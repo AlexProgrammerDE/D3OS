@@ -5,7 +5,7 @@ use d3os_compute::{
     Error, Result,
     nvidia::{GpuBuffer, Nvidia},
 };
-use d3os_nvidia::compute::Kernel;
+use d3os_nvidia::compute::{KERNEL_COUNT, Kernel, ProfileEntry};
 use spin::{Mutex, Once};
 
 const WIDTH: usize = 320;
@@ -61,13 +61,53 @@ pub(super) fn enabled() -> bool {
     RENDERER.get().is_some()
 }
 
+#[inline]
+pub(super) fn cycles() -> u64 {
+    unsafe { core::arch::x86_64::_rdtsc() }
+}
+
+pub(super) fn displayed(elapsed: u64) {
+    if let Some(renderer) = RENDERER.get() {
+        let mut renderer = renderer.lock();
+        renderer.display_cycles = renderer.display_cycles.wrapping_add(elapsed);
+    }
+}
+
+pub(super) fn report_profile() {
+    if let Some(renderer) = RENDERER.get() {
+        let renderer = renderer.lock();
+        let frames = renderer.frames.max(1) as u64;
+        log::info!(
+            "NVIDIA_DOOM_PROFILE frames={} render_cycles_per_frame={} palette_cycles_per_frame={} display_cycles_per_frame={}",
+            renderer.frames,
+            renderer.render_cycles / frames,
+            renderer.palette_cycles / frames,
+            renderer.display_cycles / frames
+        );
+        if let Ok(after) = renderer.device.profile() {
+            for (index, (before, after)) in renderer.profile_start.iter().zip(after).enumerate() {
+                let calls = after.calls.wrapping_sub(before.calls);
+                if calls != 0 {
+                    let kernel = Kernel::from_raw(index as u32).expect("profile index is a built-in kernel");
+                    log::info!(
+                        "NVIDIA_DOOM_KERNEL_PROFILE symbol={} calls={calls} cycles_per_frame={}",
+                        kernel.symbol(),
+                        after.cycles.wrapping_sub(before.cycles) / frames
+                    );
+                }
+            }
+        }
+        log::info!("NVIDIA_DOOM_PROFILE_DONE");
+    }
+}
+
 struct Renderer {
     device: Nvidia,
     verify: bool,
     active: bool,
     fuzz: bool,
     commands: Vec<u32>,
-    textures: Vec<u32>,
+    textures: Vec<u8>,
     snapshots: BTreeMap<(usize, usize), u32>,
     base: GpuBuffer<u32>,
     output: GpuBuffer<u32>,
@@ -79,6 +119,11 @@ struct Renderer {
     low_primitives: usize,
     fuzz_columns: usize,
     frame_start: i64,
+    frame_start_cycles: u64,
+    render_cycles: u64,
+    palette_cycles: u64,
+    display_cycles: u64,
+    profile_start: [ProfileEntry; KERNEL_COUNT],
 }
 
 pub(super) fn init(verify: bool) -> Result<()> {
@@ -91,16 +136,21 @@ pub(super) fn init(verify: bool) -> Result<()> {
         commands: Vec::new(),
         textures: Vec::new(),
         snapshots: BTreeMap::new(),
-        base: device.allocate_words(PIXELS)?,
-        output: device.allocate_words(PIXELS)?,
+        base: device.allocate_words(PIXELS / 4)?,
+        output: device.allocate_words(PIXELS / 4)?,
         rgba: device.allocate_words(PIXELS * 4)?,
         palette: device.allocate_words(256)?,
-        pixels: vec![0; PIXELS],
+        pixels: if verify { vec![0; PIXELS / 4] } else { Vec::new() },
         frames: 0,
         primitives: 0,
         low_primitives: 0,
         fuzz_columns: 0,
         frame_start: 0,
+        frame_start_cycles: 0,
+        render_cycles: 0,
+        palette_cycles: 0,
+        display_cycles: 0,
+        profile_start: device.profile()?,
     };
     RENDERER.call_once(|| Mutex::new(renderer));
     log::info!("NVIDIA_DOOM_READY backend=nvidia verify={verify} width={WIDTH} height={HEIGHT}");
@@ -112,17 +162,25 @@ impl Renderer {
         unsafe { slice::from_raw_parts_mut(I_VideoBuffer, PIXELS) }
     }
 
+    unsafe fn screen_words() -> Result<&'static mut [u32]> {
+        let pointer = unsafe { I_VideoBuffer.cast::<u32>() };
+        if pointer.is_null() || !pointer.is_aligned() {
+            return Err(Error::InvalidParameter);
+        }
+        // The pinned C engine allocates this byte surface with malloc. No C
+        // drawing runs while the renderer lock owns this synchronous transfer.
+        Ok(unsafe { slice::from_raw_parts_mut(pointer, PIXELS / 4) })
+    }
+
     fn begin(&mut self) -> Result<()> {
+        self.frame_start_cycles = cycles();
         self.active = true;
         self.primitives = 0;
         self.frame_start = time::systime().num_milliseconds();
         self.commands.clear();
         self.textures.clear();
         self.snapshots.clear();
-        for (out, &value) in self.pixels.iter_mut().zip(unsafe { Self::screen() }.iter()) {
-            *out = u32::from(value);
-        }
-        self.device.write_words(&self.base, 0, &self.pixels)
+        self.device.write_words(&self.base, 0, unsafe { Self::screen_words()? })
     }
 
     fn flush(&mut self) -> Result<()> {
@@ -130,17 +188,17 @@ impl Renderer {
             return Ok(());
         }
         let commands = self.device.upload_words(&self.commands)?;
-        let textures = self.device.upload_words(&self.textures)?;
+        let textures = self.device.upload_bytes(&self.textures)?;
         let parameters = [WIDTH, HEIGHT, self.commands.len() / 12, self.textures.len()];
         if self.fuzz {
             self.device
-                .dispatch_words(Kernel::Fuzz, &[(&self.base, 0), (&commands, 0), (&textures, 0)], &parameters)?;
+                .dispatch_words(Kernel::FuzzBytes, &[(&self.base, 0), (&commands, 0), (&textures, 0)], &parameters)?;
         } else {
             let bins = d3os_compute::raster::command_bins(&self.commands, WIDTH, HEIGHT)?;
             let bin_count = bins.len();
             let bins = self.device.upload_words(&bins)?;
             self.device.dispatch_words(
-                Kernel::RasterBinned,
+                Kernel::RasterBinnedBytes,
                 &[(&self.base, 0), (&commands, 0), (&textures, 0), (&self.output, 0), (&bins, 0)],
                 &[parameters[0], parameters[1], parameters[2], parameters[3], bin_count],
             )?;
@@ -151,13 +209,14 @@ impl Renderer {
             if let Some(index) = self
                 .pixels
                 .iter()
+                .flat_map(|word| word.to_le_bytes())
                 .zip(unsafe { Self::screen() }.iter())
-                .position(|(&gpu, &cpu)| gpu != u32::from(cpu))
+                .position(|(gpu, &cpu)| gpu != cpu)
             {
                 log::error!(
                     "NVIDIA_DOOM_MISMATCH frame={} pixel={index} gpu={} cpu={} fuzz={} commands={}",
                     self.frames,
-                    self.pixels[index],
+                    self.pixels[index / 4].to_le_bytes()[index % 4],
                     unsafe { Self::screen()[index] },
                     self.fuzz,
                     self.commands.len() / 12
@@ -173,12 +232,10 @@ impl Renderer {
 
     fn end(&mut self) -> Result<()> {
         self.flush()?;
-        self.device.read_words_into(&self.base, 0, &mut self.pixels)?;
-        for (out, &value) in unsafe { Self::screen() }.iter_mut().zip(&self.pixels) {
-            *out = value as u8;
-        }
+        self.device.read_words_into(&self.base, 0, unsafe { Self::screen_words()? })?;
         self.active = false;
         self.frames += 1;
+        self.render_cycles = self.render_cycles.wrapping_add(cycles().wrapping_sub(self.frame_start_cycles));
         if self.frames == 1 || self.frames.is_multiple_of(60) {
             log::info!(
                 "NVIDIA_DOOM_FRAME_OK frame={} primitives={} verify={} render_ms={} low_primitives={} fuzz_columns={} backend=nvidia",
@@ -201,16 +258,12 @@ impl Renderer {
         let bytes = unsafe { slice::from_raw_parts(pointer, length) };
         if let Some(&offset) = self.snapshots.get(&key) {
             // A zone allocation can be purged and reused even within a frame.
-            if self.textures[offset as usize..offset as usize + length]
-                .iter()
-                .zip(bytes)
-                .all(|(&a, &b)| a == u32::from(b))
-            {
+            if &self.textures[offset as usize..offset as usize + length] == bytes {
                 return Ok(offset);
             }
         }
         let offset = u32::try_from(self.textures.len()).map_err(|_| Error::SizeOverflow)?;
-        self.textures.extend(bytes.iter().map(|&byte| u32::from(byte)));
+        self.textures.extend_from_slice(bytes);
         self.snapshots.insert(key, offset);
         Ok(offset)
     }
@@ -335,7 +388,10 @@ impl Renderer {
                 .ok_or(Error::InvalidParameter)?;
             let x = ptr::addr_of!(columnofs).cast::<i32>().add(x as usize).read();
             let source = u32::try_from(self.textures.len()).map_err(|_| Error::SizeOverflow)?;
-            self.textures.extend(fuzzoffset.iter().map(|&offset| offset as u32));
+            if fuzzoffset.iter().any(|&offset| offset % WIDTH as i32 != 0) {
+                return Err(Error::InvalidParameter);
+            }
+            self.textures.extend(fuzzoffset.iter().flat_map(|offset| offset.to_le_bytes()));
             let palette = self.snapshot(colormaps.add(6 * 256), 256)?;
             self.commands.extend_from_slice(&[
                 2,
@@ -375,14 +431,17 @@ impl Renderer {
     }
 
     fn present(&mut self) -> Result<()> {
-        for (out, &value) in self.pixels.iter_mut().zip(unsafe { Self::screen() }.iter()) {
-            *out = u32::from(value);
-        }
-        self.device.write_words(&self.base, 0, &self.pixels)?;
-        self.device
-            .dispatch_words(Kernel::Palette, &[(&self.base, 0), (&self.palette, 0), (&self.rgba, 0)], &[WIDTH, HEIGHT, 2])?;
+        let start = cycles();
+        self.device.write_words(&self.base, 0, unsafe { Self::screen_words()? })?;
+        self.device.dispatch_words(
+            Kernel::PaletteBytes,
+            &[(&self.base, 0), (&self.palette, 0), (&self.rgba, 0)],
+            &[WIDTH, HEIGHT, 2],
+        )?;
         let output = unsafe { slice::from_raw_parts_mut(super::DG_ScreenBuffer as *mut u32, PIXELS * 4) };
-        self.device.read_words_into(&self.rgba, 0, output)
+        self.device.read_words_into(&self.rgba, 0, output)?;
+        self.palette_cycles = self.palette_cycles.wrapping_add(cycles().wrapping_sub(start));
+        Ok(())
     }
 }
 

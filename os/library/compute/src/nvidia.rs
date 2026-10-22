@@ -199,6 +199,27 @@ impl Nvidia {
         Ok(buffer)
     }
 
+    /// Pack little-endian bytes into owned words. The final word is zero padded;
+    /// kernels must receive the logical byte length separately for bounds checks.
+    pub fn upload_bytes(&self, values: &[u8]) -> Result<GpuBuffer<u32>> {
+        let count = values.len().div_ceil(4);
+        element_count(&[count])?;
+        dimension(count)?;
+        let mut words = Vec::<u32>::new();
+        words.try_reserve_exact(count).map_err(|_| Error::AllocationFailed)?;
+        // Initialize the tail, then fill all complete words with one copy.
+        // No uninitialized byte becomes visible through the resulting slice.
+        unsafe {
+            words.as_mut_ptr().add(count - 1).write(0);
+            core::ptr::copy_nonoverlapping(values.as_ptr(), words.as_mut_ptr().cast::<u8>(), values.len());
+            words.set_len(count);
+        }
+        for word in &mut words {
+            *word = u32::from_le(*word);
+        }
+        self.upload_words(&words)
+    }
+
     pub fn upload_words(&self, values: &[u32]) -> Result<GpuBuffer<u32>> {
         let buffer = self.allocate_words(values.len())?;
         self.write_words(&buffer, 0, values)?;

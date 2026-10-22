@@ -294,7 +294,7 @@ def main():
                     "gpu-qwen-bench": "INFERENCE_BENCH_OK qwen backend=nvidia reference_positions=29 reference_layers=24",
                     "gpu-doom": "NVIDIA_DOOM_FRAME_OK frame=600",
                     "gpu-doom-verify": "NVIDIA_DOOM_FRAME_OK frame=600",
-                    "gpu-doom-bench": "DOOM_ENGINE_REPORT timed ",
+                    "gpu-doom-bench": "NVIDIA_DOOM_PROFILE_DONE",
                 }[args.inference]
                 if expected in text:
                     if args.inference == "gpu-doom-bench":

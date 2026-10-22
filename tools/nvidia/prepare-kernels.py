@@ -122,6 +122,23 @@ def main():
                             "local_stack_probe has no local-memory load/store instructions"
                         )
                     tensor["local_stack_sass_verified"] = True
+                    for entry, patterns in (
+                        ("raster_binned_bytes", (r"\bLDG\.E\.U8\b", r"\bSTG\.E\.U8\b")),
+                        ("raster_fuzz_bytes", (r"\bLDG\.E\.U8\b", r"\bSTG\.E\.U8\b")),
+                        ("palette_scale_bytes", (r"\bLDG\.E\.U8\b",)),
+                    ):
+                        body = re.search(
+                            rf"^\.text\.{entry}:$(.*?)(?=^\.text\.|\Z)",
+                            sass,
+                            re.MULTILINE | re.DOTALL,
+                        )
+                        if not body or not all(
+                            re.search(pattern, body.group(1)) for pattern in patterns
+                        ):
+                            raise RuntimeError(
+                                f"{entry} has no expected byte memory instructions"
+                            )
+                    tensor["byte_raster_sass_verified"] = True
     (args.output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
 

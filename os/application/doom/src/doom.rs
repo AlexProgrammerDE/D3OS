@@ -67,6 +67,7 @@ mod gpu;
 #[unsafe(no_mangle)]
 unsafe extern "C" fn doom_engine_report(message: *const c_char) {
     log::info!("DOOM_ENGINE_REPORT {}", unsafe { CStr::from_ptr(message) }.to_string_lossy());
+    gpu::report_profile();
 }
 
 static WINDOW_TITLE: Once<String> = Once::new();
@@ -201,6 +202,7 @@ unsafe extern "C" fn DG_Init() {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn DG_DrawFrame() {
+    let start = gpu::cycles();
     if let Some(fb_info) = FRAMEBUFFER.get() {
         let (pos_x, pos_y) = *SCREEN_OFFSET.get().unwrap();
         let title = WINDOW_TITLE.get().unwrap().as_str();
@@ -228,6 +230,7 @@ unsafe extern "C" fn DG_DrawFrame() {
         lfb.draw_string(pos_x + 8, pos_y + 24, color::YELLOW, color::BLACK, &fps_string);
 
         fps_info.add_frame();
+        gpu::displayed(gpu::cycles().wrapping_sub(start));
     }
 }
 

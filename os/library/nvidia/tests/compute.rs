@@ -108,3 +108,17 @@ fn selection_covers_the_complete_input_without_wrapping_its_grid() {
     }
     assert!(Kernel::ArgMax.work(&[0]).is_err());
 }
+
+#[test]
+fn packed_raster_bounds_include_partial_words_without_widening_pixels() {
+    let raster = Kernel::RasterBinnedBytes.work(&[13, 17, 3, 413, 70]).unwrap();
+    assert_eq!(raster.extents[..5], [56, 36, 104, 56, 70]);
+    assert!(raster.validate_aliases(&[0x1000, 0x2000, 0x3000, 0x1000, 0x4000]).is_err());
+    assert!(Kernel::RasterBinnedBytes.work(&[13, 17, 3, 413, 30]).is_err());
+    let fuzz = Kernel::FuzzBytes.work(&[13, 17, 3, 457]).unwrap();
+    assert_eq!(fuzz.extents[..3], [56, 36, 115]);
+    assert_eq!((fuzz.blocks, fuzz.threads), (4, 128));
+    let palette = Kernel::PaletteBytes.work(&[13, 17, 3]).unwrap();
+    assert_eq!(palette.extents[..3], [56, 256, 13 * 17 * 9]);
+    assert!(Kernel::PaletteBytes.work(&[u32::MAX, 2, 1]).is_err());
+}

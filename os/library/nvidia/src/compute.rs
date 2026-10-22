@@ -14,7 +14,7 @@ pub const PROFILE: u32 = 6;
 pub const LAUNCH_ALLOCATE: u32 = 7;
 /// Enable GPU timestamp instrumentation for subsequent launches (elements 0 or 1).
 pub const DEVICE_TIMING: u32 = 8;
-pub const KERNEL_COUNT: usize = 27;
+pub const KERNEL_COUNT: usize = 30;
 
 /// Device-wide CPU cycle counters. Read snapshots around an exclusive workload
 /// and subtract them. Wait cycles include GPU execution and completion polling.
@@ -75,9 +75,12 @@ pub enum Kernel {
     ProjectBf16 = 24,
     DequantizeBf16 = 25,
     ArgMax = 26,
+    RasterBinnedBytes = 27,
+    FuzzBytes = 28,
+    PaletteBytes = 29,
 }
 
-const _: () = assert!(Kernel::ArgMax as usize + 1 == KERNEL_COUNT);
+const _: () = assert!(Kernel::PaletteBytes as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -136,6 +139,9 @@ impl Kernel {
             24 => Self::ProjectBf16,
             25 => Self::DequantizeBf16,
             26 => Self::ArgMax,
+            27 => Self::RasterBinnedBytes,
+            28 => Self::FuzzBytes,
+            29 => Self::PaletteBytes,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -169,6 +175,9 @@ impl Kernel {
             Self::ProjectBf16 => "tensor_project_bf16_weights",
             Self::DequantizeBf16 => "dequantize_bf16",
             Self::ArgMax => "argmax_partials",
+            Self::RasterBinnedBytes => "raster_binned_bytes",
+            Self::FuzzBytes => "raster_fuzz_bytes",
+            Self::PaletteBytes => "palette_scale_bytes",
         }
     }
 
@@ -194,31 +203,49 @@ impl Kernel {
                 extents[..2].copy_from_slice(&[(u64::from(n) + u64::from(half)).div_ceil(2), u64::from(n)]);
                 (n, 2, 1, false)
             }
-            (Self::Fuzz, &[width, height, commands, words]) => {
-                extents[..3].copy_from_slice(&[product(&[width, height])? as u64, product(&[commands, 12])? as u64, product(&[words])? as u64]);
-                (1, 3, 0, false)
+            (Self::Fuzz | Self::FuzzBytes, &[width, height, commands, words]) => {
+                let n = product(&[width, height])? as u64;
+                let resources = product(&[words])? as u64;
+                let packed = self == Self::FuzzBytes;
+                extents[..3].copy_from_slice(&[
+                    if packed { n.div_ceil(4) } else { n },
+                    product(&[commands, 12])? as u64,
+                    if packed { resources.div_ceil(4) } else { resources },
+                ]);
+                (if packed { product(&[width, 32])? } else { 1 }, 3, 0, false)
             }
             (Self::Raster, &[width, height, commands, words]) => {
                 let n = product(&[width, height])?;
                 extents[..4].copy_from_slice(&[n as u64, product(&[commands, 12])? as u64, product(&[words])? as u64, n as u64]);
                 (n, 4, 3, false)
             }
-            (Self::RasterBinned, &[width, height, commands, words, bins]) => {
+            (Self::RasterBinned | Self::RasterBinnedBytes, &[width, height, commands, words, bins]) => {
                 let n = product(&[width, height])?;
                 let header = width.checked_add(height).and_then(|v| v.checked_add(1)).ok_or(Error::InvalidField)?;
                 if bins < header {
                     return Err(Error::InvalidField);
                 }
-                extents[..5].copy_from_slice(&[n as u64, product(&[commands, 12])? as u64, product(&[words])? as u64, n as u64, bins as u64]);
+                let pixels = if self == Self::RasterBinnedBytes {
+                    u64::from(n).div_ceil(4)
+                } else {
+                    u64::from(n)
+                };
+                let textures = u64::from(product(&[words])?);
+                let textures = if self == Self::RasterBinnedBytes { textures.div_ceil(4) } else { textures };
+                extents[..5].copy_from_slice(&[pixels, product(&[commands, 12])? as u64, textures, pixels, bins as u64]);
                 (n, 5, 3, false)
             }
-            (Self::Palette, &[width, height, scale]) => {
+            (Self::Palette | Self::PaletteBytes, &[width, height, scale]) => {
                 if !matches!(scale, 1..=4) {
                     return Err(Error::InvalidField);
                 }
                 let n = product(&[width, height])?;
                 let output = product(&[n, scale, scale])?;
-                extents[..3].copy_from_slice(&[n as u64, 256, output as u64]);
+                extents[..3].copy_from_slice(&[
+                    if self == Self::PaletteBytes { u64::from(n).div_ceil(4) } else { u64::from(n) },
+                    256,
+                    output as u64,
+                ]);
                 (output, 3, 2, false)
             }
             (Self::Zero, &[n]) => {

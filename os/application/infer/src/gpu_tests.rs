@@ -4,6 +4,7 @@ use d3os_compute::{Backend, Conv2d, Pool2d, Tensor, cpu::Cpu, nvidia::Nvidia};
 
 mod bf16;
 mod raster;
+mod raster_bytes;
 mod selection;
 mod transformer;
 
@@ -84,6 +85,7 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     compare(&gpu, &cpu, "stable softmax")?;
     transformer::run(backend)?;
     raster::run(backend)?;
+    raster_bytes::run(backend)?;
     super::report(format_args!(
         "NVIDIA_INFERENCE_OPERATORS_OK matrix_cases=6 convolution_cases=1 softmax_cases=1 backend=nvidia"
     ));
