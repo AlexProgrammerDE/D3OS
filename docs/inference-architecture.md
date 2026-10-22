@@ -17,6 +17,8 @@ GPU initialization, kernel loading, and hardware execution remain the next imple
 - `os/library/inference/examples/infer-host.rs`: host execution of the same model implementation.
 - `tools/gpu-kernels`: Rust device kernels compiled to PTX.
 - `tools/inference`: asset preparation, CPU PTX tests, and QEMU integration tests.
+- `os/kernel/src/device/nvidia.rs`: native register discovery for the RTX 4090 Laptop GPU.
+- `tools/nvidia/run-qemu.py`: verified VFIO launch and passthrough boot checks.
 
 The inference layer depends on the backend contract rather than CPU storage.
 An NVIDIA backend can implement that contract after hardware initialization and submission work.
@@ -179,7 +181,11 @@ Before detaching the GPU, verify that the active panel uses the Intel DRM device
 
 The development laptop's read-only inspection found Intel Raptor Lake graphics and an RTX 4090 Laptop GPU (`10de:2757`).
 The NVIDIA GPU at `0000:01:00.0` shares group 15 only with its audio function at `0000:01:00.1`.
-The active internal panel currently uses NVIDIA, and `supergfxctl` reports `AsusMuxDgpu` as its sole supported mode.
+The panel now uses Intel after switching the ASUS firmware to Hybrid mode.
+Both NVIDIA functions now bind to `vfio-pci`, and their isolated group remains available to the VM.
+The session's locked-memory limit was raised to 16 GiB for VFIO.
 The [VFIO setup guide](nvidia-vfio.howto.md) gives the documented ASUS Hybrid-mode commands, display checks, VFIO reservation, and rollback steps.
-The mode switch has not been tested and no host graphics settings were changed.
+The D3OS guest boots with the physical GPU and audio function present and completes its native CPU self-test with four vCPUs.
+The native probe reads AD103 register identification, a 16 GiB BAR1 aperture, and 16,376 MiB of usable VRAM.
+GPU firmware startup, compute execution, and inference on the physical GPU remain under development.
 The Ada kernel build uses `--hardware-sm sm_89`.

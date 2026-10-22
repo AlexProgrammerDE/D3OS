@@ -3,7 +3,7 @@
 These commands prepare the inspected Fedora laptop for D3OS GPU development.
 Run each stage separately and check its result before continuing.
 The two reboot commands end your current session.
-No graphics settings were changed while preparing this guide.
+The Hybrid-mode and VFIO steps below were verified on this machine on October 22, 2026.
 
 The hardware-free implementation already runs pretrained AlexNet inside D3OS on the CPU.
 The NVIDIA hardware driver remains to be implemented after this setup.
@@ -15,7 +15,7 @@ Read [the inference guide](inference.howto.md) to run the existing tests.
 - RTX 4090 Laptop GPU: `0000:01:00.0`, PCI ID `10de:2757`.
 - NVIDIA audio: `0000:01:00.1`, PCI ID `10de:22bb`.
 - The two NVIDIA functions currently occupy IOMMU group 15 together.
-- The internal panel currently uses NVIDIA in `AsusMuxDgpu` mode.
+- The internal panel initially used NVIDIA in `AsusMuxDgpu` mode; it now uses Intel in Hybrid mode.
 
 These addresses and IDs are specific to this machine.
 Disconnect external displays attached to NVIDIA during setup.
@@ -159,9 +159,42 @@ If the KVM permission checks fail, add your user to `kvm` with `sudo usermod -aG
 Keep SELinux and the IOMMU enabled.
 
 At this point the host is ready for the next development session.
-We can configure the D3OS VM, serial capture, debugger, and passthrough launch together against the actual device.
 Passing the GPU through does not yet make inference run on it.
 Do not use the repository's older `qemu-pci.sh` template without adapting its example addresses and permissions.
+
+## 5. Boot D3OS with the physical GPU
+
+VFIO must pin the VM's RAM.
+The launcher checks the current process's locked-memory limit before starting QEMU.
+In the terminal that will start the VM, raise the shell's limit:
+
+```bash
+sudo prlimit --pid "$$" --memlock=17179869184:17179869184
+ulimit -Hl
+```
+
+The expected limit is `16777216` KiB.
+Child processes inherit that limit until the shell exits.
+For an agent session, use its process ID instead of `$$`.
+
+From the repository root, run:
+
+```bash
+cargo make --no-workspace --profile production image
+python3 tools/nvidia/run-qemu.py --boot-check
+```
+
+The launcher checks that the IOMMU group contains exactly the GPU and audio function and that both use `vfio-pci`.
+It starts QEMU without root privileges and keeps the virtual display for the D3OS console.
+The boot check requires both NVIDIA functions in the guest PCI scan, a successful native register probe, and a successful CPU inference self-test.
+Success prints `NVIDIA_PASSTHROUGH_BOOT_OK`.
+Read `target/nvidia/vm/serial.log` and `target/nvidia/vm/qemu.log` for diagnostics.
+
+Without `--boot-check`, the VM stays running until stopped.
+Use `--memory-mib 12288` for a VM that will load the Qwen assets.
+Use `--gdb-port 1234` to pause at reset for a local debugger connection.
+The kernel reports `NVIDIA_PROBE_OK` when its native register probe succeeds.
+That marker confirms register access, not initialized compute queues or GPU inference.
 
 ## Restore NVIDIA to the host
 
