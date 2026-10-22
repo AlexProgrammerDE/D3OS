@@ -372,6 +372,7 @@ pub extern "C" fn start(multiboot2_magic: u32, multiboot2_addr: *const BootInfor
 
     // Load initial ramdisk
     init_initrd(initrd_tag);
+    crate::device::nvidia::bootstrap();
 
     // Init naming service
     naming::api::init();

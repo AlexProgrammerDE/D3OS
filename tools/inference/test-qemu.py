@@ -117,7 +117,7 @@ def large_image(stage, image):
     subprocess.run(["mcopy", "-i", volume, *map(str, files), "::/"], check=True)
 
 
-def prepare(directory, mode, qwen_assets):
+def prepare(directory, mode, qwen_assets, extra_assets=()):
     stage = directory / "boot"
     initrd = stage / "initrd"
     (initrd / "bin").mkdir(parents=True, exist_ok=True)
@@ -146,11 +146,21 @@ def prepare(directory, mode, qwen_assets):
                 if error.errno != errno.EXDEV:
                     raise
                 shutil.copyfile(source / name, destination)
+    for source, relative in extra_assets:
+        destination = initrd / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.unlink(missing_ok=True)
+        try:
+            os.link(source, destination)
+        except OSError as error:
+            if error.errno != errno.EXDEV:
+                raise
+            shutil.copyfile(source, destination)
     with tarfile.open(
         stage / "initrd.tar", "w", format=tarfile.USTAR_FORMAT
     ) as archive:
         archive.add(initrd / "bin", arcname="bin")
-        if mode != "self-test":
+        if mode != "self-test" or extra_assets:
             archive.add(initrd / "usr", arcname="usr")
     shutil.copyfile(ROOT / "loader/kernel.elf", stage / "kernel.elf")
     shutil.copyfile(ROOT / "loader/towboot.toml", stage / "towboot.toml")

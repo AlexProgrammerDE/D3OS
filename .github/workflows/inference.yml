@@ -61,9 +61,9 @@ jobs:
           targets: nvptx64-nvidia-cuda
       - uses: Swatinem/rust-cache@v2
       - name: Verify CPU operators and model loading
-        run: cargo test --locked -p d3os-compute -p d3os-inference
+        run: cargo test --locked -p d3os-compute -p d3os-inference -p d3os-nvidia
       - name: Check compute and inference code
-        run: cargo clippy --locked -p d3os-compute -p d3os-inference --all-targets -- -D warnings
+        run: cargo clippy --locked -p d3os-compute -p d3os-inference -p d3os-nvidia --all-targets -- -D warnings
       - name: Execute compiled Rust GPU kernels on the CPU
         run: python3 tools/inference/test-gpu-kernels.py
       - name: Install model and OS build dependencies

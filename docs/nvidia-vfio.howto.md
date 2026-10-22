@@ -6,7 +6,8 @@ The two reboot commands end your current session.
 The Hybrid-mode and VFIO steps below were verified on this machine on October 22, 2026.
 
 The hardware-free implementation already runs pretrained AlexNet inside D3OS on the CPU.
-The NVIDIA hardware driver remains to be implemented after this setup.
+The native Rust NVIDIA driver boots FWSEC and GSP firmware on the physical GPU.
+GPU compute channels and model execution remain in development.
 Read [the inference guide](inference.howto.md) to run the existing tests.
 
 ## Hardware this guide targets
@@ -80,7 +81,8 @@ Continue only when:
 - Their IOMMU group contains exactly `0000:01:00.0` and `0000:01:00.1`.
 
 The group number can change after reboot.
-The previous inspection reported `flr bus` as available GPU reset methods; actual recovery still needs testing.
+The device reports `flr bus` as available GPU reset methods.
+Repeated QEMU sessions reset the GPU successfully after firmware boot.
 If the display still maps to NVIDIA, stop here and resolve the MUX setting before reserving the GPU.
 
 ## 3. Reserve NVIDIA for VFIO on the next boot
@@ -181,12 +183,15 @@ From the repository root, run:
 
 ```bash
 cargo make --no-workspace --profile production image
-python3 tools/nvidia/run-qemu.py --boot-check
+python3 tools/nvidia/prepare-firmware.py
+python3 tools/nvidia/run-qemu.py --firmware target/nvidia/firmware --memory-mib 2048 --boot-check
 ```
 
 The launcher checks that the IOMMU group contains exactly the GPU and audio function and that both use `vfio-pci`.
 It starts QEMU without root privileges and keeps the virtual display for the D3OS console.
-The boot check requires both NVIDIA functions in the guest PCI scan, a successful native register probe, and a successful CPU inference self-test.
+The boot check requires both NVIDIA functions, a native register probe, and a CPU inference self-test.
+With `--firmware`, it also requires a successful native GSP boot.
+The firmware preparation tool verifies SHA-256 hashes and reuses installed firmware or downloads the pinned Linux firmware files.
 Success prints `NVIDIA_PASSTHROUGH_BOOT_OK`.
 Read `target/nvidia/vm/serial.log` and `target/nvidia/vm/qemu.log` for diagnostics.
 
@@ -194,7 +199,17 @@ Without `--boot-check`, the VM stays running until stopped.
 Use `--memory-mib 12288` for a VM that will load the Qwen assets.
 Use `--gdb-port 1234` to pause at reset for a local debugger connection.
 The kernel reports `NVIDIA_PROBE_OK` when its native register probe succeeds.
-That marker confirms register access, not initialized compute queues or GPU inference.
+That marker confirms register access.
+`NVIDIA_FWSEC_BOOT_OK` confirms authenticated FWSEC execution and protected-region initialization.
+`NVIDIA_GSP_BOOT_OK` confirms GSP startup and management messages through the Rust DMA queues.
+These markers do not confirm GPU compute or model execution.
+
+The driver uses signed NVIDIA firmware with its own Rust loaders and message protocol.
+It does not load host NVIDIA libraries.
+The host-independent protocol and firmware-parser tests run with `cargo test -p d3os-nvidia`.
+The generated ABI follows tinygrad revision `81d16543a19d61c82a94df30feba2af8396275af`.
+Its reference license is in `os/library/nvidia/LICENSE.tinygrad`.
+Firmware files stay under the ignored `target/nvidia/firmware` directory.
 
 ## Restore NVIDIA to the host
 

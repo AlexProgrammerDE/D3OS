@@ -47,13 +47,16 @@ def vfio_devices(gpu):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gpu", default="0000:01:00.0")
-    parser.add_argument("--image", type=Path, default=ROOT / "d3os.img")
+    parser.add_argument("--image", type=Path, default=None)
+    parser.add_argument(
+        "--firmware", type=Path, help="stage pinned NVIDIA firmware from this directory"
+    )
     parser.add_argument("--memory-mib", type=int, default=4096)
     parser.add_argument("--cpus", type=int, default=4)
     parser.add_argument(
         "--boot-check",
         action="store_true",
-        help="verify PCI discovery and native CPU self-test, then stop",
+        help="verify native device boot and CPU self-test, then stop",
     )
     parser.add_argument("--timeout", type=float, default=180)
     parser.add_argument("--dry-run", action="store_true")
@@ -68,8 +71,12 @@ def main():
     ):
         parser.error("use 512 to 32768 MiB, 1 to 64 CPUs, and a positive timeout")
     devices = vfio_devices(args.gpu)
-    if not args.image.is_file():
-        parser.error(f"boot image does not exist: {args.image}")
+    if args.image and args.firmware:
+        parser.error("use either --image or --firmware")
+    if not args.firmware:
+        args.image = args.image or ROOT / "d3os.img"
+        if not args.image.is_file():
+            parser.error(f"boot image does not exist: {args.image}")
     required_lock = (args.memory_mib + 128) * 1024 * 1024
     soft, hard = resource.getrlimit(resource.RLIMIT_MEMLOCK)
     if not args.dry_run and hard != resource.RLIM_INFINITY and hard < required_lock:
@@ -85,6 +92,20 @@ def main():
     spec.loader.exec_module(harness)
     directory = ROOT / "target/nvidia/vm"
     directory.mkdir(parents=True, exist_ok=True)
+    if args.firmware:
+        names = ("gsp-570.144.bin", "bootloader-570.144.bin", "booter_load-570.144.bin")
+        assets = [
+            (args.firmware / name, Path("usr/share/nvidia") / name) for name in names
+        ]
+        for source, _ in assets:
+            if not source.is_file():
+                parser.error(f"firmware file does not exist: {source}")
+        if args.dry_run:
+            args.image = directory / "d3os.img"
+        else:
+            args.image = harness.prepare(
+                directory, "self-test", ROOT / "target/qwen", assets
+            )
     firmware = next(
         (
             p
@@ -180,6 +201,8 @@ def main():
                         raise RuntimeError(
                             "native NVIDIA register probe did not succeed"
                         )
+                    if args.firmware and "NVIDIA_GSP_BOOT_OK" not in text:
+                        raise RuntimeError("native GSP firmware boot did not succeed")
                     print(
                         f"NVIDIA_PASSTHROUGH_BOOT_OK cpus={args.cpus} serial={serial}",
                         flush=True,

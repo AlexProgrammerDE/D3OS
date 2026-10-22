@@ -273,6 +273,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "d3os-nvidia"
+version = "0.1.0"
+
+[[package]]
 name = "date"
 version = "0.1.0"
 dependencies = [
@@ -853,6 +857,7 @@ dependencies = [
  "bitflags 2.10.0",
  "built",
  "chrono",
+ "d3os-nvidia",
  "drawer",
  "goblin",
  "graphic",
