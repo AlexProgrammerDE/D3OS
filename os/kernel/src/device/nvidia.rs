@@ -270,6 +270,9 @@ pub fn bootstrap() {
             if let Ok(cubin) = gsp::asset("usr/share/nvidia/vector-add.cubin") {
                 compute.vector_add_test(&device, cubin)?;
             }
+            if let Ok(cubin) = gsp::asset("usr/share/nvidia/tensor-matmul.cubin") {
+                compute.tensor_test(&device, cubin)?;
+            }
             Ok(())
         });
         device.compute = Some(compute);

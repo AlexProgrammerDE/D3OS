@@ -223,6 +223,15 @@ def main():
                         raise RuntimeError(
                             "native GPU kernel verification did not succeed"
                         )
+                    if (
+                        args.kernels
+                        and (args.kernels / "tensor-matmul.cubin").is_file()
+                    ):
+                        for symbol in ("tensor_matmul_f16", "tensor_matmul_bf16"):
+                            if f"NVIDIA_TENSOR_OK kernel={symbol} cases=3" not in text:
+                                raise RuntimeError(
+                                    f"native tensor verification did not succeed: {symbol}"
+                                )
                     print(
                         f"NVIDIA_PASSTHROUGH_BOOT_OK cpus={args.cpus} serial={serial}",
                         flush=True,

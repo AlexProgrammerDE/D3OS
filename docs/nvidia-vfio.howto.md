@@ -217,9 +217,11 @@ Firmware files stay under the ignored `target/nvidia/firmware` directory.
 
 ## 6. Run the shader development test
 
-The shader test currently stalls at the first graphics `SET_OBJECT` method on this AD103.
-Its FIFO semaphore checkpoint succeeds before that method.
-The GPU reports a PBDMA error (32) through its channel notifier.
+The shader test currently fails during a graphics context switch on this AD103.
+Its FIFO semaphore checkpoint succeeds before the first engine method.
+The driver binds the graphics image in RAMIN before it schedules the channel.
+The earlier test reported PBDMA error 32 with its graphics-context pointer unset.
+The GPU now reports a graphics context-switch error (44) through its channel notifier.
 NVIDIA defines this code in [the driver error definitions](https://github.com/NVIDIA/open-gpu-kernel-modules/blob/570.144/src/common/sdk/nvidia/inc/nverror.h).
 The test reports the stall and returns an error.
 AlexNet and Qwen still run on the CPU.
@@ -241,7 +243,41 @@ python3 tools/nvidia/run-qemu.py --firmware target/nvidia/firmware \
 
 The launcher requires `NVIDIA_KERNEL_OK` for this test to pass.
 A CPU self-test cannot satisfy that requirement.
-The shader test records GPU semaphore checkpoints, notifier contents, and firmware events in the serial log.
+The shader test records GPU semaphore checkpoints, RAMIN fields, notifier contents, and firmware events in the serial log.
+
+## 7. Build and verify tensor kernels
+
+Tensor-core execution is a requirement for the AlexNet and Qwen GPU backends.
+Those backends are not complete.
+The current Rust kernels implement dense matrix multiplication through `mma.sync.aligned.m16n8k16`.
+They round FP32 inputs to FP16 or BF16, accumulate in FP32, and return FP32 output.
+One warp owns each 16-by-8 output tile.
+Masked loads and stores support matrix dimensions that do not match the tile size.
+The fragment layout follows [NVIDIA's PTX specification](https://docs.nvidia.com/cuda/parallel-thread-execution/#warp-level-matrix-fragment-mma-16816-float).
+
+With the standalone assembler and disassembler available, run:
+
+```bash
+python3 tools/nvidia/prepare-kernels.py --ptxas /path/to/ptxas \
+    --nvdisasm /path/to/nvdisasm
+cargo test --locked --manifest-path tools/gpu-kernels/Cargo.toml --test tensor-layout
+```
+
+The build produces `tensor-matmul.cubin` with two entry points: `tensor_matmul_f16` and `tensor_matmul_bf16`.
+The disassembly check requires `HMMA.16816.F32` in the FP16 kernel and `HMMA.16816.F32.BF16` in the BF16 kernel.
+The manifest records this check as `sass_verified`.
+Without a disassembler, the build leaves that field false.
+The host tests verify fragment ownership and matrix results with partial tiles and multiple inner tiles.
+These checks do not confirm hardware execution.
+The build manifest always records `hardware_validated: false`.
+
+The VM shader command in section 6 also stages the tensor kernels.
+After vector addition succeeds, D3OS runs three matrix shapes through each tensor kernel.
+It compares every output against CPU references and checks guards around the output buffers.
+The input values are exact in both formats, so these cases verify layout and arithmetic rather than conversion accuracy.
+Both kernels must report `NVIDIA_TENSOR_OK` before the launcher accepts the run.
+The graphics context-switch error currently prevents those checks from completing.
+AlexNet and Qwen do not yet use these kernels.
 
 ## Restore NVIDIA to the host
 

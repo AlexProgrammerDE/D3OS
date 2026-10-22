@@ -28,6 +28,7 @@ pub(super) struct Compute {
     pub(super) entries: usize,
     pub(super) sass_version: u64,
     pub(super) notifier: u64,
+    pub(super) instance: u64,
     runlist: u32,
     pub(super) local_bytes_per_tpc: u64,
     pub(super) local_memory: Option<Allocation>,
@@ -59,6 +60,7 @@ impl Compute {
             entries: 32,
             sass_version: 0,
             notifier: 0,
+            instance: 0,
             runlist: 0,
             local_bytes_per_tpc: 0,
             local_memory: None,
@@ -123,6 +125,7 @@ impl Compute {
 
     fn fifo_parameters(&mut self, device: &Device, fifo: Allocation, entries: u32) -> Result<Record<{ FifoAlloc::SIZE }>> {
         let instance = self.memory.allocate_physical(device, 4096, 4096)?;
+        self.instance = instance;
         let methods = self.memory.allocate_physical(device, 0x5000, 4096)?;
         let mut params = Record::<{ FifoAlloc::SIZE }>::default();
         params.set(FifoAlloc::gpFifoOffset, fifo.virtual_address)?;
@@ -140,7 +143,6 @@ impl Compute {
     fn promote(&mut self, device: &mut Device, client: u32, subdevice: u32, channel: u32, ids: &[u16], physical: bool, virtual_address: bool) -> Result<()> {
         let mut params = Record::<{ PromoteContext::SIZE }>::default();
         params.set(PromoteContext::engineType, 1)?;
-        params.set(PromoteContext::hClient, client)?;
         params.set(PromoteContext::hClient, client)?;
         params.set(PromoteContext::hChanClient, client)?;
         params.set(PromoteContext::hObject, channel)?;
@@ -214,6 +216,7 @@ impl Compute {
             let runlist = u32::from_le_bytes(words[12..16].try_into().map_err(|_| Error::Firmware)?);
             info!("NVIDIA engine={engine} runlist={runlist}");
             if engine == 1 {
+                info!("NVIDIA graphics engine data={words:02x?} pbdma={:02x?}", entry.get(DeviceInfoEntry::pbdmaIds)?);
                 self.runlist = runlist;
             }
         }
@@ -357,6 +360,17 @@ impl Compute {
             self.contexts.iter_mut().find(|buffer| buffer.id == id).ok_or(Error::Firmware)?.allocation = allocation;
         }
         self.promote(device, client, subdev, channel, &[0, 2], true, false)?;
+        // The native kernel owns RAMIN. GSP initializes the physical graphics
+        // image, but the channel must point to it before scheduling engine work.
+        let context = self.contexts.iter().find(|buffer| buffer.id == 0).ok_or(Error::Firmware)?.allocation;
+        let vram = device.vram.as_ref().ok_or(Error::Firmware)?;
+        if context.physical & 0xfff != 0 || context.physical >> 40 != 0 {
+            return Err(Error::Alignment);
+        }
+        vram.write(self.instance as usize + 0x210, context.physical as u32)?;
+        vram.write(self.instance as usize + 0x214, (context.physical >> 32) as u32)?;
+        let target = vram.read(self.instance as usize + 0xac).ok_or(Error::Firmware)?;
+        vram.write(self.instance as usize + 0xac, target | (1 << 16))?;
         self.copy_reserved(device, client, vaspace, self.reserved_virtual)?;
         let mut token_request = Record::<{ WorkToken::SIZE }>::default();
         token_request.set(WorkToken::workSubmitToken, u32::MAX)?;
@@ -364,10 +378,19 @@ impl Compute {
         self.entries = 4096;
         self.token = response.get(WorkToken::workSubmitToken)? | (self.runlist << 16);
         self.channel = channel;
+        self.dump_instance(device)?;
         let mut schedule = Record::<{ GroupSchedule::SIZE }>::default();
         schedule.set(GroupSchedule::bEnable, 1)?;
         self.control(device, client, group, NVA06C_CTRL_CMD_GPFIFO_SCHEDULE, &schedule)?;
         info!("NVIDIA_COMPUTE_CHANNEL_OK channel={channel:#x} token={:#x}", self.token);
+        Ok(())
+    }
+
+    pub(super) fn dump_instance(&self, device: &Device) -> Result<()> {
+        let vram = device.vram.as_ref().ok_or(Error::Firmware)?;
+        for offset in [0xac, 0x210, 0x214, 0x218] {
+            info!("NVIDIA instance offset={offset:#x} value={:?}", vram.read(self.instance as usize + offset));
+        }
         Ok(())
     }
 }

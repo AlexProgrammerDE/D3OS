@@ -11,6 +11,7 @@ default = ["vector-add"]
 vector-add = []
 matmul = []
 relu = []
+tensor-matmul = []
 
 [workspace]
 

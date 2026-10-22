@@ -1,17 +1,18 @@
-//! GPU device code. Compile one entry point at a time for the PTX test harness.
+//! GPU device code. Compile one kernel family at a time.
 #![no_std]
 #![feature(abi_ptx, stdarch_nvptx)]
+#![cfg_attr(feature = "tensor-matmul", feature(asm_experimental_arch))]
 
 use core::arch::nvptx::{_block_dim_x, _block_idx_x, _thread_idx_x};
 use core::panic::PanicInfo;
 
-#[cfg(any(
-    all(feature = "vector-add", feature = "relu"),
-    all(feature = "vector-add", feature = "matmul"),
-    all(feature = "relu", feature = "matmul"),
-    not(any(feature = "vector-add", feature = "relu", feature = "matmul"))
-))]
-compile_error!("select exactly one GPU kernel feature");
+const _: () = assert!(
+    cfg!(feature = "vector-add") as usize + cfg!(feature = "relu") as usize + cfg!(feature = "matmul") as usize + cfg!(feature = "tensor-matmul") as usize == 1,
+    "select exactly one GPU kernel feature"
+);
+
+#[cfg(feature = "tensor-matmul")]
+mod tensor;
 
 #[panic_handler]
 fn panic(_: &PanicInfo<'_>) -> ! {
