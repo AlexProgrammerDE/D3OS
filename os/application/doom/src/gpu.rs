@@ -136,10 +136,13 @@ impl Renderer {
             self.device
                 .dispatch_words(Kernel::Fuzz, &[(&self.base, 0), (&commands, 0), (&textures, 0)], &parameters)?;
         } else {
+            let bins = d3os_compute::raster::command_bins(&self.commands, WIDTH, HEIGHT)?;
+            let bin_count = bins.len();
+            let bins = self.device.upload_words(&bins)?;
             self.device.dispatch_words(
-                Kernel::Raster,
-                &[(&self.base, 0), (&commands, 0), (&textures, 0), (&self.output, 0)],
-                &parameters,
+                Kernel::RasterBinned,
+                &[(&self.base, 0), (&commands, 0), (&textures, 0), (&self.output, 0), (&bins, 0)],
+                &[parameters[0], parameters[1], parameters[2], parameters[3], bin_count],
             )?;
             core::mem::swap(&mut self.base, &mut self.output);
         }

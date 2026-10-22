@@ -63,6 +63,12 @@ static START_TIME_MS: Once<TimeDelta> = Once::new();
 static LOGGER: logger::Logger = logger::Logger::new();
 
 mod gpu;
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn doom_engine_report(message: *const c_char) {
+    log::info!("DOOM_ENGINE_REPORT {}", unsafe { CStr::from_ptr(message) }.to_string_lossy());
+}
+
 static WINDOW_TITLE: Once<String> = Once::new();
 
 static FRAMEBUFFER: Once<FramebufferInfo> = Once::new();

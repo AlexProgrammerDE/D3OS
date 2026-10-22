@@ -6,6 +6,7 @@ extern crate alloc;
 pub mod cpu;
 #[cfg(feature = "nvidia")]
 pub mod nvidia;
+pub mod raster;
 pub mod transformer;
 
 use alloc::vec::Vec;

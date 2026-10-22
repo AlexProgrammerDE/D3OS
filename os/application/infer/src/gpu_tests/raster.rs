@@ -85,6 +85,9 @@ fn check(backend: &Nvidia) -> d3os_compute::Result<()> {
     }
     // Invalid resource offsets must never read outside the owned word buffer.
     commands.extend_from_slice(&[0, 0, 0, 16, 0, 0, u32::MAX, 128, u32::MAX, 0, 0, 0]);
+    let bins = d3os_compute::raster::command_bins(&commands, width, height)?;
+    let bin_count = bins.len();
+    let bins = backend.upload_words(&bins)?;
     let base = backend.upload_words(&vec![3; width * height])?;
     let commands = backend.upload_words(&commands)?;
     let textures = backend.upload_words(&textures)?;
@@ -98,6 +101,15 @@ fn check(backend: &Nvidia) -> d3os_compute::Result<()> {
         &[width, height, 4, 4608],
     )?;
     let mut actual = vec![0; width * height + 2];
+    backend.read_words_into(&output, 0, &mut actual)?;
+    if actual[0] != guard || actual[width * height + 1] != guard || actual[1..actual.len() - 1] != expected {
+        return Err(d3os_compute::Error::DeviceFault);
+    }
+    backend.dispatch_words(
+        Kernel::RasterBinned,
+        &[(&base, 0), (&commands, 0), (&textures, 0), (&output, 1), (&bins, 0)],
+        &[width, height, 4, 4608, bin_count],
+    )?;
     backend.read_words_into(&output, 0, &mut actual)?;
     if actual[0] != guard || actual[width * height + 1] != guard || actual[1..actual.len() - 1] != expected {
         return Err(d3os_compute::Error::DeviceFault);

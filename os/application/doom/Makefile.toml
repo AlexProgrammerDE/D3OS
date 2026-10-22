@@ -56,7 +56,7 @@ args = [ "-n", "-T", "${LINKER_FILE}", "-o", "${APPLICATION}", "${RUST_OBJECT}",
     "--wrap=R_RenderPlayerView", "--wrap=R_DrawColumn", "--wrap=R_DrawColumnLow",
     "--wrap=R_DrawTranslatedColumn", "--wrap=R_DrawTranslatedColumnLow",
     "--wrap=R_DrawFuzzColumn", "--wrap=R_DrawFuzzColumnLow", "--wrap=R_DrawSpan", "--wrap=R_DrawSpanLow",
-    "--wrap=I_SetPalette", "--wrap=I_FinishUpdate", "--wrap=I_Quit" ]
+    "--wrap=I_SetPalette", "--wrap=I_FinishUpdate", "--wrap=I_Quit", "--wrap=I_Error" ]
 dependencies = [ "compile", "archive-doom" ]
 condition = { files_modified = { input = [ "${BUILD_DIRECTORY}/lib${CARGO_MAKE_PROJECT_NAME}*", "${LINKER_FILE}", "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/os/application/doom/Makefile.toml" ], output = [ "${APPLICATION}" ] } }
 
@@ -77,6 +77,7 @@ args = [
     "-I", "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/os/library/libc/src/include", "-D_DEFAULT_SOURCE",
 
     # Source files
+    "${SOURCE_DIRECTORY}/engine-report.c",
     "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/os/library/libc/src/stdio/stdio.c",
     "${CARGO_MAKE_WORKING_DIRECTORY}/doomgeneric/doomgeneric/am_map.c",
     "${CARGO_MAKE_WORKING_DIRECTORY}/doomgeneric/doomgeneric/d_event.c",
@@ -164,13 +165,14 @@ args = [
 ]
 condition = { files_modified = { input = [
     "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/os/application/doom/Makefile.toml",
+    "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/os/application/doom/src/*.c",
     "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/os/application/doom/doomgeneric/doomgeneric/*.c",
     "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/os/application/doom/doomgeneric/doomgeneric/*.h",
     "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/os/library/libc/**/*.h",
     "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/os/library/libc/**/*.c",
     "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/os/library/libc/**/*.rs"
 ], output = [
-    "${BUILD_DIRECTORY}/stdio.o", "${BUILD_DIRECTORY}/am_map.o", "${BUILD_DIRECTORY}/d_event.o",
+    "${BUILD_DIRECTORY}/stdio.o", "${BUILD_DIRECTORY}/engine-report.o", "${BUILD_DIRECTORY}/am_map.o", "${BUILD_DIRECTORY}/d_event.o",
     "${BUILD_DIRECTORY}/d_items.o", "${BUILD_DIRECTORY}/d_iwad.o", "${BUILD_DIRECTORY}/d_loop.o",
     "${BUILD_DIRECTORY}/d_main.o", "${BUILD_DIRECTORY}/d_mode.o", "${BUILD_DIRECTORY}/d_net.o",
     "${BUILD_DIRECTORY}/doomdef.o", "${BUILD_DIRECTORY}/doomgeneric.o", "${BUILD_DIRECTORY}/doomstat.o",
@@ -206,7 +208,7 @@ command = "${AR}"
 args = [
     "rcs",
     "${BUILD_DIRECTORY}/libdoom.a",
-    "${BUILD_DIRECTORY}/stdio.o", "${BUILD_DIRECTORY}/am_map.o", "${BUILD_DIRECTORY}/d_event.o",
+    "${BUILD_DIRECTORY}/stdio.o", "${BUILD_DIRECTORY}/engine-report.o", "${BUILD_DIRECTORY}/am_map.o", "${BUILD_DIRECTORY}/d_event.o",
     "${BUILD_DIRECTORY}/d_items.o", "${BUILD_DIRECTORY}/d_iwad.o", "${BUILD_DIRECTORY}/d_loop.o",
     "${BUILD_DIRECTORY}/d_main.o", "${BUILD_DIRECTORY}/d_mode.o", "${BUILD_DIRECTORY}/d_net.o",
     "${BUILD_DIRECTORY}/doomdef.o", "${BUILD_DIRECTORY}/doomgeneric.o", "${BUILD_DIRECTORY}/doomstat.o",
@@ -237,7 +239,7 @@ args = [
 ]
 condition = { files_modified = { input = [
     "${CARGO_MAKE_WORKING_DIRECTORY}/Cargo.toml", "${SOURCE_DIRECTORY}/**/*.rs",
-    "${BUILD_DIRECTORY}/stdio.o", "${BUILD_DIRECTORY}/am_map.o", "${BUILD_DIRECTORY}/d_event.o",
+    "${BUILD_DIRECTORY}/stdio.o", "${BUILD_DIRECTORY}/engine-report.o", "${BUILD_DIRECTORY}/am_map.o", "${BUILD_DIRECTORY}/d_event.o",
     "${BUILD_DIRECTORY}/d_items.o", "${BUILD_DIRECTORY}/d_iwad.o", "${BUILD_DIRECTORY}/d_loop.o",
     "${BUILD_DIRECTORY}/d_main.o", "${BUILD_DIRECTORY}/d_mode.o", "${BUILD_DIRECTORY}/d_net.o",
     "${BUILD_DIRECTORY}/doomdef.o", "${BUILD_DIRECTORY}/doomgeneric.o", "${BUILD_DIRECTORY}/doomstat.o",

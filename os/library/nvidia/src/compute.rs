@@ -53,6 +53,7 @@ pub enum Kernel {
     Raster = 20,
     Palette = 21,
     Fuzz = 22,
+    RasterBinned = 23,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -102,6 +103,7 @@ impl Kernel {
             20 => Self::Raster,
             21 => Self::Palette,
             22 => Self::Fuzz,
+            23 => Self::RasterBinned,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -131,6 +133,7 @@ impl Kernel {
             Self::Raster => "raster_commands",
             Self::Palette => "palette_scale",
             Self::Fuzz => "raster_fuzz",
+            Self::RasterBinned => "raster_binned",
         }
     }
 
@@ -146,6 +149,15 @@ impl Kernel {
                 let n = product(&[width, height])?;
                 extents[..4].copy_from_slice(&[n as u64, product(&[commands, 12])? as u64, product(&[words])? as u64, n as u64]);
                 (n, 4, 3, false)
+            }
+            (Self::RasterBinned, &[width, height, commands, words, bins]) => {
+                let n = product(&[width, height])?;
+                let header = width.checked_add(height).and_then(|v| v.checked_add(1)).ok_or(Error::InvalidField)?;
+                if bins < header {
+                    return Err(Error::InvalidField);
+                }
+                extents[..5].copy_from_slice(&[n as u64, product(&[commands, 12])? as u64, product(&[words])? as u64, n as u64, bins as u64]);
+                (n, 5, 3, false)
             }
             (Self::Palette, &[width, height, scale]) => {
                 if !matches!(scale, 1..=4) {

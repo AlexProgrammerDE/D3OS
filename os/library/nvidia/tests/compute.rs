@@ -1,6 +1,16 @@
 use d3os_nvidia::compute::Kernel;
 
 #[test]
+fn binned_raster_checks_header_and_address_extents() {
+    let work = Kernel::RasterBinned.work(&[320, 200, 1500, 4096, 5000]).unwrap();
+    assert_eq!(work.extents[..5], [64000, 18000, 4096, 64000, 5000]);
+    assert_eq!((work.pointers, work.output), (5, 3));
+    assert!(Kernel::RasterBinned.work(&[320, 200, 1500, 4096, 520]).is_err());
+    assert!(Kernel::RasterBinned.work(&[u32::MAX, 1, 1, 1, u32::MAX]).is_err());
+    assert!(work.validate_aliases(&[0x100000, 0x200000, 0x300000, 0x100000, 0x400000]).is_err());
+}
+
+#[test]
 fn matrix_work_covers_partial_tiles_and_checks_products() {
     for kernel in [Kernel::Matmul, Kernel::Project] {
         let work = kernel.work(&[17, 33, 9]).unwrap();
