@@ -13,6 +13,7 @@ mod gsp;
 mod mmu;
 mod rm;
 mod service;
+mod transfer;
 pub(crate) use service::{request as compute_request, release_process};
 
 #[derive(Debug)]
@@ -274,6 +275,11 @@ pub fn bootstrap() {
             }
             if let Ok(cubin) = gsp::asset("usr/share/nvidia/tensor-matmul.cubin") {
                 compute.tensor_test(&device, cubin)?;
+            }
+            if let Ok(cubin) = gsp::asset("usr/share/nvidia/inference.cubin") {
+                compute.inference_module = Some(cubin);
+                compute.prepare_staging(&device)?;
+                compute.transfer_test(&device)?;
             }
             Ok(())
         });

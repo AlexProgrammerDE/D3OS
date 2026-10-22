@@ -40,6 +40,7 @@ pub(super) struct Compute {
     pub(super) buffers: super::service::Buffers,
     pub(super) healthy: bool,
     pub(super) inference_module: Option<&'static [u8]>,
+    pub(super) staging: Option<super::transfer::Staging>,
 }
 
 impl Device {
@@ -77,6 +78,7 @@ impl Compute {
             buffers: super::service::Buffers::default(),
             healthy: true,
             inference_module: None,
+            staging: None,
         })
     }
 

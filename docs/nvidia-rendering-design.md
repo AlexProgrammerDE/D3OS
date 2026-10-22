@@ -43,16 +43,17 @@ The GPU path must resolve pending drawing before a CPU routine reads or modifies
 
 ## Frame transfer
 
-The current inference service transfers data with uncached CPU accesses through BAR1.
-Those transfers already dominate model loading and are unsuitable for frequent frame readback.
-The next driver requirement is a bounded staging allocation in guest RAM that the GPU can access.
-The driver must preserve that allocation until all submitted GPU work completes.
-CPU and GPU ownership must change only at explicit completion fences.
+The inference service now transfers data through a bounded 1 MiB staging allocation in coherent guest RAM.
+Native GPU copy kernels handle uploads and readback, while completion fences separate CPU access from GPU access.
+The device retains the staging allocation for its complete lifetime, including dispatch errors.
+The GPU also clears application buffers before the driver returns their handles.
 
 NVIDIA's [MMU definitions](https://github.com/NVIDIA/open-gpu-kernel-modules/blob/570.144/kernel-open/nvidia-uvm/hwref/volta/gv100/dev_mmu.h) provide the MMU-v2 system-coherent aperture.
-The candidate staging path maps owned guest physical RAM through that aperture in the existing GPU address space.
-Hardware tests must establish cache visibility, correct addresses under VFIO, bounds, and completion before this path handles frames.
-The same path can accelerate inference uploads and downloads.
+The staging path maps owned guest physical RAM through that aperture in the existing GPU address space.
+Six hardware cases pass exact-bit comparisons, output guards, partial chunks, and both sides of staging boundaries under VFIO.
+The tests include NaNs and signed zero, so a floating-point comparison cannot conceal a changed payload.
+Both pretrained inference models retain their full numerical checks through this transfer path.
+The renderer can now use that same path for texture upload and frame readback.
 
 ## Acceptance checks
 

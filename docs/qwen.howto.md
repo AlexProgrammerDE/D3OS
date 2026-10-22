@@ -172,8 +172,8 @@ The full-model check requires `INFERENCE_OK qwen-verify backend=nvidia positions
 This check passed on the physical RTX GPU with four vCPUs.
 Every layer value and vocabulary logit must satisfy the same tolerance as the CPU test.
 Every greedy token choice must also match the reference.
-The verified run took about 325 seconds, including approximately 295 seconds for model upload.
-The current uncached BAR1 transfer path dominates that duration.
+With coherent guest-RAM staging, the verified run took 11.5 seconds, including file access and model upload.
+The earlier BAR1 transfer path took about 325 seconds for the same command.
 
 Generate the default arithmetic reply with:
 
@@ -185,6 +185,7 @@ python3 tools/nvidia/run-qemu.py --firmware target/nvidia/firmware \
 
 This command generated `4` and stopped at EOS on the physical GPU.
 The result matched the host reference and reported one generated token.
+The staging-transfer run took about 10 seconds, including model loading and prompt processing.
 
 The corresponding native shell commands are:
 

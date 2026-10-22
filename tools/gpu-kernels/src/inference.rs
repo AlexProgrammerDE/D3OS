@@ -2,6 +2,18 @@
 use core::arch::asm;
 
 /// # Safety
+/// Output contains count writable words.
+#[unsafe(no_mangle)]
+pub unsafe extern "ptx-kernel" fn buffer_zero(output: u64, count: u32) {
+    let i = super::index();
+    if i < count {
+        unsafe {
+            (output as *mut u32).add(i as usize).write(0);
+        }
+    }
+}
+
+/// # Safety
 /// Input/output contain count elements. Exact in-place operation is allowed.
 #[unsafe(no_mangle)]
 pub unsafe extern "ptx-kernel" fn inference_relu(input: u64, output: u64, count: u32) {

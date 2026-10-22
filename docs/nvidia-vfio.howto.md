@@ -333,10 +333,22 @@ Completed operations permit buffer reuse, and process exit releases remaining bu
 A dispatch error disables further compute requests and retains storage until VM reset.
 Reference comparisons and top-five selection use explicit downloads.
 
-The current transfer path uses uncached CPU writes through BAR1.
-The verified AlexNet run took about 26 seconds, including file access, weight upload, and reference comparisons.
-This result establishes correctness rather than competitive inference performance.
-Copy-engine transfers, optimized tensor tiling, and GPU rendering remain unfinished.
+Uploads and downloads use a driver-owned 1 MiB staging allocation in coherent guest RAM.
+The GPU maps that allocation through its MMU-v2 system-coherent aperture.
+Native copy kernels transfer each chunk, and completion fences separate CPU access from GPU access.
+The allocation remains owned by the device even after a dispatch error.
+The GPU clears both fresh and recycled application buffers before the driver returns a handle.
+
+The boot check requires `NVIDIA_TRANSFER_OK cases=6 guards=ok bits=exact` when the inference module is present.
+Those checks cover both transfer directions, staging boundaries, partial chunks, output guards, and arbitrary bit patterns including NaNs.
+The `NVIDIA_TRANSFER_BENCH` line measures 128 MiB of aggregate uploads and downloads with repeated 1 MiB chunks.
+That measurement includes CPU staging copies, kernel dispatch, and completion waits.
+The warm-buffer run measured 5,333 MiB/s on the development GPU.
+
+With this path, AlexNet passed all eight reference comparisons in 0.77–0.94 seconds instead of the earlier 26–27 seconds.
+The Qwen reference run passed in 11.5 seconds instead of the earlier 325 seconds.
+These application timings include file access, model upload, and reference comparisons.
+Dedicated copy-engine transfers, optimized tensor tiling, and GPU rendering remain unfinished.
 A later repeat encountered a GSP timeout during graphics-class initialization before model execution.
 The next VM boot passed without a code change.
 Repeated-reset reliability remains under investigation.

@@ -15,14 +15,14 @@ const QUEUE_SIZE: usize = 0x40000;
 const COMMAND: usize = 0x1000;
 const STATUS: usize = COMMAND + QUEUE_SIZE;
 
-struct DmaRegion {
-    address: usize,
-    size: usize,
+pub(super) struct DmaRegion {
+    pub(super) address: usize,
+    pub(super) size: usize,
     vma: Arc<VirtualMemoryArea>,
 }
 
 impl DmaRegion {
-    fn new(bytes: usize) -> Result<Self> {
+    pub(super) fn new(bytes: usize) -> Result<Self> {
         let pages = bytes.checked_add(4095).ok_or(Error::Alignment)? / 4096;
         if pages == 0 {
             return Err(Error::Alignment);

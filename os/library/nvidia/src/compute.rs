@@ -49,6 +49,7 @@ pub enum Kernel {
     DeltaPrepare = 16,
     DeltaUpdate = 17,
     DeltaOutput = 18,
+    Zero = 19,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -94,6 +95,7 @@ impl Kernel {
             16 => Self::DeltaPrepare,
             17 => Self::DeltaUpdate,
             18 => Self::DeltaOutput,
+            19 => Self::Zero,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -119,6 +121,7 @@ impl Kernel {
             Self::DeltaPrepare => "delta_prepare",
             Self::DeltaUpdate => "delta_update",
             Self::DeltaOutput => "delta_output",
+            Self::Zero => "buffer_zero",
         }
     }
 
@@ -126,6 +129,11 @@ impl Kernel {
         let mut extents = [0; 16];
         let mut mutated = 0;
         let (count, pointers, output, in_place) = match (self, p) {
+            (Self::Zero, &[n]) => {
+                product(&[n])?;
+                extents[0] = n as u64;
+                (n, 1, 0, false)
+            }
             (Self::Matmul | Self::Project, &[m, k, n]) => {
                 extents[..3].copy_from_slice(&[product(&[m, k])? as u64, product(&[k, n])? as u64, product(&[m, n])? as u64]);
                 (product(&[m.div_ceil(16), n.div_ceil(8), 32])?, 3, 2, false)

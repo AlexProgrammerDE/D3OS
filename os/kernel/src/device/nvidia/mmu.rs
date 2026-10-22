@@ -32,6 +32,15 @@ impl Memory {
     }
 
     pub(super) fn allocate_physical(&mut self, device: &Device, bytes: u64, alignment: u64) -> Result<u64> {
+        let start = self.reserve_physical(bytes, alignment)?;
+        let vram = device.vram.as_ref().ok_or(Error::Firmware)?;
+        for offset in (start..self.physical).step_by(4) {
+            vram.write(offset as usize, 0)?;
+        }
+        Ok(start)
+    }
+
+    fn reserve_physical(&mut self, bytes: u64, alignment: u64) -> Result<u64> {
         if bytes == 0 || !alignment.is_power_of_two() {
             return Err(Error::Alignment);
         }
@@ -39,10 +48,6 @@ impl Memory {
         let end = start.checked_add(bytes).and_then(|n| n.checked_add(4095)).ok_or(Error::Alignment)? & !4095;
         if end > self.limit {
             return Err(Error::Alignment);
-        }
-        let vram = device.vram.as_ref().ok_or(Error::Firmware)?;
-        for offset in (start..end).step_by(4) {
-            vram.write(offset as usize, 0)?;
         }
         self.physical = end;
         Ok(start)
@@ -107,19 +112,46 @@ impl Memory {
     pub(super) fn allocate(&mut self, device: &Device, bytes: u64, alignment: u64) -> Result<Allocation> {
         let bytes = bytes.checked_add(4095).ok_or(Error::Alignment)? & !4095;
         let physical = self.allocate_physical(device, bytes, alignment.max(4096))?;
-        let virtual_address = self.reserve_virtual(bytes, alignment.max(4096))?;
-        for offset in (0..bytes).step_by(4096) {
-            let va = virtual_address + offset;
-            let tables = self.page_tables(device, va, 5)?;
-            let pte = 1 | (1 << 3) | (((physical + offset) >> 12) << 8) | (6u64 << 56);
-            Self::write64(device, tables[4] + ((va >> 12) & 511) * 8, pte)?;
-        }
-        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
-        device.registers.write(0xb830b0, (1 << 0) | (1 << 1) | (1 << 6) | (1 << 31))?;
+        let virtual_address = self.map_range(device, physical, bytes, alignment.max(4096), false)?;
         Ok(Allocation {
             physical,
             virtual_address,
             bytes,
         })
+    }
+
+    /// Driver-owned buffer storage. Callers must clear this allocation before
+    /// returning a handle or data to an application.
+    pub(super) fn allocate_buffer(&mut self, device: &Device, bytes: u64) -> Result<Allocation> {
+        let bytes = bytes.checked_add(4095).ok_or(Error::Alignment)? & !4095;
+        let physical = self.reserve_physical(bytes, 4096)?;
+        let virtual_address = self.map_range(device, physical, bytes, 4096, false)?;
+        Ok(Allocation {
+            physical,
+            virtual_address,
+            bytes,
+        })
+    }
+
+    pub(super) fn map_system(&mut self, device: &Device, physical: u64, bytes: u64) -> Result<u64> {
+        self.map_range(device, physical, bytes, 4096, true)
+    }
+
+    fn map_range(&mut self, device: &Device, physical: u64, bytes: u64, alignment: u64, system: bool) -> Result<u64> {
+        if physical == 0 || physical & 4095 != 0 || bytes == 0 || bytes & 4095 != 0 || physical.checked_add(bytes).is_none_or(|end| end > 1 << 52) {
+            return Err(Error::Alignment);
+        }
+        let virtual_address = self.reserve_virtual(bytes, alignment)?;
+        for offset in (0..bytes).step_by(4096) {
+            let va = virtual_address + offset;
+            let tables = self.page_tables(device, va, 5)?;
+            // NVIDIA MMU-v2 PTE: valid, volatile, system-coherent aperture 2
+            // for guest RAM, or aperture 0 for local video memory.
+            let pte = 1 | (1 << 3) | (u64::from(system) << 2) | (((physical + offset) >> 12) << 8) | (6u64 << 56);
+            Self::write64(device, tables[4] + ((va >> 12) & 511) * 8, pte)?;
+        }
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        device.registers.write(0xb830b0, (1 << 0) | (1 << 1) | (1 << 6) | (1 << 31))?;
+        Ok(virtual_address)
     }
 }

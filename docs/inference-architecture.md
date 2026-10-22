@@ -168,6 +168,10 @@ It prepares and validates every dispatch before the first cache mutation.
 The syscall checks every modified buffer, including convolution histories and recurrent state.
 The hardware suite compares outputs and state across multiple attention and gated-delta steps.
 The pretrained model then passes every original reference comparison at 29 token positions.
+The transfer path uses a persistent, driver-owned 1 MiB staging allocation in coherent guest RAM.
+GPU copy kernels move bounded chunks between that allocation and process-owned VRAM.
+GPU clearing preserves buffer isolation when storage is fresh or recycled.
+The complete AlexNet and Qwen reference commands now take about one second and 11.5 seconds on the development GPU.
 Read [the Qwen guide](qwen.howto.md) for API usage, reference verification, memory requirements, and multicore VM commands.
 
 ## GPU debug machine

@@ -228,6 +228,12 @@ def main():
                     "gpu-qwen-verify": "INFERENCE_OK qwen-verify backend=nvidia positions=29 layers=24",
                 }[args.inference]
                 if expected in text:
+                    if (
+                        args.kernels
+                        and (args.kernels / "inference.cubin").is_file()
+                        and "NVIDIA_TRANSFER_OK cases=6 guards=ok bits=exact" not in text
+                    ):
+                        raise RuntimeError("native coherent staging transfer verification did not succeed")
                     if args.inference == "gpu-qwen" and "INFERENCE_OK qwen backend=nvidia tokens=1 stop=EndOfSequence" not in text:
                         raise RuntimeError("GPU generation did not match the default arithmetic fixture")
                     if "[0x10de:0x2757]" not in text or "[0x10de:0x22bb]" not in text:

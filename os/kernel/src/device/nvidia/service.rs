@@ -82,7 +82,6 @@ pub(crate) fn request(owner: Uuid, request: &Request) -> SyscallResult {
 }
 
 fn serve(device: &Device, compute: &mut super::rm::Compute, owner: Uuid, request: &Request) -> SyscallResult {
-    let vram = device.vram.as_ref().ok_or(Errno::ENOTSUP)?;
     match request.operation {
         abi::INFO => {
             // The complete inference module must exist; a register probe alone
@@ -118,15 +117,14 @@ fn serve(device: &Device, compute: &mut super::rm::Compute, owner: Uuid, request
                     });
                     allocation.bytes = bytes;
                 }
-                // Reused storage must not expose another process's weights or data.
-                for offset in (0..allocation.bytes).step_by(4) {
-                    vram.write((allocation.physical + offset) as usize, 0).map_err(|_| Errno::EUNKN)?;
-                }
                 allocation
             } else {
-                // Memory::allocate clears new VRAM before installing its PTEs.
-                compute.memory.allocate(device, bytes, 4096).map_err(|_| Errno::ENOMEM)?
+                compute.memory.allocate_buffer(device, bytes).map_err(|_| Errno::ENOMEM)?
             };
+            inference_module(compute)?;
+            // Clear fresh and recycled storage before exposing a handle. The
+            // queue completes before another process can reuse this allocation.
+            gpu_result(compute.dispatch(device, Kernel::Zero, &[allocation.virtual_address], &[(allocation.bytes / 4) as u32]))?;
             compute.buffers.next = compute
                 .buffers
                 .next
@@ -155,18 +153,17 @@ fn serve(device: &Device, compute: &mut super::rm::Compute, owner: Uuid, request
             if request.offset.checked_add(request.elements).is_none_or(|end| end > buffer.elements) {
                 return Err(Errno::EINVAL);
             }
-            // The syscall boundary validates the userspace range before this call.
-            for i in 0..request.elements {
-                let physical = (buffer.allocation.physical + (request.offset + i) * 4) as usize;
-                let pointer = (request.pointer as *mut u32).wrapping_add(i as usize);
-                if request.operation == abi::UPLOAD {
-                    vram.write(physical, unsafe { pointer.read_volatile() }).map_err(|_| Errno::EUNKN)?;
-                } else {
-                    unsafe {
-                        pointer.write_volatile(vram.read(physical).ok_or(Errno::EUNKN)?);
-                    }
-                }
-            }
+            // The syscall boundary validated the CPU range; handle ownership
+            // and the full GPU extent were checked before any staging access.
+            gpu_result(unsafe {
+                compute.transfer(
+                    device,
+                    buffer.allocation.virtual_address + request.offset * 4,
+                    request.pointer as *mut u32,
+                    request.elements as usize,
+                    request.operation == abi::UPLOAD,
+                )
+            })?;
             Ok(0)
         }
         abi::LAUNCH => {
@@ -185,23 +182,19 @@ fn serve(device: &Device, compute: &mut super::rm::Compute, owner: Uuid, request
                 *address = buffer.allocation.virtual_address + request.offsets[i] * 4;
             }
             work.validate_aliases(&addresses[..work.pointers]).map_err(|_| Errno::EINVAL)?;
-            let mut arguments = Vec::with_capacity(work.pointers * 8 + parameters.len() * 4);
-            for address in addresses.iter().take(work.pointers) {
-                arguments.extend_from_slice(&address.to_le_bytes());
-            }
-            for parameter in parameters {
-                arguments.extend_from_slice(&parameter.to_le_bytes());
-            }
-            let cubin = inference_module(compute)?;
-            if let Err(error) = compute.launch(device, cubin, kernel.symbol(), &arguments, [work.threads, work.blocks]) {
-                compute.healthy = false;
-                log::warn!("NVIDIA inference dispatch failed: {error}");
-                return Err(Errno::EUNKN);
-            }
+            inference_module(compute)?;
+            gpu_result(compute.dispatch(device, kernel, &addresses[..work.pointers], parameters))?;
             Ok(0)
         }
         _ => Err(Errno::EINVAL),
     }
+}
+
+fn gpu_result(result: super::Result<()>) -> Result<(), Errno> {
+    result.map_err(|error| {
+        log::warn!("NVIDIA compute operation failed: {error}");
+        Errno::EUNKN
+    })
 }
 
 fn inference_module(compute: &mut super::rm::Compute) -> Result<&'static [u8], Errno> {
