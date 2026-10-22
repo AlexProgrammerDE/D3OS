@@ -127,15 +127,17 @@ It reports generation and verification results to the terminal and serial logger
 To open the prepared image in an interactive VM after the tests, run:
 
 ```bash
+cp /usr/share/OVMF/OVMF_VARS_4M.fd target/qwen/interactive-vars.fd
 qemu-system-x86_64 -machine q35 -accel kvm -cpu host -smp 2 -m 12G \
-  -bios /usr/share/OVMF/OVMF_CODE.fd \
+  -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
+  -drive if=pflash,format=raw,file=target/qwen/interactive-vars.fd \
   -drive format=raw,file=target/inference-qemu-qwen/d3os.img \
   -device virtio-vga -device virtio-rng-pci -nic model=rtl8139 \
   -serial file:target/qwen/interactive-serial.log
 ```
 
-On Fedora, the firmware path is normally `/usr/share/edk2/ovmf/OVMF_CODE.fd`.
-Select the path installed on your host.
+On Fedora, use `/usr/share/edk2/ovmf/OVMF_CODE.fd` and `/usr/share/edk2/ovmf/OVMF_VARS.fd` as the firmware pair.
+Keep the code image and variables template from the same firmware layout.
 
 ## Call the native API
 

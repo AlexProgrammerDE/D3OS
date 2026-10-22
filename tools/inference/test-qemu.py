@@ -15,6 +15,25 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def firmware_options(image, directory):
+    if not image.name.startswith("OVMF_CODE"):
+        return ["-bios", str(image)]
+    variables = image.with_name(image.name.replace("CODE", "VARS", 1))
+    if not variables.is_file():
+        raise RuntimeError(
+            f"OVMF code image requires its variables template: {variables}"
+        )
+    # Each VM gets writable variables without modifying the packaged template.
+    writable = directory / "ovmf-vars.fd"
+    shutil.copyfile(variables, writable)
+    return [
+        "-drive",
+        f"if=pflash,format=raw,readonly=on,file={image}",
+        "-drive",
+        f"if=pflash,format=raw,file={writable}",
+    ]
+
+
 class Qmp:
     def __init__(self, path, process, deadline):
         self.socket = socket.socket(socket.AF_UNIX)
@@ -214,14 +233,15 @@ def main():
             p
             for p in [
                 ROOT / "RELEASEX64_OVMF.fd",
+                Path("/usr/share/OVMF/OVMF_CODE_4M.fd"),
                 Path("/usr/share/OVMF/OVMF_CODE.fd"),
                 Path("/usr/share/edk2/ovmf/OVMF_CODE.fd"),
             ]
-            if p.exists()
+            if p.is_file()
         ),
         None,
     )
-    if bios is None:
+    if bios is None or not bios.is_file():
         parser.error(
             "provide --bios with an OVMF firmware image, or run cargo make --no-workspace ovmf"
         )
@@ -256,8 +276,7 @@ def main():
         str(cpus),
         "-m",
         "12G" if mode.startswith("qwen") else "4G" if args.alexnet else "512M",
-        "-bios",
-        str(bios.resolve()),
+        *firmware_options(bios.resolve(), directory),
         "-drive",
         f"format=raw,file={image}",
         "-boot",

@@ -31,6 +31,10 @@ For a host with KVM access, run:
 python3 tools/kernel/test-context-switch.py --accel kvm --cpus 4
 ```
 
+The launcher detects Ubuntu's `OVMF_CODE_4M.fd` and Fedora's `OVMF_CODE.fd` firmware layouts.
+It copies the matching variables template into the test directory before each boot.
+For firmware outside the standard paths, add `--bios /path/to/firmware.fd`.
+
 GDB stops a cooperative switch immediately after its first `SWAPGS` and queues a keyboard interrupt.
 The test checks that interrupts remain masked through scheduler unlock and context restoration.
 It also checks the callback's System V stack alignment and the restored GS base.

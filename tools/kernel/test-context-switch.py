@@ -121,6 +121,7 @@ def main():
     parser.add_argument("--accel", choices=("kvm", "tcg"), default="tcg")
     parser.add_argument("--cpus", type=int, default=2)
     parser.add_argument("--timeout", type=int, default=180)
+    parser.add_argument("--bios", type=Path, help="OVMF firmware image")
     args = parser.parse_args()
     if not 2 <= args.cpus <= 64 or args.timeout < 10:
         parser.error("use 2 to 64 CPUs and a timeout of at least 10 seconds")
@@ -132,22 +133,25 @@ def main():
     kernel = ROOT / "loader/kernel.elf"
     script = directory / "check.gdb"
     script.write_text(gdb_script(kernel, port))
+    command = [
+        sys.executable,
+        str(ROOT / "tools/inference/test-qemu.py"),
+        "--accel",
+        args.accel,
+        "--cpus",
+        str(args.cpus),
+        "--repeat",
+        "3",
+        "--gdb-port",
+        str(port),
+        "--timeout",
+        str(args.timeout),
+    ]
+    if args.bios is not None:
+        command.extend(["--bios", str(args.bios.resolve())])
     with (directory / "guest.log").open("w") as guest_log:
         harness = subprocess.Popen(
-            [
-                sys.executable,
-                str(ROOT / "tools/inference/test-qemu.py"),
-                "--accel",
-                args.accel,
-                "--cpus",
-                str(args.cpus),
-                "--repeat",
-                "3",
-                "--gdb-port",
-                str(port),
-                "--timeout",
-                str(args.timeout),
-            ],
+            command,
             cwd=ROOT,
             stdout=guest_log,
             stderr=subprocess.STDOUT,
@@ -167,6 +171,14 @@ def main():
                 raise RuntimeError(
                     f"guest verification failed; read {directory / 'guest.log'}"
                 )
+        except (subprocess.SubprocessError, RuntimeError):
+            for name in ("guest.log", "gdb.log"):
+                path = directory / name
+                if path.is_file():
+                    print(
+                        f"{path}:\n{path.read_text(errors='replace')}", file=sys.stderr
+                    )
+            raise
         finally:
             if harness.poll() is None:
                 os.killpg(harness.pid, signal.SIGTERM)
