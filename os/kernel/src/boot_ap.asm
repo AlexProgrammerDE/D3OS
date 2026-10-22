@@ -161,7 +161,7 @@ set_cr3:
 	; Switch to long mode (for the time being in compatibility mode)
 	mov    ecx, 0x0C0000080 ; Select Extended Feature Enable Register
 	rdmsr
-	or     eax, 1 << 8 		; LME (Long Mode Enable)
+	or     eax, (1 << 8) | (1 << 11) ; LME and NXE, required by non-executable mappings
 	wrmsr
 
 	; Activate paging
