@@ -2,6 +2,8 @@
 use alloc::{format, string::String, vec, vec::Vec};
 use d3os_compute::{Backend, Conv2d, Pool2d, Tensor, cpu::Cpu, nvidia::Nvidia};
 
+mod transformer;
+
 fn compare(actual: &[f32], expected: &[f32], operation: &str) -> Result<(), String> {
     if actual.len() != expected.len() {
         return Err(format!("{operation}: output length differs"));
@@ -75,6 +77,7 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
         .map_err(|error| format!("{error}"))?;
     let cpu = Cpu.softmax(&cpu).and_then(|output| Cpu.download(&output)).map_err(|error| format!("{error}"))?;
     compare(&gpu, &cpu, "stable softmax")?;
+    transformer::run(backend)?;
     super::report(format_args!(
         "NVIDIA_INFERENCE_OPERATORS_OK matrix_cases=6 convolution_cases=1 softmax_cases=1 backend=nvidia"
     ));

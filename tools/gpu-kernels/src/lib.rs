@@ -7,7 +7,12 @@ use core::arch::nvptx::{_block_dim_x, _block_idx_x, _thread_idx_x};
 use core::panic::PanicInfo;
 
 const _: () = assert!(
-    cfg!(feature = "vector-add") as usize + cfg!(feature = "relu") as usize + cfg!(feature = "matmul") as usize + cfg!(feature = "tensor-matmul") as usize + cfg!(feature = "inference") as usize == 1,
+    cfg!(feature = "vector-add") as usize
+        + cfg!(feature = "relu") as usize
+        + cfg!(feature = "matmul") as usize
+        + cfg!(feature = "tensor-matmul") as usize
+        + cfg!(feature = "inference") as usize
+        == 1,
     "select exactly one GPU kernel feature"
 );
 
@@ -18,6 +23,8 @@ mod tensor;
 mod inference;
 #[cfg(feature = "inference")]
 mod tf32;
+#[cfg(feature = "inference")]
+mod transformer;
 
 #[panic_handler]
 fn panic(_: &PanicInfo<'_>) -> ! {

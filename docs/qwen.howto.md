@@ -4,16 +4,18 @@ D3OS runs the text decoder of [Qwen3.5-0.8B](https://huggingface.co/Qwen/Qwen3.5
 This is the current official sub-billion Qwen model selected on October 22, 2026.
 The newer Qwen3.8 releases are larger models.
 
-The model runner, tokenizer, caches, and CPU operators use Rust with `no_std` and `alloc`.
+The model runner, tokenizer, caches, and compute backends use Rust with `no_std` and `alloc`.
 Python and Transformers run only on the development host to prepare assets and reference outputs.
-NVIDIA execution still requires the hardware backend described in [the architecture guide](inference-architecture.md).
+The native NVIDIA backend passes the complete numerical fixture on the RTX 4090 Laptop GPU.
+Read [the architecture guide](inference-architecture.md) for the driver and API boundaries.
 
 ## Prepare the model
 
 Use a Linux development host with at least 16 GiB of RAM for the VM tests.
 Allow approximately 12 GiB of free disk space for dependencies, downloads, model assets, and boot images.
 The upstream checkpoint is 1.75 GB; the exported text weights are 1.50 GB.
-The CPU backend expands BF16 weights to approximately 3 GB of FP32 storage when it loads the model.
+Both backends expand BF16 weights to approximately 3 GB of FP32 storage when they load the model.
+The NVIDIA backend retains that storage in VRAM.
 
 From the repository root, run:
 
@@ -139,6 +141,65 @@ qemu-system-x86_64 -machine q35 -accel kvm -cpu host -smp 2 -m 12G \
 On Fedora, use `/usr/share/edk2/ovmf/OVMF_CODE.fd` and `/usr/share/edk2/ovmf/OVMF_VARS.fd` as the firmware pair.
 Keep the code image and variables template from the same firmware layout.
 
+## Run on the NVIDIA GPU
+
+First, complete the [VFIO setup and native GPU checks](nvidia-vfio.howto.md).
+Prepare the model assets with the default fixture from this guide.
+Build the OS image and native kernels:
+
+```bash
+cargo make --no-workspace --profile production image
+python3 tools/nvidia/prepare-kernels.py --ptxas /path/to/ptxas \
+  --nvdisasm /path/to/nvdisasm
+```
+
+Run the operator suite and full-model verification sequentially:
+
+```bash
+python3 tools/nvidia/run-qemu.py --firmware target/nvidia/firmware \
+  --kernels target/nvidia/kernels --memory-mib 2048 --boot-check \
+  --inference gpu-self-test
+python3 tools/nvidia/run-qemu.py --firmware target/nvidia/firmware \
+  --kernels target/nvidia/kernels --memory-mib 12288 --boot-check \
+  --inference gpu-qwen-verify --timeout 1200
+```
+
+The operator suite compares outputs, KV caches, convolution histories, and recurrent state against the CPU backend.
+It covers 14 grouped-attention steps and 14 gated-delta steps, including the actual Qwen head dimensions.
+It also verifies that a rejected cache update leaves the cache contents and position unchanged.
+
+The full-model check requires `INFERENCE_OK qwen-verify backend=nvidia positions=29 layers=24`.
+This check passed on the physical RTX GPU with four vCPUs.
+Every layer value and vocabulary logit must satisfy the same tolerance as the CPU test.
+Every greedy token choice must also match the reference.
+The verified run took about 325 seconds, including approximately 295 seconds for model upload.
+The current uncached BAR1 transfer path dominates that duration.
+
+Generate the default arithmetic reply with:
+
+```bash
+python3 tools/nvidia/run-qemu.py --firmware target/nvidia/firmware \
+  --kernels target/nvidia/kernels --memory-mib 12288 --boot-check \
+  --inference gpu-qwen --timeout 1200
+```
+
+This command generated `4` and stopped at EOS on the physical GPU.
+The result matched the host reference and reported one generated token.
+
+The corresponding native shell commands are:
+
+```text
+infer gpu-qwen
+infer gpu-qwen 32 Write one short sentence about the moon.
+infer gpu-qwen-verify
+```
+
+The launcher retains the virtual display for the console and passes the NVIDIA device to D3OS for computation.
+The backend uses tensor cores for all model projections.
+Normalization, activation, rotary positions, both attention paths, and cache updates also run on the GPU.
+The tokenizer, scheduling, reference comparisons, and greedy selection run on the CPU.
+No transformer operation downloads activations to compute its result on the CPU.
+
 ## Call the native API
 
 Add `d3os-inference` and `d3os-compute` as path dependencies in your D3OS application.
@@ -182,7 +243,9 @@ The implementation includes all 24 text layers: 18 gated-delta layers and six gr
 It supports the depthwise causal convolution, normalized delta rule, gated RMSNorm, partial RoPE, SwiGLU, and tied output embeddings.
 The backend performs all numerical operations and owns cache tensors.
 The model runner downloads only final logits or explicit verification observations.
-A future NVIDIA backend must implement `TransformerBackend` in addition to `Backend`.
+The NVIDIA backend implements both `TransformerBackend` and `Backend`.
+To select it, enable the compute crate's `nvidia` feature and pass `d3os_compute::nvidia::Nvidia::new()?` as the backend.
+The same model code and tokenizer work with either backend.
 
 The supported checkpoint profile uses equal key and value head counts in its gated-delta layers.
 Image input, video input, auxiliary prediction heads, quantized CPU kernels, and stochastic sampling are outside this implementation.

@@ -8,7 +8,10 @@ The hardware-free phase delivers pretrained AlexNet and Qwen3.5-0.8B text infere
 It also provides CPU execution of compiled Rust PTX kernels.
 The native NVIDIA hardware phase now runs AlexNet on the passed-through RTX 4090 Laptop GPU.
 Firmware boot, GPU page tables, native kernel loading, and tensor execution are operational.
-Qwen GPU operators and GPU rendering remain unfinished.
+Qwen also passes all 24 layer checks and vocabulary-logit comparisons on the physical GPU.
+Its native generation command replies `4` to the default arithmetic prompt and stops at EOS.
+GPU rendering remains unfinished.
+The [DOOM rendering assessment](nvidia-rendering-design.md) describes a native compute path and the remaining transfer requirements.
 
 ## Source layout
 
@@ -152,7 +155,7 @@ The implementation milestones are:
 Milestones 1 through 4, native compute in 5, and milestones 6 through 8 are operational on the target GPU.
 The userspace service validates buffer ownership and releases storage after process exit.
 Copy-engine transfers, separate hardware address spaces for arbitrary user kernels, and recovery without VM reset remain unfinished.
-Tensor execution is operational, while Qwen transformer operators remain the next model requirement.
+Tensor execution and Qwen transformer operators are operational.
 
 Initial bring-up can use driver-owned staging buffers and explicit copies.
 It does not require shared CPU/GPU virtual addresses or demand-paged GPU memory.
@@ -160,7 +163,11 @@ Arbitrary userspace kernel submission still requires memory isolation and a docu
 
 Qwen3.5-0.8B text generation now uses the native `TransformerBackend` interface.
 It includes recurrent and grouped attention, normalization, rotary positions, SwiGLU, cached decoding, tokenization, and greedy sampling.
-The NVIDIA backend must implement these operations before Qwen can run on GPU hardware.
+The NVIDIA backend implements these operations with GPU-resident state.
+It prepares and validates every dispatch before the first cache mutation.
+The syscall checks every modified buffer, including convolution histories and recurrent state.
+The hardware suite compares outputs and state across multiple attention and gated-delta steps.
+The pretrained model then passes every original reference comparison at 29 token positions.
 Read [the Qwen guide](qwen.howto.md) for API usage, reference verification, memory requirements, and multicore VM commands.
 
 ## GPU debug machine
@@ -201,6 +208,6 @@ The session's locked-memory limit was raised to 16 GiB for VFIO.
 The [VFIO setup guide](nvidia-vfio.howto.md) gives the documented ASUS Hybrid-mode commands, display checks, VFIO reservation, and rollback steps.
 The D3OS guest boots with the physical GPU and audio function present and completes its native CPU self-test with four vCPUs.
 The native probe reads AD103 register identification, a 16 GiB BAR1 aperture, and 16,376 MiB of usable VRAM.
-GPU firmware startup, scalar kernels, tensor kernels, and AlexNet inference pass on this physical GPU.
+GPU firmware startup, scalar kernels, tensor kernels, AlexNet inference, and Qwen numerical verification pass on this physical GPU.
 Read the [native inference commands](nvidia-vfio.howto.md#8-run-native-gpu-inference) for repeatable hardware checks.
 The Ada kernel build uses `--hardware-sm sm_89`.

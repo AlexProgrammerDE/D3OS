@@ -1,0 +1,155 @@
+use alloc::{format, string::String, vec, vec::Vec};
+use d3os_compute::transformer::{AttentionConfig, AttentionInputs, AttentionState, DeltaConfig, DeltaInputs, DeltaState, TransformerBackend};
+use d3os_compute::{Result, Tensor, cpu::Cpu, nvidia::Nvidia};
+
+fn tensor<B: TransformerBackend>(backend: &B, shape: &[usize], seed: usize) -> Result<Tensor<B>> {
+    let count = d3os_compute::element_count(shape)?;
+    let values = (0..count).map(|i| (((i * 37 + seed * 17) % 127) as f32 - 63.) / 71.).collect();
+    Tensor::from_vec(backend, shape, values)
+}
+
+fn attention<B: TransformerBackend>(backend: &B, config: AttentionConfig) -> Result<Vec<Vec<f32>>> {
+    let (heads, kv, dim) = (config.heads, config.kv_heads, config.head_dim);
+    let mut state = AttentionState {
+        keys: Tensor::from_vec(backend, &[7, kv, dim], vec![0.; 7 * kv * dim])?,
+        values: Tensor::from_vec(backend, &[7, kv, dim], vec![0.; 7 * kv * dim])?,
+        position: 0,
+    };
+    let query_norm = tensor(backend, &[dim], 3)?;
+    let key_norm = tensor(backend, &[dim], 5)?;
+    let mut trace = Vec::new();
+    for step in 0..7 {
+        let query_gate = tensor(backend, &[1, 2 * heads * dim], step + 7)?;
+        let key = tensor(backend, &[1, kv * dim], step + 11)?;
+        let value = tensor(backend, &[1, kv * dim], step + 17)?;
+        let output = backend.attention_step(
+            AttentionInputs {
+                query_gate: &query_gate,
+                key: &key,
+                value: &value,
+                query_norm: &query_norm,
+                key_norm: &key_norm,
+            },
+            &mut state,
+            config,
+        )?;
+        trace.push(backend.download(&output)?);
+        trace.push(backend.download(&state.keys)?);
+        trace.push(backend.download(&state.values)?);
+    }
+    // A rejected call must leave both the position and cache bytes unchanged.
+    let before = backend.download(&state.keys)?;
+    let query_gate = tensor(backend, &[1, 2 * heads * dim], 31)?;
+    let key = tensor(backend, &[1, kv * dim], 32)?;
+    let value = tensor(backend, &[1, kv * dim], 33)?;
+    if backend
+        .attention_step(
+            AttentionInputs {
+                query_gate: &query_gate,
+                key: &key,
+                value: &value,
+                query_norm: &query_norm,
+                key_norm: &key_norm,
+            },
+            &mut state,
+            config,
+        )
+        .is_ok()
+        || state.position != 7
+        || backend.download(&state.keys)? != before
+    {
+        return Err(d3os_compute::Error::DeviceFault);
+    }
+    Ok(trace)
+}
+
+fn delta<B: TransformerBackend>(backend: &B, config: DeltaConfig) -> Result<Vec<Vec<f32>>> {
+    let (heads, key, value, kernel) = (config.heads, config.key_dim, config.value_dim, config.kernel);
+    let channels = heads * (2 * key + value);
+    let mut state = DeltaState {
+        convolution: Tensor::from_vec(backend, &[channels, kernel], vec![0.; channels * kernel])?,
+        recurrent: Tensor::from_vec(backend, &[heads, key, value], vec![0.; heads * key * value])?,
+    };
+    let convolution = tensor(backend, &[channels, 1, kernel], 3)?;
+    let log_decay = tensor(backend, &[heads], 5)?;
+    let time_bias = tensor(backend, &[heads], 7)?;
+    let norm = tensor(backend, &[value], 11)?;
+    let mut trace = Vec::new();
+    for step in 0..7 {
+        let qkv = tensor(backend, &[1, channels], step + 13)?;
+        let gate = tensor(backend, &[1, heads * value], step + 17)?;
+        let beta = tensor(backend, &[1, heads], step + 19)?;
+        let alpha = tensor(backend, &[1, heads], step + 23)?;
+        let output = backend.delta_step(
+            DeltaInputs {
+                qkv: &qkv,
+                gate: &gate,
+                beta: &beta,
+                alpha: &alpha,
+                convolution: &convolution,
+                log_decay: &log_decay,
+                time_bias: &time_bias,
+                norm: &norm,
+            },
+            &mut state,
+            config,
+        )?;
+        trace.push(backend.download(&output)?);
+        trace.push(backend.download(&state.convolution)?);
+        trace.push(backend.download(&state.recurrent)?);
+    }
+    Ok(trace)
+}
+
+fn pointwise<B: TransformerBackend>(backend: &B) -> Result<Vec<f32>> {
+    let table = tensor(backend, &[7, 11], 3)?;
+    let weights = tensor(backend, &[11], 5)?;
+    let residual = tensor(backend, &[1, 11], 7)?;
+    let embedding = backend.embedding(&table, 3)?;
+    let normalized = backend.rms_norm(&embedding, &weights, 1e-6)?;
+    let gated = backend.silu_mul(normalized, &residual)?;
+    backend.download(&backend.add(gated, &residual)?)
+}
+
+fn compare_traces(actual: &[Vec<f32>], expected: &[Vec<f32>], name: &str) -> core::result::Result<(), String> {
+    if actual.len() != expected.len() {
+        return Err(format!("{name}: trace length differs"));
+    }
+    for (step, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+        super::compare(actual, expected, &format!("{name} trace {step}"))?;
+    }
+    Ok(())
+}
+
+pub(super) fn run(backend: &Nvidia) -> core::result::Result<(), String> {
+    let pointwise_gpu = pointwise(backend).map_err(|error| format!("{error}"))?;
+    let pointwise_cpu = pointwise(&Cpu).map_err(|error| format!("{error}"))?;
+    super::compare(&pointwise_gpu, &pointwise_cpu, "transformer pointwise")?;
+    for (heads, kv_heads, head_dim, rotary_dim) in [(4, 2, 10, 6), (8, 2, 256, 64)] {
+        let config = AttentionConfig {
+            heads,
+            kv_heads,
+            head_dim,
+            rotary_dim,
+            rope_theta: 10000000.,
+            epsilon: 1e-6,
+        };
+        let gpu = attention(backend, config).map_err(|error| format!("attention: {error}"))?;
+        let cpu = attention(&Cpu, config).map_err(|error| format!("attention reference: {error}"))?;
+        compare_traces(&gpu, &cpu, "grouped attention")?;
+    }
+    for (heads, key_dim, value_dim, kernel) in [(2, 5, 7, 3), (16, 128, 128, 4)] {
+        let config = DeltaConfig {
+            heads,
+            key_dim,
+            value_dim,
+            kernel,
+            epsilon: 1e-6,
+        };
+        let gpu = delta(backend, config).map_err(|error| format!("delta: {error}"))?;
+        let cpu = delta(&Cpu, config).map_err(|error| format!("delta reference: {error}"))?;
+        compare_traces(&gpu, &cpu, "gated delta")?;
+    }
+    super::super::report(format_args!("NVIDIA_TRANSFORMER_OPERATORS_OK attention_cases=14 delta_cases=14 backend=nvidia"));
+    Ok(())
+}

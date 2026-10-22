@@ -225,7 +225,7 @@ This path replaces the earlier user-context promotion, which left the image unin
 The context layout follows NVIDIA's [image definitions](https://github.com/NVIDIA/open-gpu-doc/blob/master/manuals/volta/gv100/dev_ctxsw.ref.txt) and [RAMIN definitions](https://github.com/NVIDIA/open-gpu-doc/blob/master/manuals/turing/tu104/dev_ram.ref.txt).
 Host tests reject malformed image headers and verify that relocation preserves unrelated fields.
 The native userspace backend runs AlexNet on this GPU.
-Qwen still requires GPU transformer operators.
+Qwen also passes its complete numerical fixture through the native GPU backend.
 
 The Rust kernels compile to PTX and then native `sm_89` SASS.
 The standalone `ptxas` assembler runs on the host.
@@ -252,7 +252,7 @@ The shader test records GPU semaphore checkpoints, RAMIN fields, notifier conten
 
 Tensor-core execution is a requirement for the AlexNet and Qwen GPU backends.
 AlexNet uses the TF32 inference kernels described in section 8.
-Qwen GPU inference remains unfinished.
+The [Qwen guide](qwen.howto.md#run-on-the-nvidia-gpu) gives its GPU commands and verification requirements.
 The current Rust kernels implement dense matrix multiplication through `mma.sync.aligned.m16n8k16`.
 They round FP32 inputs to FP16 or BF16, accumulate in FP32, and return FP32 output.
 One warp owns each 16-by-8 output tile.
@@ -336,7 +336,7 @@ Reference comparisons and top-five selection use explicit downloads.
 The current transfer path uses uncached CPU writes through BAR1.
 The verified AlexNet run took about 26 seconds, including file access, weight upload, and reference comparisons.
 This result establishes correctness rather than competitive inference performance.
-Copy-engine transfers, optimized tensor tiling, Qwen GPU inference, and GPU rendering remain unfinished.
+Copy-engine transfers, optimized tensor tiling, and GPU rendering remain unfinished.
 A later repeat encountered a GSP timeout during graphics-class initialization before model execution.
 The next VM boot passed without a code change.
 Repeated-reset reliability remains under investigation.

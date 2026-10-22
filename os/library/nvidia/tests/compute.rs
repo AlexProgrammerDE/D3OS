@@ -4,7 +4,7 @@ use d3os_nvidia::compute::Kernel;
 fn matrix_work_covers_partial_tiles_and_checks_products() {
     for kernel in [Kernel::Matmul, Kernel::Project] {
         let work = kernel.work(&[17, 33, 9]).unwrap();
-        assert_eq!(work.extents, [17 * 33, 33 * 9, 17 * 9]);
+        assert_eq!(work.extents[..3], [17 * 33, 33 * 9, 17 * 9]);
         assert_eq!((work.threads, work.blocks, work.pointers, work.output), (128, 1, 3, 2));
         assert!(!work.in_place);
         assert!(kernel.work(&[u32::MAX, 2, 1]).is_err());
@@ -27,9 +27,33 @@ fn elementwise_work_rejects_incomplete_rows_and_wrapping_launches() {
     assert!(Kernel::BiasChannel.work(&[13, 2, 3]).is_err());
     assert!(Kernel::Relu.work(&[u32::MAX]).is_err());
     let work = Kernel::BiasChannel.work(&[24, 4, 3]).unwrap();
-    assert_eq!(work.extents, [24, 3, 24]);
+    assert_eq!(work.extents[..3], [24, 3, 24]);
     assert!(work.in_place);
     assert!(Kernel::MaxPool.work(&[2, 8, 8, 3, 3, 0, 2, 3, 3]).is_err());
     assert!(Kernel::Softmax.work(&[u32::MAX, 2]).is_err());
-    assert!(Kernel::from_raw(8).is_err());
+    assert!(Kernel::from_raw(u32::MAX).is_err());
+}
+
+#[test]
+fn stateful_dispatch_protects_every_mutated_range() {
+    let work = Kernel::DeltaConvolution.work(&[14, 3]).unwrap();
+    assert_eq!(work.extents[..4], [14, 42, 42, 14]);
+    assert!(work.validate_aliases(&[0x1000, 0x2000, 0x3000, 0x4000]).is_ok());
+    assert!(work.validate_aliases(&[0x3000, 0x2000, 0x3000, 0x4000]).is_err());
+    assert!(work.validate_aliases(&[0x1000, 0x2000, 0x3000, 0x3004]).is_err());
+    let update = Kernel::DeltaUpdate.work(&[2, 2, 3]).unwrap();
+    assert_eq!(update.extents[..4], [14, 8, 12, 6]);
+    assert!(update.validate_aliases(&[0x1000, 0x2000, 0x3000, 0x1004]).is_err());
+    let relu = Kernel::Relu.work(&[16]).unwrap();
+    assert!(relu.validate_aliases(&[0x1000, 0x1000]).is_ok());
+    assert!(relu.validate_aliases(&[0x1000, 0x1004]).is_err());
+}
+
+#[test]
+fn transformer_bounds_reject_invalid_groups_and_nonfinite_parameters() {
+    assert!(Kernel::AttentionScores.work(&[3, 2, 4, 5]).is_err());
+    assert!(Kernel::AttentionPrepare.work(&[2, 4, 3, 0, 10000f32.to_bits(), 1e-6f32.to_bits(), 2]).is_err());
+    assert!(Kernel::RmsNorm.work(&[1, 11, f32::NAN.to_bits(), 1f32.to_bits()]).is_err());
+    assert!(Kernel::DeltaPrepare.work(&[u32::MAX, 2, 3]).is_err());
+    assert!(Kernel::DeltaOutput.work(&[2, 3, 0]).is_err());
 }

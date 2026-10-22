@@ -54,7 +54,7 @@ def main():
     parser.add_argument("--kernels", type=Path, help="stage native GPU kernel binaries")
     parser.add_argument(
         "--inference",
-        choices=("cpu-self-test", "gpu-self-test", "gpu-alexnet"),
+        choices=("cpu-self-test", "gpu-self-test", "gpu-alexnet", "gpu-qwen", "gpu-qwen-verify"),
         default="cpu-self-test",
         help="inference command to validate during --boot-check",
     )
@@ -119,9 +119,14 @@ def main():
         if args.dry_run:
             args.image = directory / "d3os.img"
         else:
+            mode = "self-test"
+            if args.inference.startswith("gpu-qwen"):
+                mode = "qwen"
+            elif args.inference == "gpu-alexnet":
+                mode = "alexnet"
             args.image = harness.prepare(
                 directory,
-                "alexnet" if args.inference == "gpu-alexnet" else "self-test",
+                mode,
                 ROOT / "target/qwen",
                 assets,
             )
@@ -219,8 +224,12 @@ def main():
                     "cpu-self-test": "INFERENCE_OK self-test backend=cpu",
                     "gpu-self-test": "INFERENCE_OK self-test backend=nvidia",
                     "gpu-alexnet": "INFERENCE_OK alexnet backend=nvidia layers=8",
+                    "gpu-qwen": "INFERENCE_OK qwen backend=nvidia",
+                    "gpu-qwen-verify": "INFERENCE_OK qwen-verify backend=nvidia positions=29 layers=24",
                 }[args.inference]
                 if expected in text:
+                    if args.inference == "gpu-qwen" and "INFERENCE_OK qwen backend=nvidia tokens=1 stop=EndOfSequence" not in text:
+                        raise RuntimeError("GPU generation did not match the default arithmetic fixture")
                     if "[0x10de:0x2757]" not in text or "[0x10de:0x22bb]" not in text:
                         raise RuntimeError(
                             "guest did not enumerate the target GPU and audio"

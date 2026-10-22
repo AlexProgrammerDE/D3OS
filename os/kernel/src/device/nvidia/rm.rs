@@ -39,6 +39,7 @@ pub(super) struct Compute {
     pub(super) launch_buffers: Option<(Allocation, Allocation)>,
     pub(super) buffers: super::service::Buffers,
     pub(super) healthy: bool,
+    pub(super) inference_module: Option<&'static [u8]>,
 }
 
 impl Device {
@@ -75,6 +76,7 @@ impl Compute {
             launch_buffers: None,
             buffers: super::service::Buffers::default(),
             healthy: true,
+            inference_module: None,
         })
     }
 

@@ -87,7 +87,7 @@ fn serve(device: &Device, compute: &mut super::rm::Compute, owner: Uuid, request
         abi::INFO => {
             // The complete inference module must exist; a register probe alone
             // is not an operational userspace backend.
-            super::gsp::asset("usr/share/nvidia/inference.cubin").map_err(|_| Errno::ENOTSUP)?;
+            inference_module(compute)?;
             Ok(abi::VERSION as usize)
         }
         abi::ALLOCATE => {
@@ -176,7 +176,7 @@ fn serve(device: &Device, compute: &mut super::rm::Compute, owner: Uuid, request
             if request.buffer_count as usize != work.pointers {
                 return Err(Errno::EINVAL);
             }
-            let mut addresses = [0u64; 3];
+            let mut addresses = [0u64; 16];
             for (i, address) in addresses.iter_mut().enumerate().take(work.pointers) {
                 let buffer = compute.buffers.get(request.buffers[i], owner)?;
                 if request.offsets[i].checked_add(work.extents[i]).is_none_or(|end| end > buffer.elements) {
@@ -184,16 +184,7 @@ fn serve(device: &Device, compute: &mut super::rm::Compute, owner: Uuid, request
                 }
                 *address = buffer.allocation.virtual_address + request.offsets[i] * 4;
             }
-            let output = work.output;
-            for i in 0..work.pointers {
-                if i == output {
-                    continue;
-                }
-                let overlap = addresses[output] < addresses[i] + work.extents[i] * 4 && addresses[i] < addresses[output] + work.extents[output] * 4;
-                if overlap && !(work.in_place && i == 0 && addresses[i] == addresses[output] && work.extents[i] == work.extents[output]) {
-                    return Err(Errno::EINVAL);
-                }
-            }
+            work.validate_aliases(&addresses[..work.pointers]).map_err(|_| Errno::EINVAL)?;
             let mut arguments = Vec::with_capacity(work.pointers * 8 + parameters.len() * 4);
             for address in addresses.iter().take(work.pointers) {
                 arguments.extend_from_slice(&address.to_le_bytes());
@@ -201,7 +192,7 @@ fn serve(device: &Device, compute: &mut super::rm::Compute, owner: Uuid, request
             for parameter in parameters {
                 arguments.extend_from_slice(&parameter.to_le_bytes());
             }
-            let cubin = super::gsp::asset("usr/share/nvidia/inference.cubin").map_err(|_| Errno::ENOTSUP)?;
+            let cubin = inference_module(compute)?;
             if let Err(error) = compute.launch(device, cubin, kernel.symbol(), &arguments, [work.threads, work.blocks]) {
                 compute.healthy = false;
                 log::warn!("NVIDIA inference dispatch failed: {error}");
@@ -211,4 +202,13 @@ fn serve(device: &Device, compute: &mut super::rm::Compute, owner: Uuid, request
         }
         _ => Err(Errno::EINVAL),
     }
+}
+
+fn inference_module(compute: &mut super::rm::Compute) -> Result<&'static [u8], Errno> {
+    if let Some(module) = compute.inference_module {
+        return Ok(module);
+    }
+    let module = super::gsp::asset("usr/share/nvidia/inference.cubin").map_err(|_| Errno::ENOTSUP)?;
+    compute.inference_module = Some(module);
+    Ok(module)
 }

@@ -4,6 +4,8 @@ use d3os_nvidia::compute::{self as abi, Kernel, Request};
 
 use crate::{Backend, Buffer, Conv2d, Error, Pool2d, Result, Tensor, element_count, output_extent};
 
+mod transformer;
+
 fn request(request: Request) -> Result<usize> {
     #[cfg(all(target_os = "none", target_arch = "x86_64"))]
     {
@@ -77,6 +79,11 @@ impl Nvidia {
     }
 
     fn launch(&self, kernel: Kernel, buffers: &[(&GpuBuffer, usize)], parameters: &[usize]) -> Result<()> {
+        request(self.prepare(kernel, buffers, parameters)?)?;
+        Ok(())
+    }
+
+    fn prepare(&self, kernel: Kernel, buffers: &[(&GpuBuffer, usize)], parameters: &[usize]) -> Result<Request> {
         let mut call = Request {
             kernel: kernel as u32,
             buffer_count: buffers.len() as u32,
@@ -100,8 +107,7 @@ impl Nvidia {
             call.buffers[i] = buffer.handle;
             call.offsets[i] = offset as u64;
         }
-        request(call)?;
-        Ok(())
+        Ok(call)
     }
 }
 
