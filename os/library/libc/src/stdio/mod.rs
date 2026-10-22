@@ -1,12 +1,16 @@
-use core::ffi::c_size_t;
-
+pub mod file;
 pub mod print;
 pub mod scan;
-pub mod file;
 
-type FILE = c_size_t;
+#[repr(C)]
+pub struct FILE {
+    handle: usize,
+}
+
+static TERMINAL_OUT: FILE = FILE { handle: usize::MAX };
+static TERMINAL_ERR: FILE = FILE { handle: usize::MAX - 1 };
 
 #[unsafe(no_mangle)]
-static stdout: FILE = 0x00;
+static stdout: &FILE = &TERMINAL_OUT;
 #[unsafe(no_mangle)]
-static stderr: FILE = 0x01;
+static stderr: &FILE = &TERMINAL_ERR;

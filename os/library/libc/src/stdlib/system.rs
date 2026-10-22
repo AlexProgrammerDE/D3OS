@@ -17,9 +17,10 @@ pub unsafe extern "C" fn abort() -> ! {
     todo!()
 }
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn exit() -> ! {
-    todo!()
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn exit(_exit_code: c_int) -> ! {
+    let _ = syscall::syscall(syscall::SystemCall::ProcessExit, &[]);
+    panic!("ProcessExit returned")
 }
 
 #[unsafe(no_mangle)]

@@ -1,20 +1,22 @@
+use crate::errno::errno::{Errno, set_errno};
+use crate::stdio::FILE;
+use crate::str_from_c_ptr;
+use alloc::boxed::Box;
 use core::ffi::{c_char, c_int, c_long, c_size_t, c_void};
 use core::slice;
 use naming::shared_types::{OpenOptions, SeekOrigin};
-use crate::errno::errno::{set_errno, Errno};
-use crate::stdio::FILE;
-use crate::str_from_c_ptr;
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fopen(filename: *const c_char, mode: *const c_char) -> *mut FILE {
     let mode = str_from_c_ptr(mode);
     if mode != "r" && mode != "rb" {
-        todo!("libc only supports read-only fopen for now...");
+        set_errno(Errno::EACCES);
+        return core::ptr::null_mut();
     }
 
     let path = str_from_c_ptr(filename);
     match naming::open(path, OpenOptions::READONLY) {
-        Ok(handle) => handle as *mut FILE,
+        Ok(handle) => Box::into_raw(Box::new(FILE { handle })),
         Err(_) => {
             set_errno(Errno::ENOENT);
             core::ptr::null_mut()
@@ -24,20 +26,35 @@ pub unsafe extern "C" fn fopen(filename: *const c_char, mode: *const c_char) -> 
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fclose(stream: *mut FILE) -> c_int {
-    let handle = stream as usize;
+    if stream.is_null() || core::ptr::eq(stream, super::stdout) || core::ptr::eq(stream, super::stderr) {
+        set_errno(Errno::EBADF);
+        return -1;
+    }
+    let file = unsafe { Box::from_raw(stream) };
+    let handle = file.handle;
     match naming::close(handle) {
         Ok(_) => 0,
         Err(_) => {
             set_errno(Errno::EBADF);
-            1
+            -1
         }
     }
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fread(buffer: *mut c_void, size: c_size_t, count: c_size_t, stream: *mut FILE) -> c_size_t {
-    let handle = stream as usize;
-    let total_size = size * count;
+    if size == 0 || count == 0 {
+        return 0;
+    }
+    let Some(total_size) = size.checked_mul(count).filter(|&bytes| bytes <= isize::MAX as usize) else {
+        set_errno(Errno::ERANGE);
+        return 0;
+    };
+    if stream.is_null() {
+        set_errno(Errno::EBADF);
+        return 0;
+    }
+    let handle = unsafe { (*stream).handle };
 
     unsafe {
         let target = slice::from_raw_parts_mut(buffer as *mut u8, total_size as usize);
@@ -65,7 +82,11 @@ pub unsafe extern "C" fn fflush(_stream: *mut FILE) -> c_int {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fseek(stream: *mut FILE, offset: c_long, origin: c_int) -> c_int {
-    let handle = stream as usize;
+    if stream.is_null() {
+        set_errno(Errno::EBADF);
+        return -1;
+    }
+    let handle = unsafe { (*stream).handle };
 
     let mode = match origin {
         0 => SeekOrigin::Start,
@@ -88,7 +109,11 @@ pub unsafe extern "C" fn fseek(stream: *mut FILE, offset: c_long, origin: c_int)
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ftell(stream: *mut FILE) -> c_long {
-    let handle = stream as usize;
+    if stream.is_null() {
+        set_errno(Errno::EBADF);
+        return -1;
+    }
+    let handle = unsafe { (*stream).handle };
 
     match naming::seek(handle, 0, SeekOrigin::Current) {
         Ok(position) => position as c_long,

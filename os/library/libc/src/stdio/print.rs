@@ -4,7 +4,6 @@ use core::ffi::{c_char, c_int, c_size_t, VaList};
 use core::ops::DerefMut;
 use terminal::{print, println};
 use terminal::write::TERMINAL_WRITER;
-use crate::errno::errno::{set_errno, Errno};
 use crate::stdio::{stderr, stdout, FILE};
 use crate::str_from_c_ptr;
 
@@ -25,7 +24,7 @@ pub unsafe extern "C" fn puts(str: *const c_char) -> c_int {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vfprintf(stream: *mut FILE, format: *const c_char, vlist: VaList) -> c_int {
     let stream = stream as usize;
-    if stream != stdout as usize && stream != stderr as usize {
+    if stream != stdout as *const FILE as usize && stream != stderr as *const FILE as usize {
         todo!("vfprintf only supports printing to the terminal for now...")
     }
 
