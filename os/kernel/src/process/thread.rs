@@ -573,12 +573,21 @@ impl Thread {
 #[unsafe(naked)]
 unsafe extern "C" fn thread_kernel_start(old_rsp0: u64) {
     naked_asm!(
+        "cli",
         "mov rsp, rdi", // First parameter -> load 'old_rsp0'
 
         // Set Task Switched bit in CR0
         "mov rax, cr0",
         "or rax, 0x00000008",
         "mov cr0, rax",
+
+        // Release the incoming core's scheduler with interrupts still masked.
+        // R12 is saved in the context frame and preserved by the SysV callback.
+        // Both synthetic startup frames and suspended call frames need alignment.
+        "mov r12, rsp",
+        "and rsp, -16",
+        "call unlock_scheduler",
+        "mov rsp, r12",
 
         // Load registers from prepared stack
         "pop rax",
@@ -601,7 +610,6 @@ unsafe extern "C" fn thread_kernel_start(old_rsp0: u64) {
         "pop r9",
         "pop r8",
         "popf",
-        "call unlock_scheduler", // force unlock, thread_switch locks Scheduler but returns later
         "ret"
     );
 }
@@ -623,6 +631,9 @@ unsafe extern "C" fn thread_switch(current_rsp0: *mut u64, next_rsp0: u64, next_
     naked_asm!(
     // Save registers of current thread
     "pushf",
+    // Save the caller's IF before masking interrupts. An IRQ during SWAPGS
+    // would otherwise mistake the user GS base for core-local storage.
+    "cli",
     "push r8",
     "push r9",
     "push r10",
@@ -660,6 +671,12 @@ unsafe extern "C" fn thread_switch(current_rsp0: *mut u64, next_rsp0: u64, next_
 
     // Load registers of next thread by using 'next_rsp0' (second parameter)
     "mov rsp, rsi",
+    // Unlock before restoring IF, on an ABI-aligned incoming stack. R12's
+    // incoming value is restored below, after it serves as the frame anchor.
+    "mov r12, rsp",
+    "and rsp, -16",
+    "call unlock_scheduler",
+    "mov rsp, r12",
     "pop rax", "wrgsbase rax",
     "pop rax", "wrfsbase rax",
     "pop rbp",
@@ -678,8 +695,6 @@ unsafe extern "C" fn thread_switch(current_rsp0: *mut u64, next_rsp0: u64, next_
     "pop r9",
     "pop r8",
     "popf",
-
-    "call unlock_scheduler", // force unlock, thread_switch locks Scheduler but returns later
     "ret", // Return to next thread
     CORE_LOCAL_STORAGE_TSS_RSP0_PTR_INDEX = const CORE_LOCAL_STORAGE_TSS_RSP0_PTR_INDEX,
     )

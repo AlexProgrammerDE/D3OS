@@ -182,7 +182,13 @@ def main():
     )
     parser.add_argument("--timeout", type=float, default=180)
     parser.add_argument(
-        "--cpus", type=int, help="guest CPU count (one for Qwen, two for smaller tests)"
+        "--repeat", type=int, default=1, help="repeat the native command in the same VM"
+    )
+    parser.add_argument(
+        "--gdb-port", type=int, help="start paused for GDB on a local TCP port"
+    )
+    parser.add_argument(
+        "--cpus", type=int, default=2, help="guest CPU count (default: two)"
     )
     args = parser.parse_args()
     mode = (
@@ -196,7 +202,11 @@ def main():
     )
     if args.timeout <= 0:
         parser.error("--timeout must be positive")
-    cpus = args.cpus if args.cpus is not None else 1 if mode.startswith("qwen") else 2
+    if not 1 <= args.repeat <= 100:
+        parser.error("--repeat must be from 1 to 100")
+    if args.gdb_port is not None and not 1 <= args.gdb_port <= 65535:
+        parser.error("--gdb-port must be from 1 to 65535")
+    cpus = args.cpus
     if not 1 <= cpus <= 64:
         parser.error("--cpus must be from 1 to 64")
     bios = args.bios or next(
@@ -269,6 +279,8 @@ def main():
     expected = (
         f"INFERENCE_OK {mode} " if mode != "self-test" else "INFERENCE_OK self-test"
     )
+    if args.gdb_port is not None:
+        command.extend(["-gdb", f"tcp:127.0.0.1:{args.gdb_port}", "-S"])
     qmp = None
     with (directory / "qemu.log").open("w") as log:
         process = subprocess.Popen(command, cwd=ROOT, stdout=log, stderr=log)
@@ -287,11 +299,19 @@ def main():
                 raise TimeoutError(f"D3OS did not start its shell. Read {serial}")
             time.sleep(1)
             qmp.type_command(f"infer {mode}" if mode != "self-test" else "infer")
+            completed = 0
             while time.monotonic() < deadline:
                 text = serial.read_text(errors="replace")
                 if "INFERENCE_FAIL" in text or "panicked at" in text:
                     raise RuntimeError(f"D3OS inference failed. Read {serial}")
-                if expected in text:
+                count = text.count(expected)
+                if count > completed and count < args.repeat:
+                    completed = count
+                    time.sleep(1)
+                    qmp.type_command(
+                        f"infer {mode}" if mode != "self-test" else "infer"
+                    )
+                if count >= args.repeat:
                     print(
                         "\n".join(
                             line
@@ -302,7 +322,9 @@ def main():
                             or "infer.rs@" in line
                         )
                     )
-                    print(f"QEMU_INFERENCE_OK accelerator={args.accel} serial={serial}")
+                    print(
+                        f"QEMU_INFERENCE_OK accelerator={args.accel} cpus={cpus} runs={count} serial={serial}"
+                    )
                     return
                 if process.poll() is not None:
                     raise RuntimeError(f"QEMU exited during inference. Read {serial}")

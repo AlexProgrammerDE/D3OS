@@ -15,6 +15,38 @@ on:
         default: false
 
 jobs:
+  context-switch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-02-01
+          components: rust-src
+      - uses: Swatinem/rust-cache@v2
+      - name: Install kernel verification dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential binutils gdb nasm dosfstools qemu-system-x86 ovmf
+          cargo install --locked --no-default-features cargo-make --version 0.37.24
+          cargo install --locked cargo-license --version 0.6.1
+      - name: Build D3OS
+        run: cargo make --no-workspace --profile production image
+      - name: Inject an interrupt during a multicore context switch
+        run: python3 tools/kernel/test-context-switch.py --accel tcg
+      - name: Upload kernel verification logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: context-switch-verification
+          if-no-files-found: ignore
+          path: |
+            target/context-switch/*.log
+            target/context-switch/check.gdb
+            target/inference-qemu-self-test/serial.log
+            target/inference-qemu-self-test/qemu.log
+
   cpu-and-ptx:
     runs-on: ubuntu-24.04
     timeout-minutes: 15

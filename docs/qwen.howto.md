@@ -94,10 +94,10 @@ The harness builds a separate GPT/EFI image with the model assets and gives the 
 It uses mtools to reserve sufficient FAT metadata space for the large initrd.
 It does not copy model files into the normal repository boot image.
 
-The Qwen VM uses one vCPU.
-Two-vCPU KVM runs exposed a kernel `local APIC not initialized` panic during long execution.
-This change does not repair that SMP issue.
-Use `--cpus 2` to reproduce that configuration when the kernel issue is investigated.
+The VM uses two vCPUs by default.
+Use `--cpus 4` to test four vCPUs and `--repeat 3` to repeat a command within the same VM.
+The kernel masks interrupts across context transfers to prevent the earlier `local APIC not initialized` panic.
+See [the context-switch regression guide](context-switch.howto.md) for the cause and debugger checks.
 
 The complete numerical trace also passed with software CPU emulation, taking approximately six minutes on the development host.
 To select this mode, add `--accel tcg`:
@@ -127,7 +127,7 @@ It reports generation and verification results to the terminal and serial logger
 To open the prepared image in an interactive VM after the tests, run:
 
 ```bash
-qemu-system-x86_64 -machine q35 -accel kvm -cpu host -smp 1 -m 12G \
+qemu-system-x86_64 -machine q35 -accel kvm -cpu host -smp 2 -m 12G \
   -bios /usr/share/OVMF/OVMF_CODE.fd \
   -drive format=raw,file=target/inference-qemu-qwen/d3os.img \
   -device virtio-vga -device virtio-rng-pci -nic model=rtl8139 \

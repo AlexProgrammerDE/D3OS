@@ -98,7 +98,10 @@ Local verification on October 22, 2026 established these results:
 - The small-network test passed inside D3OS under QEMU/KVM.
 - Pretrained AlexNet passed all eight layer comparisons inside D3OS under QEMU/KVM.
 - Both AlexNet guest tests also passed with QEMU TCG, without KVM or GPU access.
-- Qwen3.5-0.8B passed all 24 layer checks and vocabulary-logit comparisons across 29 positions on the host and in a single-vCPU D3OS KVM guest.
+- Qwen3.5-0.8B passed all 24 layer checks and vocabulary-logit comparisons across 29 positions on the host and in D3OS KVM guests.
+- Qwen passed three numerical verification runs each with two and four vCPUs after the context-switch interrupt fix.
+- Qwen generated the expected arithmetic reply and stopped at EOS in three runs with four vCPUs.
+- The context-switch interrupt-injection regression passed with two vCPUs under KVM and TCG, and four vCPUs under KVM.
 - All 105 Qwen tokenizer cases matched the upstream tokenizer.
 - Qwen passed the complete numerical trace inside D3OS under QEMU TCG without hardware virtualization.
 
@@ -142,7 +145,7 @@ Arbitrary userspace kernel submission still requires memory isolation and a docu
 Qwen3.5-0.8B text generation now uses the native `TransformerBackend` interface.
 It includes recurrent and grouped attention, normalization, rotary positions, SwiGLU, cached decoding, tokenization, and greedy sampling.
 The NVIDIA backend must implement these operations before Qwen can run on GPU hardware.
-Read [the Qwen guide](qwen.howto.md) for API usage, reference verification, memory requirements, and the current SMP limitation.
+Read [the Qwen guide](qwen.howto.md) for API usage, reference verification, memory requirements, and multicore VM commands.
 
 ## GPU debug machine
 
