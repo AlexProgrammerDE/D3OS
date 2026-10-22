@@ -12,7 +12,6 @@ use log::error;
 use syscall::return_vals::Errno;
 use terminal::{TerminalInputState, TerminalMode};
 
-use crate::device::tty::TtyInputState;
 use crate::{tty_input, tty_output};
 
 /// SystemCall implementation for SystemCall::TerminalWriteOutput.
@@ -78,15 +77,10 @@ pub extern "sysv64" fn sys_terminal_read_input(address: *mut u8, length: usize, 
 ///
 /// Author: Sebastian Keller
 pub extern "sysv64" fn sys_terminal_check_input_state() -> isize {
-    let tty_input = tty_input();
-
-    if tty_input.state() != TtyInputState::Waiting {
-        return TerminalInputState::Idle as isize;
-    }
-
-    match tty_input.mode() {
-        TerminalMode::Canonical => TerminalInputState::Canonical as isize,
-        TerminalMode::Fluid => TerminalInputState::Fluid as isize,
-        TerminalMode::Raw => TerminalInputState::Raw as isize,
+    match tty_input().waiting_mode() {
+        Some(TerminalMode::Canonical) => TerminalInputState::Canonical as isize,
+        Some(TerminalMode::Fluid) => TerminalInputState::Fluid as isize,
+        Some(TerminalMode::Raw) => TerminalInputState::Raw as isize,
+        None => TerminalInputState::Idle as isize,
     }
 }

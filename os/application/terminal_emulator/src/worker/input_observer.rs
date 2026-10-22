@@ -94,7 +94,6 @@ pub struct InputObserver {
     terminal: Rc<LFBTerminal>,
     event_handler: Rc<RefCell<EventHandler>>,
     decoder: EventDecoder<AnyLayout>,
-    mode: TerminalMode,
     canonical: Canonical,
 }
 
@@ -107,7 +106,6 @@ impl InputObserver {
                 AnyLayout::De105Key(De105Key),
                 HandleControl::Ignore,
             ),
-            mode: TerminalMode::Raw,
             canonical: Canonical::new(),
         }
     }
@@ -125,7 +123,7 @@ impl Worker for InputObserver {
         let Some(decoded_key) = self.decoder.process_keyevent(key_event.clone()) else {
             // This returns none if the key event was a key release
             // In this case, we only process the byte if the terminal is in raw mode
-            if self.mode == TerminalMode::Raw {
+            if state == TerminalInputState::Raw {
                 if let Some(buffer) = self.buffer_raw(key_event) {
                     syscall(
                         SystemCall::TerminalWriteInput,

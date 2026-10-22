@@ -11,10 +11,6 @@
    ╚═════════════════════════════════════════════════════════════════════════╝
 */
 
-use core::{
-    sync::atomic::{AtomicUsize, Ordering},
-};
-
 use alloc::collections::vec_deque::VecDeque;
 use num_enum::{FromPrimitive, IntoPrimitive};
 use spin::Mutex;
@@ -31,9 +27,14 @@ use crate::process::core_local_storage::scheduler;
 /// Author: Sebastian Keller
 #[derive(Debug)]
 pub struct TtyInput {
-    buffer: Mutex<VecDeque<u8>>,
-    state: AtomicUsize,
-    mode: AtomicUsize,
+    input: Mutex<Input>,
+}
+
+#[derive(Debug)]
+struct Input {
+    buffer: VecDeque<u8>,
+    state: TtyInputState,
+    mode: TerminalMode,
 }
 
 /// TTY-Output device (Workaround for missing pipes).
@@ -63,61 +64,58 @@ pub enum TtyInputState {
 impl TtyInput {
     pub const fn new() -> Self {
         TtyInput {
-            buffer: Mutex::new(VecDeque::new()),
-            state: AtomicUsize::new(TtyInputState::Idle as usize),
-            mode: AtomicUsize::new(TerminalMode::Canonical as usize),
+            input: Mutex::new(Input {
+                buffer: VecDeque::new(),
+                state: TtyInputState::Idle,
+                mode: TerminalMode::Canonical,
+            }),
         }
     }
 
     pub fn read(&self, buffer: &mut [u8], mode: TerminalMode) -> usize {
-        self.state.store(TtyInputState::Waiting as usize, Ordering::SeqCst);
-        self.mode.store(mode.into(), Ordering::SeqCst);
+        {
+            let mut input = self.input.lock();
+            // A terminated reader can leave an undecoded key in the buffer.
+            // Its bytes have no meaning in the next reader's terminal mode.
+            if input.mode != mode {
+                input.buffer.clear();
+            }
+            input.mode = mode;
+            input.state = TtyInputState::Waiting;
+        }
 
-        while self.state.load(Ordering::SeqCst) != (TtyInputState::Ready as usize) {
+        loop {
+            let mut input = self.input.lock();
+            if input.state == TtyInputState::Ready {
+                let count = buffer.len().min(input.buffer.len());
+                for byte in &mut buffer[..count] {
+                    *byte = input.buffer.pop_front().unwrap();
+                }
+                input.state = TtyInputState::Idle;
+                return count;
+            }
+            drop(input);
             scheduler().switch_thread_no_interrupt();
         }
-
-        let mut input_buffer = self.buffer.lock();
-        let mut count = 0;
-        for byte in buffer {
-            *byte = match input_buffer.pop_front() {
-                Some(byte) => byte,
-                None => break,
-            };
-            count += 1;
-        }
-
-        self.state.store(TtyInputState::Idle as usize, Ordering::SeqCst);
-
-        count
     }
 
     pub fn write(&self, bytes: &[u8], mode: TerminalMode) -> usize {
-        if self.state.load(Ordering::SeqCst) != (TtyInputState::Waiting as usize) {
+        let mut input = self.input.lock();
+        if input.state != TtyInputState::Waiting {
             return 0; // Abort, no more readers
         }
-        if self.mode.load(Ordering::SeqCst) != mode as usize {
+        if input.mode != mode {
             return 0; //Abort, mismatched mode
         }
 
-        let mut input_buffer = self.buffer.lock();
-        let mut count = 0;
-        for byte in bytes {
-            input_buffer.push_back(*byte);
-            count += 1;
-        }
-
-        self.state.store(TtyInputState::Ready as usize, Ordering::SeqCst);
-
-        count
+        input.buffer.extend(bytes);
+        input.state = TtyInputState::Ready;
+        bytes.len()
     }
 
-    pub fn state(&self) -> TtyInputState {
-        TtyInputState::from(self.state.load(Ordering::SeqCst))
-    }
-
-    pub fn mode(&self) -> TerminalMode {
-        TerminalMode::from(self.mode.load(Ordering::SeqCst))
+    pub fn waiting_mode(&self) -> Option<TerminalMode> {
+        let input = self.input.lock();
+        (input.state == TtyInputState::Waiting).then_some(input.mode)
     }
 }
 
