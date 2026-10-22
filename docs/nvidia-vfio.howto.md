@@ -217,14 +217,15 @@ Firmware files stay under the ignored `target/nvidia/firmware` directory.
 
 ## 6. Run the shader development test
 
-The shader test currently fails during a graphics context switch on this AD103.
-Its FIFO semaphore checkpoint succeeds before the first engine method.
-The driver binds the graphics image in RAMIN before it schedules the channel.
-The earlier test reported PBDMA error 32 with its graphics-context pointer unset.
-The GPU now reports a graphics context-switch error (44) through its channel notifier.
-NVIDIA defines this code in [the driver error definitions](https://github.com/NVIDIA/open-gpu-kernel-modules/blob/570.144/src/common/sdk/nvidia/inc/nverror.h).
-The test reports the stall and returns an error.
+The shader test executes native vector addition on the passed-through AD103.
+It verifies all 257 output values against CPU references.
+The driver copies the initialized graphics template into a private image and relocates its internal pointer.
+It binds that image through a GPU virtual address in RAMIN before it schedules the channel.
+This path replaces the earlier user-context promotion, which left the image uninitialized.
+The context layout follows NVIDIA's [image definitions](https://github.com/NVIDIA/open-gpu-doc/blob/master/manuals/volta/gv100/dev_ctxsw.ref.txt) and [RAMIN definitions](https://github.com/NVIDIA/open-gpu-doc/blob/master/manuals/turing/tu104/dev_ram.ref.txt).
+Host tests reject malformed image headers and verify that relocation preserves unrelated fields.
 AlexNet and Qwen still run on the CPU.
+Their GPU backends remain unfinished.
 
 The Rust kernels compile to PTX and then native `sm_89` SASS.
 The standalone `ptxas` assembler runs on the host.
@@ -243,6 +244,8 @@ python3 tools/nvidia/run-qemu.py --firmware target/nvidia/firmware \
 
 The launcher requires `NVIDIA_KERNEL_OK` for this test to pass.
 A CPU self-test cannot satisfy that requirement.
+`NVIDIA_CONTEXT_OK` confirms image construction and binding.
+It does not confirm shader execution.
 The shader test records GPU semaphore checkpoints, RAMIN fields, notifier contents, and firmware events in the serial log.
 
 ## 7. Build and verify tensor kernels
@@ -272,11 +275,12 @@ These checks do not confirm hardware execution.
 The build manifest always records `hardware_validated: false`.
 
 The VM shader command in section 6 also stages the tensor kernels.
-After vector addition succeeds, D3OS runs three matrix shapes through each tensor kernel.
+After vector addition succeeds, D3OS runs five matrix shapes through each tensor kernel.
 It compares every output against CPU references and checks guards around the output buffers.
 The input values are exact in both formats, so these cases verify layout and arithmetic rather than conversion accuracy.
 Both kernels must report `NVIDIA_TENSOR_OK` before the launcher accepts the run.
-The graphics context-switch error currently prevents those checks from completing.
+These hardware checks pass on the RTX 4090 Laptop GPU.
+They include partial tiles, multiple thread blocks, and a 1-by-1024 times 1024-by-1024 projection.
 AlexNet and Qwen do not yet use these kernels.
 
 ## Restore NVIDIA to the host

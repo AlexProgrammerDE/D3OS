@@ -5,7 +5,7 @@ use super::{
     mmu::{Allocation, Memory},
 };
 use alloc::vec::Vec;
-use d3os_nvidia::{Record, abi::*};
+use d3os_nvidia::{Record, abi::*, context};
 use log::info;
 
 const PRIVILEGED_CLIENT: u32 = 0xc1e00004;
@@ -143,7 +143,8 @@ impl Compute {
     fn promote(&mut self, device: &mut Device, client: u32, subdevice: u32, channel: u32, ids: &[u16], physical: bool, virtual_address: bool) -> Result<()> {
         let mut params = Record::<{ PromoteContext::SIZE }>::default();
         params.set(PromoteContext::engineType, 1)?;
-        params.set(PromoteContext::hClient, client)?;
+        // hClient describes the optional hVirtMemory handle. Direct buffer
+        // entries identify the channel through hChanClient and hObject.
         params.set(PromoteContext::hChanClient, client)?;
         params.set(PromoteContext::hObject, channel)?;
         params.set(PromoteContext::entryCount, ids.len() as u32)?;
@@ -350,27 +351,11 @@ impl Compute {
         params.set(FifoAlloc::hObjectError, notifier.physical as u32)?;
         params.set(FifoAlloc::errorNotifierMem, Self::descriptor(notifier.physical, 4096)?)?;
         let channel = self.alloc(device, client, group, AMPERE_CHANNEL_GPFIFO_A, params.as_bytes())?;
-        self.alloc(device, client, channel, ADA_COMPUTE_A, &[])?;
         let mut bind = Record::<{ ChannelBind::SIZE }>::default();
         bind.set(ChannelBind::engineType, 1)?;
         self.control(device, client, channel, NVA06F_CTRL_CMD_BIND, &bind)?;
-        for id in [0, 2] {
-            let buffer = self.contexts.iter().find(|buffer| buffer.id == id).ok_or(Error::Firmware)?;
-            let allocation = self.memory.allocate(device, buffer.allocation.bytes, 4096)?;
-            self.contexts.iter_mut().find(|buffer| buffer.id == id).ok_or(Error::Firmware)?.allocation = allocation;
-        }
-        self.promote(device, client, subdev, channel, &[0, 2], true, false)?;
-        // The native kernel owns RAMIN. GSP initializes the physical graphics
-        // image, but the channel must point to it before scheduling engine work.
-        let context = self.contexts.iter().find(|buffer| buffer.id == 0).ok_or(Error::Firmware)?.allocation;
-        let vram = device.vram.as_ref().ok_or(Error::Firmware)?;
-        if context.physical & 0xfff != 0 || context.physical >> 40 != 0 {
-            return Err(Error::Alignment);
-        }
-        vram.write(self.instance as usize + 0x210, context.physical as u32)?;
-        vram.write(self.instance as usize + 0x214, (context.physical >> 32) as u32)?;
-        let target = vram.read(self.instance as usize + 0xac).ok_or(Error::Firmware)?;
-        vram.write(self.instance as usize + 0xac, target | (1 << 16))?;
+        self.alloc(device, client, channel, ADA_COMPUTE_A, &[])?;
+        self.initialize_context_image(device)?;
         self.copy_reserved(device, client, vaspace, self.reserved_virtual)?;
         let mut token_request = Record::<{ WorkToken::SIZE }>::default();
         token_request.set(WorkToken::workSubmitToken, u32::MAX)?;
@@ -391,6 +376,30 @@ impl Compute {
         for offset in [0xac, 0x210, 0x214, 0x218] {
             info!("NVIDIA instance offset={offset:#x} value={:?}", vram.read(self.instance as usize + offset));
         }
+        Ok(())
+    }
+
+    fn initialize_context_image(&mut self, device: &Device) -> Result<()> {
+        // Golden global buffers remain mapped in this GPU address space. Clone
+        // the engine state, relocate its self pointer, then bind the private image.
+        let template = self.contexts.iter().find(|buffer| buffer.id == 0).ok_or(Error::Firmware)?.allocation;
+        let image = self.memory.allocate(device, template.bytes, 4096)?;
+        let vram = device.vram.as_ref().ok_or(Error::Firmware)?;
+        let header = context::relocate_header(
+            &vram.read_bytes(template.physical as usize, context::HEADER_BYTES)?,
+            image.bytes,
+            image.virtual_address,
+        )?;
+        for offset in (0..image.bytes).step_by(4096) {
+            let page = vram.read_bytes((template.physical + offset) as usize, 4096)?;
+            vram.copy_from((image.physical + offset) as usize, &page)?;
+        }
+        vram.copy_from(image.physical as usize, &header)?;
+        let mut instance = Record::<{ context::INSTANCE_BYTES }>::from_bytes(&vram.read_bytes(self.instance as usize, context::INSTANCE_BYTES)?)?;
+        context::bind_virtual_image(&mut instance, image.virtual_address)?;
+        vram.copy_from(self.instance as usize, instance.as_bytes())?;
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        info!("NVIDIA_CONTEXT_OK image={:#x} bytes={:#x} mode=virtual", image.virtual_address, image.bytes);
         Ok(())
     }
 }

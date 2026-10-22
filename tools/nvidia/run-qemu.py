@@ -228,7 +228,7 @@ def main():
                         and (args.kernels / "tensor-matmul.cubin").is_file()
                     ):
                         for symbol in ("tensor_matmul_f16", "tensor_matmul_bf16"):
-                            if f"NVIDIA_TENSOR_OK kernel={symbol} cases=3" not in text:
+                            if f"NVIDIA_TENSOR_OK kernel={symbol} cases=5" not in text:
                                 raise RuntimeError(
                                     f"native tensor verification did not succeed: {symbol}"
                                 )

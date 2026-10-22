@@ -272,7 +272,8 @@ impl Compute {
         // These inputs and their reference sums are exact in both formats.
         // CPU comparisons cannot pass unless the GPU overwrites the NaN output.
         for symbol in ["tensor_matmul_f16", "tensor_matmul_bf16"] {
-            for (rows, inner, cols) in [(16u32, 16u32, 8u32), (17, 33, 9), (1, 65, 33)] {
+            const SHAPES: [(u32, u32, u32); 5] = [(16, 16, 8), (17, 33, 9), (1, 65, 33), (37, 257, 65), (1, 1024, 1024)];
+            for (rows, inner, cols) in SHAPES {
                 let a = self.memory.allocate(device, u64::from(rows * inner) * 4, 4096)?;
                 let b = self.memory.allocate(device, u64::from(inner * cols) * 4, 4096)?;
                 let output = self.memory.allocate(device, u64::from(rows * cols + 2) * 4, 4096)?;
@@ -311,7 +312,7 @@ impl Compute {
                     }
                 }
             }
-            info!("NVIDIA_TENSOR_OK kernel={symbol} cases=3 backend=nvidia");
+            info!("NVIDIA_TENSOR_OK kernel={symbol} cases={} backend=nvidia", SHAPES.len());
         }
         Ok(())
     }
