@@ -145,6 +145,12 @@ Single-row projections use coalesced warp reductions.
 Multi-row projections use the tensor path with exact BF16 weight expansion and the existing TF32 decomposition.
 The SDK checks storage types before dispatch and rejects packed weights in unsupported FP32 operations.
 
+DOOM uses byte-addressed indexed surfaces and textures with word-addressed command buffers.
+The byte raster kernels receive logical byte lengths, while the syscall validates the enclosing word ranges.
+`Nvidia::upload_bytes()` packs data into aligned words and initializes trailing padding.
+The fuzz kernel preserves ordering within each column and permits only vertical neighbor offsets.
+This permits concurrent columns without changing the original pixel feedback.
+
 Matrix and RMSNorm operations combine output allocation with the kernel that fills it.
 The kernel returns the new handle only after a validated full writer completes.
 This removes a redundant zero kernel without exposing previous buffer contents.

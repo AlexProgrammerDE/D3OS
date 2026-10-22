@@ -36,14 +36,31 @@ Measurements on 2026-10-22 and 2026-10-23:
 | Qwen warm generation | 7.04 to 7.36 tokens/s | 95.52 to 106.14 tokens/s |
 | Qwen warm prompt processing | 7.76 to 7.81 tokens/s | 112.25 to 122.22 tokens/s |
 | AlexNet forward pass | 10.0 ms | 1.5 ms |
-| DOOM uncapped `demo1` | No matched initial measurement | 655.51 to 688.11 FPS |
+| DOOM uncapped `demo1` | 536.84 to 676.89 FPS with word storage | 800.95 to 943.54 FPS with byte storage |
 
 The AlexNet result excludes input upload and final download.
 The DOOM result includes native GPU drawing, palette conversion, scaling, and framebuffer copies.
 Its scene size is 320 by 200, with presentation at 640 by 400.
 The regular game loop has separate timing behavior. Its HUD rate does not measure uncapped throughput.
-The last two native runs reported 655.51 and 688.11 FPS.
-Earlier native runs reached 673 to 684 FPS, so these measurements do not establish a substantial DOOM improvement.
+The DOOM comparison uses three runs per renderer on host CPUs 8, 10, 12, and 14.
+These CPU IDs belong to four distinct performance cores on this machine.
+The word renderer reports 676.89, 548.67, and 536.84 FPS.
+The byte renderer reports 800.95, 943.54, and 892.81 FPS.
+Both renderers use the same driver, kernel bundle, engine, WAD, and 7117-tick demo.
+The baseline renderer also includes the same profiling counters.
+Host CPU performance varies between runs, so these ranges do not establish a fixed percentage gain.
+
+Both launchers record `NVIDIA_HOST_CPU_AFFINITY` before starting a guest.
+The pinned DOOM runs use the following commands, one guest at a time:
+
+```bash
+taskset -c 8,10,12,14 python3 tools/nvidia/run-qemu.py \
+  --firmware target/nvidia/firmware --kernels target/nvidia/kernels \
+  --memory-mib 4096 --boot-check --inference gpu-doom-bench --timeout 180
+taskset -c 8,10,12,14 python3 tools/nvidia/linux-reference.py --doom-benchmark
+```
+
+These CPU IDs are machine-specific. The earlier Qwen Linux measurements used unrestricted host affinity.
 
 The Linux llama.cpp reference uses build `b11827`, full GPU offload, and three repetitions.
 It reports about 250 tokens/s with BF16 weights and 156 tokens/s with FP32 weights.
@@ -95,8 +112,18 @@ This changes storage density without rounding activations or weakening the model
 The DOOM rasterizer builds ordered column and row lists for each command batch.
 Each pixel merges its two relevant lists instead of scanning every command.
 The merge preserves draw order, including overlap between columns and spans.
-The fuzz pass retains sequential feedback semantics.
-The original scan kernel remains the independent GPU reference in the operator checks.
+The production raster path stores indexed surfaces and texture data as bytes instead of words.
+Each indexed-frame transfer now moves 64,000 bytes instead of 256,000 bytes.
+The CPU no longer expands or contracts every indexed pixel between the C engine and the GPU.
+Texture snapshots retain their content comparison, including reused zone allocations.
+The upload helper performs one bulk copy into aligned words and initializes the final padding bytes.
+
+The byte fuzz kernel assigns one active lane per warp to each framebuffer column.
+It preserves pixel order and command order within each column, including overlapping and double-width commands.
+Only vertical neighbor offsets are supported. The shader ignores invalid or nonvertical entries.
+Independent columns can therefore execute concurrently without changing feedback results.
+The original scan and serial fuzz kernels remain word-based references in the operator checks.
+The byte checks also cover odd surface sizes, word and byte guards, unaligned tables, invalid offsets, and all four palette scales.
 
 ## Scheduling delay around GPU completion
 
@@ -128,6 +155,19 @@ The native clock probe also measures about 2309 MHz through GPU timer instructio
 The firmware clock query uses NVIDIA's [RM user shared data layout](https://github.com/NVIDIA/open-gpu-kernel-modules/blob/570.144/src/common/sdk/nvidia/inc/class/cl00de.h).
 The driver reads a stable timestamp around each snapshot and stops firmware polling after the boot diagnostic.
 It retains ownership of the DMA region for the firmware lifetime.
+
+## DOOM stage profile
+
+`NVIDIA_DOOM_PROFILE` separates player-view rendering, palette/scaling transfers, and final framebuffer copying.
+Each stage reports CPU cycles per rendered frame, including scheduling delays.
+`NVIDIA_DOOM_KERNEL_PROFILE` reports CPU dispatch cycles per frame for each kernel.
+These are synchronous CPU measurements, rather than isolated GPU timestamps.
+The launcher waits for `NVIDIA_DOOM_PROFILE_DONE` before stopping a timedemo VM.
+
+In the first matched pair, copy dispatch cycles decreased from about 578,000 to 442,000 per frame.
+Fuzz dispatch cycles decreased from about 168,000 to 20,000 per frame.
+The number of draw, fuzz, palette, copy, and clear operations stayed the same.
+The full 600-frame C pixel comparison and the GPU self-test after game exit still pass.
 
 ## Compiler and local-stack correctness
 
@@ -168,15 +208,20 @@ The large projection kernels now match Linux device throughput for the measured 
 This does not establish model parity: Qwen still generates about 100 tokens/s, compared with about 250 tokens/s in the Linux BF16 reference.
 The remaining work must reduce complete model latency, rather than optimize already comparable streaming bandwidth.
 
-DOOM still transfers indexed frames for CPU HUD composition and copies RGB output into the console framebuffer.
+DOOM still transfers packed indexed frames for CPU HUD composition and copies RGB output into the console framebuffer.
+Its texture cache still uses per-batch CPU snapshots, and each upload still performs a separate allocation and clear.
 Direct GPU presentation remains separate work.
 Repeated VM starts also exposed an intermittent GSP timeout while allocating the golden compute engine.
 The failed boot never reached a workload and is excluded from throughput results.
 Successful reruns do not establish that this startup issue is fixed.
 The Linux DOOM reference uses the same pinned engine and WAD with a headless framebuffer copy.
-That reference reports 1586.59 FPS for the same 7117-tick demo.
+The two pinned Linux runs report 2306.44 and 1845.15 FPS for the same 7117-tick demo.
+The earlier unrestricted-affinity Linux run reported 1586.59 FPS.
 It measures a software-rendering baseline without display-server or physical-display costs.
 It does not represent an OpenGL port or a Linux GPU renderer.
+The Linux reference now uses a static PID 1 poweroff helper after the benchmark.
+The previous asynchronous SysRq path could fault in the shell after device shutdown.
+Runs with that shutdown panic remain excluded from the accepted results.
 
 ## Implementation sources
 
