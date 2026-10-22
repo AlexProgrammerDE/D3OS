@@ -2,7 +2,7 @@
 
 use crate::{Error, Result};
 
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 pub const INFO: u32 = 0;
 pub const ALLOCATE: u32 = 1;
 pub const FREE: u32 = 2;
@@ -12,6 +12,8 @@ pub const LAUNCH: u32 = 5;
 pub const PROFILE: u32 = 6;
 /// Allocate and fully overwrite an output before its handle becomes visible.
 pub const LAUNCH_ALLOCATE: u32 = 7;
+/// Enable GPU timestamp instrumentation for subsequent launches (elements 0 or 1).
+pub const DEVICE_TIMING: u32 = 8;
 pub const KERNEL_COUNT: usize = 27;
 
 /// Device-wide CPU cycle counters. Read snapshots around an exclusive workload
@@ -22,6 +24,8 @@ pub struct ProfileEntry {
     pub calls: u64,
     pub cycles: u64,
     pub wait_cycles: u64,
+    /// GPU start-to-completion nanoseconds for instrumented launches only.
+    pub device_ns: u64,
 }
 
 #[derive(Clone, Copy, Default)]

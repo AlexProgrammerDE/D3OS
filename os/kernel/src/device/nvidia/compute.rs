@@ -182,6 +182,7 @@ impl Compute {
 
     pub(super) fn launch(&mut self, device: &Device, cubin: &'static [u8], symbol: &'static str, arguments: &[u8], dimensions: [u32; 2]) -> Result<()> {
         self.last_wait_cycles = 0;
+        self.last_device_ns = 0;
         let [threads, blocks] = dimensions;
         if arguments.len() > 512 || threads == 0 || threads > 1024 || blocks == 0 {
             return Err(Error::Alignment);
@@ -247,7 +248,7 @@ impl Compute {
             (Q::CONSTANT_BUFFER_ADDR_LOWER_0, (launch + 256) & 0xffffffff),
             (Q::CONSTANT_BUFFER_ADDR_UPPER_0, (launch + 256) >> 32),
             (Q::RELEASE0_ENABLE, 1),
-            (Q::RELEASE0_STRUCTURE_SIZE, 2),
+            (Q::RELEASE0_STRUCTURE_SIZE, if self.device_timing { 0 } else { 2 }),
             (Q::RELEASE0_PAYLOAD64B, 1),
             (Q::RELEASE0_ADDRESS_LOWER, signal & 0xffffffff),
             (Q::RELEASE0_ADDRESS_UPPER, signal >> 32),
@@ -287,6 +288,17 @@ impl Compute {
         if !cached {
             Self::method(&mut commands, NVC6C0_INVALIDATE_SHADER_CACHES_NO_WFI, &[0x1011]);
         }
+        if self.device_timing {
+            // FIFO four-word release writes payload followed by a GPU timestamp.
+            commands.extend_from_slice(&[
+                (2 << 28) | (5 << 16) | (0x5c >> 2),
+                (signal + 16) as u32,
+                ((signal + 16) >> 32) as u32,
+                1,
+                0,
+                1 | (1 << 24) | (1 << 20) | (1 << 25),
+            ]);
+        }
         Self::method(&mut commands, NVC6C0_SEND_PCAS_A, &[(launch >> 8) as u32]);
         Self::method(
             &mut commands,
@@ -325,6 +337,14 @@ impl Compute {
         }
         fence(Ordering::SeqCst);
         self.last_wait_cycles = unsafe { core::arch::x86_64::_rdtsc() }.wrapping_sub(wait_start);
+        if self.device_timing {
+            let start = submission.region.read64(SIGNAL + 24)?;
+            let end = submission.region.read64(SIGNAL + 8)?;
+            if start == 0 || end < start {
+                return Err(Error::Firmware);
+            }
+            self.last_device_ns = end - start;
+        }
         self.engine_configured = true;
         Ok(())
     }
@@ -332,6 +352,8 @@ impl Compute {
     pub(super) fn clock_probe(&mut self, device: &Device, cubin: &'static [u8]) -> Result<()> {
         let output = self.memory.allocate(device, 4096, 4096)?;
         let vram = device.vram.as_ref().ok_or(Error::Firmware)?;
+        let timing = self.device_timing;
+        self.device_timing = true;
         for sample in 0..3 {
             self.launch(device, cubin, "clock_probe", &output.virtual_address.to_le_bytes(), [1, 1])?;
             let read64 = |offset| -> Result<u64> {
@@ -343,11 +365,16 @@ impl Compute {
             if nanoseconds < 10_000_000 || cycles == 0 {
                 return Err(Error::Firmware);
             }
+            if self.last_device_ns < 10_000_000 || self.last_device_ns > 20_000_000 {
+                return Err(Error::Firmware);
+            }
+            info!("NVIDIA_DEVICE_TIMER sample={sample} elapsed_ns={}", self.last_device_ns);
             info!(
                 "NVIDIA_CLOCK_PROBE sample={sample} sm_mhz={} cycles={cycles} nanoseconds={nanoseconds}",
                 cycles * 1000 / nanoseconds
             );
         }
+        self.device_timing = timing;
         Ok(())
     }
 

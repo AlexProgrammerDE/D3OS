@@ -42,6 +42,7 @@ impl Compute {
         profile.calls = profile.calls.wrapping_add(1);
         profile.cycles = profile.cycles.wrapping_add(cycles);
         profile.wait_cycles = profile.wait_cycles.wrapping_add(self.last_wait_cycles);
+        profile.device_ns = profile.device_ns.wrapping_add(self.last_device_ns);
         if result.is_err() {
             self.healthy = false;
         }

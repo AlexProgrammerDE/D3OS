@@ -54,6 +54,24 @@ pub(super) fn kernels(backend: &Nvidia) -> Result<(), String> {
             dispatch().map_err(|error| format!("{error}"))?;
         }
         let elapsed = (now() - start).max(1);
+        backend.set_device_timing(true).map_err(|error| format!("{error}"))?;
+        let timed_start = now();
+        let measured = (|| {
+            let before = backend.profile()?;
+            for _ in 0..REPEATS {
+                dispatch()?;
+            }
+            let after = backend.profile()?;
+            Ok::<_, d3os_compute::Error>(
+                after[Kernel::Project as usize]
+                    .device_ns
+                    .wrapping_sub(before[Kernel::Project as usize].device_ns),
+            )
+        })();
+        let timed_elapsed = (now() - timed_start).max(1);
+        let stopped = backend.set_device_timing(false);
+        let device_ns = measured.map_err(|error| format!("{error}"))?;
+        stopped.map_err(|error| format!("{error}"))?;
         let mut result = alloc::vec![0u32; rows * cols];
         backend.read_words_into(&output, 0, &mut result).map_err(|error| format!("{error}"))?;
         for (i, actual) in result.iter().enumerate() {
@@ -68,9 +86,12 @@ pub(super) fn kernels(backend: &Nvidia) -> Result<(), String> {
             }
         }
         report(format_args!(
-            "NATIVE_KERNEL_BENCH rows={rows} inner={inner} cols={cols} repeats={REPEATS} mean_us={:.3} effective_gb_s={:.3}",
+            "NATIVE_KERNEL_BENCH rows={rows} inner={inner} cols={cols} repeats={REPEATS} mean_us={:.3} effective_gb_s={:.3} device_mean_us={:.3} device_gb_s={:.3} instrumented_mean_us={:.3}",
             elapsed as f64 * 1000. / REPEATS as f64,
-            inner as f64 * cols as f64 * 4. * REPEATS as f64 / (elapsed as f64 * 1e6)
+            inner as f64 * cols as f64 * 4. * REPEATS as f64 / (elapsed as f64 * 1e6),
+            device_ns as f64 / (REPEATS as f64 * 1000.),
+            inner as f64 * cols as f64 * 4. * REPEATS as f64 / device_ns.max(1) as f64,
+            timed_elapsed as f64 * 1000. / REPEATS as f64
         ));
     }
     report(format_args!("INFERENCE_BENCH_OK kernels backend=nvidia"));

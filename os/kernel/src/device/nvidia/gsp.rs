@@ -74,6 +74,14 @@ impl DmaRegion {
             .collect())
     }
 
+    pub(super) fn read64(&self, offset: usize) -> Result<u64> {
+        self.check(offset, 8)?;
+        if offset & 7 != 0 {
+            return Err(Error::Alignment);
+        }
+        Ok(unsafe { ((self.address + offset) as *const u64).read_volatile() })
+    }
+
     pub(super) fn read32(&self, offset: usize) -> Result<u32> {
         self.check(offset, 4)?;
         if offset & 3 != 0 {

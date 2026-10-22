@@ -71,6 +71,16 @@ impl<T> Drop for GpuBuffer<T> {
 pub struct Nvidia;
 
 impl Nvidia {
+    /// Instrument future launches with GPU timestamps. This adds command work
+    /// and affects the whole device; use only around an exclusive benchmark.
+    pub fn set_device_timing(&self, enabled: bool) -> Result<()> {
+        request(Request {
+            elements: u64::from(enabled),
+            ..operation(abi::DEVICE_TIMING)
+        })?;
+        Ok(())
+    }
+
     pub fn profile(&self) -> Result<[abi::ProfileEntry; abi::KERNEL_COUNT]> {
         let mut entries = [abi::ProfileEntry::default(); abi::KERNEL_COUNT];
         request(Request {

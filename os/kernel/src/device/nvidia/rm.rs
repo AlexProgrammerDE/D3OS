@@ -46,6 +46,10 @@ pub(super) struct Compute {
     pub(super) staging: Option<super::transfer::Staging>,
     pub(super) profile: [d3os_nvidia::compute::ProfileEntry; d3os_nvidia::compute::KERNEL_COUNT],
     pub(super) last_wait_cycles: u64,
+    pub(super) device_timing: bool,
+    pub(super) last_device_ns: u64,
+    telemetry: Option<super::gsp::DmaRegion>,
+    telemetry_object: u32,
 }
 
 impl Device {
@@ -89,6 +93,10 @@ impl Compute {
             staging: None,
             profile: [d3os_nvidia::compute::ProfileEntry::default(); d3os_nvidia::compute::KERNEL_COUNT],
             last_wait_cycles: 0,
+            device_timing: false,
+            last_device_ns: 0,
+            telemetry: None,
+            telemetry_object: 0,
         })
     }
 
@@ -212,6 +220,63 @@ impl Compute {
         Ok(())
     }
 
+    fn initialize_telemetry(&mut self, device: &mut Device, client: u32, subdev: u32) -> Result<()> {
+        // RM 570 ctrl2080internal.h: INIT_USER_SHARED_DATA carries one physical
+        // u64; SET_DATA_POLL carries a u64 mask and u32 millisecond interval.
+        // Retain ownership before firmware can begin DMA, including RPC errors.
+        self.telemetry = Some(super::gsp::DmaRegion::new(4096)?);
+        self.telemetry_object = subdev;
+        let address = self.telemetry.as_ref().ok_or(Error::Firmware)?.address as u64;
+        let mut init = Record::<{ InitUserSharedData::SIZE }>::default();
+        init.set(InitUserSharedData::physAddr, address)?;
+        self.control(device, client, subdev, NV2080_CTRL_CMD_INTERNAL_INIT_USER_SHARED_DATA, &init)?;
+        let mut poll = Record::<{ PollUserSharedData::SIZE }>::default();
+        poll.set(PollUserSharedData::polledDataMask, 1)?; // CLOCK
+        poll.set(PollUserSharedData::pollFrequencyMs, 100)?;
+        self.control(device, client, subdev, NV2080_CTRL_CMD_INTERNAL_USER_SHARED_DATA_SET_DATA_POLL, &poll)?;
+        Ok(())
+    }
+
+    pub(super) fn log_clocks(&mut self, device: &mut Device) -> Result<()> {
+        let Some(telemetry) = self.telemetry.as_ref() else {
+            return Ok(());
+        };
+        // RM 570 class/cl00de.h, NV00DE_SHARED_DATA.clkPublicDomainInfos.
+        // Timestamp/sequence must remain unchanged across the coherent read.
+        let start = crate::timer().systime_ms();
+        loop {
+            let sequence = telemetry.read64(72)?;
+            core::sync::atomic::fence(core::sync::atomic::Ordering::Acquire);
+            let clocks = [telemetry.read32(80)?, telemetry.read32(84)?, telemetry.read32(88)?, telemetry.read32(92)?];
+            core::sync::atomic::fence(core::sync::atomic::Ordering::Acquire);
+            let valid = sequence != 0 && (sequence < 0xff00000000000000 || sequence & 1 == 0);
+            if valid && sequence == telemetry.read64(72)? {
+                info!(
+                    "NVIDIA_CLOCKS graphics_mhz={} memory_mhz={} video_mhz={} sm_mhz={}",
+                    clocks[0], clocks[1], clocks[2], clocks[3]
+                );
+                break;
+            }
+            if crate::timer().systime_ms().wrapping_sub(start) >= 500 {
+                log::warn!("NVIDIA clock telemetry has no stable sample");
+                break;
+            }
+            core::hint::spin_loop();
+        }
+        // Boot diagnostics must not leave a firmware polling workload active.
+        // Retain the DMA region for the firmware lifetime, including stop errors.
+        if let Err(error) = self.control(
+            device,
+            PRIVILEGED_CLIENT,
+            self.telemetry_object,
+            NV2080_CTRL_CMD_INTERNAL_USER_SHARED_DATA_SET_DATA_POLL,
+            &Record::<{ PollUserSharedData::SIZE }>::default(),
+        ) {
+            log::warn!("NVIDIA clock telemetry stop failed: {error:?}");
+        }
+        Ok(())
+    }
+
     pub(super) fn initialize(&mut self, device: &mut Device) -> Result<()> {
         device.registers.write(0x1704, 0)?;
         let client = PRIVILEGED_CLIENT;
@@ -296,7 +361,12 @@ impl Compute {
         self.alloc(device, client, channel, ADA_COMPUTE_A, &[])?;
         self.alloc(device, client, channel, AMPERE_DMA_COPY_B, &[])?;
         info!("NVIDIA_GOLDEN_CONTEXT_OK");
-        self.initialize_user(device)
+        self.initialize_user(device)?;
+        // Start optional polling only after engine/context initialization.
+        if let Err(error) = self.initialize_telemetry(device, client, subdev) {
+            log::warn!("NVIDIA clock telemetry unavailable: {error:?}");
+        }
+        Ok(())
     }
 
     fn initialize_user(&mut self, device: &mut Device) -> Result<()> {

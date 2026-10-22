@@ -83,6 +83,13 @@ pub(crate) fn request(owner: Uuid, request: &Request) -> SyscallResult {
 
 fn serve(device: &Device, compute: &mut super::rm::Compute, owner: Uuid, request: &Request) -> SyscallResult {
     match request.operation {
+        abi::DEVICE_TIMING => {
+            if request.elements > 1 {
+                return Err(Errno::EINVAL);
+            }
+            compute.device_timing = request.elements != 0;
+            Ok(0)
+        }
         abi::PROFILE => {
             if request.elements != abi::KERNEL_COUNT as u64 {
                 return Err(Errno::EINVAL);

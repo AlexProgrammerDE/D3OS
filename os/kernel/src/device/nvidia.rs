@@ -14,7 +14,7 @@ mod mmu;
 mod rm;
 mod service;
 mod transfer;
-pub(crate) use service::{request as compute_request, release_process};
+pub(crate) use service::{release_process, request as compute_request};
 
 #[derive(Debug)]
 enum Error {
@@ -280,6 +280,7 @@ pub fn bootstrap() {
             if let Ok(cubin) = gsp::asset("usr/share/nvidia/inference.cubin") {
                 compute.inference_module = Some(cubin);
                 compute.clock_probe(&device, cubin)?;
+                compute.log_clocks(&mut device)?;
                 compute.local_stack_test(&device, cubin)?;
                 compute.prepare_staging(&device)?;
                 compute.transfer_test(&device)?;

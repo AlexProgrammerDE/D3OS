@@ -620,6 +620,17 @@ impl ChannelBind {
     pub const SIZE: usize = 4;
     pub const engineType: Field<u32> = Field::new(0);
 }
+pub struct InitUserSharedData;
+impl InitUserSharedData {
+    pub const SIZE: usize = 8;
+    pub const physAddr: Field<u64> = Field::new(0);
+}
+pub struct PollUserSharedData;
+impl PollUserSharedData {
+    pub const SIZE: usize = 16;
+    pub const polledDataMask: Field<u64> = Field::new(0);
+    pub const pollFrequencyMs: Field<u32> = Field::new(8);
+}
 pub struct QmdFields;
 impl QmdFields {
     pub const OUTER_PUT: Bits = Bits::new(30, 0);
@@ -825,6 +836,8 @@ pub const REGISTRY_TABLE_ENTRY_TYPE_DWORD: u32 = 0x1;
 pub const FALCON_APPLICATION_INTERFACE_ENTRY_ID_DMEMMAPPER: u32 = 0x4;
 pub const BIT_TOKEN_FALCON_DATA: u32 = 0x70;
 pub const FALCON_UCODE_ENTRY_APPID_FWSEC_PROD: u32 = 0x85;
+pub const NV2080_CTRL_CMD_INTERNAL_INIT_USER_SHARED_DATA: u32 = 0x20800afe;
+pub const NV2080_CTRL_CMD_INTERNAL_USER_SHARED_DATA_SET_DATA_POLL: u32 = 0x20800aff;
 pub const NVC6C0_SET_OBJECT: u32 = 0x0;
 pub const NVC6C0_SET_SHADER_LOCAL_MEMORY_WINDOW_A: u32 = 0x7b0;
 pub const NVC6C0_SET_SHADER_SHARED_MEMORY_WINDOW_A: u32 = 0x2a0;

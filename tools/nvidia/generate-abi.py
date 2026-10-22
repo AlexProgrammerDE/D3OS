@@ -72,7 +72,14 @@ TYPES.update(
         "NVA06F_CTRL_BIND_PARAMS": "ChannelBind",
     }
 )
+# These RPC records must follow the firmware ABI, not the newer host header.
+RM_TYPES = {
+    "NV2080_CTRL_INTERNAL_INIT_USER_SHARED_DATA_PARAMS": "InitUserSharedData",
+    "NV2080_CTRL_INTERNAL_USER_SHARED_DATA_SET_DATA_POLL_PARAMS": "PollUserSharedData",
+}
 RM_CONSTANTS = [
+    "NV2080_CTRL_CMD_INTERNAL_INIT_USER_SHARED_DATA",
+    "NV2080_CTRL_CMD_INTERNAL_USER_SHARED_DATA_SET_DATA_POLL",
     "NVC6C0_SET_OBJECT",
     "NVC6C0_SET_SHADER_LOCAL_MEMORY_WINDOW_A",
     "NVC6C0_SET_SHADER_SHARED_MEMORY_WINDOW_A",
@@ -174,8 +181,8 @@ def main():
         ctypes.c_int32: "i32",
         ctypes.c_int64: "i64",
     }
-    for name, rust_name in TYPES.items():
-        record = getattr(nv, name, None) or getattr(rm, name)
+    for name, rust_name in (TYPES | RM_TYPES).items():
+        record = getattr(rm, name) if name in RM_TYPES else (getattr(nv, name, None) or getattr(rm, name))
         output.extend(
             [
                 f"pub struct {rust_name};",
@@ -224,7 +231,7 @@ def main():
     (path.parent.parent / "LICENSE.tinygrad").write_bytes(
         (source / "LICENSE").read_bytes()
     )
-    print(f"Generated {len(TYPES)} record schemas: {path}")
+    print(f"Generated {len(TYPES) + len(RM_TYPES)} record schemas: {path}")
 
 
 if __name__ == "__main__":
