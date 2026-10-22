@@ -26,6 +26,8 @@ mod inference;
 #[cfg(feature = "inference")]
 mod raster;
 #[cfg(feature = "inference")]
+mod selection;
+#[cfg(feature = "inference")]
 mod tf32;
 #[cfg(feature = "inference")]
 mod transformer;

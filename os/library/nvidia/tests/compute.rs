@@ -97,3 +97,14 @@ fn raster_dispatch_bounds_every_resource_and_disallows_frame_aliases() {
     assert!(Kernel::Palette.work(&[1, 1, 5]).is_err());
     assert!(Kernel::Palette.work(&[u32::MAX / 8, 1, 4]).is_err());
 }
+
+#[test]
+fn selection_covers_the_complete_input_without_wrapping_its_grid() {
+    for n in [1, 33, 248320, u32::MAX] {
+        let work = Kernel::ArgMax.work(&[n]).unwrap();
+        assert_eq!(work.extents[..2], [u64::from(n), 64]);
+        assert_eq!((work.threads, work.blocks), (128, 8));
+        assert!(work.validate_aliases(&[0x1000, 0x1000]).is_err());
+    }
+    assert!(Kernel::ArgMax.work(&[0]).is_err());
+}

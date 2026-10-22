@@ -158,6 +158,13 @@ impl Nvidia {
 
     fn produce(&self, shape: &[usize], kernel: Kernel, inputs: &[(&GpuBuffer, usize)], parameters: &[usize]) -> Result<Tensor<Self>> {
         let elements = element_count(shape)?;
+        Tensor::from_buffer(shape, self.produce_storage(elements, kernel, inputs, parameters, Storage::F32)?)
+    }
+
+    fn produce_storage<T>(
+        &self, elements: usize, kernel: Kernel, inputs: &[(&GpuBuffer, usize)], parameters: &[usize], storage: Storage,
+    ) -> Result<GpuBuffer<T>> {
+        element_count(&[elements])?;
         let (mut call, work) = self.command(kernel, parameters)?;
         if !kernel.allocates_output() || work.output != inputs.len() || work.pointers != inputs.len() + 1 || work.extents[work.output] != elements as u64 {
             return Err(Error::InvalidParameter);
@@ -166,16 +173,13 @@ impl Nvidia {
         call.operation = abi::LAUNCH_ALLOCATE;
         call.elements = elements as u64;
         let handle = request(call)? as u64;
-        Tensor::from_buffer(
-            shape,
-            GpuBuffer {
-                handle,
-                elements,
-                words: elements,
-                storage: Storage::F32,
-                element: core::marker::PhantomData,
-            },
-        )
+        Ok(GpuBuffer {
+            handle,
+            elements,
+            words: elements,
+            storage,
+            element: core::marker::PhantomData,
+        })
     }
 
     /// Allocate zeroed, process-owned words for native non-tensor compute.
@@ -249,6 +253,35 @@ impl Backend for Nvidia {
             ..operation(abi::UPLOAD)
         })?;
         Ok(tensor.buffer)
+    }
+
+    fn argmax(&self, input: &Tensor<Self>) -> Result<usize> {
+        // Each of 32 warps returns an exact index and value. Combining 32 pairs
+        // avoids downloading and scanning the complete vocabulary on the CPU.
+        let output = self.produce_storage(64, Kernel::ArgMax, &[(&input.buffer, 0)], &[input.len()], Storage::Words)?;
+        let mut partials = [0u32; 64];
+        self.read_words_into(&output, 0, &mut partials)?;
+        let mut best = (usize::MAX, f32::NEG_INFINITY);
+        for pair in partials.chunks_exact(2) {
+            let index = pair[0] as usize;
+            if index == u32::MAX as usize {
+                continue;
+            }
+            let value = f32::from_bits(pair[1]);
+            if !value.is_finite() {
+                return Err(Error::NonFinite);
+            }
+            if index >= input.len() {
+                return Err(Error::DeviceFault);
+            }
+            if value > best.1 || (value == best.1 && index < best.0) {
+                best = (index, value);
+            }
+        }
+        if best.0 == usize::MAX {
+            return Err(Error::DeviceFault);
+        }
+        Ok(best.0)
     }
 
     fn upload_bf16(&self, values: impl ExactSizeIterator<Item = u16>) -> Result<GpuBuffer> {

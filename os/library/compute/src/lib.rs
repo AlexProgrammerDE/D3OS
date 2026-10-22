@@ -160,6 +160,21 @@ pub trait Backend: Sized {
         self.upload(expanded)
     }
     fn download(&self, tensor: &Tensor<Self>) -> Result<Vec<f32>>;
+    /// Index of the largest value, choosing the first index for equal values.
+    /// Rejects any non-finite input, including values that cannot win.
+    fn argmax(&self, input: &Tensor<Self>) -> Result<usize> {
+        let values = self.download(input)?;
+        let mut best = 0;
+        for (index, &value) in values.iter().enumerate() {
+            if !value.is_finite() {
+                return Err(Error::NonFinite);
+            }
+            if value > values[best] {
+                best = index;
+            }
+        }
+        Ok(best)
+    }
     fn matmul(&self, a: &Tensor<Self>, b: &Tensor<Self>) -> Result<Tensor<Self>>;
     /// Weights have shape [output_features, input_features]. Bias has shape [output_features].
     fn linear(&self, input: &Tensor<Self>, weights: &Tensor<Self>, bias: &Tensor<Self>) -> Result<Tensor<Self>>;

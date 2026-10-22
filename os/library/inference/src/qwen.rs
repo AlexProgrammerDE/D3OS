@@ -461,17 +461,7 @@ pub fn greedy<B: Backend>(backend: &B, logits: &Tensor<B>) -> Result<u32> {
     if logits.shape().len() != 2 || logits.shape()[0] != 1 {
         return Err(Error::InvalidModelShape);
     }
-    let values = backend.download(logits)?;
-    let mut best = 0;
-    for (index, &value) in values.iter().enumerate() {
-        if !value.is_finite() {
-            return Err(d3os_compute::Error::NonFinite.into());
-        }
-        if value > values[best] {
-            best = index;
-        }
-    }
-    u32::try_from(best).map_err(|_| Error::InvalidToken)
+    u32::try_from(backend.argmax(logits)?).map_err(|_| Error::InvalidToken)
 }
 
 /// Compare every decoder layer and every vocabulary logit at every fixture position.

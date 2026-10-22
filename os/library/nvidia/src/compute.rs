@@ -12,7 +12,7 @@ pub const LAUNCH: u32 = 5;
 pub const PROFILE: u32 = 6;
 /// Allocate and fully overwrite an output before its handle becomes visible.
 pub const LAUNCH_ALLOCATE: u32 = 7;
-pub const KERNEL_COUNT: usize = 26;
+pub const KERNEL_COUNT: usize = 27;
 
 /// Device-wide CPU cycle counters. Read snapshots around an exclusive workload
 /// and subtract them. Wait cycles include GPU execution and completion polling.
@@ -70,9 +70,10 @@ pub enum Kernel {
     RasterBinned = 23,
     ProjectBf16 = 24,
     DequantizeBf16 = 25,
+    ArgMax = 26,
 }
 
-const _: () = assert!(Kernel::DequantizeBf16 as usize + 1 == KERNEL_COUNT);
+const _: () = assert!(Kernel::ArgMax as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -99,7 +100,7 @@ impl Kernel {
     /// These kernels write every output element for every valid work shape.
     /// Partial writers must never expose uncleared allocations through this API.
     pub fn allocates_output(self) -> bool {
-        matches!(self, Self::Matmul | Self::Project | Self::RmsNorm | Self::ProjectBf16)
+        matches!(self, Self::Matmul | Self::Project | Self::RmsNorm | Self::ProjectBf16 | Self::ArgMax)
     }
 
     pub fn from_raw(raw: u32) -> Result<Self> {
@@ -130,6 +131,7 @@ impl Kernel {
             23 => Self::RasterBinned,
             24 => Self::ProjectBf16,
             25 => Self::DequantizeBf16,
+            26 => Self::ArgMax,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -162,6 +164,7 @@ impl Kernel {
             Self::RasterBinned => "raster_binned",
             Self::ProjectBf16 => "tensor_project_bf16_weights",
             Self::DequantizeBf16 => "dequantize_bf16",
+            Self::ArgMax => "argmax_partials",
         }
     }
 
@@ -169,6 +172,11 @@ impl Kernel {
         let mut extents = [0; 16];
         let mut mutated = 0;
         let (count, pointers, output, in_place) = match (self, p) {
+            (Self::ArgMax, &[n]) => {
+                product(&[n])?;
+                extents[..2].copy_from_slice(&[u64::from(n), 64]);
+                (1024, 2, 1, false)
+            }
             (Self::ProjectBf16, &[m, k, n]) => {
                 extents[..3].copy_from_slice(&[product(&[m, k])? as u64, u64::from(product(&[k, n])?).div_ceil(2), product(&[m, n])? as u64]);
                 let tile = if m == 1 && n <= 2048 { 1 } else { 8 };
