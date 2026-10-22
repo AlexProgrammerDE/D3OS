@@ -88,6 +88,8 @@ break main
 
 For further commands check [GDB Quick Reference](docs/gdb-commands.pdf).
 
+For native Rust compute, pretrained AlexNet, and GPU kernel tests without NVIDIA hardware, read the [inference development guide](docs/inference.howto.md).
+
 ### In your editor
 
 The repository contains debug configurations for RustRover, Visual Studio Code and Zed.

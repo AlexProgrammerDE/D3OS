@@ -142,3 +142,7 @@ rustc-ice-*.txt
 .rustfmt.toml
 .idea/copilot*
 .gdb_history
+
+# Generated inference assets and Python tool caches
+loader/initrd/usr/share/inference/
+__pycache__/

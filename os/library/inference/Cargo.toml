@@ -1,0 +1,7 @@
+[package]
+name = "d3os-inference"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+d3os-compute = { path = "../compute" }

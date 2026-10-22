@@ -1,0 +1,61 @@
+name: Native inference
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      pretrained:
+        description: Verify pretrained AlexNet on the host and inside D3OS
+        type: boolean
+        default: false
+
+jobs:
+  cpu-and-ptx:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-02-01
+          components: rust-src, rustfmt, clippy, llvm-tools, llvm-bitcode-linker
+          targets: nvptx64-nvidia-cuda
+      - uses: Swatinem/rust-cache@v2
+      - name: Verify CPU operators and model loading
+        run: cargo test --locked -p d3os-compute -p d3os-inference
+      - name: Check compute and inference code
+        run: cargo clippy --locked -p d3os-compute -p d3os-inference --all-targets -- -D warnings
+      - name: Execute compiled Rust GPU kernels on the CPU
+        run: python3 tools/inference/test-gpu-kernels.py
+      - name: Install model and OS build dependencies
+        if: inputs.pretrained
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential nasm dosfstools qemu-system-x86 ovmf python3-numpy python3-pil
+          cargo install --locked --no-default-features cargo-make --version 0.37.24
+          cargo install --locked cargo-license --version 0.6.1
+      - name: Prepare pretrained weights and independent reference outputs
+        if: inputs.pretrained
+        run: OPENBLAS_NUM_THREADS=2 python3 tools/inference/prepare-alexnet.py
+      - name: Verify pretrained AlexNet on the host
+        if: inputs.pretrained
+        run: cargo run --locked -p d3os-inference --example infer-host --release -- alexnet target/inference/alexnet.d3t target/inference/dog.d3t
+      - name: Build D3OS
+        if: inputs.pretrained
+        run: cargo make --no-workspace --profile production image
+      - name: Verify inference inside D3OS without GPU hardware
+        if: inputs.pretrained
+        run: |
+          python3 tools/inference/test-qemu.py --accel tcg --timeout 300
+          python3 tools/inference/test-qemu.py --accel tcg --alexnet --timeout 300
+      - name: Upload verification logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: inference-verification
+          if-no-files-found: ignore
+          path: |
+            target/inference/manifest.json
+            target/inference-qemu-*/serial.log
+            target/inference-qemu-*/qemu.log

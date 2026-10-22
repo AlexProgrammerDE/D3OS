@@ -11,6 +11,11 @@ pub struct Application {
 ///
 /// Author: Sebastian Keller
 pub const APPLICATION_REGISTRY: &'static [Application] = &[
+    Application {
+        namespace: "infer",
+        single_value: &["self-test", "alexnet"],
+        key_value_pair: &[],
+    },
     //////////////////////
     // Debug
     Application {

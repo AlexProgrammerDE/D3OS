@@ -13,6 +13,7 @@ LINKER = { source = "${CARGO_MAKE_RUST_TARGET_OS}", default_value = "ld", mappin
 QEMU_AUDIO_DEVICE = { source = "${CARGO_MAKE_RUST_TARGET_OS}", default_value = "pa", mapping = { "macos" = "coreaudio" } }
 QEMU_DISPLAY = { source = "${CARGO_MAKE_RUST_TARGET_OS}", default_value = "gtk,gl=on", mapping = { "macos" = "cocoa" } }
 QEMU_VIRTIO_DEVICE = { source = "${CARGO_MAKE_RUST_TARGET_OS}", default_value = "virtio-vga-gl", mapping = { "macos" = "virtio-vga" } }
+QEMU_MEMORY = { value = "512M,slots=2,maxmem=1G", condition = { env_not_set = ["QEMU_MEMORY"] } }
 RUSTFLAGS="--cfg getrandom_backend=\"rdrand\""
 
 #VIRGL_DEBUG = "all"
@@ -30,7 +31,7 @@ dependencies = [ "image", "hdd", "ovmf" ]
 args = [
     # Base machine configuration
     "-machine", "q35,nvdimm=on,pcspk-audiodev=audio0",
-    "-m", "512M,slots=2,maxmem=1G",
+    "-m", "${QEMU_MEMORY}",
     "-cpu", "Haswell,fsgsbase",
     "-smp", "4", # 4 CPUs
     "-bios", "RELEASEX64_OVMF.fd",
@@ -77,7 +78,7 @@ env = { WSL_BIOS_PATH = { script = ["wslpath -w 'RELEASEX64_OVMF.fd'"]}, WSL_BOO
 args = [
     # Base machine configuration
     "-machine", "q35,nvdimm=on,pcspk-audiodev=audio0",
-    "-m", "512M,slots=2,maxmem=1G",
+    "-m", "${QEMU_MEMORY}",
     "-cpu", "Haswell",
     "-smp", "4", # 4 CPUs
     "-bios", "${WSL_BIOS_PATH}",
@@ -115,7 +116,7 @@ dependencies = [ "debug-signal-vscode" ]
 args = [
     # Base machine configuration
     "-machine", "q35,nvdimm=on,pcspk-audiodev=audio0",
-    "-m", "512M,slots=2,maxmem=1G",
+    "-m", "${QEMU_MEMORY}",
     "-cpu", "Haswell",
     "-smp", "4", # 4 CPUs
     "-bios", "RELEASEX64_OVMF.fd",

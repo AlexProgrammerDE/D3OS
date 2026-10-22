@@ -1,0 +1,170 @@
+# Native inference architecture and hardware handoff
+
+D3OS owns the compute API, tensor operations, model execution, and application integration in this implementation.
+The CPU backend is a real userspace implementation with `no_std` and `alloc`.
+Host verification builds the same libraries for Linux.
+
+The hardware-free phase delivers pretrained AlexNet inference inside D3OS and CPU execution of compiled Rust PTX kernels.
+It does not include an NVIDIA hardware driver.
+GPU initialization, kernel loading, and hardware execution remain the next implementation phase.
+
+## Source layout
+
+- `os/library/compute`: tensor storage, the synchronous backend contract, and CPU operators.
+- `os/library/inference`: checked tensor archives, AlexNet evaluation, ranking, and numerical verification.
+- `os/application/infer`: D3OS file access, shell commands, and serial reports.
+- `os/library/inference/examples/infer-host.rs`: host execution of the same model implementation.
+- `tools/gpu-kernels`: Rust device kernels compiled to PTX.
+- `tools/inference`: asset preparation, CPU PTX tests, and QEMU integration tests.
+
+The inference layer depends on the backend contract rather than CPU storage.
+An NVIDIA backend can implement that contract after hardware initialization and submission work.
+The model layer does not require Linux binary compatibility, a CUDA host runtime, or Python inside D3OS.
+
+## CPU implementation
+
+Each tensor owns its buffer and records its dimensions.
+Shape products use checked arithmetic before allocation or indexing.
+The CPU backend moves uploaded vectors into owned storage and exposes explicit downloads.
+
+Convolution lowers each image into an `im2col` buffer and uses row-major matrix multiplication.
+The inner matrix loop permits SIMD without global floating-point reassociation.
+Fully connected layers use independent accumulators for long dot products.
+Softmax subtracts each row's maximum before exponentiation.
+
+AlexNet uses the torchvision evaluation architecture, including its preprocessing and disabled dropout.
+The input size is fixed at 224 by 224 pixels.
+At this size, the final feature map is already 6 by 6, so adaptive pooling is an identity.
+Other input sizes and AlexNet variants are not supported by this model implementation.
+
+## Tensor archive version 1
+
+An archive starts with eight magic bytes, `D3TENSR\0`.
+A little-endian `u32` version and a little-endian `u32` record count follow.
+Version 1 supports one to 64 named tensors.
+
+Each record contains these fields in order:
+
+1. Name length as a little-endian `u16`.
+2. Rank as a little-endian `u16`.
+3. Element count as a little-endian `u64`.
+4. UTF-8 name bytes without a terminator.
+5. Dimensions as little-endian `u64` values.
+6. Contiguous little-endian IEEE 754 `f32` elements.
+
+Names contain one to 256 bytes and cannot contain null bytes.
+Ranks range from one to eight.
+Dimensions must be nonzero and their product must equal the element count.
+The parser rejects duplicate names, overflow, truncated records, unsupported versions, and trailing bytes.
+Loading a tensor rejects nonfinite values.
+
+The format stores explicit data and dimensions rather than serialized Rust objects.
+AlexNet separately validates every parameter name and shape before allocating its weight buffers.
+The exporter writes a SHA-256 manifest alongside generated archives.
+The archive itself does not authenticate its contents.
+
+## What the PTX tests establish
+
+The Rust compiler generates the device code used by the numerical tests.
+GPUOcelot executes that PTX on the host CPU.
+The harness compares vector addition, ReLU, and matrix multiplication with independent scalar calculations.
+Guard values detect writes immediately before or after the output allocation.
+
+The interpreter accepts an older PTX instruction set.
+The test build targets `sm_35`, while a separate compile targets Ampere `sm_86`.
+Both builds use the same Rust kernel source and launch ABI.
+Compilation of the Ampere output does not establish that it executes correctly on hardware.
+
+The tests cover scalar floating-point kernels and launch bounds.
+They do not establish Tensor Core support or inference performance on an NVIDIA GPU.
+They also do not model a PCIe NVIDIA device that D3OS can discover.
+
+## Verified software results
+
+Local verification on October 22, 2026 established these results:
+
+- CPU operator and archive tests passed on the development host.
+- The PTX suite passed 22 cases across three compiled Rust kernels.
+- The same kernels compiled for Ampere and Ada.
+- Pretrained AlexNet matched all eight independent NumPy layer references on the host.
+- The small-network test passed inside D3OS under QEMU/KVM.
+- Pretrained AlexNet passed all eight layer comparisons inside D3OS under QEMU/KVM.
+- Both guest tests also passed with QEMU TCG, without KVM or GPU access.
+
+The dog fixture produced class 258 with probability approximately 0.72448.
+The first full-model guest run took approximately 1.28 seconds, including file access and verification.
+That timing describes CPU execution in KVM on the development machine.
+It is not a GPU performance measurement.
+
+The test scripts preserve manifests and guest logs under `target`.
+The CI workflow provides repeatable numerical tests and an optional pretrained QEMU run.
+
+## Next phase: NVIDIA hardware
+
+The initial hardware target needs one exact GPU model, one process, and one compute queue.
+An Ampere desktop card is a practical starting point for the current kernel compiler target.
+The exact PCI ID, firmware version, and supported compute classes must determine the driver configuration.
+
+The [tinygrad direct PCI backend](https://github.com/tinygrad/tinygrad/blob/master/tinygrad/runtime/support/nv/nvdev.py) provides a reference for initialization.
+Its [firmware and GSP implementation](https://github.com/tinygrad/tinygrad/blob/master/tinygrad/runtime/support/nv/ip.py) provides the corresponding management protocol.
+[NVIDIA's hardware definitions](https://github.com/NVIDIA/open-gpu-doc) describe published command interfaces.
+The hhuOS `origin/arc_driver` branch provides a Rust example of OS adapters, GPU memory, and compute submission.
+Its Intel register encodings and page tables are specific to Intel hardware.
+
+The implementation milestones are:
+
+1. Add ECAM access and device capability handling to D3OS PCI support.
+2. Map the GPU BARs with the required memory attributes.
+3. Implement owned DMA allocations, reset handling, firmware boot, and GSP communication.
+4. Implement VRAM allocation, GPU virtual addresses, page tables, and translation invalidation.
+5. Create compute and copy channels, then submit work with completion fences and bounded timeouts.
+6. Assemble device kernels for the chosen architecture and load their code, metadata, constants, and relocations.
+7. Execute vector addition and matrix multiplication against CPU references on the real GPU.
+8. Implement the remaining inference operators in the NVIDIA backend and run AlexNet through that backend.
+9. Add process isolation, resource cleanup, fault diagnostics, and recovery tests.
+10. Optimize measured bottlenecks, then add Tensor Core kernels and larger model operators.
+
+Initial bring-up can use driver-owned staging buffers and explicit copies.
+It does not require shared CPU/GPU virtual addresses or demand-paged GPU memory.
+Arbitrary userspace kernel submission still requires memory isolation and a documented unsafe launch boundary.
+
+Qwen is a later model extension.
+It requires attention, normalization, rotary positions, feed-forward operators, a KV cache, tokenization, and sampling.
+Those operators are not present in this AlexNet implementation.
+
+## GPU debug machine
+
+The development host can keep Linux while a D3OS VM receives a secondary GPU through VFIO.
+D3OS does not need installation on the machine's boot disk.
+
+The hardware phase needs:
+
+- Remote access to a Linux host with KVM and IOMMU support.
+- An NVIDIA GPU that the host can release to VFIO, preferably separate from its display GPU.
+- Permission to manage that specific device and start QEMU with passthrough.
+- Access to serial logs, QEMU's monitor, and a debugger.
+- A recovery method for GPU hangs, including a host reboot when device reset fails.
+
+A CUDA container alone does not provide the necessary PCIe device ownership.
+The actual PCI device and IOMMU group must be inspected before any driver unbinding.
+The hardware phase must verify firmware initialization, DMA visibility, synchronization, and recovery on that device.
+
+### Hybrid laptops
+
+A laptop's display MUX can connect the internal panel directly to its NVIDIA GPU.
+In that state, the host cannot release the GPU while the graphical session uses the panel.
+The MUX must first route the panel to integrated graphics, usually through a firmware or vendor setting and a reboot.
+The NVIDIA device must remain enumerated and available for VFIO.
+Some integrated-only modes disable the discrete GPU, so the selected mode must preserve device access.
+
+On supported ASUS systems, [supergfxctl documents a VFIO mode](https://gitlab.com/asus-linux/supergfxctl/-/blob/main/README.md).
+Its read-only `--get` and `--supported` commands report the current switching state.
+The available modes depend on the machine, firmware, and kernel.
+Before detaching the GPU, verify that the active panel uses the Intel DRM device and that the complete NVIDIA IOMMU group is available.
+
+The development laptop's read-only inspection found Intel Raptor Lake graphics and an RTX 4090 Laptop GPU (`10de:2757`).
+The NVIDIA GPU at `0000:01:00.0` shares group 15 only with its audio function at `0000:01:00.1`.
+The active internal panel currently uses NVIDIA, and `supergfxctl` reports `AsusMuxDgpu` as its sole supported mode.
+The [VFIO setup guide](nvidia-vfio.howto.md) gives the documented ASUS Hybrid-mode commands, display checks, VFIO reservation, and rollback steps.
+The mode switch has not been tested and no host graphics settings were changed.
+The Ada kernel build uses `--hardware-sm sm_89`.
