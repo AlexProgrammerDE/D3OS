@@ -186,6 +186,19 @@ def prepare(directory, kernel):
     for name in ("nvidia-smi", "mknod", "awk", "cat", "sleep"):
         executable(root, name)
     modules(root, kernel, ("nvidia", "nvidia_uvm"))
+    subprocess.run(
+        [
+            "gcc",
+            "-nostdlib",
+            "-static",
+            "-no-pie",
+            "-Wl,--build-id=none,-z,noexecstack",
+            str(ROOT / "tools/nvidia/linux-poweroff.S"),
+            "-o",
+            str(root / "bin/poweroff-guest"),
+        ],
+        check=True,
+    )
     for library in ("libcuda.so.1", "libnvidia-ml.so.1"):
         copy_file(root, Path("/usr/lib64") / library, Path("/lib64") / library)
     firmware = subprocess.check_output(
@@ -229,15 +242,11 @@ echo LINUX_NVIDIA_REFERENCE_READY
 if [ -x /benchmark ]; then
     if ! /benchmark; then
         echo LINUX_NVIDIA_REFERENCE_FAILED
-        echo o > /proc/sysrq-trigger
-        set +x
-        while :; do :; done
+        exec /bin/poweroff-guest
     fi
 fi
 echo LINUX_NVIDIA_REFERENCE_DONE
-echo o > /proc/sysrq-trigger
-set +x
-while :; do :; done
+exec /bin/poweroff-guest
 """)
     init.chmod(0o755)
     archive(bootstrap, directory / "bootstrap.cpio")
@@ -266,6 +275,8 @@ def main():
     parser.add_argument("--memory-mib", type=int, default=4096)
     parser.add_argument("--doom-benchmark", action="store_true")
     args = parser.parse_args()
+    affinity = ",".join(str(cpu) for cpu in sorted(os.sched_getaffinity(0)))
+    print(f"NVIDIA_HOST_CPU_AFFINITY cpus={affinity}", flush=True)
     if (
         sum((args.kernel_benchmark, bool(args.llama_directory), args.doom_benchmark))
         > 1

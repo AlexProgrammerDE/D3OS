@@ -85,6 +85,8 @@ def main():
         "--gdb-port", type=int, help="pause at reset for a local GDB connection"
     )
     args = parser.parse_args()
+    affinity = ",".join(str(cpu) for cpu in sorted(os.sched_getaffinity(0)))
+    print(f"NVIDIA_HOST_CPU_AFFINITY cpus={affinity}", flush=True)
     if (
         not 512 <= args.memory_mib <= 32768
         or not 1 <= args.cpus <= 64
