@@ -13,7 +13,7 @@ pub struct Application {
 pub const APPLICATION_REGISTRY: &'static [Application] = &[
     Application {
         namespace: "infer",
-        single_value: &["self-test", "alexnet"],
+        single_value: &["self-test", "alexnet", "qwen", "qwen-verify"],
         key_value_pair: &[],
     },
     //////////////////////

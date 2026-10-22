@@ -2,6 +2,7 @@
 """Boot D3OS and verify native inference through the normal shell and syscalls."""
 
 import argparse
+import errno
 import json
 import os
 import shutil
@@ -48,8 +49,9 @@ class Qmp:
         raise RuntimeError("QEMU monitor disconnected")
 
     def type_command(self, command):
+        # D3OS currently decodes a German keyboard layout. QEMU key names use US positions.
         for char in command:
-            key = "spc" if char == " " else char
+            key = {" ": "spc", "-": "slash", "y": "z", "z": "y"}.get(char, char)
             self.execute("human-monitor-command", {"command-line": f"sendkey {key} 30"})
             time.sleep(0.06)
         self.execute("human-monitor-command", {"command-line": "sendkey ret 30"})
@@ -59,28 +61,86 @@ class Qmp:
         self.socket.close()
 
 
-def prepare(directory, alexnet):
+def large_image(stage, image):
+    # towbootctl 0.10 reserves too little FAT metadata space for a GiB-sized initrd.
+    # Build a GPT/EFI image with explicit headroom, streaming files through mtools.
+    for command in ("sfdisk", "mformat", "mmd", "mcopy"):
+        if shutil.which(command) is None:
+            raise RuntimeError(
+                f"large model images require {command}; install util-linux and mtools"
+            )
+    files = [stage / name for name in ("kernel.elf", "initrd.tar", "towboot.toml")]
+    mib = 1024 * 1024
+    sectors = (
+        (sum(path.stat().st_size for path in files) + 64 * mib + mib - 1) // mib
+    ) * 2048
+    with image.open("wb") as file:
+        file.truncate((sectors + 4096) * 512)
+    subprocess.run(
+        ["sfdisk", "--quiet", "--no-reread", "--no-tell-kernel", str(image)],
+        input=f"label: gpt\n\nstart=2048,size={sectors},type=U\n",
+        text=True,
+        check=True,
+    )
+    volume = f"{image}@@{mib}"
+    subprocess.run(
+        ["mformat", "-i", volume, "-T", str(sectors), "-F", "::"], check=True
+    )
+    subprocess.run(["mmd", "-i", volume, "::/EFI", "::/EFI/BOOT"], check=True)
+    bootloader = stage / "bootx64.efi"
+    bootloader.unlink(missing_ok=True)
+    subprocess.run(
+        [str(ROOT / "towbootctl"), "extract", str(bootloader), "--x86-64"], check=True
+    )
+    subprocess.run(
+        ["mcopy", "-i", volume, str(bootloader), "::/EFI/BOOT/BOOTX64.EFI"], check=True
+    )
+    subprocess.run(["mcopy", "-i", volume, *map(str, files), "::/"], check=True)
+
+
+def prepare(directory, mode, qwen_assets):
     stage = directory / "boot"
     initrd = stage / "initrd"
     (initrd / "bin").mkdir(parents=True, exist_ok=True)
     for name in ("infer", "shell", "terminal_emulator"):
         shutil.copyfile(ROOT / "loader/initrd/bin" / name, initrd / "bin" / name)
-    if alexnet:
+    if mode != "self-test":
         assets = initrd / "usr/share/inference"
         assets.mkdir(parents=True, exist_ok=True)
-        for name in ("alexnet.d3t", "dog.d3t"):
-            shutil.copyfile(ROOT / "target/inference" / name, assets / name)
+        source = qwen_assets if mode.startswith("qwen") else ROOT / "target/inference"
+        names = (
+            (
+                "qwen3.5-0.8b.d3t",
+                "qwen3.5.bpe",
+                "qwen-fixture.d3t",
+                "tokenizer-fixture.bin",
+            )
+            if mode.startswith("qwen")
+            else ("alexnet.d3t", "dog.d3t")
+        )
+        for name in names:
+            destination = assets / name
+            destination.unlink(missing_ok=True)
+            try:
+                os.link(source / name, destination)
+            except OSError as error:
+                if error.errno != errno.EXDEV:
+                    raise
+                shutil.copyfile(source / name, destination)
     with tarfile.open(
         stage / "initrd.tar", "w", format=tarfile.USTAR_FORMAT
     ) as archive:
         archive.add(initrd / "bin", arcname="bin")
-        if alexnet:
+        if mode != "self-test":
             archive.add(initrd / "usr", arcname="usr")
     shutil.copyfile(ROOT / "loader/kernel.elf", stage / "kernel.elf")
     shutil.copyfile(ROOT / "loader/towboot.toml", stage / "towboot.toml")
     image = directory / "d3os.img"
     # towbootctl expects a new destination. The file is private to this test run.
     image.unlink(missing_ok=True)
+    if (stage / "initrd.tar").stat().st_size > 512 * 1024 * 1024:
+        large_image(stage, image)
+        return image
     subprocess.run(
         [
             str(ROOT / "towbootctl"),
@@ -99,11 +159,21 @@ def prepare(directory, alexnet):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
+    models = parser.add_mutually_exclusive_group()
+    models.add_argument(
         "--alexnet",
         action="store_true",
         help="include pretrained weights and verify every AlexNet layer",
     )
+    models.add_argument(
+        "--qwen", action="store_true", help="generate text with pretrained Qwen3.5-0.8B"
+    )
+    models.add_argument(
+        "--qwen-verify",
+        action="store_true",
+        help="verify all Qwen layers, logits, and tokenizer fixtures",
+    )
+    parser.add_argument("--qwen-assets", type=Path, default=ROOT / "target/qwen")
     parser.add_argument("--bios", type=Path, help="OVMF firmware image")
     parser.add_argument(
         "--accel",
@@ -111,9 +181,24 @@ def main():
         default="kvm" if os.access("/dev/kvm", os.R_OK | os.W_OK) else "tcg",
     )
     parser.add_argument("--timeout", type=float, default=180)
+    parser.add_argument(
+        "--cpus", type=int, help="guest CPU count (one for Qwen, two for smaller tests)"
+    )
     args = parser.parse_args()
+    mode = (
+        "qwen-verify"
+        if args.qwen_verify
+        else "qwen"
+        if args.qwen
+        else "alexnet"
+        if args.alexnet
+        else "self-test"
+    )
     if args.timeout <= 0:
         parser.error("--timeout must be positive")
+    cpus = args.cpus if args.cpus is not None else 1 if mode.startswith("qwen") else 2
+    if not 1 <= cpus <= 64:
+        parser.error("--cpus must be from 1 to 64")
     bios = args.bios or next(
         (
             p
@@ -133,11 +218,18 @@ def main():
     directory = (
         ROOT
         / "target"
-        / ("inference-qemu-alexnet" if args.alexnet else "inference-qemu-self-test")
+        / (
+            "inference-qemu-qwen"
+            if mode.startswith("qwen")
+            else f"inference-qemu-{mode}"
+        )
     )
     directory.mkdir(parents=True, exist_ok=True)
-    image = prepare(directory, args.alexnet)
-    serial, monitor = directory / "serial.log", directory / "qmp.sock"
+    image = prepare(directory, mode, args.qwen_assets.resolve())
+    serial = directory / (
+        f"serial-{mode}-{args.accel}.log" if mode.startswith("qwen") else "serial.log"
+    )
+    monitor = directory / "qmp.sock"
     serial.unlink(missing_ok=True)
     monitor.unlink(missing_ok=True)
     deadline = time.monotonic() + args.timeout
@@ -151,9 +243,9 @@ def main():
         "-cpu",
         "host" if args.accel == "kvm" else "Haswell,fsgsbase",
         "-smp",
-        "2",
+        str(cpus),
         "-m",
-        "4G" if args.alexnet else "512M",
+        "12G" if mode.startswith("qwen") else "4G" if args.alexnet else "512M",
         "-bios",
         str(bios.resolve()),
         "-drive",
@@ -174,7 +266,9 @@ def main():
         f"unix:{monitor},server=on,wait=off",
         "-no-reboot",
     ]
-    expected = "INFERENCE_OK alexnet" if args.alexnet else "INFERENCE_OK self-test"
+    expected = (
+        f"INFERENCE_OK {mode} " if mode != "self-test" else "INFERENCE_OK self-test"
+    )
     qmp = None
     with (directory / "qemu.log").open("w") as log:
         process = subprocess.Popen(command, cwd=ROOT, stdout=log, stderr=log)
@@ -192,7 +286,7 @@ def main():
             else:
                 raise TimeoutError(f"D3OS did not start its shell. Read {serial}")
             time.sleep(1)
-            qmp.type_command("infer alexnet" if args.alexnet else "infer")
+            qmp.type_command(f"infer {mode}" if mode != "self-test" else "infer")
             while time.monotonic() < deadline:
                 text = serial.read_text(errors="replace")
                 if "INFERENCE_FAIL" in text or "panicked at" in text:
@@ -202,7 +296,10 @@ def main():
                         "\n".join(
                             line
                             for line in text.splitlines()
-                            if "INFERENCE_" in line or "class=" in line
+                            if "INFERENCE_" in line
+                            or "class=" in line
+                            or "QWEN_" in line
+                            or "infer.rs@" in line
                         )
                     )
                     print(f"QEMU_INFERENCE_OK accelerator={args.accel} serial={serial}")

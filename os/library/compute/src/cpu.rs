@@ -2,6 +2,8 @@ use alloc::vec::Vec;
 
 use crate::{Backend, Buffer, Conv2d, Error, Pool2d, Result, Tensor, element_count, output_extent};
 
+mod transformer;
+
 #[derive(Debug)]
 pub struct CpuBuffer(Vec<f32>);
 

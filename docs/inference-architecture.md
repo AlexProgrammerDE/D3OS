@@ -4,14 +4,15 @@ D3OS owns the compute API, tensor operations, model execution, and application i
 The CPU backend is a real userspace implementation with `no_std` and `alloc`.
 Host verification builds the same libraries for Linux.
 
-The hardware-free phase delivers pretrained AlexNet inference inside D3OS and CPU execution of compiled Rust PTX kernels.
+The hardware-free phase delivers pretrained AlexNet and Qwen3.5-0.8B text inference inside D3OS.
+It also provides CPU execution of compiled Rust PTX kernels.
 It does not include an NVIDIA hardware driver.
 GPU initialization, kernel loading, and hardware execution remain the next implementation phase.
 
 ## Source layout
 
 - `os/library/compute`: tensor storage, the synchronous backend contract, and CPU operators.
-- `os/library/inference`: checked tensor archives, AlexNet evaluation, ranking, and numerical verification.
+- `os/library/inference`: checked tensor archives, AlexNet evaluation, Qwen text generation, tokenization, and numerical verification.
 - `os/application/infer`: D3OS file access, shell commands, and serial reports.
 - `os/library/inference/examples/infer-host.rs`: host execution of the same model implementation.
 - `tools/gpu-kernels`: Rust device kernels compiled to PTX.
@@ -37,11 +38,12 @@ The input size is fixed at 224 by 224 pixels.
 At this size, the final feature map is already 6 by 6, so adaptive pooling is an identity.
 Other input sizes and AlexNet variants are not supported by this model implementation.
 
-## Tensor archive version 1
+## Tensor archives
 
 An archive starts with eight magic bytes, `D3TENSR\0`.
 A little-endian `u32` version and a little-endian `u32` record count follow.
-Version 1 supports one to 64 named tensors.
+Both supported versions accept one to 4,096 named tensors.
+Version 1 stores every element as FP32.
 
 Each record contains these fields in order:
 
@@ -57,6 +59,12 @@ Ranks range from one to eight.
 Dimensions must be nonzero and their product must equal the element count.
 The parser rejects duplicate names, overflow, truncated records, unsupported versions, and trailing bytes.
 Loading a tensor rejects nonfinite values.
+
+Version 2 inserts a little-endian `u16` dtype after the element count in each record.
+Dtype 0 stores FP32; dtype 1 stores BF16.
+BF16 values expand to FP32 before backend upload.
+The rest of the record layout stays the same.
+AlexNet archives from version 1 remain supported.
 
 The format stores explicit data and dimensions rather than serialized Rust objects.
 AlexNet separately validates every parameter name and shape before allocating its weight buffers.
@@ -89,7 +97,10 @@ Local verification on October 22, 2026 established these results:
 - Pretrained AlexNet matched all eight independent NumPy layer references on the host.
 - The small-network test passed inside D3OS under QEMU/KVM.
 - Pretrained AlexNet passed all eight layer comparisons inside D3OS under QEMU/KVM.
-- Both guest tests also passed with QEMU TCG, without KVM or GPU access.
+- Both AlexNet guest tests also passed with QEMU TCG, without KVM or GPU access.
+- Qwen3.5-0.8B passed all 24 layer checks and vocabulary-logit comparisons across 29 positions on the host and in a single-vCPU D3OS KVM guest.
+- All 105 Qwen tokenizer cases matched the upstream tokenizer.
+- Qwen passed the complete numerical trace inside D3OS under QEMU TCG without hardware virtualization.
 
 The dog fixture produced class 258 with probability approximately 0.72448.
 The first full-model guest run took approximately 1.28 seconds, including file access and verification.
@@ -128,9 +139,10 @@ Initial bring-up can use driver-owned staging buffers and explicit copies.
 It does not require shared CPU/GPU virtual addresses or demand-paged GPU memory.
 Arbitrary userspace kernel submission still requires memory isolation and a documented unsafe launch boundary.
 
-Qwen is a later model extension.
-It requires attention, normalization, rotary positions, feed-forward operators, a KV cache, tokenization, and sampling.
-Those operators are not present in this AlexNet implementation.
+Qwen3.5-0.8B text generation now uses the native `TransformerBackend` interface.
+It includes recurrent and grouped attention, normalization, rotary positions, SwiGLU, cached decoding, tokenization, and greedy sampling.
+The NVIDIA backend must implement these operations before Qwen can run on GPU hardware.
+Read [the Qwen guide](qwen.howto.md) for API usage, reference verification, memory requirements, and the current SMP limitation.
 
 ## GPU debug machine
 

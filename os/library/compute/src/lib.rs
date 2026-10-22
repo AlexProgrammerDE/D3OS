@@ -4,6 +4,7 @@
 extern crate alloc;
 
 pub mod cpu;
+pub mod transformer;
 
 use alloc::vec::Vec;
 use core::fmt;

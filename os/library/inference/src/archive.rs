@@ -1,4 +1,4 @@
-//! Version 1 tensor archives contain named, little-endian, contiguous f32 tensors.
+//! Named, little-endian tensors: version 1 stores f32, version 2 adds per-record dtypes.
 //! Parsing checks the complete file before a backend receives any allocation.
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
@@ -8,10 +8,12 @@ use crate::{Error, Result};
 
 pub const MAGIC: &[u8; 8] = b"D3TENSR\0";
 pub const VERSION: u32 = 1;
+pub const TYPED_VERSION: u32 = 2;
 
 pub struct Record<'a> {
     shape: Vec<usize>,
     bytes: &'a [u8],
+    width: usize,
 }
 
 impl Record<'_> {
@@ -26,10 +28,14 @@ impl Record<'_> {
     pub fn to_vec(&self) -> Result<Vec<f32>> {
         let mut values = Vec::new();
         values
-            .try_reserve_exact(self.bytes.len() / 4)
+            .try_reserve_exact(self.bytes.len() / self.width)
             .map_err(|_| d3os_compute::Error::AllocationFailed)?;
-        for bytes in self.bytes.chunks_exact(4) {
-            let value = f32::from_le_bytes(bytes.try_into().map_err(|_| Error::InvalidArchive)?);
+        for bytes in self.bytes.chunks_exact(self.width) {
+            let value = if self.width == 2 {
+                f32::from_bits(u32::from(u16::from_le_bytes(bytes.try_into().map_err(|_| Error::InvalidArchive)?)) << 16)
+            } else {
+                f32::from_le_bytes(bytes.try_into().map_err(|_| Error::InvalidArchive)?)
+            };
             if !value.is_finite() {
                 return Err(d3os_compute::Error::NonFinite.into());
             }
@@ -46,11 +52,15 @@ pub struct Archive<'a> {
 impl<'a> Archive<'a> {
     pub fn parse(bytes: &'a [u8]) -> Result<Self> {
         let mut cursor = Cursor(bytes);
-        if cursor.take(8)? != MAGIC || cursor.u32()? != VERSION {
+        if cursor.take(8)? != MAGIC {
+            return Err(Error::InvalidArchive);
+        }
+        let version = cursor.u32()?;
+        if version != VERSION && version != TYPED_VERSION {
             return Err(Error::InvalidArchive);
         }
         let count = cursor.u32()?;
-        if count == 0 || count > 64 {
+        if count == 0 || count > 4096 {
             return Err(Error::InvalidArchive);
         }
         let mut records = BTreeMap::new();
@@ -58,6 +68,15 @@ impl<'a> Archive<'a> {
             let name_len = cursor.u16()? as usize;
             let rank = cursor.u16()? as usize;
             let elements = usize::try_from(cursor.u64()?).map_err(|_| Error::InvalidArchive)?;
+            let width = if version == TYPED_VERSION {
+                match cursor.u16()? {
+                    0 => 4,
+                    1 => 2,
+                    _ => return Err(Error::InvalidArchive),
+                }
+            } else {
+                4
+            };
             if !(1..=256).contains(&name_len) || !(1..=8).contains(&rank) {
                 return Err(Error::InvalidArchive);
             }
@@ -72,8 +91,8 @@ impl<'a> Archive<'a> {
             if element_count(&shape).map_err(|_| Error::InvalidArchive)? != elements {
                 return Err(Error::InvalidArchive);
             }
-            let bytes = cursor.take(elements.checked_mul(4).ok_or(Error::InvalidArchive)?)?;
-            if records.insert(name, Record { shape, bytes }).is_some() {
+            let bytes = cursor.take(elements.checked_mul(width).ok_or(Error::InvalidArchive)?)?;
+            if records.insert(name, Record { shape, bytes, width }).is_some() {
                 return Err(Error::InvalidArchive);
             }
         }

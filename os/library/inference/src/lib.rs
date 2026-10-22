@@ -5,6 +5,8 @@ extern crate alloc;
 
 pub mod alexnet;
 pub mod archive;
+pub mod qwen;
+pub mod tokenizer;
 
 use alloc::string::String;
 use alloc::vec;
@@ -20,6 +22,12 @@ pub enum Error {
     UnexpectedTensor,
     InvalidModelShape,
     VerificationFailed,
+    InvalidConfig,
+    InvalidToken,
+    InvalidTokenizer,
+    ContextFull,
+    SessionFailed,
+    VerificationAt { position: usize, layer: usize },
 }
 
 impl From<d3os_compute::Error> for Error {
@@ -36,6 +44,12 @@ impl fmt::Display for Error {
             Self::MissingTensor(name) => write!(f, "model is missing tensor {name}"),
             Self::UnexpectedTensor => f.write_str("model contains unexpected tensors"),
             Self::InvalidModelShape => f.write_str("model tensor has an invalid shape"),
+            Self::VerificationAt { position, layer } => write!(f, "Qwen reference mismatch at position {position}, layer {layer}"),
+            Self::InvalidConfig => f.write_str("invalid Qwen model configuration"),
+            Self::InvalidToken => f.write_str("invalid token ID or generation length"),
+            Self::InvalidTokenizer => f.write_str("invalid or unsupported tokenizer"),
+            Self::ContextFull => f.write_str("sequence exceeds the session capacity"),
+            Self::SessionFailed => f.write_str("session failed; create a new session before continuing"),
             Self::VerificationFailed => f.write_str("inference output differs from the reference"),
         }
     }

@@ -5,3 +5,5 @@ edition = "2024"
 
 [dependencies]
 d3os-compute = { path = "../compute" }
+unicode-normalization = { version = "0.1", default-features = false }
+unicode-general-category = "1"

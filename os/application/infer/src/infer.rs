@@ -5,6 +5,10 @@ extern crate alloc;
 use alloc::{format, string::String, vec, vec::Vec};
 use core::fmt;
 use d3os_compute::cpu::Cpu;
+use d3os_inference::{
+    qwen::{self, Qwen},
+    tokenizer::{self, Tokenizer},
+};
 use naming::shared_types::{OpenOptions, SeekOrigin};
 use runtime::env;
 
@@ -67,7 +71,60 @@ fn run() -> Result<(), String> {
                 time::systime().num_milliseconds() - start
             ));
         }
-        _ => return Err(String::from("usage: infer [self-test | alexnet [MODEL FIXTURE]]")),
+        Some("qwen") if args.len() == 1 || args.len() >= 3 => {
+            let start = time::systime().num_milliseconds();
+            let limit = if args.len() == 1 {
+                32
+            } else {
+                args[1].parse::<usize>().map_err(|_| String::from("MAX_TOKENS must be a positive integer"))?
+            };
+            let prompt = if args.len() == 1 {
+                String::from("What is 2 + 2? Answer briefly.")
+            } else {
+                args[2..].join(" ")
+            };
+            let data = read_file("/usr/share/inference/qwen3.5.bpe")?;
+            let tokenizer = Tokenizer::parse(&data).map_err(|error| format!("{error}"))?;
+            let tokens = tokenizer.encode_chat(&prompt).map_err(|error| format!("{error}"))?;
+            report(format_args!("INFERENCE_START qwen3.5-0.8b backend=cpu prompt_tokens={}", tokens.len()));
+            let bytes = read_file("/usr/share/inference/qwen3.5-0.8b.d3t")?;
+            let model = Qwen::load(&Cpu, &bytes).map_err(|error| format!("{error}"))?;
+            drop(bytes);
+            let generated = model.generate(&Cpu, &tokens, limit).map_err(|error| format!("{error}"))?;
+            report(format_args!(
+                "{}",
+                tokenizer.decode(&generated.tokens, true).map_err(|error| format!("{error}"))?
+            ));
+            report(format_args!(
+                "INFERENCE_OK qwen backend=cpu tokens={} stop={:?} elapsed_ms={}",
+                generated.tokens.len(),
+                generated.stop,
+                time::systime().num_milliseconds() - start
+            ));
+        }
+        Some("qwen-verify") if args.len() == 1 => {
+            let start = time::systime().num_milliseconds();
+            report(format_args!("INFERENCE_START qwen-verify backend=cpu"));
+            let data = read_file("/usr/share/inference/qwen3.5.bpe")?;
+            let tokenizer = Tokenizer::parse(&data).map_err(|error| format!("{error}"))?;
+            let cases = tokenizer::verify_fixture(&tokenizer, &read_file("/usr/share/inference/tokenizer-fixture.bin")?).map_err(|error| format!("{error}"))?;
+            report(format_args!("QWEN_TOKENIZER_OK cases={cases}"));
+            let bytes = read_file("/usr/share/inference/qwen3.5-0.8b.d3t")?;
+            let model = Qwen::load(&Cpu, &bytes).map_err(|error| format!("{error}"))?;
+            drop(bytes);
+            let fixture = read_file("/usr/share/inference/qwen-fixture.d3t")?;
+            let positions = qwen::verify_fixture(&model, &Cpu, &fixture).map_err(|error| format!("{error}"))?;
+            report(format_args!(
+                "INFERENCE_OK qwen-verify backend=cpu positions={positions} layers={} elapsed_ms={}",
+                model.config().layers,
+                time::systime().num_milliseconds() - start
+            ));
+        }
+        _ => {
+            return Err(String::from(
+                "usage: infer self-test | alexnet [MODEL FIXTURE] | qwen [MAX_TOKENS PROMPT...] | qwen-verify",
+            ));
+        }
     }
     Ok(())
 }

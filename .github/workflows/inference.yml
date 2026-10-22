@@ -9,6 +9,10 @@ on:
         description: Verify pretrained AlexNet on the host and inside D3OS
         type: boolean
         default: false
+      qwen:
+        description: Verify pretrained Qwen3.5-0.8B on the host and inside D3OS
+        type: boolean
+        default: false
 
 jobs:
   cpu-and-ptx:
@@ -59,3 +63,43 @@ jobs:
             target/inference/manifest.json
             target/inference-qemu-*/serial.log
             target/inference-qemu-*/qemu.log
+
+  qwen:
+    if: github.event_name == 'workflow_dispatch' && inputs.qwen
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-02-01
+          components: rust-src
+      - uses: Swatinem/rust-cache@v2
+      - name: Install OS and model verification dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential nasm dosfstools mtools util-linux fdisk qemu-system-x86 ovmf python3-venv
+          cargo install --locked --no-default-features cargo-make --version 0.37.24
+          cargo install --locked cargo-license --version 0.6.1
+          python3 -m venv target/qwen-venv
+          target/qwen-venv/bin/python -m pip install -r tools/inference/requirements-qwen.txt
+      - name: Export Qwen text weights and independent Transformers fixtures
+        run: target/qwen-venv/bin/python tools/inference/prepare-qwen.py
+      - name: Verify native model and tokenizer against Transformers
+        run: cargo run --locked -p d3os-inference --example infer-host --release -- qwen-verify target/qwen
+      - name: Build D3OS
+        run: cargo make --no-workspace --profile production image
+      - name: Verify Qwen inside D3OS with software CPU emulation
+        run: |
+          python3 tools/inference/test-qemu.py --accel tcg --qwen-verify --timeout 900
+          python3 tools/inference/test-qemu.py --accel tcg --qwen --timeout 900
+      - name: Upload Qwen verification logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: qwen-verification
+          if-no-files-found: ignore
+          path: |
+            target/qwen/manifest.json
+            target/inference-qemu-qwen/serial-*.log
+            target/inference-qemu-qwen/qemu.log

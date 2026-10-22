@@ -1,6 +1,7 @@
 # Develop native Rust inference
 
 This guide is for developers who write compute applications for D3OS.
+For native text generation, read [the Qwen3.5-0.8B guide](qwen.howto.md).
 The CPU backend runs inside D3OS and on a development host.
 The PTX harness executes compiled Rust GPU kernels on a CPU.
 Neither path requires an NVIDIA GPU or NVIDIA host libraries.

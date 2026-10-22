@@ -89,6 +89,7 @@ break main
 For further commands check [GDB Quick Reference](docs/gdb-commands.pdf).
 
 For native Rust compute, pretrained AlexNet, and GPU kernel tests without NVIDIA hardware, read the [inference development guide](docs/inference.howto.md).
+For text generation through the same API, read [Qwen3.5-0.8B in D3OS](docs/qwen.howto.md).
 
 ### In your editor
 
