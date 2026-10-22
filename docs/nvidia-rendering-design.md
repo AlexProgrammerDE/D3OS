@@ -1,11 +1,11 @@
 # Native GPU rendering for DOOM
 
-The current compute driver provides a feasible path to GPU rasterization for the existing DOOM application.
-This path uses native Rust compute kernels and the existing D3OS console framebuffer.
-It does not require a CUDA host runtime or a Vulkan compatibility layer.
-This document describes the implementation path, not a completed renderer.
+DOOM runs through native Rust raster kernels on the passed-through RTX 4090 Laptop GPU.
+The renderer uses the same compute service and coherent transfers as AlexNet and Qwen.
+The D3OS console framebuffer provides the final display.
+The driver does not load a host CUDA runtime or a Vulkan compatibility layer.
 
-## Current renderer
+## Engine integration
 
 The application links the pinned `doomgeneric` engine and provides its platform callbacks in `os/application/doom/src/doom.rs`.
 The engine draws walls and sprites with textured columns, and floors and ceilings with textured spans.
@@ -15,31 +15,34 @@ The video layer converts those indices to RGB pixels and doubles the image to 64
 
 The relevant engine routines are in the pinned [column and span renderer](https://github.com/ozkl/doomgeneric/blob/fc601639494e089702a1ada082eb51aaafc03722/doomgeneric/r_draw.c).
 Palette conversion and scaling are in its [video layer](https://github.com/ozkl/doomgeneric/blob/fc601639494e089702a1ada082eb51aaafc03722/doomgeneric/i_video.c).
-Moving only that conversion to the GPU leaves scene rasterization on the CPU.
-A GPU renderer must replace the column and span drawing loops too.
+The Rust adapter replaces scene drawing, palette conversion, and scaling.
+GNU linker wrappers redirect the engine entry points without changes to the pinned submodule.
+The default `doom` command retains CPU rendering.
+`doom --gpu` selects native GPU rendering, and `doom --verify-gpu` also runs the CPU reference.
 
 ## Compute path
 
 The CPU retains game logic, BSP traversal, visibility, and draw-command construction.
-The Rust application submits ordered column and span commands with texture and lighting-table handles.
-A compute kernel resolves each output pixel from those commands and samples the corresponding texture.
-Each output pixel has one GPU writer, which preserves command order without concurrent overdraw writes.
-The first implementation can use the original 320-by-200 indexed image before RGB conversion and scaling.
+The Rust application snapshots texture bytes and lighting tables into owned word buffers.
+Each 12-word command contains a draw type, coordinates, fixed-point texture steps, resource offsets, and flags.
+Columns cover walls and sprites, including translated sprites and low-detail duplication.
+Spans cover floors and ceilings with the engine's packed fixed-point coordinates.
 
-The command format must include fixed-point texture coordinates and steps, clipping ranges, texture bounds, and lighting tables.
-The syscall must validate every command and referenced resource before dispatch.
-Queued primitives need owned texture snapshots or resources that remain valid until the frame completes.
-An engine pointer alone cannot identify a persistent texture because the zone allocator can purge and reuse its storage.
-Sprite posts also need explicit source lengths instead of an unconditional 128-byte column read.
-Translated sprites need their translation table in addition to the lighting table.
-Fuzz effects read neighboring pixels and require a separate ordering rule.
-HUD patches, menus, screen wipes, and screenshot reads also need explicit synchronization with the rendered view.
+The raster kernel assigns one GPU thread to each pixel in the 320-by-200 indexed image.
+That thread processes commands in order, so later primitives overwrite earlier primitives without races.
+The kernel checks resource offsets before each texture or table read.
+The syscall separately validates ownership, buffer extents, products, and output aliasing.
 
-The integration must keep the upstream submodule unchanged.
-Native build adapters can redirect the relevant draw entry points to the Rust renderer.
-The application must retain a selectable CPU renderer for comparison and machines without native GPU support.
-That selection must remain explicit in diagnostics and performance results.
-The GPU path must resolve pending drawing before a CPU routine reads or modifies the indexed image.
+Invisibility uses a separate fuzz kernel because each write depends on neighboring framebuffer pixels.
+One GPU thread preserves the engine's sequential feedback, including overlapping and double-width columns.
+The adapter resolves each batch before the draw type changes between ordinary primitives and fuzz.
+
+Snapshots include source lengths for sprite posts and translation tables for translated sprites.
+The snapshot cache compares bytes on reuse because the zone allocator can recycle an engine pointer within a frame.
+GPU results return to the indexed engine buffer before the view renderer returns.
+The CPU then draws HUD patches, menus, automap, and screen wipes against that synchronized image.
+The GPU converts the completed indexed image to RGB and scales it to 640 by 400.
+The application copies those pixels into the console framebuffer.
 
 ## Frame transfer
 
@@ -53,15 +56,25 @@ The staging path maps owned guest physical RAM through that aperture in the exis
 Six hardware cases pass exact-bit comparisons, output guards, partial chunks, and both sides of staging boundaries under VFIO.
 The tests include NaNs and signed zero, so a floating-point comparison cannot conceal a changed payload.
 Both pretrained inference models retain their full numerical checks through this transfer path.
-The renderer can now use that same path for texture upload and frame readback.
+The renderer uses that path for texture upload and frame readback.
 
-## Acceptance checks
+## Verification
 
-1. Compare GPU column and span output with the CPU renderer, including clipping and fixed-point wraparound.
-2. Compare captured game frames with translated sprites, fuzz, HUD, menus, and wipes.
-3. Measure frame time with transfers and presentation included.
-4. Run a timed demo, then verify interactive movement, turning, and firing in the D3OS VM.
-5. Verify cleanup after game exit and after a GPU dispatch error.
+The operator test compares textured columns, spans, translated colors, double-width drawing, ordered overdraw, fuzz feedback, and palette scaling with CPU results.
+Invalid resource offsets and output guards exercise buffer boundaries.
+These tests use the raw word API, so RGB bit patterns do not pass through floating-point validation.
 
-The renderer also needs a reproducible WAD fixture for automated tests.
-No GPU DOOM execution or frame-rate claim follows from the current inference tests.
+The game check uses checksum-pinned Freedoom 0.13.0 assets.
+It compares every indexed pixel after each GPU batch in reference mode.
+The input sequence exercises movement, turning, firing, low detail, automap, menus, and invisibility.
+The check requires 600 rendered views and both press and release events for the main controls.
+It then quits the game and runs the native GPU operator suite in the same VM.
+The GPU-only check uses the same sequence without CPU scene drawing.
+
+The frame-rate log includes transfers, game logic, and console presentation.
+The `render_ms` field measures view rendering and its transfers, before HUD drawing and final presentation.
+This renderer does not provide a general 3D API, hardware scanout, audio support, or persistent save files.
+It uses compute shaders for the original indexed renderer rather than the GPU's triangle rasterizer.
+The simple kernel scans every command for each pixel, so larger resolutions need command binning or a different raster algorithm.
+
+The [VFIO guide](nvidia-vfio.howto.md#9-run-doom-on-the-gpu) contains asset, validation, and interactive commands.

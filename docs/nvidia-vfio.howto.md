@@ -348,10 +348,86 @@ The warm-buffer run measured 5,333 MiB/s on the development GPU.
 With this path, AlexNet passed all eight reference comparisons in 0.77–0.94 seconds instead of the earlier 26–27 seconds.
 The Qwen reference run passed in 11.5 seconds instead of the earlier 325 seconds.
 These application timings include file access, model upload, and reference comparisons.
-Dedicated copy-engine transfers, optimized tensor tiling, and GPU rendering remain unfinished.
+Dedicated copy-engine transfers and optimized tensor tiling remain unfinished.
 A later repeat encountered a GSP timeout during graphics-class initialization before model execution.
 The next VM boot passed without a code change.
 Repeated-reset reliability remains under investigation.
+
+## 9. Run DOOM on the GPU
+
+Prepare the checksum-pinned Freedoom assets:
+
+```bash
+python3 tools/nvidia/prepare-doom.py
+```
+
+The tool downloads Freedoom 0.13.0 and preserves its license in `target/doom/COPYING.txt`.
+The launcher stages Phase 1 as `/usr/doom.wad` and includes the license in the VM image.
+The normal image build includes the `doom` executable.
+The kernel build from section 7 also includes the raster, fuzz, and palette kernels in `inference.cubin`.
+
+Run the comparison with the CPU renderer:
+
+```bash
+python3 tools/nvidia/run-qemu.py --firmware target/nvidia/firmware \
+    --kernels target/nvidia/kernels --memory-mib 2048 --boot-check \
+    --inference gpu-doom-verify
+```
+
+Run the game without CPU scene drawing:
+
+```bash
+python3 tools/nvidia/run-qemu.py --firmware target/nvidia/firmware \
+    --kernels target/nvidia/kernels --memory-mib 2048 --boot-check \
+    --inference gpu-doom
+```
+
+Both commands require 600 rendered views, control input, low-detail drawing, and invisibility rendering.
+The comparison command requires exact equality for every indexed pixel after each GPU batch.
+Both commands quit the game and require a successful GPU operator test in the same VM.
+The launcher saves `target/nvidia/vm/doom.ppm` before exit and reports `NVIDIA_DOOM_OK` only after all checks pass.
+
+For interactive play, start a visible VM:
+
+```bash
+python3 tools/nvidia/run-qemu.py --firmware target/nvidia/firmware \
+    --kernels target/nvidia/kernels --memory-mib 2048 \
+    --inference gpu-doom --display gtk
+```
+
+Then enter this command in the D3OS shell:
+
+```text
+doom --gpu -warp 1 1 -skill 2
+```
+
+Arrow keys move and turn, A/D strafe, E uses doors, Space fires, and Shift runs.
+Number keys select weapons, Tab shows the automap, F5 changes detail, and Escape opens the menu.
+F10 opens the quit prompt, and Y confirms exit.
+The default `doom` command uses the CPU renderer.
+An explicit GPU request returns an error if native compute is unavailable.
+
+Walls, floors, ceilings, sprites, invisibility, palette conversion, and scaling run on the NVIDIA GPU.
+Game logic, visibility, HUD, menus, automap, wipes, and the final console copy remain on the CPU.
+The visible QEMU window uses the virtual console display, while native NVIDIA compute produces the scene pixels.
+The [renderer explanation](nvidia-rendering-design.md) describes command ordering and buffer ownership.
+
+The development GPU passed both 600-view checks with four vCPUs and 2 GiB of guest RAM.
+A 30-second recording measured about 50–70 FPS after startup, including transfers and console presentation.
+The in-game HUD shows the selected backend and the current frame rate.
+
+With host `ffmpeg` and Python Pillow installed, capture the same workloads:
+
+```bash
+python3 tools/nvidia/capture-demo.py qwen
+python3 tools/nvidia/capture-demo.py doom --seconds 30 --fps 30
+```
+
+The first command asks Qwen3.5-0.8B which country is largest by size through `infer gpu-qwen`.
+It saves the terminal screenshot in `target/nvidia/captures/qwen-largest-country.png`.
+The second command records movement and firing directly from QEMU into `target/nvidia/captures/doom-nvidia-30s.mp4`.
+The application draws the backend and FPS labels inside D3OS.
+The recorder also preserves serial logs and a manifest with capture timing and game frame rates.
 
 ## Restore NVIDIA to the host
 

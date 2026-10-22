@@ -57,3 +57,22 @@ fn transformer_bounds_reject_invalid_groups_and_nonfinite_parameters() {
     assert!(Kernel::DeltaPrepare.work(&[u32::MAX, 2, 3]).is_err());
     assert!(Kernel::DeltaOutput.work(&[2, 3, 0]).is_err());
 }
+
+#[test]
+fn raster_dispatch_bounds_every_resource_and_disallows_frame_aliases() {
+    for kernel in [Kernel::Raster, Kernel::Fuzz] {
+        let work = kernel.work(&[320, 200, 73, 8192]).unwrap();
+        assert_eq!(work.extents[..3], [64000, 73 * 12, 8192]);
+        assert!(work.validate_aliases(&[0x100000, 0x200000, 0x300000, 0x400000][..work.pointers]).is_ok());
+        let mut overlapping = [0x100000, 0x200000, 0x300000, 0x400000];
+        overlapping[work.output] = overlapping[1] + 4;
+        assert!(work.validate_aliases(&overlapping[..work.pointers]).is_err());
+        assert!(kernel.work(&[u32::MAX, 2, 1, 1]).is_err());
+        assert!(kernel.work(&[1, 1, u32::MAX, 1]).is_err());
+        assert!(kernel.work(&[1, 1, 1, 0]).is_err());
+    }
+    let palette = Kernel::Palette.work(&[320, 200, 2]).unwrap();
+    assert_eq!(palette.extents[..3], [64000, 256, 256000]);
+    assert!(Kernel::Palette.work(&[1, 1, 5]).is_err());
+    assert!(Kernel::Palette.work(&[u32::MAX / 8, 1, 4]).is_err());
+}

@@ -10,8 +10,8 @@ The native NVIDIA hardware phase now runs AlexNet on the passed-through RTX 4090
 Firmware boot, GPU page tables, native kernel loading, and tensor execution are operational.
 Qwen also passes all 24 layer checks and vocabulary-logit comparisons on the physical GPU.
 Its native generation command replies `4` to the default arithmetic prompt and stops at EOS.
-GPU rendering remains unfinished.
-The [DOOM rendering assessment](nvidia-rendering-design.md) describes a native compute path and the remaining transfer requirements.
+DOOM also runs through native GPU column, span, fuzz, palette, and scaling kernels.
+The [renderer explanation](nvidia-rendering-design.md) describes command ordering, CPU synchronization, and game verification.
 
 ## Source layout
 

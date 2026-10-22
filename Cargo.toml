@@ -3,6 +3,7 @@ resolver = "2"
 exclude = ["tools/gpu-kernels"]
 
 members = [
+    "os/application/doom",
     "os/application/infer",
     "os/kernel",
     "os/application/about",

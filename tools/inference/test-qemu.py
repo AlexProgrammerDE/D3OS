@@ -73,7 +73,17 @@ class Qmp:
     def type_command(self, command):
         # D3OS currently decodes a German keyboard layout. QEMU key names use US positions.
         for char in command:
-            key = {" ": "spc", "-": "slash", "y": "z", "z": "y"}.get(char, char)
+            key = {
+                " ": "spc",
+                "-": "slash",
+                "y": "z",
+                "z": "y",
+                "?": "shift-minus",
+                ".": "dot",
+                ",": "comma",
+            }.get(char.lower(), char.lower())
+            if char.isupper():
+                key = f"shift-{key}"
             self.execute("human-monitor-command", {"command-line": f"sendkey {key} 30"})
             time.sleep(0.06)
         self.execute("human-monitor-command", {"command-line": "sendkey ret 30"})
@@ -124,7 +134,7 @@ def prepare(directory, mode, qwen_assets, extra_assets=()):
     stage = directory / "boot"
     initrd = stage / "initrd"
     # Each image contains only the assets requested for this invocation.
-    shutil.rmtree(initrd / "usr", ignore_errors=True)
+    shutil.rmtree(initrd, ignore_errors=True)
     (initrd / "bin").mkdir(parents=True, exist_ok=True)
     for name in ("infer", "shell", "terminal_emulator"):
         shutil.copyfile(ROOT / "loader/initrd/bin" / name, initrd / "bin" / name)

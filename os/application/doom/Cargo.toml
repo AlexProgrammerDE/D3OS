@@ -12,6 +12,10 @@ doctest = false
 bench = false
 
 [dependencies]
+d3os-compute = { path = "../../library/compute", features = ["nvidia"] }
+d3os-nvidia = { path = "../../library/nvidia" }
+logger = { path = "../../library/logger" }
+log = "0.4"
 # Local dependencies
 runtime = { path = "../../library/runtime" }
 terminal = { path = "../../library/terminal" }

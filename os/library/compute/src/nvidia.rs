@@ -37,18 +37,19 @@ fn dimension(value: usize) -> Result<u32> {
 }
 
 #[derive(Debug)]
-pub struct GpuBuffer {
+pub struct GpuBuffer<T = f32> {
     handle: u64,
     elements: usize,
+    element: core::marker::PhantomData<T>,
 }
 
-impl Buffer for GpuBuffer {
+impl<T> Buffer for GpuBuffer<T> {
     fn len(&self) -> usize {
         self.elements
     }
 }
 
-impl Drop for GpuBuffer {
+impl<T> Drop for GpuBuffer<T> {
     fn drop(&mut self) {
         let _ = request(Request {
             handle: self.handle,
@@ -70,20 +71,29 @@ impl Nvidia {
 
     fn allocate(&self, shape: &[usize]) -> Result<Tensor<Self>> {
         let elements = element_count(shape)?;
+        Tensor::from_buffer(shape, self.allocate_storage(elements)?)
+    }
+
+    fn allocate_storage<T>(&self, elements: usize) -> Result<GpuBuffer<T>> {
+        element_count(&[elements])?;
         dimension(elements)?;
         let handle = request(Request {
             elements: elements as u64,
             ..operation(abi::ALLOCATE)
         })? as u64;
-        Tensor::from_buffer(shape, GpuBuffer { handle, elements })
+        Ok(GpuBuffer {
+            handle,
+            elements,
+            element: core::marker::PhantomData,
+        })
     }
 
-    fn launch(&self, kernel: Kernel, buffers: &[(&GpuBuffer, usize)], parameters: &[usize]) -> Result<()> {
+    fn launch<T>(&self, kernel: Kernel, buffers: &[(&GpuBuffer<T>, usize)], parameters: &[usize]) -> Result<()> {
         request(self.prepare(kernel, buffers, parameters)?)?;
         Ok(())
     }
 
-    fn prepare(&self, kernel: Kernel, buffers: &[(&GpuBuffer, usize)], parameters: &[usize]) -> Result<Request> {
+    fn prepare<T>(&self, kernel: Kernel, buffers: &[(&GpuBuffer<T>, usize)], parameters: &[usize]) -> Result<Request> {
         let mut call = Request {
             kernel: kernel as u32,
             buffer_count: buffers.len() as u32,
@@ -108,6 +118,55 @@ impl Nvidia {
             call.offsets[i] = offset as u64;
         }
         Ok(call)
+    }
+
+    /// Allocate zeroed, process-owned words for native non-tensor compute.
+    pub fn allocate_words(&self, elements: usize) -> Result<GpuBuffer<u32>> {
+        self.allocate_storage(elements)
+    }
+
+    pub fn upload_words(&self, values: &[u32]) -> Result<GpuBuffer<u32>> {
+        let buffer = self.allocate_words(values.len())?;
+        self.write_words(&buffer, 0, values)?;
+        Ok(buffer)
+    }
+
+    pub fn write_words(&self, buffer: &GpuBuffer<u32>, offset: usize, values: &[u32]) -> Result<()> {
+        if offset.checked_add(values.len()).is_none_or(|end| end > buffer.elements) {
+            return Err(Error::ShapeMismatch);
+        }
+        if !values.is_empty() {
+            request(Request {
+                handle: buffer.handle,
+                pointer: values.as_ptr() as u64,
+                elements: values.len() as u64,
+                offset: offset as u64,
+                ..operation(abi::UPLOAD)
+            })?;
+        }
+        Ok(())
+    }
+
+    pub fn read_words_into(&self, buffer: &GpuBuffer<u32>, offset: usize, values: &mut [u32]) -> Result<()> {
+        if offset.checked_add(values.len()).is_none_or(|end| end > buffer.elements) {
+            return Err(Error::ShapeMismatch);
+        }
+        if !values.is_empty() {
+            request(Request {
+                handle: buffer.handle,
+                pointer: values.as_mut_ptr() as u64,
+                elements: values.len() as u64,
+                offset: offset as u64,
+                ..operation(abi::DOWNLOAD)
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Launch a built-in word kernel with the same checked ownership and range
+    /// rules as tensor dispatch. Offsets and lengths use 32-bit words.
+    pub fn dispatch_words(&self, kernel: Kernel, buffers: &[(&GpuBuffer<u32>, usize)], parameters: &[usize]) -> Result<()> {
+        self.launch(kernel, buffers, parameters)
     }
 }
 

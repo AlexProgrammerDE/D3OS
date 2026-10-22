@@ -4,6 +4,7 @@
 import argparse
 import importlib.util
 import os
+import re
 import resource
 import shlex
 import subprocess
@@ -54,12 +55,21 @@ def main():
     parser.add_argument("--kernels", type=Path, help="stage native GPU kernel binaries")
     parser.add_argument(
         "--inference",
-        choices=("cpu-self-test", "gpu-self-test", "gpu-alexnet", "gpu-qwen", "gpu-qwen-verify"),
+        choices=(
+            "cpu-self-test",
+            "gpu-self-test",
+            "gpu-alexnet",
+            "gpu-qwen",
+            "gpu-qwen-verify",
+            "gpu-doom",
+            "gpu-doom-verify",
+        ),
         default="cpu-self-test",
-        help="inference command to validate during --boot-check",
+        help="native workload to validate during --boot-check",
     )
     parser.add_argument("--memory-mib", type=int, default=4096)
     parser.add_argument("--cpus", type=int, default=4)
+    parser.add_argument("--display", choices=("none", "gtk", "sdl"), default="none")
     parser.add_argument(
         "--boot-check",
         action="store_true",
@@ -80,7 +90,9 @@ def main():
     devices = vfio_devices(args.gpu)
     if args.kernels and not args.firmware:
         parser.error("--kernels requires --firmware")
-    if args.inference != "cpu-self-test" and (not args.kernels or not (args.kernels / "inference.cubin").is_file()):
+    if args.inference != "cpu-self-test" and (
+        not args.kernels or not (args.kernels / "inference.cubin").is_file()
+    ):
         parser.error("GPU inference requires --kernels with inference.cubin")
     if args.image and args.firmware:
         parser.error("use either --image or --firmware")
@@ -112,6 +124,17 @@ def main():
             assets.extend(
                 (source, Path("usr/share/nvidia") / source.name)
                 for source in args.kernels.glob("*.cubin")
+            )
+        if args.inference.startswith("gpu-doom"):
+            assets.extend(
+                [
+                    (ROOT / "loader/initrd/bin/doom", Path("bin/doom")),
+                    (ROOT / "target/doom/freedoom1.wad", Path("usr/doom.wad")),
+                    (
+                        ROOT / "target/doom/COPYING.txt",
+                        Path("usr/share/doom/COPYING.txt"),
+                    ),
+                ]
             )
         for source, _ in assets:
             if not source.is_file():
@@ -164,7 +187,7 @@ def main():
         "-boot",
         "c",
         "-display",
-        "none",
+        args.display,
         "-device",
         "virtio-vga",
         "-device",
@@ -208,34 +231,134 @@ def main():
             deadline = time.monotonic() + args.timeout
             qmp = harness.Qmp(monitor, process, deadline)
             started = False
+            controls = False
             while time.monotonic() < deadline:
                 text = serial.read_text(errors="replace") if serial.is_file() else ""
                 if (
                     "panicked at" in text
                     or "INFERENCE_FAIL" in text
                     or "NVIDIA initialization failed:" in text
+                    or "NVIDIA_DOOM_FAIL" in text
+                    or "NVIDIA_DOOM_MISMATCH" in text
                 ):
                     raise RuntimeError(f"guest failed: {serial}")
                 if "name = shell" in text and not started:
                     time.sleep(1)
-                    qmp.type_command("infer" if args.inference == "cpu-self-test" else f"infer {args.inference}")
+                    if args.inference.startswith("gpu-doom"):
+                        flag = (
+                            "--verify-gpu"
+                            if args.inference.endswith("verify")
+                            else "--gpu"
+                        )
+                        qmp.type_command(f"doom {flag} -warp 1 1 -skill 2")
+                    else:
+                        qmp.type_command(
+                            "infer"
+                            if args.inference == "cpu-self-test"
+                            else f"infer {args.inference}"
+                        )
                     started = True
+                if (
+                    args.inference.startswith("gpu-doom")
+                    and "NVIDIA_DOOM_FRAME_OK frame=60" in text
+                    and not controls
+                ):
+                    for key in ("up", "left", "spc", "f5", "tab", "tab", "esc", "esc"):
+                        qmp.execute(
+                            "human-monitor-command",
+                            {"command-line": f"sendkey {key} 300"},
+                        )
+                        time.sleep(0.4)
+                    qmp.type_command("idbeholdi")
+                    controls = True
                 expected = {
                     "cpu-self-test": "INFERENCE_OK self-test backend=cpu",
                     "gpu-self-test": "INFERENCE_OK self-test backend=nvidia",
                     "gpu-alexnet": "INFERENCE_OK alexnet backend=nvidia layers=8",
                     "gpu-qwen": "INFERENCE_OK qwen backend=nvidia",
                     "gpu-qwen-verify": "INFERENCE_OK qwen-verify backend=nvidia positions=29 layers=24",
+                    "gpu-doom": "NVIDIA_DOOM_FRAME_OK frame=600",
+                    "gpu-doom-verify": "NVIDIA_DOOM_FRAME_OK frame=600",
                 }[args.inference]
                 if expected in text:
+                    if args.inference.startswith("gpu-doom"):
+                        for key in (173, 172, 32, 191, 9, 27):
+                            for state in ("true", "false"):
+                                if (
+                                    not controls
+                                    or f"NVIDIA_DOOM_INPUT key={key} pressed={state}"
+                                    not in text
+                                ):
+                                    raise RuntimeError(
+                                        f"DOOM did not consume key {key} pressed={state}"
+                                    )
+                        if not re.search(
+                            r"NVIDIA_DOOM_FRAME_OK frame=600 .*low_primitives=[1-9]\d* fuzz_columns=[1-9]\d*",
+                            text,
+                        ):
+                            raise RuntimeError(
+                                "DOOM did not exercise low detail and invisibility rendering"
+                            )
+                        rates = [
+                            int(n)
+                            for n in re.findall(r"NVIDIA_DOOM_FPS fps=(\d+)", text)
+                        ]
+                        if not rates or max(rates[-3:]) < 30:
+                            raise RuntimeError(
+                                f"DOOM did not sustain a playable frame rate: {rates}"
+                            )
+                        qmp.execute(
+                            "human-monitor-command",
+                            {"command-line": f"screendump {directory / 'doom.ppm'}"},
+                        )
+                        qmp.execute(
+                            "human-monitor-command", {"command-line": "sendkey f10 100"}
+                        )
+                        time.sleep(0.3)
+                        qmp.type_command("y")
+                        time.sleep(1)
+                        qmp.type_command("infer gpu-self-test")
+                        while time.monotonic() < deadline:
+                            text = serial.read_text(errors="replace")
+                            if (
+                                "INFERENCE_OK self-test backend=nvidia" in text
+                                and "NVIDIA_DOOM_EXIT frames=" in text
+                            ):
+                                break
+                            if (
+                                "NVIDIA_DOOM_FAIL" in text
+                                or "INFERENCE_FAIL" in text
+                                or "panicked at" in text
+                            ):
+                                raise RuntimeError(
+                                    f"guest failed after DOOM exit: {serial}"
+                                )
+                            time.sleep(0.1)
+                        else:
+                            raise TimeoutError(
+                                "DOOM exit did not return to a working GPU inference session"
+                            )
+                        print(
+                            f"NVIDIA_DOOM_OK mode={args.inference} frames=600 fps={rates} cleanup=ok screenshot={directory / 'doom.ppm'}",
+                            flush=True,
+                        )
                     if (
                         args.kernels
                         and (args.kernels / "inference.cubin").is_file()
-                        and "NVIDIA_TRANSFER_OK cases=6 guards=ok bits=exact" not in text
+                        and "NVIDIA_TRANSFER_OK cases=6 guards=ok bits=exact"
+                        not in text
                     ):
-                        raise RuntimeError("native coherent staging transfer verification did not succeed")
-                    if args.inference == "gpu-qwen" and "INFERENCE_OK qwen backend=nvidia tokens=1 stop=EndOfSequence" not in text:
-                        raise RuntimeError("GPU generation did not match the default arithmetic fixture")
+                        raise RuntimeError(
+                            "native coherent staging transfer verification did not succeed"
+                        )
+                    if (
+                        args.inference == "gpu-qwen"
+                        and "INFERENCE_OK qwen backend=nvidia tokens=1 stop=EndOfSequence"
+                        not in text
+                    ):
+                        raise RuntimeError(
+                            "GPU generation did not match the default arithmetic fixture"
+                        )
                     if "[0x10de:0x2757]" not in text or "[0x10de:0x22bb]" not in text:
                         raise RuntimeError(
                             "guest did not enumerate the target GPU and audio"
@@ -272,6 +395,16 @@ def main():
                     raise RuntimeError((directory / "qemu.log").read_text())
                 time.sleep(0.1)
             raise TimeoutError(f"D3OS boot check timed out: {serial}")
+        except BaseException:
+            if qmp is not None:
+                try:
+                    qmp.execute(
+                        "human-monitor-command",
+                        {"command-line": f"screendump {directory / 'failure.ppm'}"},
+                    )
+                except (OSError, RuntimeError):
+                    pass
+            raise
         finally:
             if qmp is not None:
                 qmp.close()

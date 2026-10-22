@@ -4,28 +4,27 @@ extern crate alloc;
 
 use alloc::ffi::CString;
 use alloc::format;
-#[allow(unused_imports)]
-use libc::*;
+use libc as _;
 
+use ::time::systime;
+use alloc::collections::VecDeque;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use core::ffi::{c_char, c_int, CStr};
-use core::sync::atomic::{AtomicUsize, Ordering};
 use chrono::TimeDelta;
-use pc_keyboard::{KeyCode, KeyEvent, KeyState};
+use concurrent::thread;
+use core::ffi::{CStr, c_char, c_int};
+use graphic::color;
+use graphic::lfb::{FramebufferInfo, LFB, map_framebuffer};
+use pc_keyboard::{DecodedKey, HandleControl, KeyCode, KeyEvent, KeyState, KeyboardLayout, Modifiers, layouts};
 use spin::Mutex;
 use spin::once::Once;
-use concurrent::thread;
-use graphic::color;
-use graphic::lfb::{map_framebuffer, FramebufferInfo, LFB};
-use ::time::systime;
-#[allow(unused_imports)]
-use runtime::*;
-#[allow(unused_imports)]
-use libc::*;
 
 unsafe extern "C" {
     static DG_ScreenBuffer: *const u32;
+    static mut key_strafeleft: c_int;
+    static mut key_straferight: c_int;
+    static mut key_use: c_int;
+    static mut key_fire: c_int;
 
     fn doomgeneric_Create(argc: c_int, argv: *mut *mut c_char) -> c_int;
     fn doomgeneric_Tick();
@@ -41,10 +40,7 @@ pub enum DoomKey {
     LeftArrow = 0xac,
     UpArrow = 0xad,
     DownArrow = 0xaf,
-    StrafeL = 0xa0,
-    StrafeR = 0xa1,
-    Use = 0xa2,
-    Fire = 0xa3,
+    Run = 0xb6,
     Escape = 27,
     Enter = 13,
     Tab = 9,
@@ -60,17 +56,19 @@ pub enum DoomKey {
     F10 = 0x80 + 0x44,
     F11 = 0x80 + 0x57,
     F12 = 0x80 + 0x58,
-    Backspace = 0x7f
+    Backspace = 0x7f,
 }
 
 static START_TIME_MS: Once<TimeDelta> = Once::new();
-static WINDOW_TITLE: Once<String> = Once::new();
+static LOGGER: logger::Logger = logger::Logger::new();
 
+mod gpu;
+static WINDOW_TITLE: Once<String> = Once::new();
 
 static FRAMEBUFFER: Once<FramebufferInfo> = Once::new();
 static SCREEN_OFFSET: Once<(u32, u32)> = Once::new();
 
-static INPUT_BUFFER: Mutex<Vec<KeyEvent>> = Mutex::new(Vec::new());
+static INPUT_BUFFER: Mutex<VecDeque<KeyEvent>> = Mutex::new(VecDeque::new());
 
 struct FpsInfo {
     start_time: TimeDelta,
@@ -86,13 +84,15 @@ impl FpsInfo {
 
         let time = systime();
         if (time - self.start_time).num_milliseconds() >= 1000 {
-            self.last_fps = self.counter;
+            self.last_fps = self.counter * 1000 / (time - self.start_time).num_milliseconds() as usize;
+            if gpu::enabled() {
+                log::info!("NVIDIA_DOOM_FPS fps={}", self.last_fps);
+            }
             self.counter = 0;
             self.start_time = time;
         }
     }
 }
-
 
 impl TryFrom<KeyCode> for DoomKey {
     type Error = ();
@@ -103,10 +103,7 @@ impl TryFrom<KeyCode> for DoomKey {
             KeyCode::ArrowLeft => Ok(Self::LeftArrow),
             KeyCode::ArrowUp => Ok(Self::UpArrow),
             KeyCode::ArrowDown => Ok(Self::DownArrow),
-            KeyCode::A => Ok(Self::StrafeL),
-            KeyCode::D => Ok(Self::StrafeR),
-            KeyCode::E => Ok(Self::Use),
-            KeyCode::Spacebar => Ok(Self::Fire),
+            KeyCode::LShift | KeyCode::RShift => Ok(Self::Run),
             KeyCode::Escape => Ok(Self::Escape),
             KeyCode::Return => Ok(Self::Enter),
             KeyCode::Tab => Ok(Self::Tab),
@@ -123,27 +120,39 @@ impl TryFrom<KeyCode> for DoomKey {
             KeyCode::F11 => Ok(Self::F11),
             KeyCode::F12 => Ok(Self::F12),
             KeyCode::Backspace => Ok(Self::Backspace),
-            _ => Err(())
+            _ => Err(()),
         }
     }
 }
 
 #[unsafe(no_mangle)]
 pub fn main() {
-    // First argument to a program is always its name.
-    // Since doomgeneric is a C program, we need to create a C-style string.
-    let arg0 = CString::new("doom").unwrap();
-
-    // Second and third arguments specify the IWAD file to use.
-    let arg1 = CString::new("-iwad").unwrap();
-    let arg2 = CString::new("/usr/doom.wad").unwrap();
-
-    // Create argv array, consisting of pointers to C-style strings.
-    let mut argv: [*mut c_char; 3] = [arg0.into_raw(), arg1.into_raw(), arg2.into_raw()];
+    if log::set_logger(&LOGGER).is_ok() {
+        log::set_max_level(log::LevelFilter::Info);
+    }
+    let args: Vec<_> = runtime::env::args().skip(1).collect();
+    let verify = args.iter().any(|arg| arg == "--verify-gpu");
+    if verify || args.iter().any(|arg| arg == "--gpu") {
+        gpu::init(verify).expect("native GPU renderer initialization failed");
+    }
+    let mut arguments = alloc::vec![
+        CString::new("doom").unwrap(),
+        CString::new("-iwad").unwrap(),
+        CString::new("/usr/doom.wad").unwrap()
+    ];
+    for arg in args.iter().filter(|arg| arg.as_str() != "--gpu" && arg.as_str() != "--verify-gpu") {
+        arguments.push(CString::new(arg.as_str()).unwrap());
+    }
+    let mut argv: Vec<_> = arguments.iter().map(|arg| arg.as_ptr().cast_mut()).collect();
+    argv.push(core::ptr::null_mut());
 
     unsafe {
-        // Call the doomgeneric initialization function.
-        doomgeneric_Create(3, argv.as_mut_ptr());
+        // Keep letter events intact for menus and cheat codes as well as actions.
+        key_strafeleft = c_int::from(b'a');
+        key_straferight = c_int::from(b'd');
+        key_use = c_int::from(b'e');
+        key_fire = c_int::from(b' ');
+        doomgeneric_Create(arguments.len() as c_int, argv.as_mut_ptr());
 
         // Enter the main loop, calling doomgeneric_Tick() repeatedly.
         // This function handles all game logic and rendering and calls our DG_* functions as needed.
@@ -155,17 +164,19 @@ pub fn main() {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn DG_Init() {
-    START_TIME_MS.call_once(|| systime());
+    START_TIME_MS.call_once(systime);
 
-    FPS_INFO.call_once(|| Mutex::new(FpsInfo {
-        start_time: systime(),
-        counter: 0,
-        last_fps: 0
-    }));
+    FPS_INFO.call_once(|| {
+        Mutex::new(FpsInfo {
+            start_time: systime(),
+            counter: 0,
+            last_fps: 0,
+        })
+    });
 
     FRAMEBUFFER.call_once(|| map_framebuffer().unwrap());
 
-    let fb_info  = FRAMEBUFFER.get().unwrap();
+    let fb_info = FRAMEBUFFER.get().unwrap();
     let x_offset = (fb_info.width - DOOMGENERIC_RESX) / 2;
     let y_offset = (fb_info.height - DOOMGENERIC_RESY) / 2;
     SCREEN_OFFSET.call_once(|| (x_offset, y_offset));
@@ -174,7 +185,7 @@ unsafe extern "C" fn DG_Init() {
     thread::create(|| {
         loop {
             if let Some(event) = terminal::read::read_raw() {
-                INPUT_BUFFER.lock().push(event);
+                INPUT_BUFFER.lock().push_back(event);
             } else {
                 thread::switch();
             }
@@ -206,6 +217,9 @@ unsafe extern "C" fn DG_DrawFrame() {
         let mut lfb = LFB::new(fb_info.addr as *mut u8, fb_info.pitch, fb_info.width, fb_info.height, fb_info.bpp);
         lfb.draw_string(title_x, title_y, color::RED, color::BLACK, title);
         lfb.draw_string(pos_x, title_y, color::YELLOW, color::BLACK, fps_string.as_str());
+        let backend = if gpu::enabled() { "NVIDIA / native Rust" } else { "CPU / native Rust" };
+        lfb.draw_string(pos_x + 8, pos_y + 8, color::WHITE, color::BLACK, &format!("Backend: {backend}"));
+        lfb.draw_string(pos_x + 8, pos_y + 24, color::YELLOW, color::BLACK, &fps_string);
 
         fps_info.add_frame();
     }
@@ -224,7 +238,7 @@ unsafe extern "C" fn DG_GetTicksMs() -> u32 {
 #[unsafe(no_mangle)]
 unsafe extern "C" fn DG_GetKey(pressed: *mut c_int, key: *mut c_char) -> c_int {
     let mut key_buffer = INPUT_BUFFER.lock();
-    if let Some(key_event) = key_buffer.pop() {
+    while let Some(key_event) = key_buffer.pop_front() {
         unsafe {
             pressed.write(match key_event.state {
                 KeyState::Down => 1,
@@ -232,8 +246,19 @@ unsafe extern "C" fn DG_GetKey(pressed: *mut c_int, key: *mut c_char) -> c_int {
             });
         }
 
-        if let Ok(doom_key) = DoomKey::try_from(key_event.code) {
-            unsafe { key.write(doom_key as c_char); }
+        let doom_key = DoomKey::try_from(key_event.code).map(|key| key as u8).ok().or_else(|| {
+            match layouts::De105Key.map_keycode(key_event.code, &Modifiers::default(), HandleControl::Ignore) {
+                DecodedKey::Unicode(c) if c.is_ascii() => Some(c as u8),
+                _ => None,
+            }
+        });
+        if let Some(doom_key) = doom_key {
+            if gpu::enabled() {
+                log::info!("NVIDIA_DOOM_INPUT key={} pressed={}", doom_key, key_event.state == KeyState::Down);
+            }
+            unsafe {
+                key.write(doom_key as c_char);
+            }
             return 1;
         }
     }
@@ -243,10 +268,5 @@ unsafe extern "C" fn DG_GetKey(pressed: *mut c_int, key: *mut c_char) -> c_int {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn DG_SetWindowTitle(title: *const c_char) {
-    WINDOW_TITLE.call_once(|| unsafe {
-        CStr::from_ptr(title as *mut c_char)
-            .to_str()
-            .unwrap_or("Doom")
-            .to_string()
-    });
+    WINDOW_TITLE.call_once(|| unsafe { CStr::from_ptr(title as *mut c_char).to_str().unwrap_or("Doom").to_string() });
 }

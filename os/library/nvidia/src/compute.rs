@@ -50,6 +50,9 @@ pub enum Kernel {
     DeltaUpdate = 17,
     DeltaOutput = 18,
     Zero = 19,
+    Raster = 20,
+    Palette = 21,
+    Fuzz = 22,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -96,6 +99,9 @@ impl Kernel {
             17 => Self::DeltaUpdate,
             18 => Self::DeltaOutput,
             19 => Self::Zero,
+            20 => Self::Raster,
+            21 => Self::Palette,
+            22 => Self::Fuzz,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -122,6 +128,9 @@ impl Kernel {
             Self::DeltaUpdate => "delta_update",
             Self::DeltaOutput => "delta_output",
             Self::Zero => "buffer_zero",
+            Self::Raster => "raster_commands",
+            Self::Palette => "palette_scale",
+            Self::Fuzz => "raster_fuzz",
         }
     }
 
@@ -129,6 +138,24 @@ impl Kernel {
         let mut extents = [0; 16];
         let mut mutated = 0;
         let (count, pointers, output, in_place) = match (self, p) {
+            (Self::Fuzz, &[width, height, commands, words]) => {
+                extents[..3].copy_from_slice(&[product(&[width, height])? as u64, product(&[commands, 12])? as u64, product(&[words])? as u64]);
+                (1, 3, 0, false)
+            }
+            (Self::Raster, &[width, height, commands, words]) => {
+                let n = product(&[width, height])?;
+                extents[..4].copy_from_slice(&[n as u64, product(&[commands, 12])? as u64, product(&[words])? as u64, n as u64]);
+                (n, 4, 3, false)
+            }
+            (Self::Palette, &[width, height, scale]) => {
+                if !matches!(scale, 1..=4) {
+                    return Err(Error::InvalidField);
+                }
+                let n = product(&[width, height])?;
+                let output = product(&[n, scale, scale])?;
+                extents[..3].copy_from_slice(&[n as u64, 256, output as u64]);
+                (output, 3, 2, false)
+            }
             (Self::Zero, &[n]) => {
                 product(&[n])?;
                 extents[0] = n as u64;

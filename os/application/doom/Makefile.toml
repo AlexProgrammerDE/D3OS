@@ -38,6 +38,9 @@ command = "cargo"
 args = [ "build", "-Z", "build-std=core,alloc", "-Z", "build-std-features=compiler-builtins-mem", "-Z", "json-target-spec", "--target", "${CARGO_CFG_TARGET_FAMILY}", "${CARGO_BUILD_OPTION}" ]
 condition = { files_modified = { input = [
     "${CARGO_MAKE_WORKING_DIRECTORY}/Cargo.toml", "${SOURCE_DIRECTORY}/**/*.rs",
+    "${LIBRARY_DIRECTORY}/compute/Cargo.toml", "${LIBRARY_DIRECTORY}/compute/src/**/*.rs",
+    "${LIBRARY_DIRECTORY}/nvidia/Cargo.toml", "${LIBRARY_DIRECTORY}/nvidia/src/**/*.rs",
+    "${LIBRARY_DIRECTORY}/logger/Cargo.toml", "${LIBRARY_DIRECTORY}/logger/src/**/*.rs",
     "${LIBRARY_DIRECTORY}/runtime/Cargo.toml", "${LIBRARY_DIRECTORY}/runtime/src/**/*.rs",
     "${LIBRARY_DIRECTORY}/terminal/Cargo.toml", "${LIBRARY_DIRECTORY}/terminal/src/**/*.rs",
     "${LIBRARY_DIRECTORY}/concurrent/Cargo.toml", "${LIBRARY_DIRECTORY}/concurrent/src/**/*.rs",
@@ -49,9 +52,13 @@ condition = { files_modified = { input = [
 
 [tasks.link]
 command = "${LINKER}"
-args = [ "-n", "-T", "${LINKER_FILE}", "-o", "${APPLICATION}", "${RUST_OBJECT}", "-z", "noexecstack", "--no-relax" ]
+args = [ "-n", "-T", "${LINKER_FILE}", "-o", "${APPLICATION}", "${RUST_OBJECT}", "-z", "noexecstack", "--no-relax",
+    "--wrap=R_RenderPlayerView", "--wrap=R_DrawColumn", "--wrap=R_DrawColumnLow",
+    "--wrap=R_DrawTranslatedColumn", "--wrap=R_DrawTranslatedColumnLow",
+    "--wrap=R_DrawFuzzColumn", "--wrap=R_DrawFuzzColumnLow", "--wrap=R_DrawSpan", "--wrap=R_DrawSpanLow",
+    "--wrap=I_SetPalette", "--wrap=I_FinishUpdate", "--wrap=I_Quit" ]
 dependencies = [ "compile", "archive-doom" ]
-condition = { files_modified = { input = [ "${BUILD_DIRECTORY}/lib${CARGO_MAKE_PROJECT_NAME}*", "${LINKER_FILE}" ], output = [ "${APPLICATION}" ] } }
+condition = { files_modified = { input = [ "${BUILD_DIRECTORY}/lib${CARGO_MAKE_PROJECT_NAME}*", "${LINKER_FILE}", "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/os/application/doom/Makefile.toml" ], output = [ "${APPLICATION}" ] } }
 
 [tasks.check]
 command = "cargo"
@@ -156,6 +163,9 @@ args = [
     "${CARGO_MAKE_WORKING_DIRECTORY}/doomgeneric/doomgeneric/z_zone.c"
 ]
 condition = { files_modified = { input = [
+    "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/os/application/doom/Makefile.toml",
+    "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/os/application/doom/doomgeneric/doomgeneric/*.c",
+    "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/os/application/doom/doomgeneric/doomgeneric/*.h",
     "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/os/library/libc/**/*.h",
     "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/os/library/libc/**/*.c",
     "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/os/library/libc/**/*.rs"

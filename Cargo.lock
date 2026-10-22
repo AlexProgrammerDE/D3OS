@@ -361,6 +361,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "doom"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "concurrent",
+ "d3os-compute",
+ "d3os-nvidia",
+ "graphic",
+ "libc 0.1.0",
+ "log",
+ "logger",
+ "pc-keyboard",
+ "runtime",
+ "spin 0.10.0",
+ "terminal",
+ "time",
+]
+
+[[package]]
 name = "drawer"
 version = "0.1.0"
 dependencies = [
@@ -782,6 +801,7 @@ version = "0.1.0"
 dependencies = [
  "d3os-compute",
  "d3os-inference",
+ "d3os-nvidia",
  "log",
  "logger",
  "naming",
