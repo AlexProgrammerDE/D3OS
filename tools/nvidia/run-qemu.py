@@ -52,12 +52,18 @@ def main():
         "--firmware", type=Path, help="stage pinned NVIDIA firmware from this directory"
     )
     parser.add_argument("--kernels", type=Path, help="stage native GPU kernel binaries")
+    parser.add_argument(
+        "--inference",
+        choices=("cpu-self-test", "gpu-self-test", "gpu-alexnet"),
+        default="cpu-self-test",
+        help="inference command to validate during --boot-check",
+    )
     parser.add_argument("--memory-mib", type=int, default=4096)
     parser.add_argument("--cpus", type=int, default=4)
     parser.add_argument(
         "--boot-check",
         action="store_true",
-        help="verify native device boot and CPU self-test, then stop",
+        help="verify native device boot and the selected inference command, then stop",
     )
     parser.add_argument("--timeout", type=float, default=180)
     parser.add_argument("--dry-run", action="store_true")
@@ -74,6 +80,8 @@ def main():
     devices = vfio_devices(args.gpu)
     if args.kernels and not args.firmware:
         parser.error("--kernels requires --firmware")
+    if args.inference != "cpu-self-test" and (not args.kernels or not (args.kernels / "inference.cubin").is_file()):
+        parser.error("GPU inference requires --kernels with inference.cubin")
     if args.image and args.firmware:
         parser.error("use either --image or --firmware")
     if not args.firmware:
@@ -112,7 +120,10 @@ def main():
             args.image = directory / "d3os.img"
         else:
             args.image = harness.prepare(
-                directory, "self-test", ROOT / "target/qwen", assets
+                directory,
+                "alexnet" if args.inference == "gpu-alexnet" else "self-test",
+                ROOT / "target/qwen",
+                assets,
             )
     firmware = next(
         (
@@ -202,9 +213,14 @@ def main():
                     raise RuntimeError(f"guest failed: {serial}")
                 if "name = shell" in text and not started:
                     time.sleep(1)
-                    qmp.type_command("infer")
+                    qmp.type_command("infer" if args.inference == "cpu-self-test" else f"infer {args.inference}")
                     started = True
-                if "INFERENCE_OK self-test" in text:
+                expected = {
+                    "cpu-self-test": "INFERENCE_OK self-test backend=cpu",
+                    "gpu-self-test": "INFERENCE_OK self-test backend=nvidia",
+                    "gpu-alexnet": "INFERENCE_OK alexnet backend=nvidia layers=8",
+                }[args.inference]
+                if expected in text:
                     if "[0x10de:0x2757]" not in text or "[0x10de:0x22bb]" not in text:
                         raise RuntimeError(
                             "guest did not enumerate the target GPU and audio"

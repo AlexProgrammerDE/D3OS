@@ -3,5 +3,10 @@ name = "d3os-compute"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+nvidia = ["dep:d3os-nvidia", "dep:syscall"]
+
 [dependencies]
 libm = "0.2"
+d3os-nvidia = { path = "../nvidia", optional = true }
+syscall = { path = "../syscall", optional = true }

@@ -72,9 +72,10 @@ pub enum SystemCall {
     ShmAttach,
     ShmDetach,
     ShmUnlink,
+    GpuCompute,
 }
 
-pub const NUM_SYSCALLS: usize = mem::variant_count::<SystemCall>() as usize;
+pub const NUM_SYSCALLS: usize = mem::variant_count::<SystemCall>();
 
 ///
 /// Description:

@@ -2,9 +2,9 @@
 
 extern crate alloc;
 
-use alloc::{format, string::String, vec, vec::Vec};
+use alloc::{format, string::String, vec::Vec};
 use core::fmt;
-use d3os_compute::cpu::Cpu;
+use d3os_compute::{Backend, cpu::Cpu, nvidia::Nvidia};
 use d3os_inference::{
     qwen::{self, Qwen},
     tokenizer::{self, Tokenizer},
@@ -13,6 +13,8 @@ use naming::shared_types::{OpenOptions, SeekOrigin};
 use runtime::env;
 
 static LOGGER: logger::Logger = logger::Logger::new();
+
+mod gpu_tests;
 
 fn report(message: fmt::Arguments<'_>) {
     terminal::println!("{}", message);
@@ -52,24 +54,18 @@ fn run() -> Result<(), String> {
             d3os_inference::self_test(&Cpu).map_err(|error| format!("{error}"))?;
             report(format_args!("INFERENCE_OK self-test backend=cpu"));
         }
+        Some("gpu-self-test") if args.len() == 1 => {
+            let backend = Nvidia::new().map_err(|error| format!("{error}"))?;
+            d3os_inference::self_test(&backend).map_err(|error| format!("{error}"))?;
+            gpu_tests::run(&backend)?;
+            report(format_args!("INFERENCE_OK self-test backend=nvidia"));
+        }
+        Some("gpu-alexnet") if args.len() == 1 || args.len() == 3 => {
+            let backend = Nvidia::new().map_err(|error| format!("{error}"))?;
+            alexnet(&backend, &args[1..])?;
+        }
         Some("alexnet") if args.len() == 1 || args.len() == 3 => {
-            let paths = if args.len() == 3 {
-                vec![args[1].as_str(), args[2].as_str()]
-            } else {
-                vec!["/usr/share/inference/alexnet.d3t", "/usr/share/inference/dog.d3t"]
-            };
-            let start = time::systime().num_milliseconds();
-            report(format_args!("INFERENCE_START alexnet backend=cpu"));
-            let model = read_file(paths[0])?;
-            let fixture = read_file(paths[1])?;
-            let predictions = d3os_inference::verify_alexnet(&Cpu, &model, &fixture).map_err(|error| format!("{error}"))?;
-            for (class, probability) in predictions {
-                report(format_args!("class={class} probability={probability:.6}"));
-            }
-            report(format_args!(
-                "INFERENCE_OK alexnet backend=cpu layers=8 elapsed_ms={}",
-                time::systime().num_milliseconds() - start
-            ));
+            alexnet(&Cpu, &args[1..])?;
         }
         Some("qwen") if args.len() == 1 || args.len() >= 3 => {
             let start = time::systime().num_milliseconds();
@@ -122,10 +118,29 @@ fn run() -> Result<(), String> {
         }
         _ => {
             return Err(String::from(
-                "usage: infer self-test | alexnet [MODEL FIXTURE] | qwen [MAX_TOKENS PROMPT...] | qwen-verify",
+                "usage: infer self-test | gpu-self-test | alexnet [MODEL FIXTURE] | gpu-alexnet [MODEL FIXTURE] | qwen [MAX_TOKENS PROMPT...] | qwen-verify",
             ));
         }
     }
+    Ok(())
+}
+
+fn alexnet<B: Backend>(backend: &B, paths: &[String]) -> Result<(), String> {
+    let defaults = ["/usr/share/inference/alexnet.d3t", "/usr/share/inference/dog.d3t"];
+    let paths = if paths.is_empty() { defaults } else { [paths[0].as_str(), paths[1].as_str()] };
+    let start = time::systime().num_milliseconds();
+    report(format_args!("INFERENCE_START alexnet backend={}", backend.name()));
+    let model = read_file(paths[0])?;
+    let fixture = read_file(paths[1])?;
+    let predictions = d3os_inference::verify_alexnet(backend, &model, &fixture).map_err(|error| format!("{error}"))?;
+    for (class, probability) in predictions {
+        report(format_args!("class={class} probability={probability:.6}"));
+    }
+    report(format_args!(
+        "INFERENCE_OK alexnet backend={} layers=8 elapsed_ms={}",
+        backend.name(),
+        time::systime().num_milliseconds() - start
+    ));
     Ok(())
 }
 

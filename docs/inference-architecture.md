@@ -6,22 +6,23 @@ Host verification builds the same libraries for Linux.
 
 The hardware-free phase delivers pretrained AlexNet and Qwen3.5-0.8B text inference inside D3OS.
 It also provides CPU execution of compiled Rust PTX kernels.
-It does not include an NVIDIA hardware driver.
-GPU initialization, kernel loading, and hardware execution remain the next implementation phase.
+The native NVIDIA hardware phase now runs AlexNet on the passed-through RTX 4090 Laptop GPU.
+Firmware boot, GPU page tables, native kernel loading, and tensor execution are operational.
+Qwen GPU operators and GPU rendering remain unfinished.
 
 ## Source layout
 
-- `os/library/compute`: tensor storage, the synchronous backend contract, and CPU operators.
+- `os/library/compute`: tensor storage, the synchronous backend contract, CPU operators, and the native NVIDIA backend.
 - `os/library/inference`: checked tensor archives, AlexNet evaluation, Qwen text generation, tokenization, and numerical verification.
 - `os/application/infer`: D3OS file access, shell commands, and serial reports.
 - `os/library/inference/examples/infer-host.rs`: host execution of the same model implementation.
 - `tools/gpu-kernels`: Rust device kernels compiled to PTX.
 - `tools/inference`: asset preparation, CPU PTX tests, and QEMU integration tests.
-- `os/kernel/src/device/nvidia.rs`: native register discovery for the RTX 4090 Laptop GPU.
+- `os/kernel/src/device/nvidia.rs`: native firmware startup, compute submission, and process-owned GPU storage for the RTX 4090 Laptop GPU.
 - `tools/nvidia/run-qemu.py`: verified VFIO launch and passthrough boot checks.
 
 The inference layer depends on the backend contract rather than CPU storage.
-An NVIDIA backend can implement that contract after hardware initialization and submission work.
+The NVIDIA backend implements the same contract through a D3OS compute syscall.
 The model layer does not require Linux binary compatibility, a CUDA host runtime, or Python inside D3OS.
 
 ## CPU implementation
@@ -115,11 +116,19 @@ It is not a GPU performance measurement.
 The test scripts preserve manifests and guest logs under `target`.
 The CI workflow provides repeatable numerical tests and an optional pretrained QEMU run.
 
-## Next phase: NVIDIA hardware
+## NVIDIA hardware implementation
 
-The initial hardware target needs one exact GPU model, one process, and one compute queue.
-An Ampere desktop card is a practical starting point for the current kernel compiler target.
-The exact PCI ID, firmware version, and supported compute classes must determine the driver configuration.
+The current target is the RTX 4090 Laptop GPU (`10de:2757`, AD103) with one serialized compute queue.
+The driver boots pinned signed firmware and allocates a private, virtually bound compute context.
+The process-owned syscall interface accepts built-in kernels and opaque buffer handles.
+The D3OS kernel verifies handle arithmetic and launch dimensions before dispatch.
+GPU tensor kernels use native Ada SASS compiled from Rust device code.
+
+AlexNet passes every layer comparison on the physical GPU with the original reference tolerances.
+Its matrix operations use three TF32 tensor products and compensated FP32 accumulation.
+An earlier running accumulation missed one third-layer value by about `2.24e-4`.
+Compensated accumulation corrects that mismatch without changing the reference tolerance.
+The hardware operator suite also covers partial tiles, long reductions, batched convolution, and buffer reuse.
 
 The [tinygrad direct PCI backend](https://github.com/tinygrad/tinygrad/blob/master/tinygrad/runtime/support/nv/nvdev.py) provides a reference for initialization.
 Its [firmware and GSP implementation](https://github.com/tinygrad/tinygrad/blob/master/tinygrad/runtime/support/nv/ip.py) provides the corresponding management protocol.
@@ -134,11 +143,16 @@ The implementation milestones are:
 3. Implement owned DMA allocations, reset handling, firmware boot, and GSP communication.
 4. Implement VRAM allocation, GPU virtual addresses, page tables, and translation invalidation.
 5. Create compute and copy channels, then submit work with completion fences and bounded timeouts.
-6. Assemble device kernels for the chosen architecture and load their code, metadata, constants, and relocations.
+6. Assemble device kernels for the chosen architecture and load their code, metadata, and constants.
 7. Execute vector addition and matrix multiplication against CPU references on the real GPU.
 8. Implement the remaining inference operators in the NVIDIA backend and run AlexNet through that backend.
 9. Add process isolation, resource cleanup, fault diagnostics, and recovery tests.
-10. Optimize measured bottlenecks, then add Tensor Core kernels and larger model operators.
+10. Optimize measured bottlenecks and add larger model operators.
+
+Milestones 1 through 4, native compute in 5, and milestones 6 through 8 are operational on the target GPU.
+The userspace service validates buffer ownership and releases storage after process exit.
+Copy-engine transfers, separate hardware address spaces for arbitrary user kernels, and recovery without VM reset remain unfinished.
+Tensor execution is operational, while Qwen transformer operators remain the next model requirement.
 
 Initial bring-up can use driver-owned staging buffers and explicit copies.
 It does not require shared CPU/GPU virtual addresses or demand-paged GPU memory.
@@ -187,5 +201,6 @@ The session's locked-memory limit was raised to 16 GiB for VFIO.
 The [VFIO setup guide](nvidia-vfio.howto.md) gives the documented ASUS Hybrid-mode commands, display checks, VFIO reservation, and rollback steps.
 The D3OS guest boots with the physical GPU and audio function present and completes its native CPU self-test with four vCPUs.
 The native probe reads AD103 register identification, a 16 GiB BAR1 aperture, and 16,376 MiB of usable VRAM.
-GPU firmware startup, compute execution, and inference on the physical GPU remain under development.
+GPU firmware startup, scalar kernels, tensor kernels, and AlexNet inference pass on this physical GPU.
+Read the [native inference commands](nvidia-vfio.howto.md#8-run-native-gpu-inference) for repeatable hardware checks.
 The Ada kernel build uses `--hardware-sm sm_89`.

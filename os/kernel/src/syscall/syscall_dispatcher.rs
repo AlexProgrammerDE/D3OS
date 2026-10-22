@@ -147,6 +147,7 @@ impl SyscallTable {
                 sys_shm_attach as *const _,
                 sys_shm_detach as *const _,
                 sys_shm_unlink as *const _,
+                super::sys_gpu::sys_gpu_compute as *const _,
             ],
         }
     }

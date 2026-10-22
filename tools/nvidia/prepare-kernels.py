@@ -32,7 +32,7 @@ def main():
     env = os.environ.copy()
     env["CARGO_TARGET_DIR"] = str(ROOT / "target/gpu-kernels")
     manifest = {"architecture": "sm_89", "hardware_validated": False, "kernels": {}}
-    for kind in ("vector-add", "relu", "matmul", "tensor-matmul"):
+    for kind in ("vector-add", "relu", "matmul", "tensor-matmul", "inference"):
         subprocess.run(
             [
                 "cargo",
@@ -71,9 +71,20 @@ def main():
             "sha256": hashlib.sha256(cubin.read_bytes()).hexdigest(),
             "bytes": cubin.stat().st_size,
         }
-        if kind == "tensor-matmul":
+        if kind in ("tensor-matmul", "inference"):
             tensor = manifest["kernels"][kind]
-            tensor["entrypoints"] = ["tensor_matmul_f16", "tensor_matmul_bf16"]
+            instructions = (
+                (
+                    ("tensor_matmul_f16", r"\bHMMA\.16816\.F32\s"),
+                    ("tensor_matmul_bf16", r"\bHMMA\.16816\.F32\.BF16\s"),
+                )
+                if kind == "tensor-matmul"
+                else (
+                    ("tensor_matmul_tf32x3", r"\bHMMA\.1688\.F32\.TF32\s"),
+                    ("tensor_project_tf32x3", r"\bHMMA\.1688\.F32\.TF32\s"),
+                )
+            )
+            tensor["entrypoints"] = [entry for entry, _ in instructions]
             tensor["accumulator"] = "f32"
             tensor["sass_verified"] = False
             if disassembler:
@@ -85,10 +96,7 @@ def main():
                     timeout=30,
                 ).stdout
                 (args.output / f"{kind}.sass").write_text(sass)
-                for entry, instruction in (
-                    ("tensor_matmul_f16", r"\bHMMA\.16816\.F32\s"),
-                    ("tensor_matmul_bf16", r"\bHMMA\.16816\.F32\.BF16\s"),
-                ):
+                for entry, instruction in instructions:
                     match = re.search(
                         rf"^\.text\.{entry}:$(.*?)(?=^\.text\.|\Z)",
                         sass,

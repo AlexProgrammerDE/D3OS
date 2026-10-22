@@ -16,6 +16,6 @@ terminal = { path = "../../library/terminal" }
 naming = { path = "../../library/naming" }
 logger = { path = "../../library/logger" }
 time = { path = "../../library/time" }
-d3os-compute = { path = "../../library/compute" }
+d3os-compute = { path = "../../library/compute", features = ["nvidia"] }
 d3os-inference = { path = "../../library/inference" }
 log = "0.4"

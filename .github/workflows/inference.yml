@@ -61,9 +61,13 @@ jobs:
           targets: nvptx64-nvidia-cuda
       - uses: Swatinem/rust-cache@v2
       - name: Verify CPU operators and model loading
-        run: cargo test --locked -p d3os-compute -p d3os-inference -p d3os-nvidia
+        run: cargo test --locked -p d3os-compute -p d3os-inference -p d3os-nvidia --features d3os-compute/nvidia
       - name: Check compute and inference code
-        run: cargo clippy --locked -p d3os-compute -p d3os-inference -p d3os-nvidia --all-targets -- -D warnings
+        run: cargo clippy --locked -p d3os-compute -p d3os-inference -p d3os-nvidia --features d3os-compute/nvidia --all-targets -- -D warnings
+      - name: Check Rust tensor inference kernels
+        run: |
+          CARGO_TARGET_DIR=target/gpu-kernels cargo clippy --locked --manifest-path tools/gpu-kernels/Cargo.toml \
+            --target nvptx64-nvidia-cuda --release --no-default-features --features inference -- -D warnings
       - name: Execute compiled Rust GPU kernels on the CPU
         run: python3 tools/inference/test-gpu-kernels.py
       - name: Install model and OS build dependencies

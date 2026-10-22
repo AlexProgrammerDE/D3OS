@@ -37,7 +37,9 @@ def firmware_options(image, directory):
 class Qmp:
     def __init__(self, path, process, deadline):
         self.socket = socket.socket(socket.AF_UNIX)
-        self.socket.settimeout(5)
+        # VFIO device reset/resume can delay capabilities after QEMU opens QMP.
+        # Keep that initial handshake within the caller's boot deadline.
+        self.socket.settimeout(max(0.1, min(60, deadline - time.monotonic())))
         while True:
             try:
                 self.socket.connect(str(path))
@@ -51,6 +53,7 @@ class Qmp:
         self.file.readline()
         self.sequence = 0
         self.execute("qmp_capabilities")
+        self.socket.settimeout(5)
 
     def execute(self, command, arguments=None):
         self.sequence += 1

@@ -22,6 +22,7 @@ pub enum Error {
     UnexpectedTensor,
     InvalidModelShape,
     VerificationFailed,
+    LayerMismatch { name: String, index: usize, actual: u32, expected: u32 },
     InvalidConfig,
     InvalidToken,
     InvalidTokenizer,
@@ -51,6 +52,12 @@ impl fmt::Display for Error {
             Self::ContextFull => f.write_str("sequence exceeds the session capacity"),
             Self::SessionFailed => f.write_str("session failed; create a new session before continuing"),
             Self::VerificationFailed => f.write_str("inference output differs from the reference"),
+            Self::LayerMismatch { name, index, actual, expected } => write!(
+                f,
+                "AlexNet reference mismatch at {name}[{index}]: actual={}, expected={}",
+                f32::from_bits(*actual),
+                f32::from_bits(*expected)
+            ),
         }
     }
 }
@@ -113,7 +120,21 @@ pub fn verify_alexnet<B: Backend>(backend: &B, model: &[u8], fixture: &[u8]) -> 
         if record.shape() != tensor.shape() {
             return Err(Error::InvalidModelShape);
         }
-        verify(&backend.download(tensor)?, &record.to_vec()?, 2e-4, 2e-4)
+        let actual = backend.download(tensor)?;
+        let expected = record.to_vec()?;
+        verify(&actual, &expected, 2e-4, 2e-4).map_err(|_| {
+            let index = actual
+                .iter()
+                .zip(&expected)
+                .position(|(&a, &b)| !a.is_finite() || !b.is_finite() || (a - b).abs() > 2e-4 + 2e-4 * b.abs())
+                .unwrap_or(0);
+            Error::LayerMismatch {
+                name: name.into(),
+                index,
+                actual: actual[index].to_bits(),
+                expected: expected[index].to_bits(),
+            }
+        })
     })?;
     reference.finish()?;
     top_k(&backend.download(&backend.softmax(&logits)?)?, 5)

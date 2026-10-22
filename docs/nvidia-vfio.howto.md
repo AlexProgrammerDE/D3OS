@@ -224,8 +224,8 @@ It binds that image through a GPU virtual address in RAMIN before it schedules t
 This path replaces the earlier user-context promotion, which left the image uninitialized.
 The context layout follows NVIDIA's [image definitions](https://github.com/NVIDIA/open-gpu-doc/blob/master/manuals/volta/gv100/dev_ctxsw.ref.txt) and [RAMIN definitions](https://github.com/NVIDIA/open-gpu-doc/blob/master/manuals/turing/tu104/dev_ram.ref.txt).
 Host tests reject malformed image headers and verify that relocation preserves unrelated fields.
-AlexNet and Qwen still run on the CPU.
-Their GPU backends remain unfinished.
+The native userspace backend runs AlexNet on this GPU.
+Qwen still requires GPU transformer operators.
 
 The Rust kernels compile to PTX and then native `sm_89` SASS.
 The standalone `ptxas` assembler runs on the host.
@@ -251,7 +251,8 @@ The shader test records GPU semaphore checkpoints, RAMIN fields, notifier conten
 ## 7. Build and verify tensor kernels
 
 Tensor-core execution is a requirement for the AlexNet and Qwen GPU backends.
-Those backends are not complete.
+AlexNet uses the TF32 inference kernels described in section 8.
+Qwen GPU inference remains unfinished.
 The current Rust kernels implement dense matrix multiplication through `mma.sync.aligned.m16n8k16`.
 They round FP32 inputs to FP16 or BF16, accumulate in FP32, and return FP32 output.
 One warp owns each 16-by-8 output tile.
@@ -281,7 +282,64 @@ The input values are exact in both formats, so these cases verify layout and ari
 Both kernels must report `NVIDIA_TENSOR_OK` before the launcher accepts the run.
 These hardware checks pass on the RTX 4090 Laptop GPU.
 They include partial tiles, multiple thread blocks, and a 1-by-1024 times 1024-by-1024 projection.
-AlexNet and Qwen do not yet use these kernels.
+These FP16 and BF16 kernels remain separate from the TF32 AlexNet kernels.
+
+## 8. Run native GPU inference
+
+After the image and kernel builds, run the operator checks:
+
+```bash
+python3 tools/nvidia/run-qemu.py --firmware target/nvidia/firmware \
+    --kernels target/nvidia/kernels --memory-mib 2048 --boot-check \
+    --inference gpu-self-test
+```
+
+The command requires `INFERENCE_OK self-test backend=nvidia`.
+It runs a small convolutional network through the userspace compute API.
+Additional checks cover six tensor matrix cases, batch offsets, padding, rectangular kernels, pooling, and storage reuse.
+The matrix checks include partial tiles and a 9,216-element reduction against FP64 references.
+Softmax checks include multiple rows with large positive and negative logits.
+
+With the AlexNet assets from the [inference guide](inference.howto.md), run:
+
+```bash
+python3 tools/nvidia/run-qemu.py --firmware target/nvidia/firmware \
+    --kernels target/nvidia/kernels --memory-mib 4096 --boot-check \
+    --inference gpu-alexnet --timeout 240
+```
+
+This command requires `INFERENCE_OK alexnet backend=nvidia layers=8`.
+All eight layers must match the stored reference with the original `2e-4` absolute and relative tolerances.
+Both commands passed with four vCPUs and the passed-through RTX 4090 Laptop GPU.
+The AlexNet dog fixture selected class 258 with probability approximately 0.72448.
+
+The shell commands are `infer gpu-self-test` and `infer gpu-alexnet [MODEL FIXTURE]`.
+Applications select `d3os_compute::nvidia::Nvidia::new()` with the compute crate's `nvidia` feature.
+The existing `Tensor` and `Backend` APIs then allocate storage and run operators on the GPU.
+The backend returns a device error when native compute is unavailable.
+It never falls back to CPU execution.
+
+The `inference.cubin` module contains TF32 matrix kernels and FP32 elementwise operators.
+Each matrix tile combines three `HMMA.1688.F32.TF32` products with compensated FP32 accumulation.
+The build verifies tensor instructions in both matrix entry points when `--nvdisasm` is present.
+Convolution uses GPU `im2col` followed by tensor matrix multiplication.
+Fully connected layers use a tensor kernel that reads transposed weights directly.
+ReLU, bias, pooling, and softmax also run on the GPU.
+
+Weights and activations remain in process-owned VRAM buffers between operators.
+The kernel validates handle ownership, buffer extents, shapes, launch bounds, and output aliasing.
+Only built-in kernels are available through this syscall.
+Completed operations permit buffer reuse, and process exit releases remaining buffers.
+A dispatch error disables further compute requests and retains storage until VM reset.
+Reference comparisons and top-five selection use explicit downloads.
+
+The current transfer path uses uncached CPU writes through BAR1.
+The verified AlexNet run took about 26 seconds, including file access, weight upload, and reference comparisons.
+This result establishes correctness rather than competitive inference performance.
+Copy-engine transfers, optimized tensor tiling, Qwen GPU inference, and GPU rendering remain unfinished.
+A later repeat encountered a GSP timeout during graphics-class initialization before model execution.
+The next VM boot passed without a code change.
+Repeated-reset reliability remains under investigation.
 
 ## Restore NVIDIA to the host
 

@@ -10,6 +10,14 @@ use goblin::elf::{
 };
 use log::info;
 
+#[derive(Clone, Copy)]
+pub(super) struct Program {
+    address: u64,
+    bytes: u64,
+    registers: u64,
+    source: (usize, usize),
+}
+
 impl Compute {
     fn method(commands: &mut Vec<u32>, method: u32, values: &[u32]) {
         commands.push((2 << 28) | ((values.len() as u32) << 16) | (1 << 13) | (method >> 2));
@@ -69,10 +77,12 @@ impl Compute {
         Ok(())
     }
 
-    fn launch_test(&mut self, device: &Device, cubin: &[u8], symbol: &str, arguments: &[u8], dimensions: [u32; 2]) -> Result<()> {
-        let [threads, blocks] = dimensions;
-        if arguments.len() > 48 || threads == 0 || threads > 1024 || blocks == 0 {
-            return Err(Error::Alignment);
+    fn load_program(&mut self, device: &Device, cubin: &'static [u8], symbol: &'static str) -> Result<Program> {
+        if let Some(program) = self.programs.get(symbol) {
+            if program.source != (cubin.as_ptr() as usize, cubin.len()) {
+                return Err(Error::Firmware);
+            }
+            return Ok(*program);
         }
         let elf = Elf::parse(cubin).map_err(|_| Error::Firmware)?;
         let mut image = Vec::new();
@@ -104,9 +114,34 @@ impl Compute {
         }
         let vram = device.vram.as_ref().ok_or(Error::Firmware)?;
         vram.copy_from(program.physical as usize, &image)?;
-        let signal = self.memory.allocate(device, 4096, 4096)?;
-        let launch = self.memory.allocate(device, 4096, 4096)?;
-        let mut constants = Record::<400>::default();
+        let program = Program {
+            address: program.virtual_address + entry,
+            bytes: code_bytes,
+            registers,
+            source: (cubin.as_ptr() as usize, cubin.len()),
+        };
+        self.programs.insert(symbol, program);
+        Ok(program)
+    }
+
+    pub(super) fn launch(&mut self, device: &Device, cubin: &'static [u8], symbol: &'static str, arguments: &[u8], dimensions: [u32; 2]) -> Result<()> {
+        let [threads, blocks] = dimensions;
+        if arguments.len() > 512 || threads == 0 || threads > 1024 || blocks == 0 {
+            return Err(Error::Alignment);
+        }
+        let program = self.load_program(device, cubin, symbol)?;
+        let vram = device.vram.as_ref().ok_or(Error::Firmware)?;
+        let (signal, launch) = if let Some(buffers) = self.launch_buffers {
+            buffers
+        } else {
+            let buffers = (self.memory.allocate(device, 4096, 4096)?, self.memory.allocate(device, 4096, 4096)?);
+            self.launch_buffers = Some(buffers);
+            buffers
+        };
+        for offset in (0..64).step_by(4) {
+            vram.write(signal.physical as usize + offset, 0)?;
+        }
+        let mut constants = Record::<1024>::default();
         for (i, value) in [threads, 1, 1, blocks, 1, 1].into_iter().enumerate() {
             constants.set(Field::<u32>::new(i * 4), value)?;
         }
@@ -124,7 +159,7 @@ impl Compute {
             (Q::SM_GLOBAL_CACHING_ENABLE, 1),
             (Q::SHARED_MEMORY_SIZE, 0x400),
             (Q::SHADER_LOCAL_MEMORY_HIGH_SIZE, 0x240),
-            (Q::REGISTER_COUNT_V, registers),
+            (Q::REGISTER_COUNT_V, program.registers),
             (Q::INVALIDATE_TEXTURE_HEADER_CACHE, 1),
             (Q::INVALIDATE_TEXTURE_SAMPLER_CACHE, 1),
             (Q::INVALIDATE_TEXTURE_DATA_CACHE, 1),
@@ -136,7 +171,7 @@ impl Compute {
             (Q::MIN_SM_CONFIG_SHARED_MEM_SIZE, 9),
             (Q::TARGET_SM_CONFIG_SHARED_MEM_SIZE, 9),
             (Q::MAX_SM_CONFIG_SHARED_MEM_SIZE, 0x1a),
-            (Q::PROGRAM_PREFETCH_SIZE, (code_bytes >> 8).min(0x1ff)),
+            (Q::PROGRAM_PREFETCH_SIZE, (program.bytes >> 8).min(0x1ff)),
             (Q::SASS_VERSION, self.sass_version),
             (Q::CTA_RASTER_WIDTH, u64::from(blocks)),
             (Q::CTA_RASTER_HEIGHT, 1),
@@ -147,10 +182,10 @@ impl Compute {
             (Q::CONSTANT_BUFFER_VALID_0, 1),
             (Q::CONSTANT_BUFFER_INVALIDATE_0, 1),
             (Q::CONSTANT_BUFFER_SIZE_SHIFTED4_0, constants.len() as u64),
-            (Q::PROGRAM_ADDRESS_LOWER, (program.virtual_address + entry) & 0xffffffff),
-            (Q::PROGRAM_ADDRESS_UPPER, (program.virtual_address + entry) >> 32),
-            (Q::PROGRAM_PREFETCH_ADDR_LOWER_SHIFTED, ((program.virtual_address + entry) >> 8) & 0xffffffff),
-            (Q::PROGRAM_PREFETCH_ADDR_UPPER_SHIFTED, (program.virtual_address + entry) >> 40),
+            (Q::PROGRAM_ADDRESS_LOWER, (program.address) & 0xffffffff),
+            (Q::PROGRAM_ADDRESS_UPPER, (program.address) >> 32),
+            (Q::PROGRAM_PREFETCH_ADDR_LOWER_SHIFTED, ((program.address) >> 8) & 0xffffffff),
+            (Q::PROGRAM_PREFETCH_ADDR_UPPER_SHIFTED, (program.address) >> 40),
             (Q::CONSTANT_BUFFER_ADDR_LOWER_0, (launch.virtual_address + 256) & 0xffffffff),
             (Q::CONSTANT_BUFFER_ADDR_UPPER_0, (launch.virtual_address + 256) >> 32),
             (Q::RELEASE0_ENABLE, 1),
@@ -204,12 +239,11 @@ impl Compute {
             &[NVC6C0_SEND_SIGNALING_PCAS2_B_PCAS_ACTION_PREFETCH_SCHEDULE],
         );
         semaphore(&mut commands, signal.virtual_address + 56, 0x2222, true);
-        info!("NVIDIA VRAM mode before submit={:?}", device.registers.read(0x1704));
         self.submit(device, &commands)?;
-        info!(
+        log::debug!(
             "NVIDIA_KERNEL_SUBMITTED symbol={symbol} qmd={:#x} entry={:#x}",
             launch.virtual_address,
-            program.virtual_address + entry
+            program.address
         );
         let start = crate::timer().systime_ms();
         // Also wait for the FIFO tail before reusing the command buffer.
@@ -238,7 +272,7 @@ impl Compute {
         Ok(())
     }
 
-    pub(super) fn vector_add_test(&mut self, device: &Device, cubin: &[u8]) -> Result<()> {
+    pub(super) fn vector_add_test(&mut self, device: &Device, cubin: &'static [u8]) -> Result<()> {
         let data = self.memory.allocate(device, 3 * 4096, 4096)?;
         let vram = device.vram.as_ref().ok_or(Error::Firmware)?;
         const COUNT: u32 = 257;
@@ -252,7 +286,7 @@ impl Compute {
         arguments.set(Field::<u64>::new(8), data.virtual_address + 4096)?;
         arguments.set(Field::<u64>::new(16), data.virtual_address + 8192)?;
         arguments.set(Field::<u32>::new(24), COUNT)?;
-        self.launch_test(device, cubin, "vector_add", arguments.as_bytes(), [128, COUNT.div_ceil(128)])?;
+        self.launch(device, cubin, "vector_add", arguments.as_bytes(), [128, COUNT.div_ceil(128)])?;
         for i in 0..COUNT {
             let actual = vram.read((data.physical + 8192 + u64::from(i) * 4) as usize).ok_or(Error::Firmware)?;
             let expected = i as f32 * 0.125 + 3.0;
@@ -265,7 +299,7 @@ impl Compute {
         Ok(())
     }
 
-    pub(super) fn tensor_test(&mut self, device: &Device, cubin: &[u8]) -> Result<()> {
+    pub(super) fn tensor_test(&mut self, device: &Device, cubin: &'static [u8]) -> Result<()> {
         let vram = device.vram.as_ref().ok_or(Error::Firmware)?;
         let a_value = |i: u32| ((i * 7 % 23) as f32 - 11.0) / 8.0;
         let b_value = |i: u32| ((i * 13 % 19) as f32 - 9.0) / 8.0;
@@ -297,7 +331,7 @@ impl Compute {
                 arguments.set(Field::<u32>::new(28), inner)?;
                 arguments.set(Field::<u32>::new(32), cols)?;
                 let tiles = rows.div_ceil(16) * cols.div_ceil(8);
-                self.launch_test(device, cubin, symbol, arguments.as_bytes(), [128, tiles.div_ceil(4)])?;
+                self.launch(device, cubin, symbol, arguments.as_bytes(), [128, tiles.div_ceil(4)])?;
                 if vram.read(output.physical as usize) != Some(GUARD) || vram.read((output.physical + u64::from(rows * cols + 1) * 4) as usize) != Some(GUARD) {
                     return Err(Error::Firmware);
                 }

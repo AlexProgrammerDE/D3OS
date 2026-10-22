@@ -12,6 +12,7 @@ vector-add = []
 matmul = []
 relu = []
 tensor-matmul = []
+inference = []
 
 [workspace]
 

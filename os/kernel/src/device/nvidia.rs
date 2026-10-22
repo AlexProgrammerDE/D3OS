@@ -12,6 +12,8 @@ mod flcn;
 mod gsp;
 mod mmu;
 mod rm;
+mod service;
+pub(crate) use service::{request as compute_request, release_process};
 
 #[derive(Debug)]
 enum Error {
@@ -275,6 +277,7 @@ pub fn bootstrap() {
             }
             Ok(())
         });
+        compute.healthy = result.is_ok();
         device.compute = Some(compute);
         if result.is_err() {
             if let Some(gsp) = device.gsp.as_mut() {

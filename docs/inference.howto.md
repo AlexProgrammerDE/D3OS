@@ -9,7 +9,8 @@ Neither path requires an NVIDIA GPU or NVIDIA host libraries.
 The current model demonstration uses pretrained torchvision AlexNet in evaluation mode.
 It accepts one normalized RGB image with shape `[1, 3, 224, 224]`.
 Read [the architecture and hardware handoff](inference-architecture.md) for the implementation boundaries.
-For the inspected Fedora laptop, follow [the NVIDIA VFIO setup commands](nvidia-vfio.howto.md) when hardware development can start.
+The native NVIDIA backend also runs AlexNet on the RTX 4090 Laptop GPU with tensor cores.
+For hardware setup and repeatable GPU checks, follow [the NVIDIA VFIO guide](nvidia-vfio.howto.md#8-run-native-gpu-inference).
 
 ## Verify the CPU backend
 

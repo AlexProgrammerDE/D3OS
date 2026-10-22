@@ -4,6 +4,8 @@
 extern crate alloc;
 
 pub mod cpu;
+#[cfg(feature = "nvidia")]
+pub mod nvidia;
 pub mod transformer;
 
 use alloc::vec::Vec;
@@ -17,6 +19,8 @@ pub enum Error {
     SizeOverflow,
     AllocationFailed,
     NonFinite,
+    DeviceUnavailable,
+    DeviceFault,
 }
 
 impl fmt::Display for Error {
@@ -28,6 +32,8 @@ impl fmt::Display for Error {
             Self::SizeOverflow => "tensor size exceeds the address space",
             Self::AllocationFailed => "cannot allocate tensor storage",
             Self::NonFinite => "operation requires finite values",
+            Self::DeviceUnavailable => "native NVIDIA compute is unavailable",
+            Self::DeviceFault => "native NVIDIA compute failed",
         })
     }
 }

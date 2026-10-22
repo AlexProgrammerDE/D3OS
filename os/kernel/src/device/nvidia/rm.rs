@@ -4,7 +4,7 @@ use super::{
     Device, Error, Result,
     mmu::{Allocation, Memory},
 };
-use alloc::vec::Vec;
+use alloc::{collections::BTreeMap, vec::Vec};
 use d3os_nvidia::{Record, abi::*, context};
 use log::info;
 
@@ -35,6 +35,10 @@ pub(super) struct Compute {
     reserved_virtual: u64,
     pub(super) command_buffer: Option<Allocation>,
     pub(super) put: usize,
+    pub(super) programs: BTreeMap<&'static str, super::compute::Program>,
+    pub(super) launch_buffers: Option<(Allocation, Allocation)>,
+    pub(super) buffers: super::service::Buffers,
+    pub(super) healthy: bool,
 }
 
 impl Device {
@@ -67,6 +71,10 @@ impl Compute {
             reserved_virtual: 0,
             command_buffer: None,
             put: 0,
+            programs: BTreeMap::new(),
+            launch_buffers: None,
+            buffers: super::service::Buffers::default(),
+            healthy: true,
         })
     }
 

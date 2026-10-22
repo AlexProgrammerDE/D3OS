@@ -147,6 +147,7 @@ impl core::fmt::Debug for Process {
 
 impl Drop for Process {
     fn drop(&mut self) {
+        crate::device::nvidia::release_process(self.id());
         network::close_sockets_for_process(self)
     }
 }
