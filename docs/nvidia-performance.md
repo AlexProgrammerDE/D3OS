@@ -21,6 +21,10 @@ Its checksum describes benchmark work, not a conversational answer.
 D3OS timers have millisecond resolution. The kernel benchmark amortizes this resolution across 100 launches.
 Its times include CPU submission and synchronization.
 The Linux kernel benchmark uses CUDA events across 30 queued launches, which excludes most CPU submission overhead.
+D3OS also runs a separate instrumented pass with GPU timestamps before scheduling and at QMD completion.
+The boot check compares these timestamps with a kernel that runs for 10 ms on the GPU.
+`device_mean_us` includes device scheduling and completion work, while `instrumented_mean_us` also includes CPU submission and waiting.
+The first `mean_us` pass runs without timestamp instrumentation.
 These measurements separate end-to-end overhead from device throughput. They are not interchangeable timers.
 
 ## Measured progress
@@ -29,15 +33,17 @@ Measurements on 2026-10-22 and 2026-10-23:
 
 | Workload | Initial resident baseline | After native optimizations |
 | --- | ---: | ---: |
-| Qwen warm generation | 7.04 to 7.36 tokens/s | 47.58 to 50.51 tokens/s |
-| Qwen warm prompt processing | 7.76 to 7.81 tokens/s | 57.44 to 59.95 tokens/s |
-| AlexNet forward pass | 10.0 ms | 2.4 to 3.0 ms |
-| DOOM uncapped `demo1` | No matched initial measurement | 673.23 to 684.33 FPS |
+| Qwen warm generation | 7.04 to 7.36 tokens/s | 95.52 to 106.14 tokens/s |
+| Qwen warm prompt processing | 7.76 to 7.81 tokens/s | 112.25 to 122.22 tokens/s |
+| AlexNet forward pass | 10.0 ms | 1.5 ms |
+| DOOM uncapped `demo1` | No matched initial measurement | 655.51 to 688.11 FPS |
 
 The AlexNet result excludes input upload and final download.
 The DOOM result includes native GPU drawing, palette conversion, scaling, and framebuffer copies.
 Its scene size is 320 by 200, with presentation at 640 by 400.
 The regular game loop has separate timing behavior. Its HUD rate does not measure uncapped throughput.
+The last two native runs reported 655.51 and 688.11 FPS.
+Earlier native runs reached 673 to 684 FPS, so these measurements do not establish a substantial DOOM improvement.
 
 The Linux llama.cpp reference uses build `b11827`, full GPU offload, and three repetitions.
 It reports about 250 tokens/s with BF16 weights and 156 tokens/s with FP32 weights.
@@ -77,6 +83,10 @@ Matrix and RMSNorm operations allocate their output inside the validated dispatc
 A full writer initializes every element before the kernel publishes the new handle.
 This removes a separate zero kernel while preserving zeroed ordinary allocations and process ownership.
 
+Token selection reduces the FP32 vocabulary logits into 32 index/value pairs on the GPU.
+The CPU combines these pairs after a 256-byte transfer, instead of downloading roughly 1 MB of logits per token.
+Equal scores select the lowest index. Every non-finite score causes an error, even when it cannot win.
+
 Qwen matrix weights retain their original BF16 bits in packed VRAM storage.
 Embedding converts only the selected row into FP32.
 Projection converts weights as it reads them and retains FP32 accumulation.
@@ -87,6 +97,37 @@ Each pixel merges its two relevant lists instead of scanning every command.
 The merge preserves draw order, including overlap between columns and spans.
 The fuzz pass retains sequential feedback semantics.
 The original scan kernel remains the independent GPU reference in the operator checks.
+
+## Scheduling delay around GPU completion
+
+The large vocabulary projection took about 3.36 ms through the application API, although GPU timestamps measured about 1.82 ms.
+Its device bandwidth already matched the Linux kernel benchmark.
+The GPU service used a spinlock whose owner could be preempted during synchronous completion polling.
+The owner could remain descheduled after the GPU finished.
+
+The service now holds a preemption guard while it owns the device lock, including process-buffer cleanup.
+Interrupts remain enabled. The guard ends after the lock is released.
+The same projection now takes about 1.82 ms through the application API.
+Qwen generation increased from about 52 tokens/s to about 100 tokens/s with the same decode checksum and full reference results.
+
+This follows the critical-region rule in the [Linux preemption locking guide](https://docs.kernel.org/locking/preempt-locking.html).
+It retains a synchronous service, so long requests can delay scheduling on the calling CPU.
+Queued submission and completion interrupts remain necessary for an efficient asynchronous service.
+
+| FP32 projection shape | D3OS device time | Linux device time |
+| --- | ---: | ---: |
+| 1 by 9216, 4096 outputs | About 287 microseconds | 286.55 microseconds |
+| 1 by 1024, 248320 outputs | About 1817 microseconds | 1815.62 microseconds |
+
+The vocabulary projection reaches about 560 GB/s in both guests.
+The native firmware clock sample reports a 9001 MHz memory target and a 2310 MHz SM target during boot.
+Linux reports the same memory target and a 2040 MHz SM target in its startup query.
+These are startup samples, rather than continuous model clock measurements.
+The native clock probe also measures about 2309 MHz through GPU timer instructions.
+
+The firmware clock query uses NVIDIA's [RM user shared data layout](https://github.com/NVIDIA/open-gpu-kernel-modules/blob/570.144/src/common/sdk/nvidia/inc/class/cl00de.h).
+The driver reads a stable timestamp around each snapshot and stops firmware polling after the boot diagnostic.
+It retains ownership of the DMA region for the firmware lifetime.
 
 ## Compiler and local-stack correctness
 
@@ -119,17 +160,19 @@ CPU cycles are useful within a run and are not a portable time unit across machi
 ## Remaining work
 
 Qwen still submits synchronous operations separately and processes the prompt one token at a time.
-It downloads the full vocabulary logits for CPU token selection.
-A faster path still needs batched submission, fused operations, GPU token selection, and batched prompt processing.
+A faster path still needs batched submission, fused operations, and batched prompt processing.
+The CPU token-selection work now combines only 32 GPU candidates.
 Each change must preserve the existing model reference or define and measure a separate precision policy.
 
-The large vocabulary projection reaches about 560 GB/s under Linux with either our kernel or cuBLAS FP32.
-D3OS currently reports about 300 GB/s for that shape, including submission overhead.
-The native SM clock probe reports about 2309 MHz. It does not measure the memory clock.
-The remaining bandwidth difference needs device timestamps and memory-clock diagnostics before a cause can be assigned.
+The large projection kernels now match Linux device throughput for the measured shapes.
+This does not establish model parity: Qwen still generates about 100 tokens/s, compared with about 250 tokens/s in the Linux BF16 reference.
+The remaining work must reduce complete model latency, rather than optimize already comparable streaming bandwidth.
 
 DOOM still transfers indexed frames for CPU HUD composition and copies RGB output into the console framebuffer.
 Direct GPU presentation remains separate work.
+Repeated VM starts also exposed an intermittent GSP timeout while allocating the golden compute engine.
+The failed boot never reached a workload and is excluded from throughput results.
+Successful reruns do not establish that this startup issue is fixed.
 The Linux DOOM reference uses the same pinned engine and WAD with a headless framebuffer copy.
 That reference reports 1586.59 FPS for the same 7117-tick demo.
 It measures a software-rendering baseline without display-server or physical-display costs.

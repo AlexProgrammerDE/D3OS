@@ -127,6 +127,8 @@ The CI workflow provides repeatable numerical tests and an optional pretrained Q
 The current target is the RTX 4090 Laptop GPU (`10de:2757`, AD103) with one serialized compute queue.
 The driver boots pinned signed firmware and allocates a private, virtually bound compute context.
 The process-owned syscall interface accepts built-in kernels and opaque buffer handles.
+Native compute protocol version 2 extends profile records with GPU timing.
+Rebuild compute applications with the matching SDK. The kernel rejects incompatible request versions.
 The D3OS kernel verifies handle arithmetic and launch dimensions before dispatch.
 GPU tensor kernels use native Ada SASS compiled from Rust device code.
 
@@ -149,7 +151,8 @@ This removes a redundant zero kernel without exposing previous buffer contents.
 Ordinary allocations remain zeroed, including recycled storage.
 
 The optional device profile returns per-kernel CPU cycle counters through the checked compute syscall.
-Snapshots include dispatch counts, total launch cycles, and completion-wait cycles.
+Snapshots include dispatch counts, total launch cycles, completion-wait cycles, and instrumented GPU nanoseconds.
+GPU timestamp instrumentation is disabled by default and can be enabled around an exclusive benchmark.
 The counters cover the whole device, so exclusive workloads are required for useful attribution.
 
 The [tinygrad direct PCI backend](https://github.com/tinygrad/tinygrad/blob/master/tinygrad/runtime/support/nv/nvdev.py) provides a reference for initialization.
@@ -190,7 +193,9 @@ The pretrained model then passes every original reference comparison at 29 token
 The transfer path uses a persistent, driver-owned 1 MiB staging allocation in coherent guest RAM.
 GPU copy kernels move bounded chunks between that allocation and process-owned VRAM.
 GPU clearing preserves buffer isolation when storage is fresh or recycled.
-The complete AlexNet and Qwen reference commands now take about one second and 11.5 seconds on the development GPU.
+Token selection reduces vocabulary logits on the GPU and downloads 32 candidate pairs for the final CPU comparison.
+It preserves the first-index tie rule and rejects every non-finite score.
+See [native NVIDIA performance](nvidia-performance.md) for resident-model timings and Linux comparisons.
 Read [the Qwen guide](qwen.howto.md) for API usage, reference verification, memory requirements, and multicore VM commands.
 
 ## GPU debug machine
