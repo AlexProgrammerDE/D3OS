@@ -22,6 +22,14 @@ The default `doom` command retains CPU rendering.
 
 ## Compute path
 
+The rasterizer builds ordered lists for each screen column and row.
+A pixel merges its column and row lists in command order.
+This removes a scan of unrelated commands from every pixel.
+The GPU checks every list offset and command ID before access.
+The scan kernel remains available for operator reference checks.
+See [native NVIDIA performance](nvidia-performance.md) for uncapped measurements and the Linux comparison method.
+
+
 The CPU retains game logic, BSP traversal, visibility, and draw-command construction.
 The Rust application snapshots texture bytes and lighting tables into owned word buffers.
 Each 12-word command contains a draw type, coordinates, fixed-point texture steps, resource offsets, and flags.
@@ -75,6 +83,7 @@ The frame-rate log includes transfers, game logic, and console presentation.
 The `render_ms` field measures view rendering and its transfers, before HUD drawing and final presentation.
 This renderer does not provide a general 3D API, hardware scanout, audio support, or persistent save files.
 It uses compute shaders for the original indexed renderer rather than the GPU's triangle rasterizer.
-The simple kernel scans every command for each pixel, so larger resolutions need command binning or a different raster algorithm.
+The binned kernel visits only the relevant column and row lists for each pixel.
+Higher resolutions still need separate measurements of command construction, GPU work, and framebuffer copies.
 
 The [VFIO guide](nvidia-vfio.howto.md#9-run-doom-on-the-gpu) contains asset, validation, and interactive commands.

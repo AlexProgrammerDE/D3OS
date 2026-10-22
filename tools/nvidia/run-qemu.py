@@ -58,11 +58,15 @@ def main():
         choices=(
             "cpu-self-test",
             "gpu-self-test",
+            "gpu-kernel-bench",
             "gpu-alexnet",
+            "gpu-alexnet-bench",
             "gpu-qwen",
             "gpu-qwen-verify",
+            "gpu-qwen-bench",
             "gpu-doom",
             "gpu-doom-verify",
+            "gpu-doom-bench",
         ),
         default="cpu-self-test",
         help="native workload to validate during --boot-check",
@@ -145,7 +149,7 @@ def main():
             mode = "self-test"
             if args.inference.startswith("gpu-qwen"):
                 mode = "qwen"
-            elif args.inference == "gpu-alexnet":
+            elif args.inference.startswith("gpu-alexnet"):
                 mode = "alexnet"
             args.image = harness.prepare(
                 directory,
@@ -250,7 +254,12 @@ def main():
                             if args.inference.endswith("verify")
                             else "--gpu"
                         )
-                        qmp.type_command(f"doom {flag} -warp 1 1 -skill 2")
+                        options = (
+                            "-timedemo demo1"
+                            if args.inference == "gpu-doom-bench"
+                            else "-warp 1 1 -skill 2"
+                        )
+                        qmp.type_command(f"doom {flag} {options}")
                     else:
                         qmp.type_command(
                             "infer"
@@ -260,6 +269,7 @@ def main():
                     started = True
                 if (
                     args.inference.startswith("gpu-doom")
+                    and args.inference != "gpu-doom-bench"
                     and "NVIDIA_DOOM_FRAME_OK frame=60" in text
                     and not controls
                 ):
@@ -274,14 +284,31 @@ def main():
                 expected = {
                     "cpu-self-test": "INFERENCE_OK self-test backend=cpu",
                     "gpu-self-test": "INFERENCE_OK self-test backend=nvidia",
+                    "gpu-kernel-bench": "INFERENCE_BENCH_OK kernels backend=nvidia",
                     "gpu-alexnet": "INFERENCE_OK alexnet backend=nvidia layers=8",
+                    "gpu-alexnet-bench": "INFERENCE_BENCH_OK alexnet backend=nvidia reference_layers=8",
                     "gpu-qwen": "INFERENCE_OK qwen backend=nvidia",
                     "gpu-qwen-verify": "INFERENCE_OK qwen-verify backend=nvidia positions=29 layers=24",
+                    "gpu-qwen-bench": "INFERENCE_BENCH_OK qwen backend=nvidia reference_positions=29 reference_layers=24",
                     "gpu-doom": "NVIDIA_DOOM_FRAME_OK frame=600",
                     "gpu-doom-verify": "NVIDIA_DOOM_FRAME_OK frame=600",
+                    "gpu-doom-bench": "DOOM_ENGINE_REPORT timed ",
                 }[args.inference]
                 if expected in text:
-                    if args.inference.startswith("gpu-doom"):
+                    if args.inference == "gpu-doom-bench":
+                        result = re.search(
+                            r"DOOM_ENGINE_REPORT timed (\d+) gametics in (\d+) realtics \(([0-9.]+) fps\)",
+                            text,
+                        )
+                        if not result:
+                            raise RuntimeError(
+                                "DOOM timedemo did not report a valid result"
+                            )
+                        print(
+                            f"NVIDIA_DOOM_BENCH_OK gametics={result[1]} realtics={result[2]} fps={result[3]}",
+                            flush=True,
+                        )
+                    elif args.inference.startswith("gpu-doom"):
                         for key in (173, 172, 32, 191, 9, 27):
                             for state in ("true", "false"):
                                 if (

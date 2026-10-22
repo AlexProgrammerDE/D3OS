@@ -429,6 +429,86 @@ The second command records movement and firing directly from QEMU into `target/n
 The application draws the backend and FPS labels inside D3OS.
 The recorder also preserves serial logs and a manifest with capture timing and game frame rates.
 
+## Measure resident workloads
+
+Use the warm benchmarks to separate inference time from file access and model upload:
+
+```bash
+python3 tools/nvidia/run-qemu.py --boot-check --inference gpu-alexnet-bench \
+    --firmware target/nvidia/firmware --kernels target/nvidia/kernels
+python3 tools/nvidia/run-qemu.py --boot-check --inference gpu-qwen-bench \
+    --memory-mib 12288 --firmware target/nvidia/firmware --kernels target/nvidia/kernels
+python3 tools/nvidia/run-qemu.py --boot-check --inference gpu-kernel-bench \
+    --memory-mib 12288 --firmware target/nvidia/firmware --kernels target/nvidia/kernels
+python3 tools/nvidia/run-qemu.py --boot-check --inference gpu-doom-bench \
+    --firmware target/nvidia/firmware --kernels target/nvidia/kernels
+```
+
+The DOOM benchmark runs the WAD's uncapped `demo1` and reports the engine's timedemo FPS.
+Qwen performs 64 fixed decode steps, including steps after EOS.
+These steps measure throughput and do not represent a chat response.
+The model benchmarks run their full reference comparisons after the timed work.
+
+### Compare against Linux
+
+The reference tool requires a readable host kernel, matching NVIDIA modules, `nvidia-smi`, GCC, and installed CUDA libraries.
+The current environment supplies CUDA libraries through `/usr/local/lib/ollama/cuda_v12`.
+The tool copies these files into an isolated Linux guest without changing the host GPU binding.
+It requires no host root privileges after VFIO access is configured.
+Run only one GPU guest at a time.
+
+Compare the native projection cubin against cuBLAS FP32:
+
+```bash
+python3 tools/nvidia/linux-reference.py --kernel-benchmark
+```
+
+Compare the pinned DOOM engine and WAD with Linux software rendering:
+
+```bash
+python3 tools/nvidia/linux-reference.py --doom-benchmark
+```
+
+This headless comparison includes a framebuffer copy, but excludes physical display costs.
+It is not an OpenGL benchmark.
+
+For the Qwen reference, download the pinned Linux binary and BF16 model:
+
+```bash
+mkdir -p target/nvidia/linux-llama target/nvidia/linux-model
+curl --fail --location \
+    https://github.com/ggml-org/llama.cpp/releases/download/b11827/llama-b11827-bin-ubuntu-cuda-12.8-x64.tar.gz \
+    --output target/nvidia/linux-llama/llama-b11827-bin-ubuntu-cuda-12.8-x64.tar.gz
+curl --fail --location \
+    https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/6ab461498e2023f6e3c1baea90a8f0fe38ab64d0/Qwen3.5-0.8B-BF16.gguf \
+    --output target/nvidia/linux-model/Qwen3.5-0.8B-BF16.gguf
+sha256sum --check <<'EOF'
+c1f538781281ec07841badf0f3972ed88e4f4b60b5aa7598139cadfa3d51a484  target/nvidia/linux-llama/llama-b11827-bin-ubuntu-cuda-12.8-x64.tar.gz
+cedf89af31c9041b601fa58303285bc46d99c51baee1b13f5e919626ca526ee5  target/nvidia/linux-model/Qwen3.5-0.8B-BF16.gguf
+EOF
+tar -xzf target/nvidia/linux-llama/llama-b11827-bin-ubuntu-cuda-12.8-x64.tar.gz \
+    -C target/nvidia/linux-llama
+python3 tools/nvidia/linux-reference.py --memory-mib 12288 \
+    --llama-directory target/nvidia/linux-llama/llama-b11827 \
+    --model target/nvidia/linux-model/Qwen3.5-0.8B-BF16.gguf
+```
+
+For the FP32 comparison, convert the same model without quantization:
+
+```bash
+LD_LIBRARY_PATH="$PWD/target/nvidia/linux-llama/llama-b11827:/usr/local/lib/ollama/cuda_v12" \
+    target/nvidia/linux-llama/llama-b11827/llama-quantize \
+    target/nvidia/linux-model/Qwen3.5-0.8B-BF16.gguf \
+    target/nvidia/linux-model/Qwen3.5-0.8B-F32.gguf F32
+python3 tools/nvidia/linux-reference.py --memory-mib 12288 \
+    --llama-directory target/nvidia/linux-llama/llama-b11827 \
+    --model target/nvidia/linux-model/Qwen3.5-0.8B-F32.gguf
+```
+
+The tool saves the guest log and driver manifest under `target/nvidia/linux-reference`.
+A directory lock prevents another invocation from replacing files while that guest runs.
+See [native NVIDIA performance](nvidia-performance.md) for measurement limits and the remaining performance gap.
+
 ## Restore NVIDIA to the host
 
 Run this from the kernel entry changed in stage 3, with the VM stopped:
