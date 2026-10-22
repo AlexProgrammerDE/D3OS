@@ -183,6 +183,25 @@ impl TransformerBackend for Nvidia {
         {
             return Err(Error::ShapeMismatch);
         }
+        if key_dim <= 128 && value_dim <= 128 && kernel <= 8 {
+            return self.produce(
+                &[1, value_width],
+                Kernel::DeltaFused,
+                &[
+                    (&input.qkv.buffer, 0),
+                    (&input.gate.buffer, 0),
+                    (&input.beta.buffer, 0),
+                    (&input.alpha.buffer, 0),
+                    (&input.convolution.buffer, 0),
+                    (&input.log_decay.buffer, 0),
+                    (&input.time_bias.buffer, 0),
+                    (&input.norm.buffer, 0),
+                    (&state.convolution.buffer, 0),
+                    (&state.recurrent.buffer, 0),
+                ],
+                &[heads, key_dim, value_dim, kernel, epsilon.to_bits() as usize],
+            );
+        }
         let mixed = self.allocate(&[channels])?;
         let scales = self.allocate(&[heads, 4])?;
         let raw = self.allocate(&[heads, value_dim])?;

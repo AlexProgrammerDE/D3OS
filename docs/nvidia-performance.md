@@ -33,13 +33,15 @@ Measurements on 2026-10-22 and 2026-10-23:
 
 | Workload | Initial resident baseline | After native optimizations |
 | --- | ---: | ---: |
-| Qwen warm generation | 7.04 to 7.36 tokens/s | 95.52 to 106.14 tokens/s |
-| Qwen warm prompt processing | 7.76 to 7.81 tokens/s | 112.25 to 122.22 tokens/s |
-| AlexNet forward pass | 10.0 ms | 1.5 ms |
+| Qwen warm generation | 7.04 to 7.36 tokens/s | 127.75 to 138.83 tokens/s |
+| Qwen warm prompt processing | 7.76 to 7.81 tokens/s | 162.96 to 164.18 tokens/s |
+| AlexNet forward pass | 10.0 ms | 1.55 ms |
 | DOOM uncapped `demo1` | 536.84 to 676.89 FPS with word storage | 800.95 to 943.54 FPS with byte storage |
 
 The AlexNet result excludes input upload and final download.
 The DOOM result includes native GPU drawing, palette conversion, scaling, and framebuffer copies.
+The latest inference regression run also passes the 600-frame pixel check and reports 996.38 FPS in the uncapped demo.
+The DOOM source did not change during that run; host variability remains relevant.
 Its scene size is 320 by 200, with presentation at 640 by 400.
 The regular game loop has separate timing behavior. Its HUD rate does not measure uncapped throughput.
 The DOOM comparison uses three runs per renderer on host CPUs 8, 10, 12, and 14.
@@ -61,9 +63,11 @@ taskset -c 8,10,12,14 python3 tools/nvidia/linux-reference.py --doom-benchmark
 ```
 
 These CPU IDs are machine-specific. The earlier Qwen Linux measurements used unrestricted host affinity.
+A new BF16 reference on these pinned cores reports 264.90 tokens/s and shuts down cleanly.
+The other model-comparison limitations below still apply.
 
 The Linux llama.cpp reference uses build `b11827`, full GPU offload, and three repetitions.
-It reports about 250 tokens/s with BF16 weights and 156 tokens/s with FP32 weights.
+The earlier unrestricted runs report about 250 tokens/s with BF16 weights and 156 tokens/s with FP32 weights.
 The FP32 file is a conversion of the same BF16 GGUF file without quantization.
 The Linux reference retains its default FP16 attention cache. D3OS uses FP32 state.
 Both benchmarks request 22 prompt tokens and 64 generated tokens, but they use different token sequences.
@@ -93,10 +97,31 @@ Large application allocations use aligned 2 MiB GPU pages where possible, with 4
 These mapping changes passed the transfer guard checks and full model references.
 They did not remove the measured steady-state bandwidth gap by themselves.
 
-RMSNorm and gated delta output use cooperative warp reductions instead of serial work in one GPU thread.
-The warp broadcasts one common row scale before the lanes write their outputs.
+RMSNorm uses one 128-thread block per row instead of one warp.
+The block combines four partial sums in shared memory and publishes one common scale before writing the output.
+In the measured decode profile, RMSNorm dispatch cycles fell from 137.95 million to 79.56 million across 3,136 calls.
+This reduction changes the summation order. The original model tolerances and decode checksum still pass.
 
-Matrix and RMSNorm operations allocate their output inside the validated dispatch.
+The recurrent delta step fuses convolution, Q/K normalization, decay, state updates, and gated output into one kernel.
+One block handles each head and uses shared storage instead of global intermediate tensors.
+Key and value dimensions up to 128 and convolution widths up to eight use this path.
+Larger configurations retain the separate operator path.
+The fused path removes 126 launches per generated token, including redundant intermediate clears.
+Across 64 decode steps, zero kernels fell from 5,824 to 1,216.
+The hardware suite compares output, convolution history, and recurrent state across 42 steps, including both paths.
+
+The loader now allocates each entrypoint's static shared memory plus the reserved 1 KiB CUDA prefix.
+It rounds the allocation to 128 bytes and rejects requests above the configured 32 KiB partition.
+The kernel build checks shared loads, shared stores, and barriers in the assembled normalization and recurrent kernels.
+
+The fused delta step first raised warm generation from about 103 to 125–127 tokens/s.
+The block-wide RMSNorm change then reached 138.83 tokens/s in both warm sessions of the next run.
+A second VM reports 127.75 and 135.31 tokens/s, with the same checksum and complete reference pass.
+Host variability remains visible; these runs do not establish a fixed gain percentage.
+These measurements use host CPUs 8, 10, 12, and 14.
+The complete Qwen reference still passes all 24 layers across 29 positions.
+
+Matrix, RMSNorm, and fused delta operations allocate their output inside the validated dispatch.
 A full writer initializes every element before the kernel publishes the new handle.
 This removes a separate zero kernel while preserving zeroed ordinary allocations and process ownership.
 
@@ -205,7 +230,7 @@ The CPU token-selection work now combines only 32 GPU candidates.
 Each change must preserve the existing model reference or define and measure a separate precision policy.
 
 The large projection kernels now match Linux device throughput for the measured shapes.
-This does not establish model parity: Qwen still generates about 100 tokens/s, compared with about 250 tokens/s in the Linux BF16 reference.
+This does not establish model parity: Qwen still generates about 128 to 139 tokens/s, compared with about 265 tokens/s in the pinned Linux BF16 reference.
 The remaining work must reduce complete model latency, rather than optimize already comparable streaming bandwidth.
 
 DOOM still transfers packed indexed frames for CPU HUD composition and copies RGB output into the console framebuffer.
@@ -229,5 +254,10 @@ The MMU encoding follows NVIDIA's published [MMU-v2 fields](https://github.com/N
 The mapping policy also follows the native [tinygrad NVIDIA page-table implementation](https://github.com/tinygrad/tinygrad/blob/master/tinygrad/runtime/support/nv/nvdev.py).
 The Linux comparison uses [llama.cpp CUDA kernels](https://github.com/ggml-org/llama.cpp/tree/master/ggml/src/ggml-cuda).
 NVIDIA's [matrix performance guide](https://docs.nvidia.com/deeplearning/performance/dl-performance-matrix-multiplication/index.html) explains the distinction between matrix tiling and memory-bound vector work.
+
+The shared-memory allocation follows [tinygrad’s native NVIDIA runtime](https://github.com/tinygrad/tinygrad/blob/master/tinygrad/runtime/ops_nv.py).
+
+The fused recurrent mapping also uses [llama.cpp’s gated delta implementation](https://github.com/ggml-org/llama.cpp/blob/master/ggml/src/ggml-cuda/gated_delta_net.cu) as a reference.
+Its warp groups split independent value columns across key lanes. D3OS retains its existing row-major state layout.
 
 The collective annotations follow the [Rust assembly options](https://doc.rust-lang.org/reference/inline-assembly.html#asm-options-supported-options-pure) and NVIDIA's [shuffle participation rules](https://docs.nvidia.com/cuda/parallel-thread-execution/#data-movement-and-conversion-instructions-shfl-sync).

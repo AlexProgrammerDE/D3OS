@@ -16,6 +16,7 @@ pub(super) struct Program {
     bytes: u64,
     registers: u64,
     local_bytes: u64,
+    shared_bytes: u64,
     source: (usize, usize),
 }
 
@@ -137,7 +138,13 @@ impl Compute {
         let mut entry = None;
         let mut registers = 0;
         let mut stack_bytes = 0;
+        let mut shared_bytes = 0x400u64;
         for section in &elf.section_headers {
+            if elf.shdr_strtab.get_at(section.sh_name).and_then(|name| name.strip_prefix(".nv.shared.")) == Some(symbol) {
+                // CUDA reserves a 1 KiB shared-memory prefix. The static section
+                // is NOBITS and needs allocation, rather than a VRAM image copy.
+                shared_bytes = u64::from(d3os_nvidia::cubin::shared_bytes(section.sh_size).map_err(|_| Error::Firmware)?);
+            }
             if elf.shdr_strtab.get_at(section.sh_name) == Some(".nv.info") {
                 let metadata = cubin
                     .get(section.sh_offset as usize..section.sh_offset.checked_add(section.sh_size).ok_or(Error::Firmware)? as usize)
@@ -174,6 +181,7 @@ impl Compute {
             bytes: code_bytes,
             registers,
             local_bytes: u64::from(stack_bytes).checked_add(0x240).ok_or(Error::Firmware)?,
+            shared_bytes,
             source: (cubin.as_ptr() as usize, cubin.len()),
         };
         self.programs.insert(symbol, program);
@@ -215,7 +223,7 @@ impl Compute {
             (Q::QMD_MAJOR_VERSION, 3),
             (Q::QMD_GROUP_ID, 0x3f),
             (Q::SM_GLOBAL_CACHING_ENABLE, 1),
-            (Q::SHARED_MEMORY_SIZE, 0x400),
+            (Q::SHARED_MEMORY_SIZE, program.shared_bytes),
             (Q::SHADER_LOCAL_MEMORY_HIGH_SIZE, self.local_bytes_per_thread),
             (Q::REGISTER_COUNT_V, program.registers),
             (Q::INVALIDATE_TEXTURE_HEADER_CACHE, 1),

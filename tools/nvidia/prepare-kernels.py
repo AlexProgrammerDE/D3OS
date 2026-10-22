@@ -139,6 +139,20 @@ def main():
                                 f"{entry} has no expected byte memory instructions"
                             )
                     tensor["byte_raster_sass_verified"] = True
+                    for entry in ("rms_norm", "delta_fused"):
+                        body = re.search(
+                            rf"^\.text\.{entry}:$(.*?)(?=^\.text\.|\Z)",
+                            sass,
+                            re.MULTILINE | re.DOTALL,
+                        )
+                        if not body or not all(
+                            re.search(pattern, body.group(1))
+                            for pattern in (r"\bLDS\b", r"\bSTS\b", r"\bBAR\.SYNC\b")
+                        ):
+                            raise RuntimeError(
+                                f"{entry} has no expected shared memory and barrier instructions"
+                            )
+                    tensor["shared_transformer_sass_verified"] = True
     (args.output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
 

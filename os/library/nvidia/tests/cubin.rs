@@ -18,3 +18,14 @@ fn malformed_stack_payloads_do_not_become_scratch_sizes() {
     assert!(stack_bytes(&[1, 0x12, 8, 0]).is_err());
     assert!(stack_bytes(&[4, 0x12, 0, 0]).is_err());
 }
+
+#[test]
+fn shared_allocation_accounts_for_reserved_space_and_partition_limit() {
+    use d3os_nvidia::cubin::shared_bytes;
+    assert_eq!(shared_bytes(0).unwrap(), 1024);
+    assert_eq!(shared_bytes(2064).unwrap(), 3200);
+    assert_eq!(shared_bytes(129).unwrap(), 1280);
+    assert_eq!(shared_bytes(32 * 1024 - 1024).unwrap(), 32 * 1024);
+    assert!(shared_bytes(32 * 1024 - 1024 + 1).is_err());
+    assert!(shared_bytes(u64::MAX).is_err());
+}

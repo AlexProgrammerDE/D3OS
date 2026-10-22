@@ -1,6 +1,16 @@
 use d3os_nvidia::compute::Kernel;
 
 #[test]
+fn normalization_uses_one_full_block_per_row() {
+    for (rows, width) in [(1, 1), (7, 33), (5, 1024), (2, 4097)] {
+        let work = Kernel::RmsNorm.work(&[rows, width, 1e-6f32.to_bits(), 1f32.to_bits()]).unwrap();
+        assert_eq!((work.blocks, work.threads), (rows, 128));
+        assert_eq!(work.extents[..3], [u64::from(rows * width), u64::from(width), u64::from(rows * width)]);
+    }
+    assert!(Kernel::RmsNorm.work(&[u32::MAX / 128 + 1, 1, 1e-6f32.to_bits(), 0]).is_err());
+}
+
+#[test]
 fn packed_weight_extents_cover_odd_tails_and_half_word_offsets() {
     let project = Kernel::ProjectBf16.work(&[17, 33, 9]).unwrap();
     assert_eq!(project.extents[..3], [17 * 33, 149, 17 * 9]);
@@ -121,4 +131,31 @@ fn packed_raster_bounds_include_partial_words_without_widening_pixels() {
     let palette = Kernel::PaletteBytes.work(&[13, 17, 3]).unwrap();
     assert_eq!(palette.extents[..3], [56, 256, 13 * 17 * 9]);
     assert!(Kernel::PaletteBytes.work(&[u32::MAX, 2, 1]).is_err());
+}
+
+#[test]
+fn fused_delta_covers_all_writers_and_checks_cta_limits() {
+    let work = Kernel::DeltaFused.work(&[16, 128, 128, 4, 1e-6f32.to_bits()]).unwrap();
+    assert_eq!((work.threads, work.blocks, work.pointers, work.output), (1024, 16, 11, 10));
+    assert_eq!(work.extents[..11], [6144, 2048, 16, 16, 24576, 16, 16, 128, 24576, 262144, 2048]);
+    assert_eq!(work.mutated, (1 << 8) | (1 << 9));
+    let mut addresses: Vec<_> = (1..=11).map(|i| i * 0x1000000).collect();
+    assert!(work.validate_aliases(&addresses).is_ok());
+    addresses[8] = addresses[0];
+    assert!(work.validate_aliases(&addresses).is_err());
+    addresses[8] = 9 * 0x1000000;
+    addresses[9] = addresses[10];
+    assert!(work.validate_aliases(&addresses).is_err());
+    let odd = Kernel::DeltaFused.work(&[2, 5, 7, 3, 1e-6f32.to_bits()]).unwrap();
+    assert_eq!((odd.threads, odd.blocks), (64, 2));
+    for p in [
+        [1, 129, 128, 4, 1],
+        [1, 128, 129, 4, 1],
+        [1, 128, 128, 9, 1],
+        [1, 128, 128, 0, 1],
+        [1, 0, 1, 1, 1],
+    ] {
+        assert!(Kernel::DeltaFused.work(&p).is_err());
+    }
+    assert!(Kernel::DeltaFused.work(&[1, 1, 1, 1, f32::NAN.to_bits()]).is_err());
 }

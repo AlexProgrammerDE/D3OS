@@ -1,5 +1,31 @@
 //! Qwen transformer operators. Mutable caches never leave GPU memory.
 use core::arch::asm;
+use core::arch::nvptx::{_block_idx_x, _thread_idx_x};
+
+mod delta;
+
+#[inline(always)]
+unsafe fn shared_read(base: u32, index: u32) -> f32 {
+    let value;
+    unsafe {
+        asm!("ld.shared.f32 {value}, [{address}];", value = out(reg32) value, address = in(reg32) (base + index * 4), options(nostack));
+    }
+    value
+}
+
+#[inline(always)]
+unsafe fn shared_write(base: u32, index: u32, value: f32) {
+    unsafe {
+        asm!("st.shared.f32 [{address}], {value};", address = in(reg32) (base + index * 4), value = in(reg32) value, options(nostack));
+    }
+}
+
+#[inline(always)]
+unsafe fn barrier() {
+    unsafe {
+        asm!("bar.sync 0;", options(nostack));
+    }
+}
 
 #[inline(always)]
 fn exp(value: f32) -> f32 {
@@ -127,22 +153,45 @@ pub unsafe extern "ptx-kernel" fn silu_mul(input: u64, other: u64, output: u64, 
 /// # Safety
 /// Input/output contain rows*width elements, weights width elements, with no
 /// output overlap. Epsilon is finite and positive, offset is zero or one.
-/// Launch full warps, one warp per row.
+/// Launch 128 threads per block, one block per row.
 #[unsafe(no_mangle)]
 pub unsafe extern "ptx-kernel" fn rms_norm(input: u64, weights: u64, output: u64, rows: u32, width: u32, epsilon: u32, offset: u32) {
-    let row = super::index() / 32;
-    let lane = super::index() % 32;
+    let (row, thread) = unsafe { (_block_idx_x(), _thread_idx_x()) };
     if row >= rows {
         return;
     }
     let base = row * width;
-    let scale = 1. / sqrt(unsafe { warp_dot(input, base, input, base, width) } / width as f32 + f32::from_bits(epsilon));
-    let mut i = lane;
+    let shared: u32;
+    unsafe {
+        asm!("{{ .shared .align 16 .b8 rms_shared[16]; mov.u32 {base}, rms_shared; }}", base = out(reg32) shared, options(nostack));
+    }
+    let mut square = 0.;
+    let mut i = thread;
+    while i < width {
+        let value = unsafe { read(input, base + i) };
+        square += value * value;
+        i += 128;
+    }
+    square = unsafe { super::warp::sum(square) };
+    if thread % 32 == 0 {
+        unsafe { shared_write(shared, thread / 32, square) };
+    }
+    unsafe { barrier() };
+    if thread < 32 {
+        let partial = if thread < 4 { unsafe { shared_read(shared, thread) } } else { 0. };
+        let square = unsafe { super::warp::sum(partial) };
+        if thread == 0 {
+            unsafe { shared_write(shared, 0, 1. / sqrt(square / width as f32 + f32::from_bits(epsilon))) };
+        }
+    }
+    unsafe { barrier() };
+    let scale = unsafe { shared_read(shared, 0) };
+    let mut i = thread;
     while i < width {
         unsafe {
             write(output, base + i, read(input, base + i) * scale * (f32::from_bits(offset) + read(weights, i)));
         }
-        i += 32;
+        i += 128;
     }
 }
 

@@ -14,7 +14,7 @@ pub const PROFILE: u32 = 6;
 pub const LAUNCH_ALLOCATE: u32 = 7;
 /// Enable GPU timestamp instrumentation for subsequent launches (elements 0 or 1).
 pub const DEVICE_TIMING: u32 = 8;
-pub const KERNEL_COUNT: usize = 30;
+pub const KERNEL_COUNT: usize = 31;
 
 /// Device-wide CPU cycle counters. Read snapshots around an exclusive workload
 /// and subtract them. Wait cycles include GPU execution and completion polling.
@@ -78,9 +78,10 @@ pub enum Kernel {
     RasterBinnedBytes = 27,
     FuzzBytes = 28,
     PaletteBytes = 29,
+    DeltaFused = 30,
 }
 
-const _: () = assert!(Kernel::PaletteBytes as usize + 1 == KERNEL_COUNT);
+const _: () = assert!(Kernel::DeltaFused as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -107,7 +108,10 @@ impl Kernel {
     /// These kernels write every output element for every valid work shape.
     /// Partial writers must never expose uncleared allocations through this API.
     pub fn allocates_output(self) -> bool {
-        matches!(self, Self::Matmul | Self::Project | Self::RmsNorm | Self::ProjectBf16 | Self::ArgMax)
+        matches!(
+            self,
+            Self::Matmul | Self::Project | Self::RmsNorm | Self::ProjectBf16 | Self::ArgMax | Self::DeltaFused
+        )
     }
 
     pub fn from_raw(raw: u32) -> Result<Self> {
@@ -142,6 +146,7 @@ impl Kernel {
             27 => Self::RasterBinnedBytes,
             28 => Self::FuzzBytes,
             29 => Self::PaletteBytes,
+            30 => Self::DeltaFused,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -178,13 +183,40 @@ impl Kernel {
             Self::RasterBinnedBytes => "raster_binned_bytes",
             Self::FuzzBytes => "raster_fuzz_bytes",
             Self::PaletteBytes => "palette_scale_bytes",
+            Self::DeltaFused => "delta_fused",
         }
     }
 
     pub fn work(self, p: &[u32]) -> Result<Work> {
         let mut extents = [0; 16];
         let mut mutated = 0;
+        let mut threads = 128;
         let (count, pointers, output, in_place) = match (self, p) {
+            (Self::DeltaFused, &[heads, key, value, kernel, epsilon]) => {
+                let channels = delta_channels(heads, key, value)?;
+                if key > 128 || value > 128 || !(1..=8).contains(&kernel) {
+                    return Err(Error::InvalidField);
+                }
+                positive_float(epsilon)?;
+                let history = product(&[channels, kernel])? as u64;
+                let output = product(&[heads, value])? as u64;
+                extents[..11].copy_from_slice(&[
+                    channels as u64,
+                    output,
+                    heads as u64,
+                    heads as u64,
+                    history,
+                    heads as u64,
+                    heads as u64,
+                    value as u64,
+                    history,
+                    product(&[heads, key, value])? as u64,
+                    output,
+                ]);
+                mutated = (1 << 8) | (1 << 9);
+                threads = product(&[value.div_ceil(4), 32])?;
+                (product(&[heads, threads])?, 11, 10, false)
+            }
             (Self::ArgMax, &[n]) => {
                 product(&[n])?;
                 extents[..2].copy_from_slice(&[u64::from(n), 64]);
@@ -311,7 +343,7 @@ impl Kernel {
                 }
                 let n = product(&[rows, width])? as u64;
                 extents[..3].copy_from_slice(&[n, width as u64, n]);
-                (product(&[rows, 32])?, 3, 2, false)
+                (product(&[rows, 128])?, 3, 2, false)
             }
             (Self::AttentionPrepare, &[heads, dim, rotary, position, theta, epsilon, stride]) => {
                 positive_float(theta)?;
@@ -377,10 +409,10 @@ impl Kernel {
             }
             _ => return Err(Error::InvalidField),
         };
-        let blocks = count.div_ceil(128);
-        blocks.checked_mul(128).ok_or(Error::InvalidField)?;
+        let blocks = count.div_ceil(threads);
+        blocks.checked_mul(threads).ok_or(Error::InvalidField)?;
         Ok(Work {
-            threads: 128,
+            threads,
             blocks,
             extents,
             pointers,

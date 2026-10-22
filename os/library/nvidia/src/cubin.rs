@@ -23,3 +23,13 @@ pub fn stack_bytes(info: &[u8]) -> Result<u32> {
     }
     Ok(maximum)
 }
+
+/// CUDA's reserved shared prefix plus static storage, rounded to 128 bytes.
+/// The current QMD configuration provides a 32 KiB shared-memory partition.
+pub fn shared_bytes(static_bytes: u64) -> Result<u32> {
+    let bytes = static_bytes.checked_add(0x400 + 127).ok_or(Error::InvalidField)? & !127;
+    if bytes > 32 * 1024 {
+        return Err(Error::InvalidField);
+    }
+    Ok(bytes as u32)
+}

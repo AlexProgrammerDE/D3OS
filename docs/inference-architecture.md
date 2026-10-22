@@ -138,6 +138,8 @@ An earlier running accumulation missed one third-layer value by about `2.24e-4`.
 Compensated accumulation corrects that mismatch without changing the reference tolerance.
 The hardware operator suite also covers partial tiles, long reductions, batched convolution, and buffer reuse.
 The loader reads module stack metadata and sizes local scratch storage before submission.
+It also reads each entrypoint’s static shared-memory section and includes the reserved CUDA prefix in its QMD allocation.
+The current shared-memory partition accepts at most 32 KiB, including that prefix.
 A GPU boot diagnostic exercises a real local stack frame across partial blocks.
 
 Qwen matrix weights remain in packed BF16 storage while activations and accumulators retain FP32 values.
@@ -151,7 +153,15 @@ The byte raster kernels receive logical byte lengths, while the syscall validate
 The fuzz kernel preserves ordering within each column and permits only vertical neighbor offsets.
 This permits concurrent columns without changing the original pixel feedback.
 
-Matrix and RMSNorm operations combine output allocation with the kernel that fills it.
+RMSNorm uses one 128-thread block per row, with shared partial sums and one common scale.
+The hardware checks cover narrow rows, multiple rows, and widths that exceed or do not divide the block size.
+
+The recurrent delta step fuses convolution, normalization, state updates, and gated output into one block per head.
+This path supports key and value dimensions up to 128 and convolution widths up to eight.
+Larger configurations retain the separate operator path.
+Both paths keep state in VRAM and pass independent output and state comparisons after each step.
+
+Matrix, RMSNorm, and fused delta operations combine output allocation with the kernel that fills it.
 The kernel returns the new handle only after a validated full writer completes.
 This removes a redundant zero kernel without exposing previous buffer contents.
 Ordinary allocations remain zeroed, including recycled storage.

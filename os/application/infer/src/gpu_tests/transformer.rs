@@ -122,7 +122,7 @@ fn compare_traces(actual: &[Vec<f32>], expected: &[Vec<f32>], name: &str) -> cor
 }
 
 pub(super) fn run(backend: &Nvidia) -> core::result::Result<(), String> {
-    for (rows, width) in [(7, 33), (5, 1024)] {
+    for (rows, width) in [(1, 1), (7, 33), (3, 129), (5, 1024), (2, 4097)] {
         let gpu_input = tensor(backend, &[rows, width], 3).map_err(|e| format!("{e}"))?;
         let gpu_weights = tensor(backend, &[width], 5).map_err(|e| format!("{e}"))?;
         let cpu_input = tensor(&Cpu, &[rows, width], 3).map_err(|e| format!("{e}"))?;
@@ -135,7 +135,7 @@ pub(super) fn run(backend: &Nvidia) -> core::result::Result<(), String> {
             .rms_norm(&cpu_input, &cpu_weights, 1e-6)
             .and_then(|t| Cpu.download(&t))
             .map_err(|e| format!("{e}"))?;
-        super::compare(&gpu, &cpu, "multi-row warp RMSNorm")?;
+        super::compare(&gpu, &cpu, "block RMSNorm")?;
     }
     let pointwise_gpu = pointwise(backend).map_err(|error| format!("{error}"))?;
     let pointwise_cpu = pointwise(&Cpu).map_err(|error| format!("{error}"))?;
@@ -153,7 +153,7 @@ pub(super) fn run(backend: &Nvidia) -> core::result::Result<(), String> {
         let cpu = attention(&Cpu, config).map_err(|error| format!("attention reference: {error}"))?;
         compare_traces(&gpu, &cpu, "grouped attention")?;
     }
-    for (heads, key_dim, value_dim, kernel) in [(2, 5, 7, 3), (16, 128, 128, 4)] {
+    for (heads, key_dim, value_dim, kernel) in [(1, 1, 1, 1), (2, 5, 7, 3), (3, 33, 17, 8), (16, 128, 128, 4), (2, 129, 9, 4), (2, 7, 129, 9)] {
         let config = DeltaConfig {
             heads,
             key_dim,
@@ -165,6 +165,6 @@ pub(super) fn run(backend: &Nvidia) -> core::result::Result<(), String> {
         let cpu = delta(&Cpu, config).map_err(|error| format!("delta reference: {error}"))?;
         compare_traces(&gpu, &cpu, "gated delta")?;
     }
-    super::super::report(format_args!("NVIDIA_TRANSFORMER_OPERATORS_OK attention_cases=14 delta_cases=14 backend=nvidia"));
+    super::super::report(format_args!("NVIDIA_TRANSFORMER_OPERATORS_OK attention_cases=14 delta_cases=42 backend=nvidia"));
     Ok(())
 }
