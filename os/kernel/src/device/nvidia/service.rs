@@ -51,6 +51,7 @@ pub(crate) fn release_process(owner: Uuid) {
     let Some(device) = DEVICE.get() else {
         return;
     };
+    let _preempt = crate::process::core_local_storage::PreemptGuard::new();
     let mut device = device.lock();
     let Some(compute) = device.compute.as_mut() else {
         return;
@@ -70,6 +71,9 @@ pub(crate) fn request(owner: Uuid, request: &Request) -> SyscallResult {
     if request.version != abi::VERSION {
         return Err(Errno::ENOTSUP);
     }
+    // Keep the spinlock owner runnable until its synchronous GPU transaction
+    // completes. Interrupts remain enabled for timers and cross-core work.
+    let _preempt = crate::process::core_local_storage::PreemptGuard::new();
     let mut device = DEVICE.get().ok_or(Errno::ENOTSUP)?.lock();
     let mut compute = device.compute.take().ok_or(Errno::ENOTSUP)?;
     let result = if compute.healthy {
