@@ -25,13 +25,13 @@ These measurements separate end-to-end overhead from device throughput. They are
 
 ## Measured progress
 
-Measurements on 2026-10-22:
+Measurements on 2026-10-22 and 2026-10-23:
 
 | Workload | Initial resident baseline | After native optimizations |
 | --- | ---: | ---: |
-| Qwen warm generation | 7.04 to 7.36 tokens/s | 26.89 to 27.11 tokens/s |
-| Qwen warm prompt processing | 7.76 to 7.81 tokens/s | 30.56 tokens/s |
-| AlexNet forward pass | 10.0 ms | 2.5 ms |
+| Qwen warm generation | 7.04 to 7.36 tokens/s | 47.58 to 50.51 tokens/s |
+| Qwen warm prompt processing | 7.76 to 7.81 tokens/s | 57.44 to 59.95 tokens/s |
+| AlexNet forward pass | 10.0 ms | 2.4 to 3.0 ms |
 | DOOM uncapped `demo1` | No matched initial measurement | 673.23 to 684.33 FPS |
 
 The AlexNet result excludes input upload and final download.
@@ -54,7 +54,8 @@ The D3OS archive retains the pinned Qwen revision and original Transformers fixt
 ## Changes that reduce overhead
 
 The projection kernel selects a warp reduction for a single input row.
-Each warp reads contiguous weights and reuses each input across eight outputs.
+Each warp reads contiguous weights. Wide matrices reuse each input across eight outputs.
+Narrow matrices use one output per warp to occupy more GPU multiprocessors.
 This avoids the 15 unused rows in a padded tensor-core tile.
 Larger matrix operations retain the TF32 tensor-core path.
 The FP16 and BF16 tensor-core boot checks also remain active.
@@ -69,17 +70,57 @@ Large application allocations use aligned 2 MiB GPU pages where possible, with 4
 These mapping changes passed the transfer guard checks and full model references.
 They did not remove the measured steady-state bandwidth gap by themselves.
 
+RMSNorm and gated delta output use cooperative warp reductions instead of serial work in one GPU thread.
+The warp broadcasts one common row scale before the lanes write their outputs.
+
+Matrix and RMSNorm operations allocate their output inside the validated dispatch.
+A full writer initializes every element before the kernel publishes the new handle.
+This removes a separate zero kernel while preserving zeroed ordinary allocations and process ownership.
+
+Qwen matrix weights retain their original BF16 bits in packed VRAM storage.
+Embedding converts only the selected row into FP32.
+Projection converts weights as it reads them and retains FP32 accumulation.
+This changes storage density without rounding activations or weakening the model reference tolerances.
+
 The DOOM rasterizer builds ordered column and row lists for each command batch.
 Each pixel merges its two relevant lists instead of scanning every command.
 The merge preserves draw order, including overlap between columns and spans.
 The fuzz pass retains sequential feedback semantics.
 The original scan kernel remains the independent GPU reference in the operator checks.
 
+## Compiler and local-stack correctness
+
+Warp shuffle instructions depend on execution in other lanes.
+The inline assembly must not use `pure` or `nomem`, which permit assumptions that do not describe a synchronized collective.
+A narrow-matrix check exposed the compiler sinking a shuffle into the lane-zero output branch.
+The shared warp helper now preserves participation and uses immediate shuffle distances.
+This also avoids a compiler-generated local shift table in the production projection kernels.
+
+A larger validation run exposed a separate driver fault with a valid 40-byte local stack frame.
+The same cubin passed under Linux but faulted during Qwen prefill in D3OS.
+The loader now reads `EIATTR_MIN_STACK_SIZE` from CUDA ELF metadata and grows scratch storage before dispatch.
+It updates the channel's local-memory base, per-TPC allocation, and QMD limit while the queue is idle.
+The original failing cubin then passed the complete Qwen reference with the same decode checksum.
+A boot diagnostic deliberately uses volatile local storage across 257 GPU threads to preserve this coverage.
+
+The QMD constant-buffer size uses 16-byte units. The encoded size now matches the actual 1 KiB launch buffer.
+Mesa's [QMD v3 implementation](https://chromium.googlesource.com/external/gitlab.freedesktop.org/mesa/mesa/+/a5af649fb690c96e3d1a1e5efb2ca199666c0ff1/src/nouveau/compiler/nak/qmd.rs) provides the same size conversion.
+
+## Per-kernel profile
+
+The resident Qwen benchmark also reads `Nvidia::profile()` before and after the second decode run.
+The snapshot reports call counts, CPU launch cycles, and completion-wait cycles for each built-in kernel.
+`dispatch_share_pct` divides a kernel's cycles by the total dispatch cycles in that interval.
+It excludes application work outside dispatch and does not equal that kernel's share of total model latency.
+`wait_pct` includes GPU execution and completion polling, rather than an isolated device timestamp.
+The counters cover the whole device. Concurrent GPU workloads invalidate attribution to one model.
+CPU cycles are useful within a run and are not a portable time unit across machines.
+
 ## Remaining work
 
 Qwen still submits synchronous operations separately and processes the prompt one token at a time.
-It expands BF16 weights into FP32 VRAM storage and downloads the full vocabulary logits for CPU token selection.
-A faster path needs batched submission, fused operations, native reduced-precision weights, and batched prompt processing.
+It downloads the full vocabulary logits for CPU token selection.
+A faster path still needs batched submission, fused operations, GPU token selection, and batched prompt processing.
 Each change must preserve the existing model reference or define and measure a separate precision policy.
 
 The large vocabulary projection reaches about 560 GB/s under Linux with either our kernel or cuBLAS FP32.
@@ -100,3 +141,5 @@ The MMU encoding follows NVIDIA's published [MMU-v2 fields](https://github.com/N
 The mapping policy also follows the native [tinygrad NVIDIA page-table implementation](https://github.com/tinygrad/tinygrad/blob/master/tinygrad/runtime/support/nv/nvdev.py).
 The Linux comparison uses [llama.cpp CUDA kernels](https://github.com/ggml-org/llama.cpp/tree/master/ggml/src/ggml-cuda).
 NVIDIA's [matrix performance guide](https://docs.nvidia.com/deeplearning/performance/dl-performance-matrix-multiplication/index.html) explains the distinction between matrix tiling and memory-bound vector work.
+
+The collective annotations follow the [Rust assembly options](https://doc.rust-lang.org/reference/inline-assembly.html#asm-options-supported-options-pure) and NVIDIA's [shuffle participation rules](https://docs.nvidia.com/cuda/parallel-thread-execution/#data-movement-and-conversion-instructions-shfl-sync).

@@ -14,8 +14,10 @@ Read [the architecture guide](inference-architecture.md) for the driver and API 
 Use a Linux development host with at least 16 GiB of RAM for the VM tests.
 Allow approximately 12 GiB of free disk space for dependencies, downloads, model assets, and boot images.
 The upstream checkpoint is 1.75 GB; the exported text weights are 1.50 GB.
-Both backends expand BF16 weights to approximately 3 GB of FP32 storage when they load the model.
-The NVIDIA backend retains that storage in VRAM.
+The CPU backend expands BF16 weights to approximately 3 GB of FP32 storage.
+The NVIDIA backend keeps matrix weights packed in BF16, with approximately 1.5 GB of weight data in VRAM.
+Activations, normalization parameters, and recurrent state retain FP32 values.
+Allocation padding and temporary buffers add to the VRAM requirement.
 
 From the repository root, run:
 

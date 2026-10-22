@@ -68,7 +68,10 @@ Loading a tensor rejects nonfinite values.
 
 Version 2 inserts a little-endian `u16` dtype after the element count in each record.
 Dtype 0 stores FP32; dtype 1 stores BF16.
-BF16 values expand to FP32 before backend upload.
+Two-dimensional BF16 records use the backend's packed-weight upload operation.
+The CPU backend expands them exactly to FP32.
+The NVIDIA backend retains packed weights for embedding, projection, and linear operations.
+Other BF16 record shapes still expand before upload.
 The rest of the record layout stays the same.
 AlexNet archives from version 1 remain supported.
 
@@ -132,6 +135,22 @@ Its matrix operations use three TF32 tensor products and compensated FP32 accumu
 An earlier running accumulation missed one third-layer value by about `2.24e-4`.
 Compensated accumulation corrects that mismatch without changing the reference tolerance.
 The hardware operator suite also covers partial tiles, long reductions, batched convolution, and buffer reuse.
+The loader reads module stack metadata and sizes local scratch storage before submission.
+A GPU boot diagnostic exercises a real local stack frame across partial blocks.
+
+Qwen matrix weights remain in packed BF16 storage while activations and accumulators retain FP32 values.
+Single-row projections use coalesced warp reductions.
+Multi-row projections use the tensor path with exact BF16 weight expansion and the existing TF32 decomposition.
+The SDK checks storage types before dispatch and rejects packed weights in unsupported FP32 operations.
+
+Matrix and RMSNorm operations combine output allocation with the kernel that fills it.
+The kernel returns the new handle only after a validated full writer completes.
+This removes a redundant zero kernel without exposing previous buffer contents.
+Ordinary allocations remain zeroed, including recycled storage.
+
+The optional device profile returns per-kernel CPU cycle counters through the checked compute syscall.
+Snapshots include dispatch counts, total launch cycles, and completion-wait cycles.
+The counters cover the whole device, so exclusive workloads are required for useful attribution.
 
 The [tinygrad direct PCI backend](https://github.com/tinygrad/tinygrad/blob/master/tinygrad/runtime/support/nv/nvdev.py) provides a reference for initialization.
 Its [firmware and GSP implementation](https://github.com/tinygrad/tinygrad/blob/master/tinygrad/runtime/support/nv/ip.py) provides the corresponding management protocol.
