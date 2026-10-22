@@ -7,7 +7,8 @@ The Hybrid-mode and VFIO steps below were verified on this machine on October 22
 
 The hardware-free implementation already runs pretrained AlexNet inside D3OS on the CPU.
 The native Rust NVIDIA driver boots FWSEC and GSP firmware on the physical GPU.
-GPU compute channels and model execution remain in development.
+The driver also creates a compute channel and verifies GPU writes through its submission queue.
+Shader execution and GPU model execution remain in development.
 Read [the inference guide](inference.howto.md) to run the existing tests.
 
 ## Hardware this guide targets
@@ -190,7 +191,8 @@ python3 tools/nvidia/run-qemu.py --firmware target/nvidia/firmware --memory-mib 
 The launcher checks that the IOMMU group contains exactly the GPU and audio function and that both use `vfio-pci`.
 It starts QEMU without root privileges and keeps the virtual display for the D3OS console.
 The boot check requires both NVIDIA functions, a native register probe, and a CPU inference self-test.
-With `--firmware`, it also requires a successful native GSP boot.
+With `--firmware`, it also requires a native GSP boot and three GPU semaphore submissions.
+Each submission must write the expected value back through the GPU address space.
 The firmware preparation tool verifies SHA-256 hashes and reuses installed firmware or downloads the pinned Linux firmware files.
 Success prints `NVIDIA_PASSTHROUGH_BOOT_OK`.
 Read `target/nvidia/vm/serial.log` and `target/nvidia/vm/qemu.log` for diagnostics.
@@ -202,7 +204,9 @@ The kernel reports `NVIDIA_PROBE_OK` when its native register probe succeeds.
 That marker confirms register access.
 `NVIDIA_FWSEC_BOOT_OK` confirms authenticated FWSEC execution and protected-region initialization.
 `NVIDIA_GSP_BOOT_OK` confirms GSP startup and management messages through the Rust DMA queues.
-These markers do not confirm GPU compute or model execution.
+`NVIDIA_COMPUTE_CHANNEL_OK` confirms channel construction and scheduling.
+`NVIDIA_QUEUE_OK` confirms three GPU writes through GPFIFO submissions.
+These markers do not confirm shader execution or GPU model execution.
 
 The driver uses signed NVIDIA firmware with its own Rust loaders and message protocol.
 It does not load host NVIDIA libraries.
@@ -210,6 +214,34 @@ The host-independent protocol and firmware-parser tests run with `cargo test -p 
 The generated ABI follows tinygrad revision `81d16543a19d61c82a94df30feba2af8396275af`.
 Its reference license is in `os/library/nvidia/LICENSE.tinygrad`.
 Firmware files stay under the ignored `target/nvidia/firmware` directory.
+
+## 6. Run the shader development test
+
+The shader test currently stalls at the first graphics `SET_OBJECT` method on this AD103.
+Its FIFO semaphore checkpoint succeeds before that method.
+The GPU reports a PBDMA error (32) through its channel notifier.
+NVIDIA defines this code in [the driver error definitions](https://github.com/NVIDIA/open-gpu-kernel-modules/blob/570.144/src/common/sdk/nvidia/inc/nverror.h).
+The test reports the stall and returns an error.
+AlexNet and Qwen still run on the CPU.
+
+The Rust kernels compile to PTX and then native `sm_89` SASS.
+The standalone `ptxas` assembler runs on the host.
+D3OS uses its own Rust loader, GPU page tables, QMD descriptors, and GPFIFO submissions.
+It does not use a host CUDA driver or runtime library.
+The current assembler validation uses version 12.8.93.
+NVIDIA lists compiler packages in its [CUDA installation guide](https://docs.nvidia.com/cuda/cuda-quick-start-guide/index.html).
+
+With a standalone assembler available, run:
+
+```bash
+python3 tools/nvidia/prepare-kernels.py --ptxas /path/to/ptxas
+python3 tools/nvidia/run-qemu.py --firmware target/nvidia/firmware \
+    --kernels target/nvidia/kernels --memory-mib 2048 --boot-check
+```
+
+The launcher requires `NVIDIA_KERNEL_OK` for this test to pass.
+A CPU self-test cannot satisfy that requirement.
+The shader test records GPU semaphore checkpoints, notifier contents, and firmware events in the serial log.
 
 ## Restore NVIDIA to the host
 

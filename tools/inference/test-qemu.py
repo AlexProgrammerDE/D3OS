@@ -120,6 +120,8 @@ def large_image(stage, image):
 def prepare(directory, mode, qwen_assets, extra_assets=()):
     stage = directory / "boot"
     initrd = stage / "initrd"
+    # Each image contains only the assets requested for this invocation.
+    shutil.rmtree(initrd / "usr", ignore_errors=True)
     (initrd / "bin").mkdir(parents=True, exist_ok=True)
     for name in ("infer", "shell", "terminal_emulator"):
         shutil.copyfile(ROOT / "loader/initrd/bin" / name, initrd / "bin" / name)

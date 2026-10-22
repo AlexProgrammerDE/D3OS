@@ -7,8 +7,11 @@ use alloc::vec::Vec;
 use core::ptr::NonNull;
 use d3os_nvidia::firmware;
 
+mod compute;
 mod flcn;
 mod gsp;
+mod mmu;
+mod rm;
 
 #[derive(Debug)]
 enum Error {
@@ -133,6 +136,7 @@ struct Device {
     address: pci_types::PciAddress,
     bar3: u64,
     gsp: Option<gsp::Gsp>,
+    compute: Option<rm::Compute>,
     boot0: u32,
     vram_address: u64,
     vram_aperture: u64,
@@ -203,6 +207,7 @@ pub fn init() {
             address,
             bar3,
             gsp: None,
+            compute: None,
             boot0,
             vram_address: bar1,
             vram_aperture: size1,
@@ -254,9 +259,29 @@ pub fn bootstrap() {
         device.gsp = Some(gsp);
         result?;
         info!("NVIDIA_GSP_BOOT_OK; management firmware is running, compute is not initialized");
+        info!(
+            "NVIDIA BAR1 mapping before compute={:#x}",
+            device.registers.read(0x1704).ok_or(Error::Firmware)?
+        );
+        device.registers.write(0x1704, 0)?;
+        let mut compute = rm::Compute::new(&device)?;
+        let result = compute.initialize(&mut device).and_then(|()| {
+            compute.queue_test(&device)?;
+            if let Ok(cubin) = gsp::asset("usr/share/nvidia/vector-add.cubin") {
+                compute.vector_add_test(&device, cubin)?;
+            }
+            Ok(())
+        });
+        device.compute = Some(compute);
+        if result.is_err() {
+            if let Some(gsp) = device.gsp.as_mut() {
+                gsp.drain_diagnostics();
+            }
+        }
+        result?;
         Ok(())
     })();
     if let Err(error) = result {
-        warn!("NVIDIA firmware boot failed: {error}");
+        warn!("NVIDIA initialization failed: {error}");
     }
 }

@@ -51,6 +51,7 @@ def main():
     parser.add_argument(
         "--firmware", type=Path, help="stage pinned NVIDIA firmware from this directory"
     )
+    parser.add_argument("--kernels", type=Path, help="stage native GPU kernel binaries")
     parser.add_argument("--memory-mib", type=int, default=4096)
     parser.add_argument("--cpus", type=int, default=4)
     parser.add_argument(
@@ -71,6 +72,8 @@ def main():
     ):
         parser.error("use 512 to 32768 MiB, 1 to 64 CPUs, and a positive timeout")
     devices = vfio_devices(args.gpu)
+    if args.kernels and not args.firmware:
+        parser.error("--kernels requires --firmware")
     if args.image and args.firmware:
         parser.error("use either --image or --firmware")
     if not args.firmware:
@@ -97,6 +100,11 @@ def main():
         assets = [
             (args.firmware / name, Path("usr/share/nvidia") / name) for name in names
         ]
+        if args.kernels:
+            assets.extend(
+                (source, Path("usr/share/nvidia") / source.name)
+                for source in args.kernels.glob("*.cubin")
+            )
         for source, _ in assets:
             if not source.is_file():
                 parser.error(f"firmware file does not exist: {source}")
@@ -186,7 +194,11 @@ def main():
             started = False
             while time.monotonic() < deadline:
                 text = serial.read_text(errors="replace") if serial.is_file() else ""
-                if "panicked at" in text or "INFERENCE_FAIL" in text:
+                if (
+                    "panicked at" in text
+                    or "INFERENCE_FAIL" in text
+                    or "NVIDIA initialization failed:" in text
+                ):
                     raise RuntimeError(f"guest failed: {serial}")
                 if "name = shell" in text and not started:
                     time.sleep(1)
@@ -201,8 +213,16 @@ def main():
                         raise RuntimeError(
                             "native NVIDIA register probe did not succeed"
                         )
+                    if args.firmware and "NVIDIA_QUEUE_OK" not in text:
+                        raise RuntimeError(
+                            "native GPU submission queue did not succeed"
+                        )
                     if args.firmware and "NVIDIA_GSP_BOOT_OK" not in text:
                         raise RuntimeError("native GSP firmware boot did not succeed")
+                    if args.kernels and "NVIDIA_KERNEL_OK" not in text:
+                        raise RuntimeError(
+                            "native GPU kernel verification did not succeed"
+                        )
                     print(
                         f"NVIDIA_PASSTHROUGH_BOOT_OK cpus={args.cpus} serial={serial}",
                         flush=True,

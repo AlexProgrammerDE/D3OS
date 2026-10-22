@@ -319,7 +319,7 @@ impl Gsp {
         self.send(device, NV_VGPU_MSG_FUNCTION_SET_REGISTRY, &data)
     }
 
-    fn send(&mut self, device: &Device, function: u32, payload: &[u8]) -> Result<()> {
+    pub(super) fn send(&mut self, device: &Device, function: u32, payload: &[u8]) -> Result<()> {
         let message = rpc::encode(function, self.sequence, payload)?;
         let memory = &self.regions[self.queue];
         let write = memory.read32(COMMAND + 16)? as usize;
@@ -376,16 +376,56 @@ impl Gsp {
         Ok(Some(result))
     }
 
+    pub(super) fn drain_diagnostics(&mut self) {
+        for _ in 0..63 {
+            match self.receive() {
+                Ok(Some((function, result, payload))) => {
+                    log::warn!("NVIDIA queued event function={function:#x} result={result:#x} bytes={}", payload.len());
+                    if function == 0x1004 {
+                        if let Ok(header) = Record::<{ RcError::SIZE }>::from_bytes(&payload) {
+                            log::warn!(
+                                "NVIDIA engine fault engine={:?} channel={:?} kind={:?}",
+                                header.get(RcError::nv2080EngineType),
+                                header.get(RcError::chid),
+                                header.get(RcError::exceptType)
+                            );
+                        }
+                    }
+                    if function != 0x1020 {
+                        log::warn!("NVIDIA event payload {:02x?}", payload);
+                    }
+                }
+                Ok(None) => break,
+                Err(error) => {
+                    log::warn!("NVIDIA diagnostic queue error: {error}");
+                    break;
+                }
+            }
+        }
+    }
+
+    pub(super) fn call(&mut self, device: &Device, function: u32, payload: &[u8]) -> Result<Vec<u8>> {
+        self.send(device, function, payload)?;
+        self.wait_for(device, function)
+    }
+
     pub(super) fn wait_ready(&mut self, device: &Device) -> Result<()> {
+        self.wait_for(device, NV_VGPU_MSG_EVENT_GSP_INIT_DONE).map(|_| ())
+    }
+
+    fn wait_for(&mut self, device: &Device, expected: u32) -> Result<Vec<u8>> {
         let start = crate::timer().systime_ms();
         loop {
             if let Some((function, result, payload)) = self.receive()? {
                 info!("NVIDIA GSP event function={function:#x} result={result:#x} bytes={}", payload.len());
+                if function == 0x1020 {
+                    log::debug!("NVIDIA NOCAT {:02x?}", payload);
+                }
                 if result != 0 {
                     return Err(Error::Rpc { function, result });
                 }
-                if function == NV_VGPU_MSG_EVENT_GSP_INIT_DONE {
-                    return Ok(());
+                if function == expected {
+                    return Ok(payload);
                 }
                 if function == NV_VGPU_MSG_EVENT_OS_ERROR_LOG {
                     let text = payload.get(12..).unwrap_or(&payload);
@@ -400,6 +440,7 @@ impl Gsp {
                 }
             }
             if crate::timer().systime_ms().wrapping_sub(start) >= 15000 {
+                log::warn!("NVIDIA GSP timed out waiting for function={expected:#x}");
                 return Err(Error::Firmware);
             }
             core::hint::spin_loop();
