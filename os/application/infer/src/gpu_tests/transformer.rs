@@ -1,6 +1,6 @@
 use alloc::{format, string::String, vec, vec::Vec};
 use d3os_compute::transformer::{AttentionConfig, AttentionInputs, AttentionState, DeltaConfig, DeltaInputs, DeltaState, TransformerBackend};
-use d3os_compute::{Result, Tensor, cpu::Cpu, nvidia::Nvidia};
+use d3os_compute::{Backend, Result, Tensor, cpu::Cpu, nvidia::Nvidia};
 
 fn tensor<B: TransformerBackend>(backend: &B, shape: &[usize], seed: usize) -> Result<Tensor<B>> {
     let count = d3os_compute::element_count(shape)?;
@@ -122,6 +122,21 @@ fn compare_traces(actual: &[Vec<f32>], expected: &[Vec<f32>], name: &str) -> cor
 }
 
 pub(super) fn run(backend: &Nvidia) -> core::result::Result<(), String> {
+    for (rows, width) in [(7, 33), (5, 1024)] {
+        let gpu_input = tensor(backend, &[rows, width], 3).map_err(|e| format!("{e}"))?;
+        let gpu_weights = tensor(backend, &[width], 5).map_err(|e| format!("{e}"))?;
+        let cpu_input = tensor(&Cpu, &[rows, width], 3).map_err(|e| format!("{e}"))?;
+        let cpu_weights = tensor(&Cpu, &[width], 5).map_err(|e| format!("{e}"))?;
+        let gpu = backend
+            .rms_norm(&gpu_input, &gpu_weights, 1e-6)
+            .and_then(|t| backend.download(&t))
+            .map_err(|e| format!("{e}"))?;
+        let cpu = Cpu
+            .rms_norm(&cpu_input, &cpu_weights, 1e-6)
+            .and_then(|t| Cpu.download(&t))
+            .map_err(|e| format!("{e}"))?;
+        super::compare(&gpu, &cpu, "multi-row warp RMSNorm")?;
+    }
     let pointwise_gpu = pointwise(backend).map_err(|error| format!("{error}"))?;
     let pointwise_cpu = pointwise(&Cpu).map_err(|error| format!("{error}"))?;
     super::compare(&pointwise_gpu, &pointwise_cpu, "transformer pointwise")?;

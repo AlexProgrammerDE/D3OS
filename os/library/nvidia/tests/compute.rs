@@ -1,6 +1,17 @@
 use d3os_nvidia::compute::Kernel;
 
 #[test]
+fn packed_weight_extents_cover_odd_tails_and_half_word_offsets() {
+    let project = Kernel::ProjectBf16.work(&[17, 33, 9]).unwrap();
+    assert_eq!(project.extents[..3], [17 * 33, 149, 17 * 9]);
+    assert_eq!(Kernel::DequantizeBf16.work(&[10, 0]).unwrap().extents[..2], [5, 10]);
+    assert_eq!(Kernel::DequantizeBf16.work(&[10, 1]).unwrap().extents[..2], [6, 10]);
+    assert_eq!(Kernel::DequantizeBf16.work(&[11, 0]).unwrap().extents[..2], [6, 11]);
+    assert!(Kernel::DequantizeBf16.work(&[11, 2]).is_err());
+    assert!(Kernel::ProjectBf16.work(&[1, u32::MAX, 2]).is_err());
+}
+
+#[test]
 fn binned_raster_checks_header_and_address_extents() {
     let work = Kernel::RasterBinned.work(&[320, 200, 1500, 4096, 5000]).unwrap();
     assert_eq!(work.extents[..5], [64000, 18000, 4096, 64000, 5000]);

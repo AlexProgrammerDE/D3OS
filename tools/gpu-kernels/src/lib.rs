@@ -29,6 +29,8 @@ mod raster;
 mod tf32;
 #[cfg(feature = "inference")]
 mod transformer;
+#[cfg(feature = "inference")]
+mod warp;
 
 #[panic_handler]
 fn panic(_: &PanicInfo<'_>) -> ! {

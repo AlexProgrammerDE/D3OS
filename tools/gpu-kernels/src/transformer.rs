@@ -75,6 +75,19 @@ unsafe fn dot(a: u64, a_offset: u32, b: u64, b_offset: u32, width: u32) -> f32 {
     sums.into_iter().sum::<f32>() + tail
 }
 
+#[inline(always)]
+unsafe fn warp_dot(a: u64, a_offset: u32, b: u64, b_offset: u32, width: u32) -> f32 {
+    let lane = super::index() % 32;
+    let mut sum = 0.;
+    let mut k = lane;
+    while k < width {
+        sum += unsafe { read(a, a_offset + k) * read(b, b_offset + k) };
+        k += 32;
+    }
+    // Broadcast lane zero so every row element uses one reduction order.
+    unsafe { super::warp::broadcast(super::warp::sum(sum)) }
+}
+
 /// # Safety
 /// Input and output contain count elements. Exact aliasing is allowed.
 #[unsafe(no_mangle)]
@@ -114,18 +127,22 @@ pub unsafe extern "ptx-kernel" fn silu_mul(input: u64, other: u64, output: u64, 
 /// # Safety
 /// Input/output contain rows*width elements, weights width elements, with no
 /// output overlap. Epsilon is finite and positive, offset is zero or one.
+/// Launch full warps, one warp per row.
 #[unsafe(no_mangle)]
 pub unsafe extern "ptx-kernel" fn rms_norm(input: u64, weights: u64, output: u64, rows: u32, width: u32, epsilon: u32, offset: u32) {
-    let row = super::index();
+    let row = super::index() / 32;
+    let lane = super::index() % 32;
     if row >= rows {
         return;
     }
     let base = row * width;
-    let scale = 1. / sqrt(unsafe { dot(input, base, input, base, width) } / width as f32 + f32::from_bits(epsilon));
-    for i in 0..width {
+    let scale = 1. / sqrt(unsafe { warp_dot(input, base, input, base, width) } / width as f32 + f32::from_bits(epsilon));
+    let mut i = lane;
+    while i < width {
         unsafe {
             write(output, base + i, read(input, base + i) * scale * (f32::from_bits(offset) + read(weights, i)));
         }
+        i += 32;
     }
 }
 
@@ -291,18 +308,35 @@ pub unsafe extern "ptx-kernel" fn delta_update(mixed: u64, scales: u64, state: u
 
 /// # Safety
 /// Raw/gate/output[heads,value_dim], weights[value_dim], disjoint output.
-/// Epsilon is finite and positive.
+/// Epsilon is finite and positive. Launch full warps, one warp per head.
 #[unsafe(no_mangle)]
 pub unsafe extern "ptx-kernel" fn delta_output(raw: u64, weights: u64, gate: u64, output: u64, heads: u32, value_dim: u32, epsilon: u32) {
-    let head = super::index();
+    let head = super::index() / 32;
+    let lane = super::index() % 32;
     if head >= heads {
         return;
     }
     let base = head * value_dim;
-    let scale = 1. / sqrt(unsafe { dot(raw, base, raw, base, value_dim) } / value_dim as f32 + f32::from_bits(epsilon));
-    for i in 0..value_dim {
+    let scale = 1. / sqrt(unsafe { warp_dot(raw, base, raw, base, value_dim) } / value_dim as f32 + f32::from_bits(epsilon));
+    let mut i = lane;
+    while i < value_dim {
         unsafe {
             write(output, base + i, read(raw, base + i) * scale * read(weights, i) * silu(read(gate, base + i)));
+        }
+        i += 32;
+    }
+}
+
+/// # Safety
+/// Input contains ceil((count+half)/2) packed BF16 words, output count FP32
+/// elements. Buffers are disjoint, half is 0 or 1, and count is nonzero.
+#[unsafe(no_mangle)]
+pub unsafe extern "ptx-kernel" fn dequantize_bf16(input: u64, output: u64, count: u32, half: u32) {
+    let i = super::index();
+    if i < count {
+        let bits = unsafe { (input as *const u16).add((u64::from(i) + u64::from(half)) as usize).read() };
+        unsafe {
+            write(output, i, f32::from_bits(u32::from(bits) << 16));
         }
     }
 }

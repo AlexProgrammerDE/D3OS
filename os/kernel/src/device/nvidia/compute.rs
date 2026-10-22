@@ -15,6 +15,7 @@ pub(super) struct Program {
     address: u64,
     bytes: u64,
     registers: u64,
+    local_bytes: u64,
     source: (usize, usize),
 }
 
@@ -30,6 +31,36 @@ pub(super) struct Submission {
 }
 
 impl Compute {
+    pub(super) fn ensure_local_memory(&mut self, device: &Device, required: u64) -> Result<()> {
+        if self.local_bytes_per_thread >= required {
+            return Ok(());
+        }
+        let per_thread = required.checked_add(31).ok_or(Error::Firmware)? & !31;
+        if per_thread >= 1 << 24 || self.local_warps_per_tpc == 0 || self.local_tpc_count == 0 {
+            return Err(Error::Firmware);
+        }
+        let per_tpc = per_thread
+            .checked_mul(32)
+            .and_then(|v| v.checked_mul(self.local_warps_per_tpc))
+            .and_then(|v| v.checked_add(0x7fff))
+            .ok_or(Error::Firmware)?
+            & !0x7fff;
+        let bytes = per_tpc
+            .checked_mul(self.local_tpc_count)
+            .and_then(|v| v.checked_add(0x1ffff))
+            .ok_or(Error::Firmware)?
+            & !0x1ffff;
+        // Driver-private scratch is never exposed through a userspace handle.
+        // Valid shaders initialize their local values before reading them.
+        let allocation = self.memory.allocate_buffer(device, bytes)?;
+        self.local_memory = Some(allocation);
+        self.local_bytes_per_thread = per_thread;
+        self.local_bytes_per_tpc = per_tpc;
+        self.engine_configured = false;
+        info!("NVIDIA_LOCAL_MEMORY_READY per_thread={per_thread} per_tpc={per_tpc} bytes={bytes}");
+        Ok(())
+    }
+
     pub(super) fn prepare_submission(&mut self, device: &Device) -> Result<()> {
         let region = DmaRegion::new(8192)?;
         let physical = region.address as u64;
@@ -105,7 +136,14 @@ impl Compute {
         let mut image = Vec::new();
         let mut entry = None;
         let mut registers = 0;
+        let mut stack_bytes = 0;
         for section in &elf.section_headers {
+            if elf.shdr_strtab.get_at(section.sh_name) == Some(".nv.info") {
+                let metadata = cubin
+                    .get(section.sh_offset as usize..section.sh_offset.checked_add(section.sh_size).ok_or(Error::Firmware)? as usize)
+                    .ok_or(Error::Firmware)?;
+                stack_bytes = stack_bytes.max(d3os_nvidia::cubin::stack_bytes(metadata).map_err(|_| Error::Firmware)?);
+            }
             if section.sh_type != SHT_PROGBITS || section.sh_flags & u64::from(SHF_ALLOC) == 0 {
                 continue;
             }
@@ -135,6 +173,7 @@ impl Compute {
             address: program.virtual_address + entry,
             bytes: code_bytes,
             registers,
+            local_bytes: u64::from(stack_bytes).checked_add(0x240).ok_or(Error::Firmware)?,
             source: (cubin.as_ptr() as usize, cubin.len()),
         };
         self.programs.insert(symbol, program);
@@ -142,12 +181,16 @@ impl Compute {
     }
 
     pub(super) fn launch(&mut self, device: &Device, cubin: &'static [u8], symbol: &'static str, arguments: &[u8], dimensions: [u32; 2]) -> Result<()> {
+        self.last_wait_cycles = 0;
         let [threads, blocks] = dimensions;
         if arguments.len() > 512 || threads == 0 || threads > 1024 || blocks == 0 {
             return Err(Error::Alignment);
         }
         let cached = self.programs.contains_key(symbol);
         let program = self.load_program(device, cubin, symbol)?;
+        // Previous launches have completed before any scratch allocation or
+        // engine-state change. A larger module stack needs a larger QMD limit.
+        self.ensure_local_memory(device, program.local_bytes)?;
         let vram = device.vram.as_ref().ok_or(Error::Firmware)?;
         let submission = self.submission.as_ref().ok_or(Error::Firmware)?;
         let launch = submission.address;
@@ -172,7 +215,7 @@ impl Compute {
             (Q::QMD_GROUP_ID, 0x3f),
             (Q::SM_GLOBAL_CACHING_ENABLE, 1),
             (Q::SHARED_MEMORY_SIZE, 0x400),
-            (Q::SHADER_LOCAL_MEMORY_HIGH_SIZE, 0x240),
+            (Q::SHADER_LOCAL_MEMORY_HIGH_SIZE, self.local_bytes_per_thread),
             (Q::REGISTER_COUNT_V, program.registers),
             (Q::INVALIDATE_TEXTURE_HEADER_CACHE, 1),
             (Q::INVALIDATE_TEXTURE_SAMPLER_CACHE, 1),
@@ -195,7 +238,8 @@ impl Compute {
             (Q::CTA_THREAD_DIMENSION2, 1),
             (Q::CONSTANT_BUFFER_VALID_0, 1),
             (Q::CONSTANT_BUFFER_INVALIDATE_0, 1),
-            (Q::CONSTANT_BUFFER_SIZE_SHIFTED4_0, constants.len() as u64),
+            // QMD v3 encodes this size in 16-byte units.
+            (Q::CONSTANT_BUFFER_SIZE_SHIFTED4_0, (constants.len() / 16) as u64),
             (Q::PROGRAM_ADDRESS_LOWER, (program.address) & 0xffffffff),
             (Q::PROGRAM_ADDRESS_UPPER, (program.address) >> 32),
             (Q::PROGRAM_PREFETCH_ADDR_LOWER_SHIFTED, ((program.address) >> 8) & 0xffffffff),
@@ -255,11 +299,12 @@ impl Compute {
         log::debug!("NVIDIA_KERNEL_SUBMITTED symbol={symbol} qmd={:#x} entry={:#x}", launch, program.address);
         let start = crate::timer().systime_ms();
         // Also wait for the FIFO tail before reusing the command buffer.
+        let wait_start = unsafe { core::arch::x86_64::_rdtsc() };
         while submission.region.read32(SIGNAL)? != 1 || submission.region.read32(SIGNAL + 56)? != 0x2222 {
             if crate::timer().systime_ms().wrapping_sub(start) >= 5000 {
                 self.dump_instance(device)?;
                 log::warn!(
-                    "NVIDIA kernel timeout GPGet={:?} GPPut={:?}",
+                    "NVIDIA kernel timeout symbol={symbol} threads={threads} blocks={blocks} arguments={arguments:02x?} GPGet={:?} GPPut={:?}",
                     vram.read(self.fifo.physical as usize + self.entries * 8 + 0x88),
                     vram.read(self.fifo.physical as usize + self.entries * 8 + 0x8c)
                 );
@@ -279,6 +324,7 @@ impl Compute {
             core::hint::spin_loop();
         }
         fence(Ordering::SeqCst);
+        self.last_wait_cycles = unsafe { core::arch::x86_64::_rdtsc() }.wrapping_sub(wait_start);
         self.engine_configured = true;
         Ok(())
     }
@@ -302,6 +348,25 @@ impl Compute {
                 cycles * 1000 / nanoseconds
             );
         }
+        Ok(())
+    }
+
+    pub(super) fn local_stack_test(&mut self, device: &Device, cubin: &'static [u8]) -> Result<()> {
+        const COUNT: u32 = 257;
+        let output = self.memory.allocate_buffer(device, 4096)?;
+        let mut arguments = Record::<12>::default();
+        arguments.set(Field::<u64>::new(0), output.virtual_address)?;
+        arguments.set(Field::<u32>::new(8), COUNT)?;
+        self.launch(device, cubin, "local_stack_probe", arguments.as_bytes(), [128, COUNT.div_ceil(128)])?;
+        let vram = device.vram.as_ref().ok_or(Error::Firmware)?;
+        for index in 0..COUNT {
+            let seed = index.wrapping_mul(0x9e3779b9);
+            let expected = (0u32..16).fold(0u32, |sum, i| sum.wrapping_add(seed ^ i.wrapping_mul(0x51a6d305)));
+            if vram.read(output.physical as usize + index as usize * 4) != Some(expected) {
+                return Err(Error::Firmware);
+            }
+        }
+        info!("NVIDIA_LOCAL_STACK_OK count={COUNT} backend=nvidia");
         Ok(())
     }
 

@@ -95,7 +95,7 @@ mod device {
                         a0 = in(reg32) ar[0], a1 = in(reg32) ar[1],
                         a2 = in(reg32) ar[2], a3 = in(reg32) ar[3],
                         b0 = in(reg32) br[0], b1 = in(reg32) br[1],
-                        options(nomem, nostack)
+                        options(nostack)
                     );
                 } else {
                     asm!(
@@ -107,7 +107,7 @@ mod device {
                         a0 = in(reg32) ar[0], a1 = in(reg32) ar[1],
                         a2 = in(reg32) ar[2], a3 = in(reg32) ar[3],
                         b0 = in(reg32) br[0], b1 = in(reg32) br[1],
-                        options(nomem, nostack)
+                        options(nostack)
                     );
                 }
             }

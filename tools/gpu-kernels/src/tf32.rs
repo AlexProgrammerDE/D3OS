@@ -4,22 +4,32 @@
 use core::arch::asm;
 
 #[inline(always)]
-unsafe fn projection_vector(a: u64, b: u64, out: u64, inner: u32, cols: u32) {
+unsafe fn weight<const BF16: bool>(address: u64, index: u32) -> f32 {
+    if BF16 {
+        let bits = unsafe { (address as *const u16).add(index as usize).read() };
+        f32::from_bits(u32::from(bits) << 16)
+    } else {
+        unsafe { (address as *const f32).add(index as usize).read() }
+    }
+}
+
+#[inline(always)]
+unsafe fn projection_vector<const BF16: bool, const OUTPUTS: usize>(a: u64, b: u64, out: u64, inner: u32, cols: u32) {
     let index = super::index();
     let lane = index % 32;
-    let column = (index / 32) * 8;
+    let column = (index / 32) * OUTPUTS as u32;
     if column >= cols {
         return;
     }
-    // One warp computes eight outputs. Adjacent lanes read adjacent weights
-    // and reuse each input across those outputs, without padding 15 empty rows.
-    let mut sums = [0.0f32; 8];
+    // Wide matrices reuse each input across eight outputs. Narrow matrices
+    // use one output per warp to occupy more SMs. Both coalesce weight reads.
+    let mut sums = [0.0f32; OUTPUTS];
     let mut k = lane;
     while k < inner {
         let input = unsafe { (a as *const f32).add(k as usize).read() };
-        for j in 0..8 {
+        for j in 0..OUTPUTS as u32 {
             if column + j < cols {
-                let weight = unsafe { (b as *const f32).add(((column + j) * inner + k) as usize).read() };
+                let weight = unsafe { weight::<BF16>(b, (column + j) * inner + k) };
                 unsafe {
                     asm!("fma.rn.f32 {d}, {a}, {b}, {c};", d = out(reg32) sums[j as usize],
                         a = in(reg32) input, b = in(reg32) weight, c = in(reg32) sums[j as usize], options(pure, nomem, nostack));
@@ -29,17 +39,10 @@ unsafe fn projection_vector(a: u64, b: u64, out: u64, inner: u32, cols: u32) {
         k += 32;
     }
     for sum in &mut sums {
-        for shift in [16, 8, 4, 2, 1] {
-            let other: f32;
-            unsafe {
-                asm!("shfl.sync.bfly.b32 {d}, {a}, {shift}, 31, -1;", d = out(reg32) other,
-                    a = in(reg32) *sum, shift = in(reg32) shift, options(pure, nomem, nostack));
-            }
-            *sum += other;
-        }
+        *sum = unsafe { super::warp::sum(*sum) };
     }
     if lane == 0 {
-        for j in 0..8 {
+        for j in 0..OUTPUTS as u32 {
             if column + j < cols {
                 unsafe {
                     (out as *mut f32).add((column + j) as usize).write(sums[j as usize]);
@@ -72,16 +75,20 @@ unsafe fn mma(a: [u32; 4], b: [u32; 2], mut c: [f32; 4]) -> [f32; 4] {
             c2 = inout(reg32) c[2], c3 = inout(reg32) c[3],
             a0 = in(reg32) a[0], a1 = in(reg32) a[1],
             a2 = in(reg32) a[2], a3 = in(reg32) a[3],
-            b0 = in(reg32) b[0], b1 = in(reg32) b[1], options(nomem, nostack)
+            b0 = in(reg32) b[0], b1 = in(reg32) b[1], options(nostack)
         );
     }
     c
 }
 
 #[inline(always)]
-unsafe fn multiply<const TRANSPOSE_B: bool>(a: u64, b: u64, out: u64, rows: u32, inner: u32, cols: u32) {
+unsafe fn multiply<const TRANSPOSE_B: bool, const BF16: bool>(a: u64, b: u64, out: u64, rows: u32, inner: u32, cols: u32) {
     if TRANSPOSE_B && rows == 1 {
-        unsafe { projection_vector(a, b, out, inner, cols) };
+        if cols <= 2048 {
+            unsafe { projection_vector::<BF16, 1>(a, b, out, inner, cols) };
+        } else {
+            unsafe { projection_vector::<BF16, 8>(a, b, out, inner, cols) };
+        }
         return;
     }
     let index = super::index();
@@ -113,11 +120,7 @@ unsafe fn multiply<const TRANSPOSE_B: bool>(a: u64, b: u64, out: u64, rows: u32,
             let k = step * 8 + lane % 4 + element * 4;
             let col = col_base + lane / 4;
             let offset = if TRANSPOSE_B { col * inner + k } else { k * cols + col };
-            let value = if k < inner && col < cols {
-                unsafe { (b as *const f32).add(offset as usize).read() }
-            } else {
-                0.0
-            };
+            let value = if k < inner && col < cols { unsafe { weight::<BF16>(b, offset) } } else { 0.0 };
             (bh[element as usize], bl[element as usize]) = unsafe { split(value) };
         }
         // Keep the MMA's short reductions separate from the long K reduction.
@@ -148,12 +151,22 @@ unsafe fn multiply<const TRANSPOSE_B: bool>(a: u64, b: u64, out: u64, rows: u32,
 /// products fit u32. Launch full warps, at least ceil(M/16)*ceil(N/8) warps.
 #[unsafe(no_mangle)]
 pub unsafe extern "ptx-kernel" fn tensor_matmul_tf32x3(a: u64, b: u64, out: u64, rows: u32, inner: u32, cols: u32) {
-    unsafe { multiply::<false>(a, b, out, rows, inner, cols) };
+    unsafe { multiply::<false, false>(a, b, out, rows, inner, cols) };
 }
 
 /// # Safety
-/// Same requirements as GEMM, except B is stored as B[N,K].
+/// Same bounds as GEMM, except B is stored as B[N,K]. Launch full warps:
+/// ceil(M/16)*ceil(N/8) warps, or N warps when M=1 and N<=2048.
 #[unsafe(no_mangle)]
 pub unsafe extern "ptx-kernel" fn tensor_project_tf32x3(a: u64, b: u64, out: u64, rows: u32, inner: u32, cols: u32) {
-    unsafe { multiply::<true>(a, b, out, rows, inner, cols) };
+    unsafe { multiply::<true, false>(a, b, out, rows, inner, cols) };
+}
+
+/// # Safety
+/// A[M,K] and output[M,N] contain FP32 values. B[N,K] contains packed BF16.
+/// Buffers are disjoint, products fit u32, and the launch covers full warps
+/// with the same tiling as tensor_project_tf32x3. Accumulation remains FP32.
+#[unsafe(no_mangle)]
+pub unsafe extern "ptx-kernel" fn tensor_project_bf16_weights(a: u64, b: u64, out: u64, rows: u32, inner: u32, cols: u32) {
+    unsafe { multiply::<true, true>(a, b, out, rows, inner, cols) };
 }

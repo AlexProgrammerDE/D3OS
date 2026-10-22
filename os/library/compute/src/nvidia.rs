@@ -36,10 +36,19 @@ fn dimension(value: usize) -> Result<u32> {
     u32::try_from(value).map_err(|_| Error::SizeOverflow)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Storage {
+    F32,
+    Bf16,
+    Words,
+}
+
 #[derive(Debug)]
 pub struct GpuBuffer<T = f32> {
     handle: u64,
     elements: usize,
+    words: usize,
+    storage: Storage,
     element: core::marker::PhantomData<T>,
 }
 
@@ -62,6 +71,16 @@ impl<T> Drop for GpuBuffer<T> {
 pub struct Nvidia;
 
 impl Nvidia {
+    pub fn profile(&self) -> Result<[abi::ProfileEntry; abi::KERNEL_COUNT]> {
+        let mut entries = [abi::ProfileEntry::default(); abi::KERNEL_COUNT];
+        request(Request {
+            pointer: entries.as_mut_ptr() as u64,
+            elements: abi::KERNEL_COUNT as u64,
+            ..operation(abi::PROFILE)
+        })?;
+        Ok(entries)
+    }
+
     pub fn new() -> Result<Self> {
         if request(operation(abi::INFO))? != abi::VERSION as usize {
             return Err(Error::DeviceUnavailable);
@@ -84,6 +103,8 @@ impl Nvidia {
         Ok(GpuBuffer {
             handle,
             elements,
+            words: elements,
+            storage: Storage::F32,
             element: core::marker::PhantomData,
         })
     }
@@ -93,36 +114,75 @@ impl Nvidia {
         Ok(())
     }
 
-    fn prepare<T>(&self, kernel: Kernel, buffers: &[(&GpuBuffer<T>, usize)], parameters: &[usize]) -> Result<Request> {
+    fn command(&self, kernel: Kernel, parameters: &[usize]) -> Result<(Request, abi::Work)> {
         let mut call = Request {
             kernel: kernel as u32,
-            buffer_count: buffers.len() as u32,
             parameter_count: parameters.len() as u32,
             ..operation(abi::LAUNCH)
         };
-        if buffers.len() > call.buffers.len() || parameters.len() > call.parameters.len() {
+        if parameters.len() > call.parameters.len() {
             return Err(Error::InvalidParameter);
         }
         for (dest, &value) in call.parameters.iter_mut().zip(parameters) {
             *dest = dimension(value)?;
         }
         let work = kernel.work(&call.parameters[..parameters.len()]).map_err(|_| Error::InvalidParameter)?;
-        if buffers.len() != work.pointers {
+        call.buffer_count = work.pointers as u32;
+        Ok((call, work))
+    }
+
+    fn bind<T>(call: &mut Request, buffers: &[(&GpuBuffer<T>, usize)], extents: &[u64]) -> Result<()> {
+        if buffers.len() != extents.len() || buffers.len() > call.buffers.len() {
             return Err(Error::InvalidParameter);
         }
-        for (i, &(buffer, offset)) in buffers.iter().enumerate() {
-            if (offset as u64).checked_add(work.extents[i]).is_none_or(|end| end > buffer.elements as u64) {
+        let kernel = Kernel::from_raw(call.kernel).map_err(|_| Error::InvalidParameter)?;
+        for (i, (&(buffer, offset), &extent)) in buffers.iter().zip(extents).enumerate() {
+            let packed = matches!((kernel, i), (Kernel::ProjectBf16, 1) | (Kernel::DequantizeBf16, 0));
+            if buffer.storage != Storage::Words && (buffer.storage == Storage::Bf16) != packed {
+                return Err(Error::InvalidParameter);
+            }
+            if (offset as u64).checked_add(extent).is_none_or(|end| end > buffer.words as u64) {
                 return Err(Error::ShapeMismatch);
             }
             call.buffers[i] = buffer.handle;
             call.offsets[i] = offset as u64;
         }
+        Ok(())
+    }
+
+    fn prepare<T>(&self, kernel: Kernel, buffers: &[(&GpuBuffer<T>, usize)], parameters: &[usize]) -> Result<Request> {
+        let (mut call, work) = self.command(kernel, parameters)?;
+        Self::bind(&mut call, buffers, &work.extents[..work.pointers])?;
         Ok(call)
+    }
+
+    fn produce(&self, shape: &[usize], kernel: Kernel, inputs: &[(&GpuBuffer, usize)], parameters: &[usize]) -> Result<Tensor<Self>> {
+        let elements = element_count(shape)?;
+        let (mut call, work) = self.command(kernel, parameters)?;
+        if !kernel.allocates_output() || work.output != inputs.len() || work.pointers != inputs.len() + 1 || work.extents[work.output] != elements as u64 {
+            return Err(Error::InvalidParameter);
+        }
+        Self::bind(&mut call, inputs, &work.extents[..inputs.len()])?;
+        call.operation = abi::LAUNCH_ALLOCATE;
+        call.elements = elements as u64;
+        let handle = request(call)? as u64;
+        Tensor::from_buffer(
+            shape,
+            GpuBuffer {
+                handle,
+                elements,
+                words: elements,
+                storage: Storage::F32,
+                element: core::marker::PhantomData,
+            },
+        )
     }
 
     /// Allocate zeroed, process-owned words for native non-tensor compute.
     pub fn allocate_words(&self, elements: usize) -> Result<GpuBuffer<u32>> {
-        self.allocate_storage(elements)
+        let mut buffer = self.allocate_storage(elements)?;
+        buffer.storage = Storage::Words;
+        Ok(buffer)
     }
 
     pub fn upload_words(&self, values: &[u32]) -> Result<GpuBuffer<u32>> {
@@ -191,7 +251,62 @@ impl Backend for Nvidia {
         Ok(tensor.buffer)
     }
 
+    fn upload_bf16(&self, values: impl ExactSizeIterator<Item = u16>) -> Result<GpuBuffer> {
+        let elements = values.len();
+        element_count(&[elements])?;
+        dimension(elements)?;
+        let mut words = Vec::new();
+        words.try_reserve_exact(elements.div_ceil(2)).map_err(|_| Error::AllocationFailed)?;
+        let mut count = 0;
+        for value in values {
+            if value & 0x7f80 == 0x7f80 {
+                return Err(Error::NonFinite);
+            }
+            if count % 2 == 0 {
+                words.push(u32::from(value));
+            } else {
+                *words.last_mut().ok_or(Error::InvalidParameter)? |= u32::from(value) << 16;
+            }
+            count += 1;
+        }
+        if count != elements {
+            return Err(Error::InvalidParameter);
+        }
+        let mut buffer = self.allocate_storage::<f32>(words.len())?;
+        request(Request {
+            handle: buffer.handle,
+            pointer: words.as_ptr() as u64,
+            elements: words.len() as u64,
+            ..operation(abi::UPLOAD)
+        })?;
+        buffer.elements = elements;
+        buffer.storage = Storage::Bf16;
+        Ok(buffer)
+    }
+
     fn download(&self, tensor: &Tensor<Self>) -> Result<Vec<f32>> {
+        if tensor.buffer.storage == Storage::Bf16 {
+            let mut words = Vec::new();
+            words.try_reserve_exact(tensor.buffer.words).map_err(|_| Error::AllocationFailed)?;
+            words.resize(tensor.buffer.words, 0u32);
+            request(Request {
+                handle: tensor.buffer.handle,
+                pointer: words.as_mut_ptr() as u64,
+                elements: words.len() as u64,
+                ..operation(abi::DOWNLOAD)
+            })?;
+            let mut values = Vec::new();
+            values.try_reserve_exact(tensor.len()).map_err(|_| Error::AllocationFailed)?;
+            for i in 0..tensor.len() {
+                let bits = ((words[i / 2] >> ((i % 2) * 16)) & 0xffff) << 16;
+                let value = f32::from_bits(bits);
+                if !value.is_finite() {
+                    return Err(Error::NonFinite);
+                }
+                values.push(value);
+            }
+            return Ok(values);
+        }
         let mut values = Vec::new();
         values.try_reserve_exact(tensor.len()).map_err(|_| Error::AllocationFailed)?;
         values.resize(tensor.len(), 0.0);
@@ -214,9 +329,7 @@ impl Backend for Nvidia {
         if inner != other_inner {
             return Err(Error::ShapeMismatch);
         }
-        let output = self.allocate(&[*rows, *cols])?;
-        self.launch(Kernel::Matmul, &[(&a.buffer, 0), (&b.buffer, 0), (&output.buffer, 0)], &[*rows, *inner, *cols])?;
-        Ok(output)
+        self.produce(&[*rows, *cols], Kernel::Matmul, &[(&a.buffer, 0), (&b.buffer, 0)], &[*rows, *inner, *cols])
     }
 
     fn linear(&self, input: &Tensor<Self>, weights: &Tensor<Self>, bias: &Tensor<Self>) -> Result<Tensor<Self>> {
@@ -226,10 +339,14 @@ impl Backend for Nvidia {
         if features != weight_features || outputs != bias_outputs {
             return Err(Error::ShapeMismatch);
         }
-        let output = self.allocate(&[*batch, *outputs])?;
-        self.launch(
-            Kernel::Project,
-            &[(&input.buffer, 0), (&weights.buffer, 0), (&output.buffer, 0)],
+        let output = self.produce(
+            &[*batch, *outputs],
+            if weights.buffer.storage == Storage::Bf16 {
+                Kernel::ProjectBf16
+            } else {
+                Kernel::Project
+            },
+            &[(&input.buffer, 0), (&weights.buffer, 0)],
             &[*batch, *features, *outputs],
         )?;
         self.launch(

@@ -57,7 +57,8 @@ static void benchmark(Handle function, Handle blas, unsigned rows, unsigned inne
         free(values);
     }
     void *arguments[] = {&buffers[0], &buffers[1], &buffers[2], &rows, &inner, &cols};
-    const unsigned blocks = (((rows + 15) / 16) * ((cols + 7) / 8) + 3) / 4;
+    const unsigned tile = rows == 1 && cols <= 2048 ? 1 : 8;
+    const unsigned blocks = (((rows + 15) / 16) * ((cols + tile - 1) / tile) + 3) / 4;
     Handle start, stop;
     CHECK(cuEventCreate(&start, 0));
     CHECK(cuEventCreate(&stop, 0));

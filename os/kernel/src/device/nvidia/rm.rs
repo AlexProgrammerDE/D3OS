@@ -31,6 +31,9 @@ pub(super) struct Compute {
     pub(super) instance: u64,
     runlist: u32,
     pub(super) local_bytes_per_tpc: u64,
+    pub(super) local_bytes_per_thread: u64,
+    pub(super) local_warps_per_tpc: u64,
+    pub(super) local_tpc_count: u64,
     pub(super) local_memory: Option<Allocation>,
     reserved_virtual: u64,
     pub(super) put: usize,
@@ -41,6 +44,8 @@ pub(super) struct Compute {
     pub(super) healthy: bool,
     pub(super) inference_module: Option<&'static [u8]>,
     pub(super) staging: Option<super::transfer::Staging>,
+    pub(super) profile: [d3os_nvidia::compute::ProfileEntry; d3os_nvidia::compute::KERNEL_COUNT],
+    pub(super) last_wait_cycles: u64,
 }
 
 impl Device {
@@ -69,6 +74,9 @@ impl Compute {
             instance: 0,
             runlist: 0,
             local_bytes_per_tpc: 0,
+            local_bytes_per_thread: 0,
+            local_warps_per_tpc: 0,
+            local_tpc_count: 0,
             local_memory: None,
             reserved_virtual: 0,
             put: 0,
@@ -79,6 +87,8 @@ impl Compute {
             healthy: true,
             inference_module: None,
             staging: None,
+            profile: [d3os_nvidia::compute::ProfileEntry::default(); d3os_nvidia::compute::KERNEL_COUNT],
+            last_wait_cycles: 0,
         })
     }
 
@@ -314,10 +324,10 @@ impl Compute {
             ))
         };
         let (warps, gpcs, tpcs, sms) = (value(13)?, value(20)?, value(23)?, value(32)?);
-        self.local_bytes_per_tpc = (0x240 * 32 * warps * sms + 0x7fff) & !0x7fff;
-        let local_bytes = (self.local_bytes_per_tpc * gpcs * tpcs + 0x1ffff) & !0x1ffff;
-        info!("NVIDIA topology gpcs={gpcs} tpcs_per_gpc={tpcs} sm_per_tpc={sms} warps_per_sm={warps} local_bytes={local_bytes:#x}");
-        self.local_memory = Some(self.memory.allocate(device, local_bytes, 0x20000)?);
+        self.local_warps_per_tpc = warps * sms;
+        self.local_tpc_count = gpcs * tpcs;
+        info!("NVIDIA topology gpcs={gpcs} tpcs_per_gpc={tpcs} sm_per_tpc={sms} warps_per_sm={warps}");
+        self.ensure_local_memory(device, 0x240)?;
         let mut boost = Record::<{ PerfBoost::SIZE }>::default();
         boost.set(PerfBoost::duration, u32::MAX)?;
         boost.set(PerfBoost::flags, 0x52)?;

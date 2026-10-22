@@ -379,6 +379,14 @@ def main():
                             "native coherent staging transfer verification did not succeed"
                         )
                     if (
+                        args.kernels
+                        and (args.kernels / "inference.cubin").is_file()
+                        and "NVIDIA_LOCAL_STACK_OK count=257 backend=nvidia" not in text
+                    ):
+                        raise RuntimeError(
+                            "native GPU local-stack verification did not succeed"
+                        )
+                    if (
                         args.inference == "gpu-qwen"
                         and "INFERENCE_OK qwen backend=nvidia tokens=1 stop=EndOfSequence"
                         not in text

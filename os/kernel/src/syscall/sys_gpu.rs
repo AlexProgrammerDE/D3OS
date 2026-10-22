@@ -37,6 +37,13 @@ pub extern "sysv64" fn sys_gpu_compute(pointer: *const Request) -> isize {
         return Errno::EINVAL as isize;
     }
     let request = unsafe { pointer.read_unaligned() };
+    if request.operation == abi::PROFILE {
+        if request.elements != abi::KERNEL_COUNT as u64
+            || !valid_range(&process, request.pointer, (size_of::<abi::ProfileEntry>() * abi::KERNEL_COUNT) as u64, true)
+        {
+            return Errno::EINVAL as isize;
+        }
+    }
     if matches!(request.operation, abi::UPLOAD | abi::DOWNLOAD) {
         let Some(bytes) = request.elements.checked_mul(4) else {
             return Errno::EINVAL as isize;

@@ -35,7 +35,13 @@ impl Compute {
         for parameter in parameters {
             arguments.extend_from_slice(&parameter.to_le_bytes());
         }
+        let start = unsafe { core::arch::x86_64::_rdtsc() };
         let result = self.launch(device, module, kernel.symbol(), &arguments, [work.threads, work.blocks]);
+        let cycles = unsafe { core::arch::x86_64::_rdtsc() }.wrapping_sub(start);
+        let profile = &mut self.profile[kernel as usize];
+        profile.calls = profile.calls.wrapping_add(1);
+        profile.cycles = profile.cycles.wrapping_add(cycles);
+        profile.wait_cycles = profile.wait_cycles.wrapping_add(self.last_wait_cycles);
         if result.is_err() {
             self.healthy = false;
         }

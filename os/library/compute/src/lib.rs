@@ -146,6 +146,19 @@ pub trait Backend: Sized {
 
     fn name(&self) -> &'static str;
     fn upload(&self, values: Vec<f32>) -> Result<Self::Buffer>;
+    /// Upload finite, exact BF16 weights. Backends can keep packed storage for supported
+    /// weight operations or expand it without changing the represented values.
+    fn upload_bf16(&self, values: impl ExactSizeIterator<Item = u16>) -> Result<Self::Buffer> {
+        let mut expanded = Vec::new();
+        expanded.try_reserve_exact(values.len()).map_err(|_| Error::AllocationFailed)?;
+        for value in values {
+            if value & 0x7f80 == 0x7f80 {
+                return Err(Error::NonFinite);
+            }
+            expanded.push(f32::from_bits(u32::from(value) << 16));
+        }
+        self.upload(expanded)
+    }
     fn download(&self, tensor: &Tensor<Self>) -> Result<Vec<f32>>;
     fn matmul(&self, a: &Tensor<Self>, b: &Tensor<Self>) -> Result<Tensor<Self>>;
     /// Weights have shape [output_features, input_features]. Bias has shape [output_features].

@@ -9,6 +9,20 @@ pub const FREE: u32 = 2;
 pub const UPLOAD: u32 = 3;
 pub const DOWNLOAD: u32 = 4;
 pub const LAUNCH: u32 = 5;
+pub const PROFILE: u32 = 6;
+/// Allocate and fully overwrite an output before its handle becomes visible.
+pub const LAUNCH_ALLOCATE: u32 = 7;
+pub const KERNEL_COUNT: usize = 26;
+
+/// Device-wide CPU cycle counters. Read snapshots around an exclusive workload
+/// and subtract them. Wait cycles include GPU execution and completion polling.
+#[derive(Clone, Copy, Debug, Default)]
+#[repr(C)]
+pub struct ProfileEntry {
+    pub calls: u64,
+    pub cycles: u64,
+    pub wait_cycles: u64,
+}
 
 #[derive(Clone, Copy, Default)]
 #[repr(C)]
@@ -54,7 +68,11 @@ pub enum Kernel {
     Palette = 21,
     Fuzz = 22,
     RasterBinned = 23,
+    ProjectBf16 = 24,
+    DequantizeBf16 = 25,
 }
+
+const _: () = assert!(Kernel::DequantizeBf16 as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -78,6 +96,12 @@ fn product(values: &[u32]) -> Result<u32> {
 }
 
 impl Kernel {
+    /// These kernels write every output element for every valid work shape.
+    /// Partial writers must never expose uncleared allocations through this API.
+    pub fn allocates_output(self) -> bool {
+        matches!(self, Self::Matmul | Self::Project | Self::RmsNorm | Self::ProjectBf16)
+    }
+
     pub fn from_raw(raw: u32) -> Result<Self> {
         Ok(match raw {
             0 => Self::Matmul,
@@ -104,6 +128,8 @@ impl Kernel {
             21 => Self::Palette,
             22 => Self::Fuzz,
             23 => Self::RasterBinned,
+            24 => Self::ProjectBf16,
+            25 => Self::DequantizeBf16,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -134,6 +160,8 @@ impl Kernel {
             Self::Palette => "palette_scale",
             Self::Fuzz => "raster_fuzz",
             Self::RasterBinned => "raster_binned",
+            Self::ProjectBf16 => "tensor_project_bf16_weights",
+            Self::DequantizeBf16 => "dequantize_bf16",
         }
     }
 
@@ -141,6 +169,19 @@ impl Kernel {
         let mut extents = [0; 16];
         let mut mutated = 0;
         let (count, pointers, output, in_place) = match (self, p) {
+            (Self::ProjectBf16, &[m, k, n]) => {
+                extents[..3].copy_from_slice(&[product(&[m, k])? as u64, u64::from(product(&[k, n])?).div_ceil(2), product(&[m, n])? as u64]);
+                let tile = if m == 1 && n <= 2048 { 1 } else { 8 };
+                (product(&[m.div_ceil(16), n.div_ceil(tile), 32])?, 3, 2, false)
+            }
+            (Self::DequantizeBf16, &[n, half]) => {
+                product(&[n])?;
+                if half > 1 {
+                    return Err(Error::InvalidField);
+                }
+                extents[..2].copy_from_slice(&[(u64::from(n) + u64::from(half)).div_ceil(2), u64::from(n)]);
+                (n, 2, 1, false)
+            }
             (Self::Fuzz, &[width, height, commands, words]) => {
                 extents[..3].copy_from_slice(&[product(&[width, height])? as u64, product(&[commands, 12])? as u64, product(&[words])? as u64]);
                 (1, 3, 0, false)
@@ -175,7 +216,8 @@ impl Kernel {
             }
             (Self::Matmul | Self::Project, &[m, k, n]) => {
                 extents[..3].copy_from_slice(&[product(&[m, k])? as u64, product(&[k, n])? as u64, product(&[m, n])? as u64]);
-                (product(&[m.div_ceil(16), n.div_ceil(8), 32])?, 3, 2, false)
+                let tile = if self == Self::Project && m == 1 && n <= 2048 { 1 } else { 8 };
+                (product(&[m.div_ceil(16), n.div_ceil(tile), 32])?, 3, 2, false)
             }
             (Self::Relu | Self::Copy, &[n]) => {
                 product(&[n])?;
@@ -230,7 +272,7 @@ impl Kernel {
                 }
                 let n = product(&[rows, width])? as u64;
                 extents[..3].copy_from_slice(&[n, width as u64, n]);
-                (rows, 3, 2, false)
+                (product(&[rows, 32])?, 3, 2, false)
             }
             (Self::AttentionPrepare, &[heads, dim, rotary, position, theta, epsilon, stride]) => {
                 positive_float(theta)?;
@@ -292,7 +334,7 @@ impl Kernel {
                 positive_float(epsilon)?;
                 let n = product(&[heads, value])? as u64;
                 extents[..4].copy_from_slice(&[n, value as u64, n, n]);
-                (heads, 4, 3, false)
+                (product(&[heads, 32])?, 4, 3, false)
             }
             _ => return Err(Error::InvalidField),
         };

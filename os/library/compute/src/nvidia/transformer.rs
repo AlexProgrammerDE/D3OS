@@ -1,4 +1,4 @@
-use super::{Nvidia, request};
+use super::{Nvidia, Storage, request};
 use crate::transformer::{AttentionConfig, AttentionInputs, AttentionState, DeltaConfig, DeltaInputs, DeltaState, TransformerBackend};
 use crate::{Error, Result, Tensor, element_count};
 use d3os_nvidia::compute::Kernel;
@@ -16,7 +16,15 @@ impl TransformerBackend for Nvidia {
             return Err(Error::InvalidParameter);
         }
         let output = self.allocate(&[1, *width])?;
-        self.launch(Kernel::Copy, &[(&table.buffer, token * width), (&output.buffer, 0)], &[*width])?;
+        if table.buffer.storage == Storage::Bf16 {
+            self.launch(
+                Kernel::DequantizeBf16,
+                &[(&table.buffer, token * width / 2), (&output.buffer, 0)],
+                &[*width, token * width % 2],
+            )?;
+        } else {
+            self.launch(Kernel::Copy, &[(&table.buffer, token * width), (&output.buffer, 0)], &[*width])?;
+        }
         Ok(output)
     }
 
@@ -27,13 +35,16 @@ impl TransformerBackend for Nvidia {
         if width != inner {
             return Err(Error::ShapeMismatch);
         }
-        let output = self.allocate(&[*batch, *outputs])?;
-        self.launch(
-            Kernel::Project,
-            &[(&input.buffer, 0), (&weights.buffer, 0), (&output.buffer, 0)],
+        self.produce(
+            &[*batch, *outputs],
+            if weights.buffer.storage == Storage::Bf16 {
+                Kernel::ProjectBf16
+            } else {
+                Kernel::Project
+            },
+            &[(&input.buffer, 0), (&weights.buffer, 0)],
             &[*batch, *width, *outputs],
-        )?;
-        Ok(output)
+        )
     }
 
     fn rms_norm(&self, input: &Tensor<Self>, weights: &Tensor<Self>, epsilon: f32) -> Result<Tensor<Self>> {
@@ -43,13 +54,12 @@ impl TransformerBackend for Nvidia {
         if weights.shape() != [width] || !positive(epsilon) {
             return Err(Error::InvalidParameter);
         }
-        let output = self.allocate(input.shape())?;
-        self.launch(
+        self.produce(
+            input.shape(),
             Kernel::RmsNorm,
-            &[(&input.buffer, 0), (&weights.buffer, 0), (&output.buffer, 0)],
+            &[(&input.buffer, 0), (&weights.buffer, 0)],
             &[input.len() / width, width, epsilon.to_bits() as usize, 1f32.to_bits() as usize],
-        )?;
-        Ok(output)
+        )
     }
 
     fn add(&self, input: Tensor<Self>, residual: &Tensor<Self>) -> Result<Tensor<Self>> {

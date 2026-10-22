@@ -31,3 +31,29 @@ pub unsafe extern "ptx-kernel" fn clock_probe(output: u64) {
         (output as *mut u64).add(1).write(end_time.wrapping_sub(start_time));
     }
 }
+
+/// # Safety
+/// Output contains count words. This diagnostic deliberately uses a local
+/// stack frame to validate the driver's metadata-derived scratch allocation.
+#[unsafe(no_mangle)]
+pub unsafe extern "ptx-kernel" fn local_stack_probe(output: u64, count: u32) {
+    let index = super::index();
+    if index >= count {
+        return;
+    }
+    let seed = index.wrapping_mul(0x9e3779b9);
+    let mut scratch = [0u32; 16];
+    let pointer = scratch.as_mut_ptr();
+    for i in 0..16 {
+        unsafe {
+            pointer.add(i).write_volatile(seed ^ (i as u32).wrapping_mul(0x51a6d305));
+        }
+    }
+    let mut checksum = 0u32;
+    for i in 0..16 {
+        checksum = checksum.wrapping_add(unsafe { pointer.add(((i * 7) as u32 + (seed & 15)) as usize % 16).read_volatile() });
+    }
+    unsafe {
+        (output as *mut u32).add(index as usize).write(checksum);
+    }
+}

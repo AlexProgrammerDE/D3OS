@@ -4,8 +4,9 @@
 extern crate alloc;
 
 pub mod abi;
-pub mod context;
 pub mod compute;
+pub mod context;
+pub mod cubin;
 pub mod firmware;
 pub mod rpc;
 

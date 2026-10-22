@@ -82,6 +82,7 @@ def main():
                 else (
                     ("tensor_matmul_tf32x3", r"\bHMMA\.1688\.F32\.TF32\s"),
                     ("tensor_project_tf32x3", r"\bHMMA\.1688\.F32\.TF32\s"),
+                    ("tensor_project_bf16_weights", r"\bHMMA\.1688\.F32\.TF32\s"),
                 )
             )
             tensor["entrypoints"] = [entry for entry, _ in instructions]
@@ -107,6 +108,20 @@ def main():
                             f"{entry} has no expected tensor instruction"
                         )
                 tensor["sass_verified"] = True
+                if kind == "inference":
+                    stack = re.search(
+                        r"^\.text\.local_stack_probe:$(.*?)(?=^\.text\.|\Z)",
+                        sass,
+                        re.MULTILINE | re.DOTALL,
+                    )
+                    if not stack or not all(
+                        re.search(pattern, stack.group(1))
+                        for pattern in (r"\bLDL\b", r"\bSTL\b")
+                    ):
+                        raise RuntimeError(
+                            "local_stack_probe has no local-memory load/store instructions"
+                        )
+                    tensor["local_stack_sass_verified"] = True
     (args.output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
 

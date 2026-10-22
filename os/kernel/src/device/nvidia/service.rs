@@ -83,6 +83,16 @@ pub(crate) fn request(owner: Uuid, request: &Request) -> SyscallResult {
 
 fn serve(device: &Device, compute: &mut super::rm::Compute, owner: Uuid, request: &Request) -> SyscallResult {
     match request.operation {
+        abi::PROFILE => {
+            if request.elements != abi::KERNEL_COUNT as u64 {
+                return Err(Errno::EINVAL);
+            }
+            // sys_gpu_compute validated the complete writable user range.
+            unsafe {
+                core::ptr::copy_nonoverlapping(compute.profile.as_ptr().cast::<u8>(), request.pointer as *mut u8, size_of_val(&compute.profile));
+            }
+            Ok(0)
+        }
         abi::INFO => {
             // The complete inference module must exist; a register probe alone
             // is not an operational userspace backend.
@@ -100,27 +110,7 @@ fn serve(device: &Device, compute: &mut super::rm::Compute, owner: Uuid, request
             if request.elements > u32::MAX as u64 {
                 return Err(Errno::EINVAL);
             }
-            let allocation = if let Some((index, _)) = compute
-                .buffers
-                .free
-                .iter()
-                .enumerate()
-                .filter(|(_, b)| b.bytes >= bytes)
-                .min_by_key(|(_, b)| b.bytes)
-            {
-                let mut allocation = compute.buffers.free.swap_remove(index);
-                if allocation.bytes > bytes {
-                    compute.buffers.free.push(Allocation {
-                        physical: allocation.physical + bytes,
-                        virtual_address: allocation.virtual_address + bytes,
-                        bytes: allocation.bytes - bytes,
-                    });
-                    allocation.bytes = bytes;
-                }
-                allocation
-            } else {
-                compute.memory.allocate_buffer(device, bytes).map_err(|_| Errno::ENOMEM)?
-            };
+            let allocation = allocate(device, compute, bytes)?;
             inference_module(compute)?;
             // Clear fresh and recycled storage before exposing a handle. The
             // queue completes before another process can reuse this allocation.
@@ -166,28 +156,99 @@ fn serve(device: &Device, compute: &mut super::rm::Compute, owner: Uuid, request
             })?;
             Ok(0)
         }
-        abi::LAUNCH => {
+        abi::LAUNCH | abi::LAUNCH_ALLOCATE => {
             let kernel = Kernel::from_raw(request.kernel).map_err(|_| Errno::ENOTSUP)?;
             let parameters = request.parameters.get(..request.parameter_count as usize).ok_or(Errno::EINVAL)?;
             let work = kernel.work(parameters).map_err(|_| Errno::EINVAL)?;
             if request.buffer_count as usize != work.pointers {
                 return Err(Errno::EINVAL);
             }
+            let produce = request.operation == abi::LAUNCH_ALLOCATE;
+            if produce
+                && (!kernel.allocates_output()
+                    || request.elements != work.extents[work.output]
+                    || request.buffers[work.output] != 0
+                    || request.offsets[work.output] != 0)
+            {
+                return Err(Errno::EINVAL);
+            }
             let mut addresses = [0u64; 16];
             for (i, address) in addresses.iter_mut().enumerate().take(work.pointers) {
+                if produce && i == work.output {
+                    continue;
+                }
                 let buffer = compute.buffers.get(request.buffers[i], owner)?;
                 if request.offsets[i].checked_add(work.extents[i]).is_none_or(|end| end > buffer.elements) {
                     return Err(Errno::EINVAL);
                 }
                 *address = buffer.allocation.virtual_address + request.offsets[i] * 4;
             }
-            work.validate_aliases(&addresses[..work.pointers]).map_err(|_| Errno::EINVAL)?;
             inference_module(compute)?;
+            let output = if produce {
+                // All inputs were checked before allocation. Do not publish the
+                // new handle until a proven full writer completes successfully.
+                let bytes = request.elements.checked_mul(4).and_then(|n| n.checked_add(4095)).ok_or(Errno::EINVAL)? & !4095;
+                let handle = compute
+                    .buffers
+                    .next
+                    .checked_add(1)
+                    .filter(|&n| n <= isize::MAX as u64)
+                    .ok_or(Errno::ENOHANDLES)?;
+                let allocation = allocate(device, compute, bytes)?;
+                addresses[work.output] = allocation.virtual_address;
+                Some((handle, allocation))
+            } else {
+                None
+            };
+            if work.validate_aliases(&addresses[..work.pointers]).is_err() {
+                if let Some((_, allocation)) = output {
+                    compute.buffers.recycle(allocation);
+                }
+                return Err(Errno::EINVAL);
+            }
             gpu_result(compute.dispatch(device, kernel, &addresses[..work.pointers], parameters))?;
-            Ok(0)
+            if let Some((handle, allocation)) = output {
+                compute.buffers.next = handle;
+                compute.buffers.live.insert(
+                    handle,
+                    Buffer {
+                        owner,
+                        allocation,
+                        elements: request.elements,
+                    },
+                );
+                Ok(handle as usize)
+            } else {
+                Ok(0)
+            }
         }
         _ => Err(Errno::EINVAL),
     }
+}
+
+fn allocate(device: &Device, compute: &mut super::rm::Compute, bytes: u64) -> Result<Allocation, Errno> {
+    let allocation = if let Some((index, _)) = compute
+        .buffers
+        .free
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| b.bytes >= bytes)
+        .min_by_key(|(_, b)| b.bytes)
+    {
+        let mut allocation = compute.buffers.free.swap_remove(index);
+        if allocation.bytes > bytes {
+            compute.buffers.free.push(Allocation {
+                physical: allocation.physical + bytes,
+                virtual_address: allocation.virtual_address + bytes,
+                bytes: allocation.bytes - bytes,
+            });
+            allocation.bytes = bytes;
+        }
+        allocation
+    } else {
+        compute.memory.allocate_buffer(device, bytes).map_err(|_| Errno::ENOMEM)?
+    };
+    Ok(allocation)
 }
 
 fn gpu_result(result: super::Result<()>) -> Result<(), Errno> {
