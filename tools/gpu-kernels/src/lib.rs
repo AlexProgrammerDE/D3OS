@@ -20,13 +20,15 @@ const _: () = assert!(
 mod tensor;
 
 #[cfg(feature = "inference")]
+mod diagnostic;
+#[cfg(feature = "inference")]
 mod inference;
+#[cfg(feature = "inference")]
+mod raster;
 #[cfg(feature = "inference")]
 mod tf32;
 #[cfg(feature = "inference")]
 mod transformer;
-#[cfg(feature = "inference")]
-mod raster;
 
 #[panic_handler]
 fn panic(_: &PanicInfo<'_>) -> ! {

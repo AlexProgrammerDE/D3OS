@@ -4,6 +4,52 @@
 use core::arch::asm;
 
 #[inline(always)]
+unsafe fn projection_vector(a: u64, b: u64, out: u64, inner: u32, cols: u32) {
+    let index = super::index();
+    let lane = index % 32;
+    let column = (index / 32) * 8;
+    if column >= cols {
+        return;
+    }
+    // One warp computes eight outputs. Adjacent lanes read adjacent weights
+    // and reuse each input across those outputs, without padding 15 empty rows.
+    let mut sums = [0.0f32; 8];
+    let mut k = lane;
+    while k < inner {
+        let input = unsafe { (a as *const f32).add(k as usize).read() };
+        for j in 0..8 {
+            if column + j < cols {
+                let weight = unsafe { (b as *const f32).add(((column + j) * inner + k) as usize).read() };
+                unsafe {
+                    asm!("fma.rn.f32 {d}, {a}, {b}, {c};", d = out(reg32) sums[j as usize],
+                        a = in(reg32) input, b = in(reg32) weight, c = in(reg32) sums[j as usize], options(pure, nomem, nostack));
+                }
+            }
+        }
+        k += 32;
+    }
+    for sum in &mut sums {
+        for shift in [16, 8, 4, 2, 1] {
+            let other: f32;
+            unsafe {
+                asm!("shfl.sync.bfly.b32 {d}, {a}, {shift}, 31, -1;", d = out(reg32) other,
+                    a = in(reg32) *sum, shift = in(reg32) shift, options(pure, nomem, nostack));
+            }
+            *sum += other;
+        }
+    }
+    if lane == 0 {
+        for j in 0..8 {
+            if column + j < cols {
+                unsafe {
+                    (out as *mut f32).add((column + j) as usize).write(sums[j as usize]);
+                }
+            }
+        }
+    }
+}
+
+#[inline(always)]
 unsafe fn split(value: f32) -> (u32, u32) {
     let high: u32;
     let low: u32;
@@ -34,6 +80,10 @@ unsafe fn mma(a: [u32; 4], b: [u32; 2], mut c: [f32; 4]) -> [f32; 4] {
 
 #[inline(always)]
 unsafe fn multiply<const TRANSPOSE_B: bool>(a: u64, b: u64, out: u64, rows: u32, inner: u32, cols: u32) {
+    if TRANSPOSE_B && rows == 1 {
+        unsafe { projection_vector(a, b, out, inner, cols) };
+        return;
+    }
     let index = super::index();
     let lane = index % 32;
     let tile = index / 32;

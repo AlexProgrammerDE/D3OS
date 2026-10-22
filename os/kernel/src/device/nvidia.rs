@@ -269,6 +269,7 @@ pub fn bootstrap() {
         device.registers.write(0x1704, 0)?;
         let mut compute = rm::Compute::new(&device)?;
         let result = compute.initialize(&mut device).and_then(|()| {
+            compute.prepare_submission(&device)?;
             compute.queue_test(&device)?;
             if let Ok(cubin) = gsp::asset("usr/share/nvidia/vector-add.cubin") {
                 compute.vector_add_test(&device, cubin)?;
@@ -278,6 +279,7 @@ pub fn bootstrap() {
             }
             if let Ok(cubin) = gsp::asset("usr/share/nvidia/inference.cubin") {
                 compute.inference_module = Some(cubin);
+                compute.clock_probe(&device, cubin)?;
                 compute.prepare_staging(&device)?;
                 compute.transfer_test(&device)?;
             }

@@ -1,6 +1,6 @@
 //! SASS loading, QMD construction, and submission to the native compute FIFO.
 
-use super::{Device, Error, Result, rm::Compute};
+use super::{Device, Error, Result, gsp::DmaRegion, rm::Compute};
 use alloc::vec::Vec;
 use core::sync::atomic::{Ordering, fence};
 use d3os_nvidia::{Field, Record, abi::*};
@@ -18,7 +18,29 @@ pub(super) struct Program {
     source: (usize, usize),
 }
 
+// QMD and constants occupy the first 1280 bytes. Signals use a separate
+// cache line, and commands have their own page. Reuse requires completion of
+// both compute and the FIFO tail. Ownership lasts for the device lifetime.
+const SIGNAL: usize = 1536;
+const COMMANDS: usize = 4096;
+
+pub(super) struct Submission {
+    region: DmaRegion,
+    address: u64,
+}
+
 impl Compute {
+    pub(super) fn prepare_submission(&mut self, device: &Device) -> Result<()> {
+        let region = DmaRegion::new(8192)?;
+        let physical = region.address as u64;
+        // Retain DMA ownership even if installing the mapping later fails.
+        self.submission = Some(Submission { region, address: 0 });
+        let address = self.memory.map_system(device, physical, 8192)?;
+        self.submission.as_mut().ok_or(Error::Firmware)?.address = address;
+        info!("NVIDIA_SUBMISSION_READY physical={physical:#x} virtual={address:#x} bytes=8192");
+        Ok(())
+    }
+
     fn method(commands: &mut Vec<u32>, method: u32, values: &[u32]) {
         commands.push((2 << 28) | ((values.len() as u32) << 16) | (1 << 13) | (method >> 2));
         commands.extend_from_slice(values);
@@ -28,18 +50,13 @@ impl Compute {
         if commands.is_empty() || commands.len() > 1024 {
             return Err(Error::Alignment);
         }
-        let allocation = if let Some(allocation) = self.command_buffer {
-            allocation
-        } else {
-            let allocation = self.memory.allocate(device, 4096, 4096)?;
-            self.command_buffer = Some(allocation);
-            allocation
-        };
+        let submission = self.submission.as_ref().ok_or(Error::Firmware)?;
         let vram = device.vram.as_ref().ok_or(Error::Firmware)?;
         for (i, word) in commands.iter().copied().enumerate() {
-            vram.write(allocation.physical as usize + i * 4, word)?;
+            submission.region.write32(COMMANDS + i * 4, word)?;
         }
-        let entry = allocation.virtual_address | (1 << 41) | ((commands.len() as u64) << 42);
+        fence(Ordering::SeqCst);
+        let entry = (submission.address + COMMANDS as u64) | (1 << 41) | ((commands.len() as u64) << 42);
         let slot = self.put % self.entries;
         vram.write(self.fifo.physical as usize + slot * 8, entry as u32)?;
         vram.write(self.fifo.physical as usize + slot * 8 + 4, (entry >> 32) as u32)?;
@@ -129,17 +146,14 @@ impl Compute {
         if arguments.len() > 512 || threads == 0 || threads > 1024 || blocks == 0 {
             return Err(Error::Alignment);
         }
+        let cached = self.programs.contains_key(symbol);
         let program = self.load_program(device, cubin, symbol)?;
         let vram = device.vram.as_ref().ok_or(Error::Firmware)?;
-        let (signal, launch) = if let Some(buffers) = self.launch_buffers {
-            buffers
-        } else {
-            let buffers = (self.memory.allocate(device, 4096, 4096)?, self.memory.allocate(device, 4096, 4096)?);
-            self.launch_buffers = Some(buffers);
-            buffers
-        };
+        let submission = self.submission.as_ref().ok_or(Error::Firmware)?;
+        let launch = submission.address;
+        let signal = launch + SIGNAL as u64;
         for offset in (0..64).step_by(4) {
-            vram.write(signal.physical as usize + offset, 0)?;
+            submission.region.write32(SIGNAL + offset, 0)?;
         }
         let mut constants = Record::<1024>::default();
         for (i, value) in [threads, 1, 1, blocks, 1, 1].into_iter().enumerate() {
@@ -150,7 +164,7 @@ impl Compute {
         constants.set(Field::<u64>::new(40), 0xfffdc0)?;
         let mut constants = constants.into_bytes();
         constants[0x160..0x160 + arguments.len()].copy_from_slice(arguments);
-        vram.copy_from(launch.physical as usize + 256, &constants)?;
+        submission.region.copy(256, &constants)?;
         let mut qmd = Record::<256>::default();
         use QmdFields as Q;
         for (field, value) in [
@@ -186,19 +200,19 @@ impl Compute {
             (Q::PROGRAM_ADDRESS_UPPER, (program.address) >> 32),
             (Q::PROGRAM_PREFETCH_ADDR_LOWER_SHIFTED, ((program.address) >> 8) & 0xffffffff),
             (Q::PROGRAM_PREFETCH_ADDR_UPPER_SHIFTED, (program.address) >> 40),
-            (Q::CONSTANT_BUFFER_ADDR_LOWER_0, (launch.virtual_address + 256) & 0xffffffff),
-            (Q::CONSTANT_BUFFER_ADDR_UPPER_0, (launch.virtual_address + 256) >> 32),
+            (Q::CONSTANT_BUFFER_ADDR_LOWER_0, (launch + 256) & 0xffffffff),
+            (Q::CONSTANT_BUFFER_ADDR_UPPER_0, (launch + 256) >> 32),
             (Q::RELEASE0_ENABLE, 1),
             (Q::RELEASE0_STRUCTURE_SIZE, 2),
             (Q::RELEASE0_PAYLOAD64B, 1),
-            (Q::RELEASE0_ADDRESS_LOWER, signal.virtual_address & 0xffffffff),
-            (Q::RELEASE0_ADDRESS_UPPER, signal.virtual_address >> 32),
+            (Q::RELEASE0_ADDRESS_LOWER, signal & 0xffffffff),
+            (Q::RELEASE0_ADDRESS_UPPER, signal >> 32),
             (Q::RELEASE0_PAYLOAD_LOWER, 1),
             (Q::RELEASE0_PAYLOAD_UPPER, 0),
         ] {
             qmd.set_bits(field, value)?;
         }
-        vram.copy_from(launch.physical as usize, qmd.as_bytes())?;
+        submission.region.copy(0, qmd.as_bytes())?;
         let mut commands = Vec::new();
         let semaphore = |commands: &mut Vec<u32>, address: u64, value: u32, wait: bool| {
             commands.extend_from_slice(&[
@@ -210,44 +224,38 @@ impl Compute {
                 1 | (1 << 24) | (u32::from(wait) << 20),
             ]);
         };
-        semaphore(&mut commands, signal.virtual_address + 8, 0x1111, false);
-
-        Self::method(&mut commands, NVC6C0_SET_OBJECT, &[ADA_COMPUTE_A]);
-        semaphore(&mut commands, signal.virtual_address + 16, 0x2000, true);
-        Self::method(&mut commands, NVC6C0_SET_SHADER_LOCAL_MEMORY_WINDOW_A, &[0x7293, 0]);
-        Self::method(&mut commands, NVC6C0_SET_SHADER_SHARED_MEMORY_WINDOW_A, &[0x7294, 0]);
-        semaphore(&mut commands, signal.virtual_address + 24, 0x2001, true);
-        let local = self.local_memory.ok_or(Error::Firmware)?;
-        Self::method(
-            &mut commands,
-            NVC6C0_SET_SHADER_LOCAL_MEMORY_A,
-            &[(local.virtual_address >> 32) as u32, local.virtual_address as u32],
-        );
-        Self::method(
-            &mut commands,
-            NVC6C0_SET_SHADER_LOCAL_MEMORY_NON_THROTTLED_A,
-            &[(self.local_bytes_per_tpc >> 32) as u32, self.local_bytes_per_tpc as u32, 0xff],
-        );
-        semaphore(&mut commands, signal.virtual_address + 32, 0x2002, true);
-        Self::method(&mut commands, NVC6C0_INVALIDATE_SHADER_CACHES_NO_WFI, &[0x1011]);
-        semaphore(&mut commands, signal.virtual_address + 40, 0x2003, true);
-        Self::method(&mut commands, NVC6C0_SEND_PCAS_A, &[(launch.virtual_address >> 8) as u32]);
-        semaphore(&mut commands, signal.virtual_address + 48, 0x2004, true);
+        if !self.engine_configured {
+            Self::method(&mut commands, NVC6C0_SET_OBJECT, &[ADA_COMPUTE_A]);
+            Self::method(&mut commands, NVC6C0_SET_SHADER_LOCAL_MEMORY_WINDOW_A, &[0x7293, 0]);
+            Self::method(&mut commands, NVC6C0_SET_SHADER_SHARED_MEMORY_WINDOW_A, &[0x7294, 0]);
+            let local = self.local_memory.ok_or(Error::Firmware)?;
+            Self::method(
+                &mut commands,
+                NVC6C0_SET_SHADER_LOCAL_MEMORY_A,
+                &[(local.virtual_address >> 32) as u32, local.virtual_address as u32],
+            );
+            Self::method(
+                &mut commands,
+                NVC6C0_SET_SHADER_LOCAL_MEMORY_NON_THROTTLED_A,
+                &[(self.local_bytes_per_tpc >> 32) as u32, self.local_bytes_per_tpc as u32, 0xff],
+            );
+        }
+        if !cached {
+            Self::method(&mut commands, NVC6C0_INVALIDATE_SHADER_CACHES_NO_WFI, &[0x1011]);
+        }
+        Self::method(&mut commands, NVC6C0_SEND_PCAS_A, &[(launch >> 8) as u32]);
         Self::method(
             &mut commands,
             NVC6C0_SEND_SIGNALING_PCAS2_B,
             &[NVC6C0_SEND_SIGNALING_PCAS2_B_PCAS_ACTION_PREFETCH_SCHEDULE],
         );
-        semaphore(&mut commands, signal.virtual_address + 56, 0x2222, true);
+        semaphore(&mut commands, signal + 56, 0x2222, true);
         self.submit(device, &commands)?;
-        log::debug!(
-            "NVIDIA_KERNEL_SUBMITTED symbol={symbol} qmd={:#x} entry={:#x}",
-            launch.virtual_address,
-            program.address
-        );
+        let submission = self.submission.as_ref().ok_or(Error::Firmware)?;
+        log::debug!("NVIDIA_KERNEL_SUBMITTED symbol={symbol} qmd={:#x} entry={:#x}", launch, program.address);
         let start = crate::timer().systime_ms();
         // Also wait for the FIFO tail before reusing the command buffer.
-        while vram.read(signal.physical as usize) != Some(1) || vram.read(signal.physical as usize + 56) != Some(0x2222) {
+        while submission.region.read32(SIGNAL)? != 1 || submission.region.read32(SIGNAL + 56)? != 0x2222 {
             if crate::timer().systime_ms().wrapping_sub(start) >= 5000 {
                 self.dump_instance(device)?;
                 log::warn!(
@@ -255,9 +263,11 @@ impl Compute {
                     vram.read(self.fifo.physical as usize + self.entries * 8 + 0x88),
                     vram.read(self.fifo.physical as usize + self.entries * 8 + 0x8c)
                 );
-                for stage in 0..7 {
-                    info!("NVIDIA FIFO stage={stage} value={:?}", vram.read(signal.physical as usize + 8 + stage * 8));
-                }
+                info!(
+                    "NVIDIA completion compute={:?} fifo={:?}",
+                    submission.region.read32(SIGNAL),
+                    submission.region.read32(SIGNAL + 56)
+                );
                 info!("NVIDIA notifier {:02x?}", vram.read_bytes(self.notifier as usize, 0x100)?);
                 for offset in [
                     0x400100, 0x400700, 0x409800, 0x409804, 0x409808, 0x40980c, 0x409810, 0x409814, 0x409818, 0x40981c, 0x1fa100,
@@ -269,6 +279,29 @@ impl Compute {
             core::hint::spin_loop();
         }
         fence(Ordering::SeqCst);
+        self.engine_configured = true;
+        Ok(())
+    }
+
+    pub(super) fn clock_probe(&mut self, device: &Device, cubin: &'static [u8]) -> Result<()> {
+        let output = self.memory.allocate(device, 4096, 4096)?;
+        let vram = device.vram.as_ref().ok_or(Error::Firmware)?;
+        for sample in 0..3 {
+            self.launch(device, cubin, "clock_probe", &output.virtual_address.to_le_bytes(), [1, 1])?;
+            let read64 = |offset| -> Result<u64> {
+                let low = vram.read(output.physical as usize + offset).ok_or(Error::Firmware)?;
+                let high = vram.read(output.physical as usize + offset + 4).ok_or(Error::Firmware)?;
+                Ok(u64::from(low) | (u64::from(high) << 32))
+            };
+            let (cycles, nanoseconds) = (read64(0)?, read64(8)?);
+            if nanoseconds < 10_000_000 || cycles == 0 {
+                return Err(Error::Firmware);
+            }
+            info!(
+                "NVIDIA_CLOCK_PROBE sample={sample} sm_mhz={} cycles={cycles} nanoseconds={nanoseconds}",
+                cycles * 1000 / nanoseconds
+            );
+        }
         Ok(())
     }
 

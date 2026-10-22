@@ -124,8 +124,9 @@ impl Memory {
     /// returning a handle or data to an application.
     pub(super) fn allocate_buffer(&mut self, device: &Device, bytes: u64) -> Result<Allocation> {
         let bytes = bytes.checked_add(4095).ok_or(Error::Alignment)? & !4095;
-        let physical = self.reserve_physical(bytes, 4096)?;
-        let virtual_address = self.map_range(device, physical, bytes, 4096, false)?;
+        let alignment = if bytes >= 2 << 20 { 2 << 20 } else { 4096 };
+        let physical = self.reserve_physical(bytes, alignment)?;
+        let virtual_address = self.map_range(device, physical, bytes, alignment, false)?;
         Ok(Allocation {
             physical,
             virtual_address,
@@ -142,13 +143,26 @@ impl Memory {
             return Err(Error::Alignment);
         }
         let virtual_address = self.reserve_virtual(bytes, alignment)?;
-        for offset in (0..bytes).step_by(4096) {
+        let mut offset = 0;
+        while offset < bytes {
             let va = virtual_address + offset;
-            let tables = self.page_tables(device, va, 5)?;
-            // NVIDIA MMU-v2 PTE: valid, volatile, system-coherent aperture 2
-            // for guest RAM, or aperture 0 for local video memory.
-            let pte = 1 | (1 << 3) | (u64::from(system) << 2) | (((physical + offset) >> 12) << 8) | (6u64 << 56);
-            Self::write64(device, tables[4] + ((va >> 12) & 511) * 8, pte)?;
+            let large = !system && (va | (physical + offset)) & ((2 << 20) - 1) == 0 && bytes - offset >= 2 << 20;
+            let tables = self.page_tables(device, va, if large { 4 } else { 5 })?;
+            // GPU-owned VRAM must use the L2 cache. VOL bypasses caching and
+            // is needed only for CPU/GPU coherent shared system-memory pages.
+            // MMU-v2 aperture 2 denotes system-coherent RAM; 0 denotes VRAM.
+            let pte = 1 | (u64::from(system) << 3) | (u64::from(system) << 2) | (((physical + offset) >> 12) << 8) | (6u64 << 56);
+            if large {
+                // A valid PTE in PDE0 maps 2 MiB directly instead of pointing
+                // to 512 small-page entries. Keep the unused upper word zero.
+                let entry = tables[3] + ((va >> 21) & 255) * 16;
+                Self::write64(device, entry, pte)?;
+                Self::write64(device, entry + 8, 0)?;
+                offset += 2 << 20;
+            } else {
+                Self::write64(device, tables[4] + ((va >> 12) & 511) * 8, pte)?;
+                offset += 4096;
+            }
         }
         core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
         device.registers.write(0xb830b0, (1 << 0) | (1 << 1) | (1 << 6) | (1 << 31))?;

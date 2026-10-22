@@ -56,7 +56,7 @@ impl DmaRegion {
         Ok(())
     }
 
-    fn copy(&self, offset: usize, bytes: &[u8]) -> Result<()> {
+    pub(super) fn copy(&self, offset: usize, bytes: &[u8]) -> Result<()> {
         self.check(offset, bytes.len())?;
         // Queue memory is shared with an external DMA agent.
         for (i, byte) in bytes.iter().copied().enumerate() {
@@ -74,7 +74,7 @@ impl DmaRegion {
             .collect())
     }
 
-    fn read32(&self, offset: usize) -> Result<u32> {
+    pub(super) fn read32(&self, offset: usize) -> Result<u32> {
         self.check(offset, 4)?;
         if offset & 3 != 0 {
             return Err(Error::Alignment);
@@ -82,7 +82,7 @@ impl DmaRegion {
         Ok(unsafe { ((self.address + offset) as *const u32).read_volatile() })
     }
 
-    fn write32(&self, offset: usize, value: u32) -> Result<()> {
+    pub(super) fn write32(&self, offset: usize, value: u32) -> Result<()> {
         self.check(offset, 4)?;
         if offset & 3 != 0 {
             return Err(Error::Alignment);
