@@ -35,6 +35,8 @@ jobs:
         run: cargo make --no-workspace --profile production image
       - name: Inject an interrupt during a multicore context switch
         run: python3 tools/kernel/test-context-switch.py --accel tcg
+      - name: Verify PCI BAR enumeration with a virtual 16 GiB device
+        run: python3 tools/inference/test-qemu.py --accel tcg --large-pci-bar --repeat 3
       - name: Upload kernel verification logs
         if: always()
         uses: actions/upload-artifact@v7

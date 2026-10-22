@@ -195,6 +195,11 @@ def main():
     parser.add_argument("--qwen-assets", type=Path, default=ROOT / "target/qwen")
     parser.add_argument("--bios", type=Path, help="OVMF firmware image")
     parser.add_argument(
+        "--large-pci-bar",
+        action="store_true",
+        help="exercise 64-bit PCI BAR allocation with a virtual 16 GiB device",
+    )
+    parser.add_argument(
         "--accel",
         choices=("kvm", "tcg"),
         default="kvm" if os.access("/dev/kvm", os.R_OK | os.W_OK) else "tcg",
@@ -300,6 +305,8 @@ def main():
     )
     if args.gdb_port is not None:
         command.extend(["-gdb", f"tcp:127.0.0.1:{args.gdb_port}", "-S"])
+    if args.large_pci_bar:
+        command.extend(["-device", "pci-testdev,membar=16G"])
     qmp = None
     with (directory / "qemu.log").open("w") as log:
         process = subprocess.Popen(command, cwd=ROOT, stdout=log, stderr=log)
