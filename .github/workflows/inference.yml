@@ -30,7 +30,7 @@ jobs:
       - name: Install kernel verification dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential binutils gdb nasm dosfstools qemu-system-x86 ovmf
+          sudo apt-get install --no-install-recommends -y build-essential binutils gdb nasm dosfstools qemu-system-x86 ovmf
           cargo install --locked --no-default-features cargo-make --version 0.37.24
           cargo install --locked cargo-license --version 0.6.1
       - name: Build D3OS
@@ -71,7 +71,7 @@ jobs:
       - name: Install cuTile host compiler dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libclang-dev
+          sudo apt-get install --no-install-recommends -y libclang-dev
           rustup toolchain install 1.98.1 --profile minimal --component clippy,rustfmt
       - name: Compile and audit cuTile kernels without GPU hardware
         run: python3 tools/inference/test-cutile-kernels.py
@@ -79,7 +79,7 @@ jobs:
         if: inputs.pretrained
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential nasm dosfstools qemu-system-x86 ovmf python3-numpy python3-pil
+          sudo apt-get install --no-install-recommends -y build-essential nasm dosfstools qemu-system-x86 ovmf python3-numpy python3-pil
           cargo install --locked --no-default-features cargo-make --version 0.37.24
           cargo install --locked cargo-license --version 0.6.1
       - name: Prepare pretrained weights and independent reference outputs
@@ -125,7 +125,7 @@ jobs:
       - name: Install OS and model verification dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential nasm dosfstools mtools util-linux fdisk qemu-system-x86 ovmf python3-venv
+          sudo apt-get install --no-install-recommends -y build-essential nasm dosfstools mtools util-linux fdisk qemu-system-x86 ovmf python3-venv
           cargo install --locked --no-default-features cargo-make --version 0.37.24
           cargo install --locked cargo-license --version 0.6.1
           python3 -m venv target/qwen-venv
