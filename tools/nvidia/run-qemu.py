@@ -72,6 +72,11 @@ def main():
         help="native workload to validate during --boot-check",
     )
     parser.add_argument("--memory-mib", type=int, default=4096)
+    parser.add_argument(
+        "--qwen-device-timing",
+        action="store_true",
+        help="serialize Qwen benchmark run 1 for per-kernel GPU timestamps",
+    )
     parser.add_argument("--cpus", type=int, default=4)
     parser.add_argument("--display", choices=("none", "gtk", "sdl"), default="none")
     parser.add_argument(
@@ -85,6 +90,8 @@ def main():
         "--gdb-port", type=int, help="pause at reset for a local GDB connection"
     )
     args = parser.parse_args()
+    if args.qwen_device_timing and args.inference != "gpu-qwen-bench":
+        parser.error("--qwen-device-timing requires --inference gpu-qwen-bench")
     affinity = ",".join(str(cpu) for cpu in sorted(os.sched_getaffinity(0)))
     print(f"NVIDIA_HOST_CPU_AFFINITY cpus={affinity}", flush=True)
     if (
@@ -267,6 +274,7 @@ def main():
                             "infer"
                             if args.inference == "cpu-self-test"
                             else f"infer {args.inference}"
+                            + (" device-timing" if args.qwen_device_timing else "")
                         )
                     started = True
                 if (
@@ -400,7 +408,9 @@ def main():
                         and (args.kernels / "inference.cubin").is_file()
                         and "NVIDIA_DEVICE_TIMER_OK" not in text
                     ):
-                        raise RuntimeError("native GPU timestamp verification did not succeed")
+                        raise RuntimeError(
+                            "native GPU timestamp verification did not succeed"
+                        )
                     if (
                         args.inference == "gpu-qwen"
                         and "INFERENCE_OK qwen backend=nvidia tokens=1 stop=EndOfSequence"

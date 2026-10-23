@@ -105,6 +105,27 @@ fn prefill_and_incremental_decode_agree_and_sessions_remain_independent() {
     assert!(model.generate(&Cpu, &[], 4).is_err());
     assert!(model.generate(&Cpu, &[1], 0).is_err());
     assert_eq!(model.generate(&Cpu, &[1], 3).unwrap().tokens.len(), 3);
+    let expected = model.generate(&Cpu, &[1, 7], 5).unwrap();
+    let mut streamed = Vec::new();
+    let actual = model
+        .generate_stream(&Cpu, &[1, 7], 5, |token| {
+            streamed.push(token);
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(streamed, expected.tokens);
+    assert_eq!(actual.tokens, expected.tokens);
+    assert_eq!(actual.stop, expected.stop);
+    let mut calls = 0;
+    assert!(
+        model
+            .generate_stream(&Cpu, &[1], 5, |_| {
+                calls += 1;
+                Err(d3os_inference::Error::InvalidToken)
+            })
+            .is_err()
+    );
+    assert_eq!(calls, 1);
 }
 
 #[test]
@@ -263,4 +284,24 @@ fn tokenizer_applies_ranked_overlapping_merges_nfc_and_number_boundaries() {
     let mut duplicate = data.clone();
     duplicate.extend([0]);
     assert!(Tokenizer::parse(&duplicate).is_err());
+}
+
+#[test]
+fn streaming_decoder_preserves_split_scalars_and_matches_lossy_batch_decoding() {
+    let data = tokenizer_bytes();
+    let tokenizer = Tokenizer::parse(&data).unwrap();
+    for bytes in ["aé😀z".as_bytes(), &[0xf0, 0x9f], &[0xc3, b'a', 0xff, 0xe2, 0x82, 0xac]] {
+        let ids: Vec<_> = bytes.iter().map(|&byte| byte as u32).collect();
+        let mut decoder = tokenizer.decoder(true);
+        let mut text = String::new();
+        for &id in &ids {
+            text.push_str(&decoder.push(id).unwrap());
+        }
+        text.push_str(&decoder.finish());
+        assert_eq!(text, tokenizer.decode(&ids, true).unwrap());
+    }
+    let mut decoder = tokenizer.decoder(false);
+    assert_eq!(decoder.push(0xc3).unwrap(), "");
+    assert!(decoder.push(u32::MAX).is_err());
+    assert_eq!(decoder.push(0xa9).unwrap(), "é");
 }

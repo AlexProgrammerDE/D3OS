@@ -151,6 +151,15 @@ impl<'a> Tokenizer<'a> {
         Ok(String::from_utf8_lossy(&bytes).into_owned())
     }
 
+    /// Decode byte BPE incrementally, retaining incomplete UTF-8 between tokens.
+    pub fn decoder(&self, skip_special: bool) -> Decoder<'_, 'a> {
+        Decoder {
+            tokenizer: self,
+            skip_special,
+            pending: Vec::new(),
+        }
+    }
+
     fn bpe(&self, bytes: &[u8], output: &mut Vec<u32>) {
         if bytes.is_empty() {
             return;
@@ -198,6 +207,48 @@ impl<'a> Tokenizer<'a> {
             enqueue(left, &nodes, &mut heap);
         }
         output.extend(nodes.into_iter().filter(|node| node.live).map(|node| node.id));
+    }
+}
+
+pub struct Decoder<'t, 'a> {
+    tokenizer: &'t Tokenizer<'a>,
+    skip_special: bool,
+    pending: Vec<u8>,
+}
+
+impl Decoder<'_, '_> {
+    pub fn push(&mut self, id: u32) -> Result<String> {
+        let token = self.tokenizer.tokens.get(id as usize).ok_or(Error::InvalidToken)?;
+        if !self.skip_special || !self.tokenizer.added.iter().any(|&(other, special)| other == id && special) {
+            self.pending.extend_from_slice(token);
+        }
+        // Defer only an incomplete trailing scalar. Invalid complete sequences
+        // use the same replacement behavior as non-streaming decode.
+        let mut end = 0;
+        while end < self.pending.len() {
+            match core::str::from_utf8(&self.pending[end..]) {
+                Ok(_) => {
+                    end = self.pending.len();
+                    break;
+                }
+                Err(error) => {
+                    end += error.valid_up_to();
+                    if let Some(length) = error.error_len() {
+                        end += length;
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+        let text = String::from_utf8_lossy(&self.pending[..end]).into_owned();
+        self.pending.drain(..end);
+        Ok(text)
+    }
+
+    /// Flush an incomplete final scalar with the usual replacement character.
+    pub fn finish(self) -> String {
+        String::from_utf8_lossy(&self.pending).into_owned()
     }
 }
 

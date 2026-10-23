@@ -127,6 +127,12 @@ infer qwen-verify
 `infer qwen` uses the arithmetic prompt and a limit of 32 new tokens.
 The application reads assets from `/usr/share/inference` through normal file syscalls.
 It reports generation and verification results to the terminal and serial logger.
+Generation streams text as tokens arrive and reports a cumulative rate every 256 tokens.
+The final `QWEN_STREAM` line separates session setup and prompt processing from the interval after the first token.
+Its rate divides subsequent generated tokens by that interval, including terminal output and synchronization costs.
+It excludes model loading. Normal generation still stops at EOS or the requested token limit.
+The native API exposes `Qwen::generate_stream()` and an incremental tokenizer decoder for other applications.
+The decoder retains incomplete UTF-8 sequences between tokens.
 
 To open the prepared image in an interactive VM after the tests, run:
 

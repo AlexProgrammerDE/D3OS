@@ -38,15 +38,146 @@ def wait_for(serial, process, expected, deadline):
     raise TimeoutError(f"waiting for {expected}: {serial}")
 
 
+def record_qwen(qmp, serial, process, args):
+    movie = args.output / "qwen-nvidia.mp4"
+    ppm = args.output / "capture-frame.ppm"
+    command = f"infer gpu-qwen {args.max_tokens} {args.prompt}"
+    encoder_command = [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "warning",
+        "-f",
+        "image2pipe",
+        "-vcodec",
+        "ppm",
+        "-framerate",
+        str(args.fps),
+        "-i",
+        "pipe:0",
+        "-an",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "18",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        str(movie),
+    ]
+    typed = 0
+    completed = None
+    frames = 0
+    with (args.output / "qwen-encoder.log").open("w") as log:
+        encoder = subprocess.Popen(encoder_command, stdin=subprocess.PIPE, stderr=log)
+        start = time.monotonic()
+        try:
+            for frame in range(args.seconds * args.fps):
+                # Actual QMP keyboard input and framebuffer capture share one
+                # connection. One character per frame keeps the prompt visible.
+                if frame >= args.fps and typed <= len(command):
+                    if typed == len(command):
+                        key = "ret"
+                    else:
+                        char = command[typed]
+                        key = {
+                            " ": "spc",
+                            "-": "slash",
+                            "y": "z",
+                            "z": "y",
+                            "?": "shift-minus",
+                            ".": "dot",
+                            ",": "comma",
+                        }.get(char.lower(), char.lower())
+                        if char.isupper():
+                            key = f"shift-{key}"
+                    qmp.execute(
+                        "human-monitor-command", {"command-line": f"sendkey {key} 30"}
+                    )
+                    typed += 1
+                qmp.execute(
+                    "human-monitor-command", {"command-line": f"screendump {ppm}"}
+                )
+                encoder.stdin.write(ppm.read_bytes())
+                frames += 1
+                text = serial.read_text(errors="replace")
+                if process.poll() is not None or any(
+                    marker in text for marker in ("INFERENCE_FAIL", "panicked at")
+                ):
+                    raise RuntimeError("Qwen recording failed; inspect qwen-serial.log")
+                if "INFERENCE_OK qwen backend=nvidia" in text and completed is None:
+                    completed = frame
+                    Image.open(ppm).save(args.output / "qwen-complete.png")
+                time.sleep(max(0, start + (frame + 1) / args.fps - time.monotonic()))
+                if completed is not None and frame - completed >= 3 * args.fps:
+                    break
+            elapsed = time.monotonic() - start
+        finally:
+            encoder.stdin.close()
+            encoder.wait(timeout=30)
+    if encoder.returncode or completed is None or abs(elapsed - frames / args.fps) > 1:
+        raise RuntimeError(
+            "recording failed, did not finish, or could not maintain real time"
+        )
+    match = re.search(
+        r"QWEN_STREAM tokens=(\d+) first_token_ms=(\d+) decode_ms=(\d+) tokens_per_second=([\d.]+)",
+        text,
+    )
+    transcript = re.search(
+        r"QWEN_TRANSCRIPT_BEGIN\n(.*?)\nQWEN_TRANSCRIPT_END", text, re.DOTALL
+    )
+    if match is None or transcript is None:
+        raise RuntimeError("missing measured generation evidence")
+    (args.output / "qwen-essay.txt").write_text(transcript[1] + "\n")
+    ppm.unlink(missing_ok=True)
+    return {
+        "prompt": args.prompt,
+        "command": command,
+        "backend": "nvidia",
+        "model": "Qwen3.5-0.8B",
+        "max_tokens": args.max_tokens,
+        "tokens": int(match[1]),
+        "first_token_ms": int(match[2]),
+        "decode_ms": int(match[3]),
+        "tokens_per_second": float(match[4]),
+        "capture_fps": args.fps,
+        "frames": frames,
+        "elapsed_seconds": elapsed,
+        "video_seconds": frames / args.fps,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("workload", choices=("qwen", "doom"))
     parser.add_argument("--output", type=Path, default=ROOT / "target/nvidia/captures")
-    parser.add_argument("--seconds", type=int, default=30)
+    parser.add_argument(
+        "--seconds",
+        type=int,
+        help="duration for DOOM, maximum duration for Qwen (defaults: 30 and 120)",
+    )
     parser.add_argument("--fps", type=int, default=30)
+    parser.add_argument(
+        "--video", action="store_true", help="record Qwen typing and streaming output"
+    )
+    parser.add_argument(
+        "--prompt",
+        default="Write a very long essay about the importance of hand washing in as much detail as possible. Aim for at least 2500 words. Explain the science, everyday situations, proper technique, common mistakes, and benefits for communities.",
+    )
+    parser.add_argument("--max-tokens", type=int, default=4096)
     args = parser.parse_args()
+    if args.seconds is None:
+        args.seconds = 120 if args.workload == "qwen" and args.video else 30
     if not 1 <= args.seconds <= 300 or not 1 <= args.fps <= 60:
         parser.error("use 1 to 300 seconds and 1 to 60 capture frames per second")
+    if args.max_tokens <= 0 or not re.fullmatch(r"[a-zA-Z0-9 .,?\-]+", args.prompt):
+        parser.error(
+            "use a positive token limit and a prompt supported by the guest keyboard mapping"
+        )
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=True)
     spec = importlib.util.spec_from_file_location(
@@ -98,7 +229,9 @@ def main():
                 if marker not in text:
                     raise RuntimeError(f"missing hardware boot evidence: {marker}")
             time.sleep(1)
-            if args.workload == "qwen":
+            if args.workload == "qwen" and args.video:
+                manifest = record_qwen(qmp, serial, process, args)
+            elif args.workload == "qwen":
                 question = "What country is largest by size? Answer briefly."
                 qmp.type_command(f"infer gpu-qwen 32 {question}")
                 text = wait_for(

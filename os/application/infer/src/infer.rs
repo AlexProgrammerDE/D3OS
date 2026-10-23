@@ -64,7 +64,9 @@ fn run() -> Result<(), String> {
         }
         Some("gpu-kernel-bench") if args.len() == 1 => benchmark::kernels(&Nvidia::new().map_err(|error| format!("{error}"))?)?,
         Some("gpu-alexnet-bench") if args.len() == 1 => benchmark::alexnet(&Nvidia::new().map_err(|error| format!("{error}"))?)?,
-        Some("gpu-qwen-bench") if args.len() == 1 => benchmark::qwen(&Nvidia::new().map_err(|error| format!("{error}"))?)?,
+        Some("gpu-qwen-bench") if args.len() == 1 || (args.len() == 2 && args[1] == "device-timing") => {
+            benchmark::qwen(&Nvidia::new().map_err(|error| format!("{error}"))?, args.len() == 2)?;
+        }
         Some("gpu-alexnet") if args.len() == 1 || args.len() == 3 => {
             let backend = Nvidia::new().map_err(|error| format!("{error}"))?;
             alexnet(&backend, &args[1..])?;
@@ -84,7 +86,7 @@ fn run() -> Result<(), String> {
         }
         _ => {
             return Err(String::from(
-                "usage: infer self-test | gpu-self-test | gpu-kernel-bench | alexnet [MODEL FIXTURE] | gpu-alexnet [MODEL FIXTURE] | gpu-alexnet-bench | qwen [MAX_TOKENS PROMPT...] | qwen-verify | gpu-qwen [MAX_TOKENS PROMPT...] | gpu-qwen-verify | gpu-qwen-bench",
+                "usage: infer self-test | gpu-self-test | gpu-kernel-bench | alexnet [MODEL FIXTURE] | gpu-alexnet [MODEL FIXTURE] | gpu-alexnet-bench | qwen [MAX_TOKENS PROMPT...] | qwen-verify | gpu-qwen [MAX_TOKENS PROMPT...] | gpu-qwen-verify | gpu-qwen-bench [device-timing]",
             ));
         }
     }
@@ -137,10 +139,52 @@ fn generate_qwen<B: TransformerBackend>(backend: &B, args: &[String]) -> Result<
     let bytes = read_file("/usr/share/inference/qwen3.5-0.8b.d3t")?;
     let model = Qwen::load(backend, &bytes).map_err(|error| format!("{error}"))?;
     drop(bytes);
-    let generated = model.generate(backend, &tokens, limit).map_err(|error| format!("{error}"))?;
+    report(format_args!("Qwen3.5-0.8B | {} | streaming greedy generation", backend.name()));
+    let generation_start = time::systime().num_milliseconds();
+    let mut first_token = None;
+    let mut count = 0usize;
+    let mut decoder = tokenizer.decoder(true);
+    let mut transcript = String::new();
+    let mut pending = String::new();
+    let mut last_flush = generation_start;
+    let generated = model
+        .generate_stream(backend, &tokens, limit, |token| {
+            let now = time::systime().num_milliseconds();
+            let first = *first_token.get_or_insert(now);
+            count += 1;
+            let text = decoder.push(token)?;
+            transcript.push_str(&text);
+            pending.push_str(&text);
+            if now - last_flush >= 50 || count == 1 {
+                terminal::print!("{}", pending);
+                pending.clear();
+                last_flush = now;
+            }
+            if count.is_multiple_of(256) {
+                terminal::print!("{}", pending);
+                pending.clear();
+                report(format_args!(
+                    "\n[{} tokens | {:.1} tokens/s | {} ms since first token]",
+                    count,
+                    (count - 1) as f64 * 1000. / (now - first).max(1) as f64,
+                    now - first
+                ));
+            }
+            Ok(())
+        })
+        .map_err(|error| format!("{error}"))?;
+    let generation_end = time::systime().num_milliseconds();
+    let tail = decoder.finish();
+    transcript.push_str(&tail);
+    terminal::println!("{}{}", pending, tail);
+    log::info!("QWEN_TRANSCRIPT_BEGIN\n{}\nQWEN_TRANSCRIPT_END", transcript);
+    let first = first_token.unwrap_or(generation_end);
     report(format_args!(
-        "{}",
-        tokenizer.decode(&generated.tokens, true).map_err(|error| format!("{error}"))?
+        "QWEN_STREAM tokens={} first_token_ms={} decode_ms={} tokens_per_second={:.3}",
+        count,
+        first - generation_start,
+        generation_end - first,
+        count.saturating_sub(1) as f64 * 1000. / (generation_end - first).max(1) as f64
     ));
     report(format_args!(
         "INFERENCE_OK qwen backend={} tokens={} stop={:?} elapsed_ms={}",

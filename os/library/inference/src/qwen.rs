@@ -260,6 +260,12 @@ impl<B: TransformerBackend> Qwen<B> {
 
     /// Greedy decoding. Call `Session::step` directly to implement other samplers.
     pub fn generate(&self, backend: &B, prompt: &[u32], max_new_tokens: usize) -> Result<Generation> {
+        self.generate_stream(backend, prompt, max_new_tokens, |_| Ok(()))
+    }
+
+    /// Deliver each selected non-stop token before computing the next one.
+    /// Callback errors stop generation and release the session's caches.
+    pub fn generate_stream(&self, backend: &B, prompt: &[u32], max_new_tokens: usize, mut emit: impl FnMut(u32) -> Result<()>) -> Result<Generation> {
         if prompt.is_empty() || max_new_tokens == 0 {
             return Err(Error::InvalidToken);
         }
@@ -276,6 +282,7 @@ impl<B: TransformerBackend> Qwen<B> {
                 });
             }
             tokens.push(token);
+            emit(token)?;
             if index + 1 < max_new_tokens {
                 logits = session.step(token)?;
             }

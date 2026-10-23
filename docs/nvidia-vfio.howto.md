@@ -418,7 +418,7 @@ The [renderer explanation](nvidia-rendering-design.md) describes command orderin
 
 The development GPU passed both 600-view checks with four vCPUs and 2 GiB of guest RAM.
 A 30-second recording measured about 50–70 FPS after startup, including transfers and console presentation.
-The in-game HUD shows the selected backend and the current frame rate.
+The window title shows the frame rate. The corner overlay is removed.
 
 With host `ffmpeg` and Python Pillow installed, capture the same workloads:
 
@@ -430,8 +430,20 @@ python3 tools/nvidia/capture-demo.py doom --seconds 30 --fps 30
 The first command asks Qwen3.5-0.8B which country is largest by size through `infer gpu-qwen`.
 It saves the terminal screenshot in `target/nvidia/captures/qwen-largest-country.png`.
 The second command records movement and firing directly from QEMU into `target/nvidia/captures/doom-nvidia-30s.mp4`.
-The application draws the backend and FPS labels inside D3OS.
+The application draws the window title and FPS inside D3OS.
 The recorder also preserves serial logs and a manifest with capture timing and game frame rates.
+
+To record a long Qwen reply with live token rates, run:
+
+```bash
+python3 tools/nvidia/capture-demo.py qwen --video --seconds 120 --fps 15 \
+  --output target/nvidia/captures/qwen-essay
+```
+
+The default prompt requests a detailed essay about hand washing, with a limit of 4,096 new tokens.
+Use `--prompt` and `--max-tokens` to select another workload.
+The recorder enters the command through QEMU keyboard input and captures the guest framebuffer at real speed.
+It saves `qwen-nvidia.mp4`, the transcript, serial evidence, and a JSON file with measured rates.
 
 ## Measure resident workloads
 
@@ -452,6 +464,11 @@ The DOOM benchmark runs the WAD's uncapped `demo1` and reports the engine's time
 Qwen performs 64 fixed decode steps, including steps after EOS.
 These steps measure throughput and do not represent a chat response.
 The model benchmarks run their full reference comparisons after the timed work.
+
+For per-kernel GPU timestamps, add `--qwen-device-timing` to the Qwen benchmark command.
+This option serializes run 1 and labels it `instrumented=true`.
+The per-kernel profile reports device nanoseconds separately from CPU preparation and wait cycles.
+Instrumentation changes scheduling and adds overhead. Use the uninstrumented runs for throughput comparisons.
 
 ### Compare against Linux
 

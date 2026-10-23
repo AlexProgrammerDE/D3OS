@@ -27,9 +27,10 @@ fn profile(before: &[d3os_nvidia::compute::ProfileEntry], after: &[d3os_nvidia::
         let wait = b.wait_cycles.wrapping_sub(a.wait_cycles);
         let kernel = Kernel::from_raw(index as u32).expect("profile index is a built-in kernel");
         report(format_args!(
-            "NATIVE_KERNEL_PROFILE symbol={} calls={calls} prepare_cycles={cycles} serial_wait_cycles={wait} prepare_share_pct={:.2} phase={phase}",
+            "NATIVE_KERNEL_PROFILE symbol={} calls={calls} prepare_cycles={cycles} serial_wait_cycles={wait} prepare_share_pct={:.2} device_ns={} phase={phase}",
             kernel.symbol(),
-            cycles as f64 * 100. / total.max(1) as f64
+            cycles as f64 * 100. / total.max(1) as f64,
+            b.device_ns.wrapping_sub(a.device_ns)
         ));
     }
 }
@@ -254,7 +255,27 @@ pub(super) fn alexnet(backend: &Nvidia) -> Result<(), String> {
     Ok(())
 }
 
-pub(super) fn qwen(backend: &Nvidia) -> Result<(), String> {
+struct DeviceTiming<'a>(Option<&'a Nvidia>);
+
+impl DeviceTiming<'_> {
+    fn finish(mut self) -> d3os_compute::Result<()> {
+        if let Some(backend) = self.0 {
+            backend.set_device_timing(false)?;
+            self.0 = None;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for DeviceTiming<'_> {
+    fn drop(&mut self) {
+        if let Some(backend) = self.0 {
+            let _ = backend.set_device_timing(false);
+        }
+    }
+}
+
+pub(super) fn qwen(backend: &Nvidia, device_timing: bool) -> Result<(), String> {
     let start = now();
     let tokenizer = read_file("/usr/share/inference/qwen3.5.bpe")?;
     let tokenizer = Tokenizer::parse(&tokenizer).map_err(|error| format!("{error}"))?;
@@ -271,6 +292,13 @@ pub(super) fn qwen(backend: &Nvidia) -> Result<(), String> {
     const DECODE: usize = 64;
     const CAPACITY: usize = 256;
     for run in 0..3 {
+        let instrumented = device_timing && run == 1;
+        let timing = if instrumented {
+            backend.set_device_timing(true).map_err(|error| format!("{error}"))?;
+            Some(DeviceTiming(Some(backend)))
+        } else {
+            None
+        };
         let start = now();
         let mut session = model.session(backend, CAPACITY).map_err(|error| format!("{error}"))?;
         let state_ms = now() - start;
@@ -318,8 +346,11 @@ pub(super) fn qwen(backend: &Nvidia) -> Result<(), String> {
             queue_profile(queue_before, queue_after, "decode");
             service_profile(service_before.as_ref().expect("warm profile"), &service_after, "decode");
         }
+        if let Some(timing) = timing {
+            timing.finish().map_err(|error| format!("{error}"))?;
+        }
         report(format_args!(
-            "INFERENCE_BENCH qwen backend=nvidia run={run} warm={} file_ms={file_ms} load_ms={load_ms} state_ms={state_ms} session_capacity={CAPACITY} prompt_tokens={} prefill_ms={prefill_ms} prefill_tps={:.3} decode_tokens={DECODE} decode_ms={decode_ms} decode_tps={:.3} checksum={checksum}",
+            "INFERENCE_BENCH qwen backend=nvidia run={run} warm={} instrumented={instrumented} file_ms={file_ms} load_ms={load_ms} state_ms={state_ms} session_capacity={CAPACITY} prompt_tokens={} prefill_ms={prefill_ms} prefill_tps={:.3} decode_tokens={DECODE} decode_ms={decode_ms} decode_tps={:.3} checksum={checksum}",
             run != 0,
             prompt.len(),
             prompt.len() as f64 * 1000. / prefill_ms.max(1) as f64,
