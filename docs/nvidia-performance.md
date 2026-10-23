@@ -224,6 +224,23 @@ The complete compiler validation also passes, with the same CUBIN bytes as the h
 An independent recurrent experiment also reduced queue-wait cycles by about 4%, but showed no clear full-model throughput gain.
 Its extra preparation kernels and allocations consumed the benefit, so the maintained path retains the simpler fused recurrent operation.
 
+### Cached launch metadata
+
+Each loaded program now retains a QMD template with its code addresses, resource metadata, and compiler constant banks.
+Every launch copies the template and patches its dimensions, argument-buffer address, completion address, timing mode, and current scratch limit.
+Dependency links modify only the submission copies. They cannot change the cached template.
+The queue retains the existing compute and FIFO completion waits.
+
+Three fresh guests record 27.0 to 32.8 million preparation cycles for the same 64-token decode.
+The previous three guests record 52.8 to 57.7 million cycles.
+These samples reduce preparation costs by about 38% to 53%, with host variation in both groups.
+Three guests provide six warm generation samples from 203.82 to 210.53 tokens/s, averaging 206.37 tokens/s.
+All guests pass every token, layer, logit, and cache comparison.
+The GPU operator suite and timestamp measurements also pass with cached templates.
+Warm prompt processing remains 10 to 11 ms, and AlexNet measures 1.25 ms per forward pass across 20 repeats.
+Fresh DOOM runs measure 1423.40, 1383.86, and 1407.32 FPS with the title-bar FPS display.
+The separate 600-frame pixel comparison and GPU operator checks after game exit also pass.
+
 The following sections preserve the earlier NVPTX measurements and implementation history.
 They do not describe the current compiler-generated register layouts.
 

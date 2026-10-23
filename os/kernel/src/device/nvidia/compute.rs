@@ -10,22 +10,21 @@ use goblin::elf::{
 };
 use log::{info, warn};
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(super) struct Program {
-    address: u64,
-    bytes: u64,
     registers: u64,
     local_bytes: u64,
-    shared_bytes: u64,
     required_threads: Option<[u32; 3]>,
-    constants: [Option<(u64, u32)>; 8],
     source: (usize, usize),
+    // Launch addresses and dependency links belong only to submission copies.
+    qmd: Record<256>,
 }
 
 // Each slot owns its QMD, constants, and completion cache line. A dependency
 // chain completes before any slot or retired buffer can be reused.
 const SLOTS: usize = 32;
 const SLOT_BYTES: usize = 2048;
+const CONSTANT_BYTES: usize = 1024;
 const SIGNAL: usize = 1536;
 const COMMANDS: usize = SLOTS * SLOT_BYTES;
 
@@ -149,7 +148,7 @@ impl Compute {
             if program.source != source {
                 return Err(Error::Firmware);
             }
-            return Ok(*program);
+            return Ok(program.clone());
         }
         let elf = Elf::parse(cubin).map_err(|_| Error::Firmware)?;
         let mut image = Vec::new();
@@ -222,66 +221,22 @@ impl Compute {
             info!("NVIDIA_PROGRAM_IMAGE_READY bytes={} images={}", image.len(), self.program_images.len());
             allocation
         };
+        let address = program.virtual_address + entry;
+        let constants = constants.map(|binding| binding.map(|(offset, size)| (program.virtual_address + offset, size)));
+        let qmd = self.program_qmd(address, code_bytes, registers, shared_bytes, &constants)?;
         let program = Program {
-            address: program.virtual_address + entry,
-            bytes: code_bytes,
             registers,
             local_bytes: u64::from(stack_bytes).checked_add(0x240).ok_or(Error::Firmware)?,
-            shared_bytes,
             required_threads,
-            constants: constants.map(|binding| binding.map(|(offset, size)| (program.virtual_address + offset, size))),
             source,
+            qmd,
         };
-        self.programs.insert(symbol, program);
+        self.programs.insert(symbol, program.clone());
         Ok(program)
     }
 
-    pub(super) fn launch(&mut self, device: &Device, cubin: &'static [u8], symbol: &'static str, arguments: &[u8], dimensions: [u32; 2]) -> Result<()> {
-        self.last_wait_cycles = 0;
-        self.last_device_ns = 0;
-        let [threads, blocks] = dimensions;
-        if arguments.len() > 512 || threads == 0 || threads > 1024 || blocks == 0 {
-            return Err(Error::Alignment);
-        }
-        if self.submission.as_ref().ok_or(Error::Firmware)?.pending.len() == SLOTS {
-            self.flush_pending(device)?;
-        }
-        let cached = self.programs.contains_key(symbol);
-        let program = self.load_program(device, cubin, symbol)?;
-        if program.required_threads.is_some_and(|required| required != [threads, 1, 1]) {
-            return Err(Error::Alignment);
-        }
-        if d3os_nvidia::cubin::validate_ada_registers(program.registers, threads).is_err() {
-            warn!(
-                "NVIDIA launch exceeds Ada register budget symbol={symbol} registers={} threads={threads}",
-                program.registers
-            );
-            return Err(Error::Alignment);
-        }
-        // Previous launches have completed before any scratch allocation or
-        // engine-state change. A larger module stack needs a larger QMD limit.
-        if self.local_bytes_per_thread < program.local_bytes {
-            self.flush_pending(device)?;
-            self.ensure_local_memory(device, program.local_bytes)?;
-        }
-        let submission = self.submission.as_ref().ok_or(Error::Firmware)?;
-        let slot_offset = submission.pending.len() * SLOT_BYTES;
-        let launch = submission.address + slot_offset as u64;
-        let signal = launch + SIGNAL as u64;
-        for offset in (0..64).step_by(4) {
-            submission.region.write32(slot_offset + SIGNAL + offset, 0)?;
-        }
-        let mut constants = Record::<1024>::default();
-        for (i, value) in [threads, 1, 1, blocks, 1, 1].into_iter().enumerate() {
-            constants.set(Field::<u32>::new(i * 4), value)?;
-        }
-        constants.set(Field::<u64>::new(24), 0x729400000000)?;
-        constants.set(Field::<u64>::new(32), 0x729300000000)?;
-        constants.set(Field::<u64>::new(40), 0xfffdc0)?;
-        let mut constants = constants.into_bytes();
-        constants[0x160..0x160 + arguments.len()].copy_from_slice(arguments);
-        submission.region.copy(slot_offset + 256, &constants)?;
-        let shared_partition = u64::from(d3os_nvidia::cubin::shared_partition(program.shared_bytes as u32)?);
+    fn program_qmd(&self, address: u64, bytes: u64, registers: u64, shared_bytes: u64, constants: &[Option<(u64, u32)>; 8]) -> Result<Record<256>> {
+        let shared_partition = u64::from(d3os_nvidia::cubin::shared_partition(shared_bytes as u32)?);
         let mut qmd = Record::<256>::default();
         use QmdFields as Q;
         let banks = [
@@ -336,7 +291,7 @@ impl Compute {
             ),
         ];
         for (bank, (lower, upper, size, valid, invalidate)) in banks.into_iter().enumerate() {
-            if let Some((address, bytes)) = program.constants[bank + 1] {
+            if let Some((address, bytes)) = constants[bank + 1] {
                 qmd.set_bits(lower, address & 0xffffffff)?;
                 qmd.set_bits(upper, address >> 32)?;
                 qmd.set_bits(size, u64::from(bytes.div_ceil(16)))?;
@@ -348,9 +303,8 @@ impl Compute {
             (Q::QMD_MAJOR_VERSION, 3),
             (Q::QMD_GROUP_ID, 0x3f),
             (Q::SM_GLOBAL_CACHING_ENABLE, 1),
-            (Q::SHARED_MEMORY_SIZE, program.shared_bytes),
-            (Q::SHADER_LOCAL_MEMORY_HIGH_SIZE, self.local_bytes_per_thread),
-            (Q::REGISTER_COUNT_V, program.registers),
+            (Q::SHARED_MEMORY_SIZE, shared_bytes),
+            (Q::REGISTER_COUNT_V, registers),
             (Q::INVALIDATE_TEXTURE_HEADER_CACHE, 1),
             (Q::INVALIDATE_TEXTURE_SAMPLER_CACHE, 1),
             (Q::INVALIDATE_TEXTURE_DATA_CACHE, 1),
@@ -362,31 +316,86 @@ impl Compute {
             (Q::MIN_SM_CONFIG_SHARED_MEM_SIZE, shared_partition),
             (Q::TARGET_SM_CONFIG_SHARED_MEM_SIZE, shared_partition),
             (Q::MAX_SM_CONFIG_SHARED_MEM_SIZE, 0x1a),
-            (Q::PROGRAM_PREFETCH_SIZE, (program.bytes >> 8).min(0x1ff)),
+            (Q::PROGRAM_PREFETCH_SIZE, (bytes >> 8).min(0x1ff)),
             (Q::SASS_VERSION, self.sass_version),
-            (Q::CTA_RASTER_WIDTH, u64::from(blocks)),
             (Q::CTA_RASTER_HEIGHT, 1),
             (Q::CTA_RASTER_DEPTH, 1),
-            (Q::CTA_THREAD_DIMENSION0, u64::from(threads)),
             (Q::CTA_THREAD_DIMENSION1, 1),
             (Q::CTA_THREAD_DIMENSION2, 1),
             (Q::CONSTANT_BUFFER_VALID_0, 1),
             (Q::CONSTANT_BUFFER_INVALIDATE_0, 1),
             // QMD v3 encodes this size in 16-byte units.
-            (Q::CONSTANT_BUFFER_SIZE_SHIFTED4_0, (constants.len() / 16) as u64),
-            (Q::PROGRAM_ADDRESS_LOWER, (program.address) & 0xffffffff),
-            (Q::PROGRAM_ADDRESS_UPPER, (program.address) >> 32),
-            (Q::PROGRAM_PREFETCH_ADDR_LOWER_SHIFTED, ((program.address) >> 8) & 0xffffffff),
-            (Q::PROGRAM_PREFETCH_ADDR_UPPER_SHIFTED, (program.address) >> 40),
-            (Q::CONSTANT_BUFFER_ADDR_LOWER_0, (launch + 256) & 0xffffffff),
-            (Q::CONSTANT_BUFFER_ADDR_UPPER_0, (launch + 256) >> 32),
+            (Q::CONSTANT_BUFFER_SIZE_SHIFTED4_0, (CONSTANT_BYTES / 16) as u64),
+            (Q::PROGRAM_ADDRESS_LOWER, address & 0xffffffff),
+            (Q::PROGRAM_ADDRESS_UPPER, address >> 32),
+            (Q::PROGRAM_PREFETCH_ADDR_LOWER_SHIFTED, (address >> 8) & 0xffffffff),
+            (Q::PROGRAM_PREFETCH_ADDR_UPPER_SHIFTED, address >> 40),
             (Q::RELEASE0_ENABLE, 1),
-            (Q::RELEASE0_STRUCTURE_SIZE, if self.device_timing { 0 } else { 2 }),
             (Q::RELEASE0_PAYLOAD64B, 1),
-            (Q::RELEASE0_ADDRESS_LOWER, signal & 0xffffffff),
-            (Q::RELEASE0_ADDRESS_UPPER, signal >> 32),
             (Q::RELEASE0_PAYLOAD_LOWER, 1),
             (Q::RELEASE0_PAYLOAD_UPPER, 0),
+        ] {
+            qmd.set_bits(field, value)?;
+        }
+        Ok(qmd)
+    }
+
+    pub(super) fn launch(&mut self, device: &Device, cubin: &'static [u8], symbol: &'static str, arguments: &[u8], dimensions: [u32; 2]) -> Result<()> {
+        self.last_wait_cycles = 0;
+        self.last_device_ns = 0;
+        let [threads, blocks] = dimensions;
+        if arguments.len() > 512 || threads == 0 || threads > 1024 || blocks == 0 {
+            return Err(Error::Alignment);
+        }
+        if self.submission.as_ref().ok_or(Error::Firmware)?.pending.len() == SLOTS {
+            self.flush_pending(device)?;
+        }
+        let cached = self.programs.contains_key(symbol);
+        let program = self.load_program(device, cubin, symbol)?;
+        if program.required_threads.is_some_and(|required| required != [threads, 1, 1]) {
+            return Err(Error::Alignment);
+        }
+        if d3os_nvidia::cubin::validate_ada_registers(program.registers, threads).is_err() {
+            warn!(
+                "NVIDIA launch exceeds Ada register budget symbol={symbol} registers={} threads={threads}",
+                program.registers
+            );
+            return Err(Error::Alignment);
+        }
+        // Previous launches have completed before any scratch allocation or
+        // engine-state change. A larger module stack needs a larger QMD limit.
+        if self.local_bytes_per_thread < program.local_bytes {
+            self.flush_pending(device)?;
+            self.ensure_local_memory(device, program.local_bytes)?;
+        }
+        let submission = self.submission.as_ref().ok_or(Error::Firmware)?;
+        let slot_offset = submission.pending.len() * SLOT_BYTES;
+        let launch = submission.address + slot_offset as u64;
+        let signal = launch + SIGNAL as u64;
+        for offset in (0..64).step_by(4) {
+            submission.region.write32(slot_offset + SIGNAL + offset, 0)?;
+        }
+        let mut constants = Record::<CONSTANT_BYTES>::default();
+        for (i, value) in [threads, 1, 1, blocks, 1, 1].into_iter().enumerate() {
+            constants.set(Field::<u32>::new(i * 4), value)?;
+        }
+        constants.set(Field::<u64>::new(24), 0x729400000000)?;
+        constants.set(Field::<u64>::new(32), 0x729300000000)?;
+        constants.set(Field::<u64>::new(40), 0xfffdc0)?;
+        let mut constants = constants.into_bytes();
+        constants[0x160..0x160 + arguments.len()].copy_from_slice(arguments);
+        submission.region.copy(slot_offset + 256, &constants)?;
+        let mut qmd = program.qmd.clone();
+        use QmdFields as Q;
+        for (field, value) in [
+            (Q::SHADER_LOCAL_MEMORY_HIGH_SIZE, self.local_bytes_per_thread),
+            (Q::CTA_RASTER_WIDTH, u64::from(blocks)),
+            (Q::CTA_THREAD_DIMENSION0, u64::from(threads)),
+            (Q::CONSTANT_BUFFER_ADDR_LOWER_0, (launch + 256) & 0xffffffff),
+            (Q::CONSTANT_BUFFER_ADDR_UPPER_0, (launch + 256) >> 32),
+            (Q::RELEASE0_STRUCTURE_SIZE, if self.device_timing { 0 } else { 2 }),
+            (Q::RELEASE0_ADDRESS_LOWER, signal & 0xffffffff),
+            (Q::RELEASE0_ADDRESS_UPPER, signal >> 32),
         ] {
             qmd.set_bits(field, value)?;
         }

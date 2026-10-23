@@ -239,6 +239,9 @@ Only the final QMD signals compute completion. The CPU also waits for the FIFO t
 Dropped buffers remain retired until queued work completes, including during process cleanup.
 GPU errors retain mapped storage and mark the device unhealthy.
 The loader shares each immutable CUBIN image across entry points, with separate resource metadata for each entry.
+Each program also caches its fixed QMD fields, including code addresses, resource limits, and compiler constant banks.
+Every launch copies that template before it changes dimensions, constants, completion addresses, timing mode, and the current scratch limit.
+Dependency links change only the owned submission copies.
 
 The optional device profile returns per-kernel CPU cycle counters through the checked compute syscall.
 Snapshots include dispatch counts, CPU preparation cycles, immediate-wait cycles, and instrumented GPU nanoseconds.
