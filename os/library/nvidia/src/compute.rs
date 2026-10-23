@@ -164,6 +164,9 @@ impl Kernel {
                 | Self::SumProjectionPartials
                 | Self::ResidualNorm
                 | Self::ProjectResidualBf16
+                | Self::DeltaConvolution
+                | Self::DeltaUpdate
+                | Self::DeltaOutput
         )
     }
 
@@ -261,6 +264,8 @@ impl Kernel {
     /// Select the cuTile specialization without changing the public request ABI.
     pub fn entry(self, parameters: &[u32]) -> &'static str {
         match (self, parameters) {
+            (Self::DeltaConvolution, [_, _, _]) => "delta_convolution_batch",
+            (Self::DeltaUpdate, [_, _, _, _]) => "delta_recurrent_batch",
             (Self::GatedProjectBf16, [k, _]) if k.is_multiple_of(2) => "gated_project_paired_bf16_weights",
             (Self::ProjectBf16, [1, k, n]) if !k.is_multiple_of(2) && *n > 8192 => "vector_project_unpaired_wide_bf16_weights",
             (Self::Project, [1, _, n]) if *n <= 8192 => "vector_project_tf32x3",
@@ -540,6 +545,16 @@ impl Kernel {
                 mutated = 1 << 2;
                 (channels, 4, 3, false)
             }
+            (Self::DeltaConvolution, &[channels, kernel, rows]) => {
+                if !(1..=8).contains(&kernel) {
+                    return Err(Error::InvalidField);
+                }
+                let history = product(&[channels, kernel])? as u64;
+                let n = product(&[rows, channels])? as u64;
+                extents[..4].copy_from_slice(&[n, history, history, n]);
+                mutated = 1 << 2;
+                (channels, 4, 3, false)
+            }
             (Self::DeltaPrepare, &[heads, key, value]) => {
                 let channels = delta_channels(heads, key, value)?;
                 extents[..6].copy_from_slice(&[
@@ -558,6 +573,24 @@ impl Kernel {
                 extents[..4].copy_from_slice(&[channels as u64, product(&[heads, 4])? as u64, product(&[heads, key, value])? as u64, n as u64]);
                 mutated = 1 << 2;
                 (product(&[heads, value.div_ceil(128), 128])?, 4, 3, false)
+            }
+            (Self::DeltaUpdate, &[heads, key, value, rows]) => {
+                if !(1..=128).contains(&key) || !(1..=128).contains(&value) {
+                    return Err(Error::InvalidField);
+                }
+                let channels = delta_channels(heads, key, value)?;
+                let scalars = product(&[rows, heads])? as u64;
+                extents[..7].copy_from_slice(&[
+                    product(&[rows, channels])? as u64,
+                    scalars,
+                    scalars,
+                    heads as u64,
+                    heads as u64,
+                    product(&[heads, key, value])? as u64,
+                    product(&[rows, heads, value])? as u64,
+                ]);
+                mutated = 1 << 5;
+                (product(&[heads, value.div_ceil(32), 128])?, 7, 6, false)
             }
             (Self::DeltaOutput, &[heads, value, epsilon]) => {
                 positive_float(epsilon)?;

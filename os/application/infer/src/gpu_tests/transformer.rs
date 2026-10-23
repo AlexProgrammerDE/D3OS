@@ -191,6 +191,54 @@ fn delta_batches<B: TransformerBackend>(backend: &B, config: DeltaConfig) -> Res
     Ok(trace)
 }
 
+fn rejected_delta_storage(backend: &Nvidia) -> Result<()> {
+    let config = DeltaConfig {
+        heads: 2,
+        key_dim: 5,
+        value_dim: 7,
+        kernel: 3,
+        epsilon: 1e-6,
+    };
+    let mut state = DeltaState {
+        convolution: tensor(backend, &[34, 3], 31)?,
+        recurrent: tensor(backend, &[2, 5, 7], 37)?,
+    };
+    let history = backend.download(&state.convolution)?;
+    let recurrent = backend.download(&state.recurrent)?;
+    let qkv = tensor(backend, &[2, 34], 3)?;
+    let gate = tensor(backend, &[2, 14], 5)?;
+    let beta = tensor(backend, &[2, 2], 7)?;
+    let alpha = tensor(backend, &[2, 2], 11)?;
+    let convolution = tensor(backend, &[34, 1, 3], 13)?;
+    let log_decay = tensor(backend, &[2], 17)?;
+    let time_bias = tensor(backend, &[2], 19)?;
+    // This input belongs to the final stage. Reject it before earlier stages
+    // can alter either cache, even though its shape is valid.
+    let norm = Tensor::from_buffer(&[7], backend.upload_bf16(core::iter::repeat_n(0x3f80u16, 7))?)?;
+    if backend
+        .delta_batch(
+            DeltaInputs {
+                qkv: &qkv,
+                gate: &gate,
+                beta: &beta,
+                alpha: &alpha,
+                convolution: &convolution,
+                log_decay: &log_decay,
+                time_bias: &time_bias,
+                norm: &norm,
+            },
+            &mut state,
+            config,
+        )
+        .is_ok()
+        || backend.download(&state.convolution)? != history
+        || backend.download(&state.recurrent)? != recurrent
+    {
+        return Err(d3os_compute::Error::DeviceFault);
+    }
+    Ok(())
+}
+
 fn pointwise<B: TransformerBackend>(backend: &B) -> Result<Vec<f32>> {
     let table = tensor(backend, &[7, 11], 3)?;
     let weights = tensor(backend, &[11], 5)?;
@@ -275,6 +323,7 @@ pub(super) fn run(backend: &Nvidia) -> core::result::Result<(), String> {
         let batch = attention_batches(backend, config).map_err(|e| format!("{e}"))?;
         compare_traces(&batch, &batched_trace(&cpu), "batched attention")?;
     }
+    rejected_delta_storage(backend).map_err(|error| format!("delta storage rejection: {error}"))?;
     for (heads, key_dim, value_dim, kernel) in [(1, 1, 1, 1), (2, 5, 7, 3), (3, 33, 17, 8), (16, 128, 128, 4), (2, 129, 9, 4), (2, 7, 129, 9)] {
         let config = DeltaConfig {
             heads,

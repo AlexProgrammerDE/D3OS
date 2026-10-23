@@ -91,6 +91,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "vector_project_wide_bf16_weights",
             "vector_project_unpaired_wide_bf16_weights",
             "gated_project_paired_bf16_weights",
+            "delta_convolution_batch",
+            "delta_recurrent_batch",
             "timestamp_probe",
             "local_stack_probe",
         ]);

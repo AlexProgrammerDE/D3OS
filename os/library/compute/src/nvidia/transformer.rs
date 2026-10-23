@@ -303,6 +303,52 @@ impl TransformerBackend for Nvidia {
             epsilon,
         } = config;
         let (rows, channels, value_width) = delta_shape(&input, state, config)?;
+        if rows > 1 && key_dim <= 128 && value_dim <= 128 && kernel <= 8 {
+            // Reject every unsupported storage type before the convolution
+            // changes history, including inputs consumed only by later stages.
+            if [
+                &input.qkv.buffer,
+                &input.gate.buffer,
+                &input.beta.buffer,
+                &input.alpha.buffer,
+                &input.convolution.buffer,
+                &input.log_decay.buffer,
+                &input.time_bias.buffer,
+                &input.norm.buffer,
+                &state.convolution.buffer,
+                &state.recurrent.buffer,
+            ]
+            .iter()
+            .any(|buffer| buffer.storage != Storage::F32)
+            {
+                return Err(Error::InvalidParameter);
+            }
+            let mixed = self.produce(
+                &[rows, channels],
+                Kernel::DeltaConvolution,
+                &[(&input.qkv.buffer, 0), (&input.convolution.buffer, 0), (&state.convolution.buffer, 0)],
+                &[channels, kernel, rows],
+            )?;
+            let raw = self.produce(
+                &[rows, value_width],
+                Kernel::DeltaUpdate,
+                &[
+                    (&mixed.buffer, 0),
+                    (&input.beta.buffer, 0),
+                    (&input.alpha.buffer, 0),
+                    (&input.log_decay.buffer, 0),
+                    (&input.time_bias.buffer, 0),
+                    (&state.recurrent.buffer, 0),
+                ],
+                &[heads, key_dim, value_dim, rows],
+            )?;
+            return self.produce(
+                &[rows, value_width],
+                Kernel::DeltaOutput,
+                &[(&raw.buffer, 0), (&input.norm.buffer, 0), (&input.gate.buffer, 0)],
+                &[rows * heads, value_dim, epsilon.to_bits() as usize],
+            );
+        }
         if key_dim <= 128 && value_dim <= 128 && kernel <= 8 {
             let inputs = [
                 (&input.qkv.buffer, 0),
@@ -316,13 +362,12 @@ impl TransformerBackend for Nvidia {
                 (&state.convolution.buffer, 0),
                 (&state.recurrent.buffer, 0),
             ];
-            let parameters = [heads, key_dim, value_dim, kernel, epsilon.to_bits() as usize, rows];
-            let (entry, parameters) = if rows == 1 {
-                (Kernel::DeltaFused, &parameters[..5])
-            } else {
-                (Kernel::DeltaFusedBatch, &parameters[..])
-            };
-            return self.produce(&[rows, value_width], entry, &inputs, parameters);
+            return self.produce(
+                &[rows, value_width],
+                Kernel::DeltaFused,
+                &inputs,
+                &[heads, key_dim, value_dim, kernel, epsilon.to_bits() as usize],
+            );
         }
         let mixed = self.allocate(&[channels])?;
         let scales = self.allocate(&[heads, 4])?;

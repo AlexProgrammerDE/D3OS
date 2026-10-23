@@ -63,6 +63,19 @@ The streaming essay demonstration generates 4,096 tokens in 24.393 seconds after
 Its longer context, terminal output, and recording costs differ from the 64-token benchmark.
 This result is not a regression measurement against the short benchmark.
 
+### Recurrent prompt processing
+
+The combined recurrent kernels reach 255 registers per thread and contain local-memory spill instructions.
+Prompt batches now separate convolution history from the recurrent matrix and distribute each head across 32-column blocks.
+The new kernels compile with 96 and 246 registers per thread, respectively, with 128 threads per block and no local-memory spills.
+The operator suite and all layer, batch, and cache references pass with unchanged tolerances and exact greedy tokens.
+
+An initial warm 22-token prompt falls from approximately 11 ms to 9 ms.
+The serialized device profile reduces the recurrent portion from 2.64 ms to 1.13 ms across 18 layers.
+A 16-column variant increases that portion to 1.46 ms and is removed.
+Single-token decoding retains the combined kernel.
+The separated stages reduce its device work but add launches, allocations, and request handling, reducing observed throughput.
+
 ## Earlier retained measurements
 
 The final retained sample on 2026-10-23 uses the cached QMD templates and two submission waves described below.

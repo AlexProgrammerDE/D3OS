@@ -1,6 +1,39 @@
 use d3os_nvidia::compute::Kernel;
 
 #[test]
+fn split_recurrence_checks_partial_columns_history_and_every_writer() {
+    let convolution = Kernel::DeltaConvolution.work(&[33, 8, 3]).unwrap();
+    assert_eq!(convolution.extents[..4], [99, 264, 264, 99]);
+    assert_eq!((convolution.blocks, convolution.threads, convolution.mutated), (1, 128, 1 << 2));
+    let recurrence = Kernel::DeltaUpdate.work(&[3, 33, 65, 7]).unwrap();
+    assert_eq!(recurrence.extents[..7], [2751, 21, 21, 3, 3, 6435, 1365]);
+    assert_eq!((recurrence.blocks, recurrence.threads, recurrence.mutated), (9, 128, 1 << 5));
+    for work in [convolution, recurrence] {
+        let addresses: Vec<_> = (0..work.pointers).map(|i| (i as u64 + 1) * 0x10000).collect();
+        assert!(work.validate_aliases(&addresses).is_ok());
+        for writer in 0..work.pointers {
+            if (work.mutated | (1 << work.output)) & (1 << writer) == 0 {
+                continue;
+            }
+            for other in 0..work.pointers {
+                if writer == other {
+                    continue;
+                }
+                let mut invalid = addresses.clone();
+                invalid[writer] = invalid[other];
+                assert!(work.validate_aliases(&invalid).is_err());
+            }
+        }
+    }
+    for p in [[33, 0, 3], [33, 9, 3], [33, 4, 0], [u32::MAX, 4, 3]] {
+        assert!(Kernel::DeltaConvolution.work(&p).is_err());
+    }
+    for p in [[3, 129, 65, 7], [3, 33, 129, 7], [3, 33, 65, 0], [u32::MAX, 128, 128, 7]] {
+        assert!(Kernel::DeltaUpdate.work(&p).is_err());
+    }
+}
+
+#[test]
 fn residual_projection_allows_only_exact_residual_aliasing() {
     let work = Kernel::ProjectResidualBf16.work(&[64, 17]).unwrap();
     assert_eq!(work.extents[..4], [17, 64, 544, 17]);

@@ -9,6 +9,7 @@ fn main() {
         "tensor.rs",
         "attention.rs",
         "delta.rs",
+        "delta-split.rs",
         "raster.rs",
         "diagnostic.rs",
     ] {

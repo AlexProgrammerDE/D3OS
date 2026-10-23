@@ -190,10 +190,13 @@ This keeps the intermediate storage bounded and avoids overflow from an unnormal
 All attention arithmetic remains FP32. Larger head dimensions retain the separate operator path.
 The fused path allocates its complete output during dispatch and removes the separate score tensor.
 The backend checks the consumer and cache-write requests before executing the cache updates.
-For supported recurrent dimensions, one block per head processes an entire prompt chunk in token order.
-The block retains private recurrent state across rows and writes the final state when the chunk completes.
-Eight value columns share each warp, limiting the batch block to 512 threads.
-Single-token decoding retains its four-column layout. Larger recurrent configurations retain the separate operator path.
+For supported recurrent dimensions, prompt batches separate convolution, recurrent updates, and output normalization.
+The convolution kernel owns each channel's history across all rows and writes its final history after the chunk.
+The recurrent kernel distributes each head across groups of 32 value columns.
+Each block retains its private state columns across rows and writes their final values when the chunk completes.
+This division removes register spills from the batch kernels and increases the number of independent blocks.
+Single-token decoding retains the combined kernel because the additional launches outweigh its lower device work.
+Larger recurrent configurations retain the separate operator path.
 The batch dispatch validates all input, output, history, and recurrent extents before changing state.
 It initializes the entire output directly, without a separate clear.
 The NVIDIA backend binds row ranges directly and retains scratch storage for the fallback operations.
