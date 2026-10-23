@@ -32,7 +32,8 @@ These measurements separate end-to-end overhead from device throughput. They are
 All 38 native inference and rendering operators now use NVIDIA cuTile Rust.
 The former NVPTX crate and GPUOcelot test harness are removed.
 The host compiler produces Tile IR 13.4 and assembles native Ada binaries with CUDA 13.4.92.
-D3OS retains its Rust driver, inference API, buffer ownership, and synchronous submission path.
+D3OS retains its Rust driver, inference API, and buffer ownership.
+Explicit command scopes now group dependent operations before a completion wait.
 
 Fresh measurements on 2026-10-23 use host CPUs 8, 10, 12, and 14:
 
@@ -55,7 +56,7 @@ Its combined vector and matrix entry reserved matrix resources during decoding.
 Separate matrix, small-vector, and wide-vector entries recovered much of that loss.
 Wide BF16 projections use paired 32-bit weight loads.
 Their measured bandwidth increased from 272 to 556 GB/s.
-Smaller projections retain separate cuTile implementations where paired loads measured slower.
+Smaller projections retain separate cuTile implementations; their later layout changes are described below.
 All variants use the same native request ABI.
 
 D3OS now reads fixed thread counts from the binaries and rejects mismatched launches.
@@ -139,6 +140,62 @@ Model file access, model upload, and session allocation remain separate timings.
 Warm generation still falls within the observed host variation and remains below the Linux target.
 All three Qwen guests pass the complete token, layer, and cache comparisons.
 AlexNet, the operator suite, and 600-frame DOOM verification also pass with shared images.
+
+### Owned command batches
+
+`Backend::with_commands()` now groups dependent GPU work while preserving the synchronous API outside explicit scopes.
+Qwen records each transformer pass inside a scope.
+The native queue owns 32 QMD slots, their constants, and their completion storage until the batch finishes.
+QMD dependencies preserve order without a CPU wait after every operator.
+Scope completion, CPU transfers, and profile snapshots drain pending work.
+The driver also waits for the FIFO tail before reusing command storage.
+Temporary allocations remain retired until that completion point.
+
+The same 64-token decode records 19,584 launches in 896 submissions, about 22 launches per submission.
+The first scope-only measurement generates 195.72 to 200.63 tokens/s, compared with roughly 150 to 160 before batching.
+A 128-slot queue shows no clear overall gain and increases first-use allocation costs, so the maintained queue retains 32 slots.
+A separate bulk-free API also shows no clear model gain and is removed.
+Hardware checks cover queue wraparound, temporary allocation reuse, readback inside a scope, nested scopes, and returned errors.
+
+### Small BF16 reductions
+
+Small even-width BF16 projections now use three-dimensional `[2, 4, 32]` tiles with explicit masked loads.
+The gated kernel's static shared storage decreases from 8,192 bytes to 64 bytes, excluding the driver's reserved prefix.
+Its register count decreases from 64 to 48 per thread.
+The compiler still chooses the physical lane layout.
+Separate entries prevent odd-width fallback resources from increasing the even-width launch requirements.
+
+The 1-by-1024 projection with 3,584 outputs decreases from 9.71 to 8.36 microseconds in GPU timestamp measurements.
+The warm gated operation decreases from about 23 to 17 microseconds through the application API.
+After 128 MiB of cache eviction, the gated operation remains near 43 microseconds.
+The warm microbenchmark gain therefore does not establish the same improvement for model weights streamed from VRAM.
+A reordered pair layout increases register use and reduces full-model throughput, so it is rejected.
+
+### Final measurements with command scopes
+
+Three fresh native guests use the retained cuTile bundle and host CPUs 8, 10, 12, and 14.
+The matched Linux guest runs afterward with the same GPU, token contract, FP32 caches, and 256-token capacity.
+
+| Workload | D3OS | Linux reference |
+| --- | ---: | ---: |
+| First-use 22-token prompt | 17 ms | 245.96 ms |
+| Warm 22-token prompt | 12 to 13 ms | 7.48 ms in a new context |
+| Warm 64-token generation | 192.19 to 204.47 tokens/s | 256.03 to 256.78 tokens/s in a new context |
+| Warm AlexNet forward | 1.45 ms | Separate reference required |
+| Uncapped DOOM `demo1` | 1383.86 to 1423.40 FPS | Earlier headless software baseline only |
+
+The six warm native generation samples average 199.56 tokens/s.
+Linux reset-context samples generate 254.85 to 256.52 tokens/s, with prompt times of 6.55 to 6.96 ms.
+The first-use intervals describe these prepared guests, with different kernel and graph setup costs.
+They do not establish a general cold-start advantage for D3OS.
+Warm native generation remains about 22% below this Linux reference, so the performance goal remains open.
+
+DOOM uses the native NVIDIA compute renderer and a 640-by-400 output framebuffer.
+The three runs complete the same 7,117 game ticks and 7,116 rendered frames, without a frame-rate cap.
+The duplicate corner overlay is removed. FPS remains above the game image, beside the title.
+The 600-frame pixel comparison and GPU operator checks after game exit still pass.
+All three Qwen guests retain the exact 64-token checksum and pass every layer, logit, batch, and cache comparison.
+AlexNet retains class 258 and passes all eight reference layers.
 
 The following sections preserve the earlier NVPTX measurements and implementation history.
 They do not describe the current compiler-generated register layouts.
@@ -589,19 +646,22 @@ Mesa's [QMD v3 implementation](https://chromium.googlesource.com/external/gitlab
 
 The resident Qwen benchmark reads `Nvidia::profile()` around prompt processing and decoding in the second session.
 The `phase=prefill` and `phase=decode` records separate the two workloads. Logging occurs after both timed intervals.
-The snapshot reports call counts, CPU launch cycles, and completion-wait cycles for each built-in kernel.
-`dispatch_share_pct` divides a kernel's cycles by the total dispatch cycles in that interval.
-It excludes application work outside dispatch and does not equal that kernel's share of total model latency.
-`wait_pct` includes GPU execution and completion polling, rather than an isolated device timestamp.
+With protocol version 3, each snapshot reports call counts, CPU preparation cycles, and immediate-launch wait cycles per built-in kernel.
+`prepare_share_pct` divides a kernel's preparation cycles by the total preparation cycles in that interval.
+It excludes application work and queue submission, so it does not equal that kernel's share of total model latency.
+`NATIVE_QUEUE_PROFILE` separately reports submission batches, queued launches, submission cycles, and all completion-wait cycles.
+Wait cycles include GPU execution and completion polling, rather than an isolated device timestamp.
+GPU timestamp instrumentation forces individual submissions and changes the workload's queue behavior.
 The counters cover the whole device. Concurrent GPU workloads invalidate attribution to one model.
 CPU cycles are useful within a run and are not a portable time unit across machines.
 
 ## Remaining work
 
-Qwen now batches prompt matrices but still submits synchronous operations separately.
+Qwen now batches prompt matrices and records dependent kernels inside command scopes.
 Attention scoring, softmax, and output now share one tiled launch per attention layer and prompt chunk.
 Recurrent updates now use one launch per layer and prompt chunk.
-The latest prompt profile puts projections and their partial reductions at about 68% of dispatch cycles, and recurrent work at about 22%.
+Earlier synchronous profiles put projections and their partial reductions at about 68% of dispatch cycles, and recurrent work at about 22%.
+The current preparation counters exclude queue waiting and cannot establish the same attribution.
 The next improvements must address matrix efficiency, recurrent execution, and submission costs.
 The matched benchmark now uses identical token work, audited weights, FP32 caches, and equal cache capacity.
 Longer contexts and prompts still need matched measurements.
@@ -609,7 +669,7 @@ The CPU token-selection work now combines only 32 GPU candidates.
 Each change must preserve the existing model reference or define and measure a separate precision policy.
 
 The previous large projection kernels matched Linux device throughput for the measured shapes.
-Recent native runs generate about 147 to 163 tokens/s, compared with about 258 to 261 tokens/s in the matched Linux reference.
+Command scopes increase native generation to about 192 to 204 tokens/s, compared with about 258 to 261 in the matched Linux reference.
 The remaining work must reduce complete model latency, rather than optimize already comparable streaming bandwidth.
 
 NVIDIA's cuTile Rust compiler is now the maintained base for every native GPU kernel.

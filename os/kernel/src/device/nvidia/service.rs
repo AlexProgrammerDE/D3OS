@@ -1,4 +1,4 @@
-//! Synchronous, process-owned compute buffers and built-in GPU dispatch.
+//! Process-owned compute buffers and explicit command scopes.
 use super::{DEVICE, Device, mmu::Allocation};
 use alloc::{collections::BTreeMap, vec::Vec};
 use d3os_nvidia::compute::{self as abi, Kernel, Request};
@@ -17,9 +17,16 @@ pub(super) struct Buffers {
     next: u64,
     live: BTreeMap<u64, Buffer>,
     free: Vec<Allocation>,
+    retired: Vec<Allocation>,
 }
 
 impl Buffers {
+    pub(super) fn reclaim_retired(&mut self) {
+        while let Some(allocation) = self.retired.pop() {
+            self.recycle(allocation);
+        }
+    }
+
     fn get(&self, handle: u64, owner: Uuid) -> Result<Buffer, Errno> {
         self.live.get(&handle).filter(|buffer| buffer.owner == owner).copied().ok_or(Errno::EINVALH)
     }
@@ -53,18 +60,20 @@ pub(crate) fn release_process(owner: Uuid) {
     };
     let _preempt = crate::process::core_local_storage::PreemptGuard::new();
     let mut device = device.lock();
-    let Some(compute) = device.compute.as_mut() else {
+    let Some(mut compute) = device.compute.take() else {
         return;
     };
-    if !compute.healthy {
-        return;
-    } // A faulted GPU may still reference its buffers.
-    let handles: Vec<_> = compute.buffers.live.iter().filter(|(_, b)| b.owner == owner).map(|(&h, _)| h).collect();
-    for handle in handles {
-        if let Some(buffer) = compute.buffers.live.remove(&handle) {
-            compute.buffers.recycle(buffer.allocation);
+    // A faulted GPU may still reference both live and retired buffers.
+    if compute.healthy && compute.flush_pending(&device).is_ok() {
+        compute.command_scopes.remove(&owner);
+        let handles: Vec<_> = compute.buffers.live.iter().filter(|(_, b)| b.owner == owner).map(|(&h, _)| h).collect();
+        for handle in handles {
+            if let Some(buffer) = compute.buffers.live.remove(&handle) {
+                compute.buffers.recycle(buffer.allocation);
+            }
         }
     }
+    device.compute = Some(compute);
 }
 
 pub(crate) fn request(owner: Uuid, request: &Request) -> SyscallResult {
@@ -76,6 +85,7 @@ pub(crate) fn request(owner: Uuid, request: &Request) -> SyscallResult {
     let _preempt = crate::process::core_local_storage::PreemptGuard::new();
     let mut device = DEVICE.get().ok_or(Errno::ENOTSUP)?.lock();
     let mut compute = device.compute.take().ok_or(Errno::ENOTSUP)?;
+    compute.defer_launch = compute.command_scopes.contains_key(&owner) && !compute.device_timing;
     let result = if compute.healthy {
         serve(&device, &mut compute, owner, request)
     } else {
@@ -87,10 +97,36 @@ pub(crate) fn request(owner: Uuid, request: &Request) -> SyscallResult {
 
 fn serve(device: &Device, compute: &mut super::rm::Compute, owner: Uuid, request: &Request) -> SyscallResult {
     match request.operation {
+        abi::BEGIN_COMMANDS => {
+            let depth = compute.command_scopes.entry(owner).or_default();
+            *depth = depth.checked_add(1).ok_or(Errno::EINVAL)?;
+            Ok(0)
+        }
+        abi::END_COMMANDS => {
+            let depth = compute.command_scopes.get(&owner).copied().ok_or(Errno::EINVAL)?;
+            gpu_result(compute.flush_pending(device))?;
+            if depth == 1 {
+                compute.command_scopes.remove(&owner);
+            } else {
+                compute.command_scopes.insert(owner, depth - 1);
+            }
+            Ok(0)
+        }
+        abi::QUEUE_PROFILE => {
+            if request.elements != 1 {
+                return Err(Errno::EINVAL);
+            }
+            gpu_result(compute.flush_pending(device))?;
+            unsafe {
+                (request.pointer as *mut abi::QueueProfile).write_unaligned(compute.queue_profile);
+            }
+            Ok(0)
+        }
         abi::DEVICE_TIMING => {
             if request.elements > 1 {
                 return Err(Errno::EINVAL);
             }
+            gpu_result(compute.flush_pending(device))?;
             compute.device_timing = request.elements != 0;
             Ok(0)
         }
@@ -98,6 +134,7 @@ fn serve(device: &Device, compute: &mut super::rm::Compute, owner: Uuid, request
             if request.elements != abi::KERNEL_COUNT as u64 {
                 return Err(Errno::EINVAL);
             }
+            gpu_result(compute.flush_pending(device))?;
             // sys_gpu_compute validated the complete writable user range.
             unsafe {
                 core::ptr::copy_nonoverlapping(compute.profile.as_ptr().cast::<u8>(), request.pointer as *mut u8, size_of_val(&compute.profile));
@@ -145,8 +182,16 @@ fn serve(device: &Device, compute: &mut super::rm::Compute, owner: Uuid, request
         }
         abi::FREE => {
             let buffer = compute.buffers.get(request.handle, owner)?;
+            let retire = compute.defer_launch && compute.pending_commands();
+            if !retire {
+                gpu_result(compute.flush_pending(device))?;
+            }
             compute.buffers.live.remove(&request.handle);
-            compute.buffers.recycle(buffer.allocation);
+            if retire {
+                compute.buffers.retired.push(buffer.allocation);
+            } else {
+                compute.buffers.recycle(buffer.allocation);
+            }
             Ok(0)
         }
         abi::UPLOAD | abi::DOWNLOAD => {
@@ -197,7 +242,8 @@ fn serve(device: &Device, compute: &mut super::rm::Compute, owner: Uuid, request
             inference_module(compute)?;
             let output = if produce {
                 // All inputs were checked before allocation. Do not publish the
-                // new handle until a proven full writer completes successfully.
+                // new handle until a proven full writer is accepted. Scoped
+                // readback and scope completion wait for that writer to finish.
                 let bytes = request.elements.checked_mul(4).and_then(|n| n.checked_add(4095)).ok_or(Errno::EINVAL)? & !4095;
                 let handle = compute
                     .buffers

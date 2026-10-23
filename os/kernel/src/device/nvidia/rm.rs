@@ -49,6 +49,10 @@ pub(super) struct Compute {
     pub(super) last_wait_cycles: u64,
     pub(super) device_timing: bool,
     pub(super) last_device_ns: u64,
+    pub(super) command_scopes: BTreeMap<uuid::Uuid, u32>,
+    pub(super) defer_launch: bool,
+    pub(super) last_flush_cycles: u64,
+    pub(super) queue_profile: d3os_nvidia::compute::QueueProfile,
     telemetry: Option<super::gsp::DmaRegion>,
     telemetry_object: u32,
 }
@@ -97,6 +101,10 @@ impl Compute {
             last_wait_cycles: 0,
             device_timing: false,
             last_device_ns: 0,
+            command_scopes: BTreeMap::new(),
+            defer_launch: false,
+            last_flush_cycles: 0,
+            queue_profile: d3os_nvidia::compute::QueueProfile::default(),
             telemetry: None,
             telemetry_object: 0,
         })

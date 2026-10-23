@@ -173,7 +173,26 @@ fn multiply() -> d3os_compute::Result<Tensor<Cpu>> {
 `Tensor` uses contiguous row-major storage.
 Convolution uses NCHW input and OIHW weights.
 Linear layers use weights with shape `[output_features, input_features]`.
-All current backend operations complete before they return.
+Outside command scopes, backend operations complete before they return.
+
+For dependent operations, use a command scope:
+
+```rust
+let result = backend.with_commands(|| -> d3os_compute::Result<_> {
+    let product = backend.matmul(&a, &b)?;
+    backend.relu(product)
+})?;
+```
+
+The CPU backend runs the closure directly.
+The NVIDIA backend preserves GPU operation order and waits when the scope completes.
+Downloads inside the scope also wait. Temporary buffers remain owned until their queued users finish.
+Nested scopes wait before returning, and closure errors still close their scopes.
+NVIDIA scopes apply to the process, including calls from its other threads.
+Qwen uses scopes automatically for transformer execution.
+
+Protocol version 3 adds command scopes and changes profile semantics.
+Rebuild the kernel and compute applications together. Incompatible versions return an error.
 
 For model execution, add `os/library/inference`.
 Load weights with `AlexNet::load`, supply a normalized input tensor, and call `AlexNet::forward`.

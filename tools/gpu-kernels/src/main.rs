@@ -86,6 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         inference.extend([
             "vector_project_tf32x3",
             "vector_project_bf16_weights",
+            "vector_project_paired_bf16_weights",
             "vector_project_wide_tf32x3",
             "vector_project_wide_bf16_weights",
             "vector_project_unpaired_wide_bf16_weights",

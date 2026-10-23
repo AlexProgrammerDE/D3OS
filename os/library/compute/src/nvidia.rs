@@ -71,6 +71,16 @@ impl<T> Drop for GpuBuffer<T> {
 pub struct Nvidia;
 
 impl Nvidia {
+    pub fn queue_profile(&self) -> Result<abi::QueueProfile> {
+        let mut profile = abi::QueueProfile::default();
+        request(Request {
+            pointer: &mut profile as *mut abi::QueueProfile as u64,
+            elements: 1,
+            ..operation(abi::QUEUE_PROFILE)
+        })?;
+        Ok(profile)
+    }
+
     /// Instrument future launches with GPU timestamps. This adds command work
     /// and affects the whole device; use only around an exclusive benchmark.
     pub fn set_device_timing(&self, enabled: bool) -> Result<()> {
@@ -300,6 +310,16 @@ impl Nvidia {
 }
 
 impl Backend for Nvidia {
+    fn with_commands<T, E: From<Error>>(&self, work: impl FnOnce() -> core::result::Result<T, E>) -> core::result::Result<T, E> {
+        request(operation(abi::BEGIN_COMMANDS)).map_err(E::from)?;
+        let result = work();
+        let completed = request(operation(abi::END_COMMANDS)).map_err(E::from);
+        match result {
+            Ok(output) => completed.map(|_| output),
+            Err(error) => Err(error),
+        }
+    }
+
     type Buffer = GpuBuffer;
 
     fn name(&self) -> &'static str {

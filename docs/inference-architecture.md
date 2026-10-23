@@ -15,7 +15,7 @@ The [renderer explanation](nvidia-rendering-design.md) describes command orderin
 
 ## Source layout
 
-- `os/library/compute`: tensor storage, the synchronous backend contract, CPU operators, and the native NVIDIA backend.
+- `os/library/compute`: tensor storage, command scopes, CPU operators, and the native NVIDIA backend.
 - `os/library/inference`: checked tensor archives, AlexNet evaluation, Qwen text generation, tokenization, and numerical verification.
 - `os/application/infer`: D3OS file access, shell commands, and serial reports.
 - `os/library/inference/examples/infer-host.rs`: host execution of the same model implementation.
@@ -127,7 +127,7 @@ The CI workflow provides repeatable numerical tests and an optional pretrained Q
 The current target is the RTX 4090 Laptop GPU (`10de:2757`, AD103) with one serialized compute queue.
 The driver boots pinned signed firmware and allocates a private, virtually bound compute context.
 The process-owned syscall interface accepts built-in kernels and opaque buffer handles.
-Native compute protocol version 2 extends profile records with GPU timing.
+Native compute protocol version 3 adds command scopes and queue profiles.
 Rebuild compute applications with the matching SDK. The kernel rejects incompatible request versions.
 The D3OS kernel verifies handle arithmetic and launch dimensions before dispatch.
 GPU tensor kernels use native Ada SASS compiled from Rust device code.
@@ -139,7 +139,7 @@ Compensated accumulation corrects that mismatch without changing the reference t
 The hardware operator suite also covers partial tiles, long reductions, batched convolution, and buffer reuse.
 The loader reads module stack metadata and sizes local scratch storage before submission.
 It also reads each entrypoint’s static shared-memory section and includes the reserved CUDA prefix in its QMD allocation.
-The current shared-memory partition accepts at most 32 KiB, including that prefix.
+The driver selects a 32, 64, or 100 KiB shared-memory partition, including the reserved 1 KiB prefix.
 Before submission, the driver also checks the entrypoint's register count against Ada's 64K-register budget per block.
 It accounts for register allocation granularity and partial warps.
 An oversized launch returns an error before the driver queues GPU work.
@@ -147,11 +147,12 @@ A GPU boot diagnostic exercises a real local stack frame across partial blocks.
 
 Qwen matrix weights remain in packed BF16 storage while activations and accumulators retain FP32 values.
 Single-row projections use coalesced warp reductions.
-For aligned rows with an input width divisible by 64, each lane reads two BF16 weights through one 32-bit load.
+For even input widths, each lane reads two BF16 weights through one 32-bit load.
 Bit expansion preserves both weights exactly. Activations and fused multiply-add accumulation remain FP32.
 Other widths retain scalar reads, including odd rows and tails.
-Ordinary BF16 projection warps own one output through 2,048 columns, four through 8,192 columns, and eight for wider matrices.
-This gives medium projections more active warps while retaining input reuse for the vocabulary projection.
+Small BF16 projections use tiles with shape `[2, 4, 32]`, with two groups of 32 weight pairs per output.
+This layout reduces the shared storage for partial sums. cuTile selects the physical register and lane layout.
+Wider projections retain eight outputs per warp and reuse inputs across the vocabulary matrix.
 Multi-row projections expand BF16 weights exactly and split FP32 activations into TF32 high and residual parts.
 They need two tensor products because BF16 weights have no TF32 residual.
 FP32 weight operations retain three tensor products and compensated FP32 accumulation.
@@ -217,13 +218,29 @@ Larger configurations retain the separate operator path.
 Both paths keep state in VRAM and pass independent output and state comparisons after each step.
 
 Matrix, row-copy, embedding-gather, RMSNorm, and fused delta operations combine output allocation with the kernel that fills it.
-The kernel returns the new handle only after a validated full writer completes.
-This removes a redundant zero kernel without exposing previous buffer contents.
+The driver validates a full writer before it publishes the new handle.
+Outside command scopes, that writer completes before the call returns.
+Inside a scope, GPU consumers retain queue order, and CPU readback waits for completion.
+This removes a redundant zero kernel without exposing previous buffer contents to the CPU.
 Ordinary allocations remain zeroed, including recycled storage.
 
+`Backend::with_commands()` groups dependent operations without an immediate CPU wait after each launch.
+The CPU backend runs the closure directly. The NVIDIA backend records process-scoped, nested command scopes.
+Qwen uses one scope for the embedding and all transformer layers in each prompt chunk or decode step.
+Readback, transfer, profile snapshots, and scope completion drain the queue.
+Nested scope completion also drains the queue. A returned closure error still closes the scope.
+
+The submission region owns 32 slots, each with a QMD, launch constants, and completion storage.
+QMD dependencies use GPU virtual addresses and preserve launch order.
+Only the final QMD signals compute completion. The CPU also waits for the FIFO tail before slot reuse.
+Dropped buffers remain retired until queued work completes, including during process cleanup.
+GPU errors retain mapped storage and mark the device unhealthy.
+The loader shares each immutable CUBIN image across entry points, with separate resource metadata for each entry.
+
 The optional device profile returns per-kernel CPU cycle counters through the checked compute syscall.
-Snapshots include dispatch counts, total launch cycles, completion-wait cycles, and instrumented GPU nanoseconds.
-GPU timestamp instrumentation is disabled by default and can be enabled around an exclusive benchmark.
+Snapshots include dispatch counts, CPU preparation cycles, immediate-wait cycles, and instrumented GPU nanoseconds.
+`QueueProfile` separately counts all submission batches, launches, submission cycles, and completion-wait cycles.
+GPU timestamp instrumentation is disabled by default. Enabling it forces individual submissions for kernel attribution.
 The counters cover the whole device, so exclusive workloads are required for useful attribution.
 
 The [tinygrad direct PCI backend](https://github.com/tinygrad/tinygrad/blob/master/tinygrad/runtime/support/nv/nvdev.py) provides a reference for initialization.

@@ -2,7 +2,7 @@
 
 use crate::{Error, Result};
 
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 pub const INFO: u32 = 0;
 pub const ALLOCATE: u32 = 1;
 pub const FREE: u32 = 2;
@@ -10,11 +10,27 @@ pub const UPLOAD: u32 = 3;
 pub const DOWNLOAD: u32 = 4;
 pub const LAUNCH: u32 = 5;
 pub const PROFILE: u32 = 6;
-/// Allocate and fully overwrite an output before its handle becomes visible.
+/// Allocate an output and enqueue a full writer. Readback and scope completion
+/// wait for that writer; outside command scopes this operation is synchronous.
 pub const LAUNCH_ALLOCATE: u32 = 7;
 /// Enable GPU timestamp instrumentation for subsequent launches (elements 0 or 1).
 pub const DEVICE_TIMING: u32 = 8;
+/// Open a process-scoped command batch. Nested scopes are supported.
+pub const BEGIN_COMMANDS: u32 = 9;
+/// Complete queued work before closing one command scope.
+pub const END_COMMANDS: u32 = 10;
+pub const QUEUE_PROFILE: u32 = 11;
 pub const KERNEL_COUNT: usize = 38;
+
+/// Device-wide submission counters, including waits outside kernel dispatch.
+#[derive(Clone, Copy, Debug, Default)]
+#[repr(C)]
+pub struct QueueProfile {
+    pub batches: u64,
+    pub launches: u64,
+    pub cycles: u64,
+    pub wait_cycles: u64,
+}
 
 /// Device-wide CPU cycle counters. Read snapshots around an exclusive workload
 /// and subtract them. Wait cycles include GPU execution and completion polling.
@@ -22,7 +38,9 @@ pub const KERNEL_COUNT: usize = 38;
 #[repr(C)]
 pub struct ProfileEntry {
     pub calls: u64,
+    /// CPU recording and metadata preparation, excluding queue submission.
     pub cycles: u64,
+    /// Immediate-launch waits only. QueueProfile includes all batch waits.
     pub wait_cycles: u64,
     /// GPU start-to-completion nanoseconds for instrumented launches only.
     pub device_ns: u64,
@@ -228,6 +246,7 @@ impl Kernel {
             (Self::ProjectBf16, [1, k, n]) if !k.is_multiple_of(2) && *n > 8192 => "vector_project_unpaired_wide_bf16_weights",
             (Self::Project, [1, _, n]) if *n <= 8192 => "vector_project_tf32x3",
             (Self::Project, [1, _, _]) => "vector_project_wide_tf32x3",
+            (Self::ProjectBf16, [1, k, n]) if k.is_multiple_of(2) && *n <= 8192 => "vector_project_paired_bf16_weights",
             (Self::ProjectBf16, [1, _, n]) if *n <= 8192 => "vector_project_bf16_weights",
             (Self::ProjectBf16, [1, _, _]) => "vector_project_wide_bf16_weights",
             _ => self.symbol(),

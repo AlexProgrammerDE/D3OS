@@ -3,6 +3,7 @@ fn main() {
     let mut source = String::from("#[cutile::module] pub mod kernels { use cutile::core::*;\n");
     for file in [
         "common.rs",
+        "quad.rs",
         "elementwise.rs",
         "matrix.rs",
         "tensor.rs",
@@ -38,14 +39,12 @@ fn main() {
     }
     println!("cargo:rerun-if-changed=src/paired.rs.in");
     let paired = fs::read_to_string("src/paired.rs.in").expect("read paired BF16 template");
-    for columns in [4, 32] {
-        source.push_str(
-            &paired
-                .replace("paired_project_template", &format!("paired_project_{columns}"))
-                .replace("TILE_COLUMNS", &columns.to_string())
-                .replace("PAIR_VALUES", &(columns * 64).to_string()),
-        );
-    }
+    source.push_str(
+        &paired
+            .replace("paired_project_template", "paired_project_32")
+            .replace("TILE_COLUMNS", "32")
+            .replace("PAIR_VALUES", "2048"),
+    );
     println!("cargo:rerun-if-changed=src/texture.rs.in");
     let texture = fs::read_to_string("src/texture.rs.in").expect("read texture tile template");
     for width in [1, 32] {

@@ -27,12 +27,21 @@ fn profile(before: &[d3os_nvidia::compute::ProfileEntry], after: &[d3os_nvidia::
         let wait = b.wait_cycles.wrapping_sub(a.wait_cycles);
         let kernel = Kernel::from_raw(index as u32).expect("profile index is a built-in kernel");
         report(format_args!(
-            "NATIVE_KERNEL_PROFILE symbol={} calls={calls} cycles={cycles} wait_cycles={wait} dispatch_share_pct={:.2} wait_pct={:.2} phase={phase}",
+            "NATIVE_KERNEL_PROFILE symbol={} calls={calls} prepare_cycles={cycles} serial_wait_cycles={wait} prepare_share_pct={:.2} phase={phase}",
             kernel.symbol(),
-            cycles as f64 * 100. / total.max(1) as f64,
-            wait as f64 * 100. / cycles.max(1) as f64
+            cycles as f64 * 100. / total.max(1) as f64
         ));
     }
+}
+
+fn queue_profile(before: d3os_nvidia::compute::QueueProfile, after: d3os_nvidia::compute::QueueProfile, phase: &str) {
+    report(format_args!(
+        "NATIVE_QUEUE_PROFILE phase={phase} batches={} launches={} submit_cycles={} wait_cycles={}",
+        after.batches.wrapping_sub(before.batches),
+        after.launches.wrapping_sub(before.launches),
+        after.cycles.wrapping_sub(before.cycles),
+        after.wait_cycles.wrapping_sub(before.wait_cycles)
+    ));
 }
 
 pub(super) fn kernels(backend: &Nvidia) -> Result<(), String> {
@@ -251,7 +260,10 @@ pub(super) fn qwen(backend: &Nvidia) -> Result<(), String> {
         let mut session = model.session(backend, CAPACITY).map_err(|error| format!("{error}"))?;
         let state_ms = now() - start;
         let prefill_profile = if run == 1 {
-            Some(backend.profile().map_err(|error| format!("{error}"))?)
+            Some((
+                backend.profile().map_err(|error| format!("{error}"))?,
+                backend.queue_profile().map_err(|error| format!("{error}"))?,
+            ))
         } else {
             None
         };
@@ -259,6 +271,7 @@ pub(super) fn qwen(backend: &Nvidia) -> Result<(), String> {
         let mut logits = session.prefill(&prompt).map_err(|error| format!("{error}"))?;
         let prefill_ms = now() - start;
         let before = backend.profile().map_err(|error| format!("{error}"))?;
+        let queue_before = backend.queue_profile().map_err(|error| format!("{error}"))?;
         let mut tokens = Vec::with_capacity(DECODE);
         let start = now();
         let mut checksum = 0u64;
@@ -273,10 +286,13 @@ pub(super) fn qwen(backend: &Nvidia) -> Result<(), String> {
         let decode_ms = now() - start;
         if run == 1 {
             let after = backend.profile().map_err(|error| format!("{error}"))?;
-            if let Some(prefill_before) = prefill_profile {
+            let queue_after = backend.queue_profile().map_err(|error| format!("{error}"))?;
+            if let Some((prefill_before, queue_prefill)) = prefill_profile {
                 profile(&prefill_before, &before, "prefill");
+                queue_profile(queue_prefill, queue_before, "prefill");
             }
             profile(&before, &after, "decode");
+            queue_profile(queue_before, queue_after, "decode");
         }
         report(format_args!(
             "INFERENCE_BENCH qwen backend=nvidia run={run} warm={} file_ms={file_ms} load_ms={load_ms} state_ms={state_ms} session_capacity={CAPACITY} prompt_tokens={} prefill_ms={prefill_ms} prefill_tps={:.3} decode_tokens={DECODE} decode_ms={decode_ms} decode_tps={:.3} checksum={checksum}",

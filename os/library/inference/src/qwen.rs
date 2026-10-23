@@ -400,60 +400,63 @@ impl<'a, B: TransformerBackend> Session<'a, B> {
         self.failed = true;
         let backend = self.backend;
         let config = self.model.config;
-        let mut hidden = if tokens.len() == 1 {
-            backend.embedding(&self.model.embedding, tokens[0] as usize)?
-        } else {
-            backend.embedding_batch(&self.model.embedding, tokens)?
-        };
-        for (index, (layer, cache)) in self.model.layers.iter().zip(&mut self.caches).enumerate() {
-            let normalized = backend.rms_norm(&hidden, &layer.input_norm, config.epsilon)?;
-            let mixed = match (&layer.mixer, cache) {
-                (Mixer::Full(weights), Cache::Full(state)) => {
-                    let q = backend.project(&normalized, &weights.q)?;
-                    let k = backend.project(&normalized, &weights.k)?;
-                    let v = backend.project(&normalized, &weights.v)?;
-                    let attention = backend.attention_batch(
-                        AttentionInputs {
-                            query_gate: &q,
-                            key: &k,
-                            value: &v,
-                            query_norm: &weights.q_norm,
-                            key_norm: &weights.k_norm,
-                        },
-                        state,
-                        config.attention(),
-                    )?;
-                    backend.project(&attention, &weights.out)?
-                }
-                (Mixer::Linear(weights), Cache::Linear(state)) => {
-                    let qkv = backend.project(&normalized, &weights.qkv)?;
-                    let z = backend.project(&normalized, &weights.z)?;
-                    let beta = backend.project(&normalized, &weights.beta)?;
-                    let alpha = backend.project(&normalized, &weights.alpha)?;
-                    let attention = backend.delta_batch(
-                        DeltaInputs {
-                            qkv: &qkv,
-                            gate: &z,
-                            beta: &beta,
-                            alpha: &alpha,
-                            convolution: &weights.conv,
-                            log_decay: &weights.log_decay,
-                            time_bias: &weights.time_bias,
-                            norm: &weights.norm,
-                        },
-                        state,
-                        config.delta(),
-                    )?;
-                    backend.project(&attention, &weights.out)?
-                }
-                _ => return Err(Error::InvalidConfig),
+        let hidden = backend.with_commands(|| -> Result<Tensor<B>> {
+            let mut hidden = if tokens.len() == 1 {
+                backend.embedding(&self.model.embedding, tokens[0] as usize)?
+            } else {
+                backend.embedding_batch(&self.model.embedding, tokens)?
             };
-            hidden = backend.add(hidden, &mixed)?;
-            let normalized = backend.rms_norm(&hidden, &layer.post_norm, config.epsilon)?;
-            let activation = backend.gated_project(&normalized, &layer.gate, &layer.up)?;
-            hidden = backend.add(hidden, &backend.project(&activation, &layer.down)?)?;
-            observe(index, &hidden)?;
-        }
+            for (index, (layer, cache)) in self.model.layers.iter().zip(&mut self.caches).enumerate() {
+                let normalized = backend.rms_norm(&hidden, &layer.input_norm, config.epsilon)?;
+                let mixed = match (&layer.mixer, cache) {
+                    (Mixer::Full(weights), Cache::Full(state)) => {
+                        let q = backend.project(&normalized, &weights.q)?;
+                        let k = backend.project(&normalized, &weights.k)?;
+                        let v = backend.project(&normalized, &weights.v)?;
+                        let attention = backend.attention_batch(
+                            AttentionInputs {
+                                query_gate: &q,
+                                key: &k,
+                                value: &v,
+                                query_norm: &weights.q_norm,
+                                key_norm: &weights.k_norm,
+                            },
+                            state,
+                            config.attention(),
+                        )?;
+                        backend.project(&attention, &weights.out)?
+                    }
+                    (Mixer::Linear(weights), Cache::Linear(state)) => {
+                        let qkv = backend.project(&normalized, &weights.qkv)?;
+                        let z = backend.project(&normalized, &weights.z)?;
+                        let beta = backend.project(&normalized, &weights.beta)?;
+                        let alpha = backend.project(&normalized, &weights.alpha)?;
+                        let attention = backend.delta_batch(
+                            DeltaInputs {
+                                qkv: &qkv,
+                                gate: &z,
+                                beta: &beta,
+                                alpha: &alpha,
+                                convolution: &weights.conv,
+                                log_decay: &weights.log_decay,
+                                time_bias: &weights.time_bias,
+                                norm: &weights.norm,
+                            },
+                            state,
+                            config.delta(),
+                        )?;
+                        backend.project(&attention, &weights.out)?
+                    }
+                    _ => return Err(Error::InvalidConfig),
+                };
+                hidden = backend.add(hidden, &mixed)?;
+                let normalized = backend.rms_norm(&hidden, &layer.post_norm, config.epsilon)?;
+                let activation = backend.gated_project(&normalized, &layer.gate, &layer.up)?;
+                hidden = backend.add(hidden, &backend.project(&activation, &layer.down)?)?;
+                observe(index, &hidden)?;
+            }
+            Ok(hidden)
+        })?;
         self.position += tokens.len();
         self.failed = false;
         Ok(hidden)

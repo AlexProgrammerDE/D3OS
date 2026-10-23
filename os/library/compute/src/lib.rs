@@ -140,9 +140,16 @@ pub fn output_extent(input: usize, kernel: usize, stride: usize, padding: usize)
 }
 
 /// Synchronous tensor operations. Successful return means that the output is ready.
-/// A hardware backend can manage asynchronous queues internally and synchronize here.
+/// Explicit command scopes can defer work until readback or scope completion.
 pub trait Backend: Sized {
     type Buffer: Buffer;
+
+    /// Group operations while retaining their order. Outputs are ready when
+    /// this call returns, including nested scopes. CPU reads synchronize inside
+    /// the scope; temporary buffers remain owned until queued work completes.
+    fn with_commands<T, E: From<Error>>(&self, work: impl FnOnce() -> core::result::Result<T, E>) -> core::result::Result<T, E> {
+        work()
+    }
 
     fn name(&self) -> &'static str;
     fn upload(&self, values: Vec<f32>) -> Result<Self::Buffer>;

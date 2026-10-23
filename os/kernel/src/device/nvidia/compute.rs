@@ -22,15 +22,24 @@ pub(super) struct Program {
     source: (usize, usize),
 }
 
-// QMD and constants occupy the first 1280 bytes. Signals use a separate
-// cache line, and commands have their own page. Reuse requires completion of
-// both compute and the FIFO tail. Ownership lasts for the device lifetime.
+// Each slot owns its QMD, constants, and completion cache line. A dependency
+// chain completes before any slot or retired buffer can be reused.
+const SLOTS: usize = 32;
+const SLOT_BYTES: usize = 2048;
 const SIGNAL: usize = 1536;
-const COMMANDS: usize = 4096;
+const COMMANDS: usize = SLOTS * SLOT_BYTES;
+
+struct Pending {
+    qmd: Record<256>,
+    symbol: &'static str,
+    dimensions: [u32; 2],
+}
 
 pub(super) struct Submission {
     region: DmaRegion,
     address: u64,
+    pending: Vec<Pending>,
+    invalidate_code: bool,
 }
 
 impl Compute {
@@ -65,13 +74,19 @@ impl Compute {
     }
 
     pub(super) fn prepare_submission(&mut self, device: &Device) -> Result<()> {
-        let region = DmaRegion::new(8192)?;
+        let bytes = COMMANDS + 4096;
+        let region = DmaRegion::new(bytes)?;
         let physical = region.address as u64;
         // Retain DMA ownership even if installing the mapping later fails.
-        self.submission = Some(Submission { region, address: 0 });
-        let address = self.memory.map_system(device, physical, 8192)?;
+        self.submission = Some(Submission {
+            region,
+            address: 0,
+            pending: Vec::with_capacity(SLOTS),
+            invalidate_code: false,
+        });
+        let address = self.memory.map_system(device, physical, bytes as u64)?;
         self.submission.as_mut().ok_or(Error::Firmware)?.address = address;
-        info!("NVIDIA_SUBMISSION_READY physical={physical:#x} virtual={address:#x} bytes=8192");
+        info!("NVIDIA_SUBMISSION_READY physical={physical:#x} virtual={address:#x} bytes={bytes} slots={SLOTS}");
         Ok(())
     }
 
@@ -228,6 +243,9 @@ impl Compute {
         if arguments.len() > 512 || threads == 0 || threads > 1024 || blocks == 0 {
             return Err(Error::Alignment);
         }
+        if self.submission.as_ref().ok_or(Error::Firmware)?.pending.len() == SLOTS {
+            self.flush_pending(device)?;
+        }
         let cached = self.programs.contains_key(symbol);
         let program = self.load_program(device, cubin, symbol)?;
         if program.required_threads.is_some_and(|required| required != [threads, 1, 1]) {
@@ -242,13 +260,16 @@ impl Compute {
         }
         // Previous launches have completed before any scratch allocation or
         // engine-state change. A larger module stack needs a larger QMD limit.
-        self.ensure_local_memory(device, program.local_bytes)?;
-        let vram = device.vram.as_ref().ok_or(Error::Firmware)?;
+        if self.local_bytes_per_thread < program.local_bytes {
+            self.flush_pending(device)?;
+            self.ensure_local_memory(device, program.local_bytes)?;
+        }
         let submission = self.submission.as_ref().ok_or(Error::Firmware)?;
-        let launch = submission.address;
+        let slot_offset = submission.pending.len() * SLOT_BYTES;
+        let launch = submission.address + slot_offset as u64;
         let signal = launch + SIGNAL as u64;
         for offset in (0..64).step_by(4) {
-            submission.region.write32(SIGNAL + offset, 0)?;
+            submission.region.write32(slot_offset + SIGNAL + offset, 0)?;
         }
         let mut constants = Record::<1024>::default();
         for (i, value) in [threads, 1, 1, blocks, 1, 1].into_iter().enumerate() {
@@ -259,7 +280,7 @@ impl Compute {
         constants.set(Field::<u64>::new(40), 0xfffdc0)?;
         let mut constants = constants.into_bytes();
         constants[0x160..0x160 + arguments.len()].copy_from_slice(arguments);
-        submission.region.copy(256, &constants)?;
+        submission.region.copy(slot_offset + 256, &constants)?;
         let shared_partition = u64::from(d3os_nvidia::cubin::shared_partition(program.shared_bytes as u32)?);
         let mut qmd = Record::<256>::default();
         use QmdFields as Q;
@@ -369,7 +390,55 @@ impl Compute {
         ] {
             qmd.set_bits(field, value)?;
         }
-        submission.region.copy(0, qmd.as_bytes())?;
+        let submission = self.submission.as_mut().ok_or(Error::Firmware)?;
+        if let Some(previous) = submission.pending.last_mut() {
+            d3os_nvidia::qmd::chain(&mut previous.qmd, launch)?;
+        }
+        submission.invalidate_code |= !cached;
+        submission.pending.push(Pending { qmd, symbol, dimensions });
+        if !self.defer_launch || self.device_timing {
+            self.flush_pending(device)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn pending_commands(&self) -> bool {
+        self.submission.as_ref().is_some_and(|s| !s.pending.is_empty())
+    }
+
+    pub(super) fn flush_pending(&mut self, device: &Device) -> Result<()> {
+        if !self.pending_commands() {
+            return Ok(());
+        }
+        let start = unsafe { core::arch::x86_64::_rdtsc() };
+        let result = self.flush_pending_inner(device);
+        let cycles = unsafe { core::arch::x86_64::_rdtsc() }.wrapping_sub(start);
+        self.last_flush_cycles = self.last_flush_cycles.wrapping_add(cycles);
+        self.queue_profile.cycles = self.queue_profile.cycles.wrapping_add(cycles);
+        if result.is_err() {
+            self.healthy = false;
+        }
+        result
+    }
+
+    fn flush_pending_inner(&mut self, device: &Device) -> Result<()> {
+        let submission = self.submission.as_ref().ok_or(Error::Firmware)?;
+        let count = submission.pending.len();
+        if self.device_timing && count != 1 {
+            return Err(Error::Firmware);
+        }
+        for (index, pending) in submission.pending.iter().enumerate() {
+            submission.region.copy(index * SLOT_BYTES, pending.qmd.as_bytes())?;
+        }
+        let last = submission.pending.last().ok_or(Error::Firmware)?;
+        let symbol = last.symbol;
+        let [threads, blocks] = last.dimensions;
+        let launch = submission.address;
+        let signal_offset = (count - 1) * SLOT_BYTES + SIGNAL;
+        let signal = submission.address + signal_offset as u64;
+        let invalidate_code = submission.invalidate_code;
+        let vram = device.vram.as_ref().ok_or(Error::Firmware)?;
+
         let mut commands = Vec::new();
         let semaphore = |commands: &mut Vec<u32>, address: u64, value: u32, wait: bool| {
             commands.extend_from_slice(&[
@@ -397,7 +466,7 @@ impl Compute {
                 &[(self.local_bytes_per_tpc >> 32) as u32, self.local_bytes_per_tpc as u32, 0xff],
             );
         }
-        if !cached {
+        if invalidate_code {
             Self::method(&mut commands, NVC6C0_INVALIDATE_SHADER_CACHES_NO_WFI, &[0x1011]);
         }
         if self.device_timing {
@@ -420,22 +489,22 @@ impl Compute {
         semaphore(&mut commands, signal + 56, 0x2222, true);
         self.submit(device, &commands)?;
         let submission = self.submission.as_ref().ok_or(Error::Firmware)?;
-        log::debug!("NVIDIA_KERNEL_SUBMITTED symbol={symbol} qmd={:#x} entry={:#x}", launch, program.address);
+        log::debug!("NVIDIA_BATCH_SUBMITTED last={symbol} kernels={count} qmd={launch:#x}");
         let start = crate::timer().systime_ms();
         // Also wait for the FIFO tail before reusing the command buffer.
         let wait_start = unsafe { core::arch::x86_64::_rdtsc() };
-        while submission.region.read32(SIGNAL)? != 1 || submission.region.read32(SIGNAL + 56)? != 0x2222 {
+        while submission.region.read32(signal_offset)? != 1 || submission.region.read32(signal_offset + 56)? != 0x2222 {
             if crate::timer().systime_ms().wrapping_sub(start) >= 5000 {
                 self.dump_instance(device)?;
                 log::warn!(
-                    "NVIDIA kernel timeout symbol={symbol} threads={threads} blocks={blocks} arguments={arguments:02x?} GPGet={:?} GPPut={:?}",
+                    "NVIDIA batch timeout last={symbol} kernels={count} threads={threads} blocks={blocks} GPGet={:?} GPPut={:?}",
                     vram.read(self.fifo.physical as usize + self.entries * 8 + 0x88),
                     vram.read(self.fifo.physical as usize + self.entries * 8 + 0x8c)
                 );
                 info!(
                     "NVIDIA completion compute={:?} fifo={:?}",
-                    submission.region.read32(SIGNAL),
-                    submission.region.read32(SIGNAL + 56)
+                    submission.region.read32(signal_offset),
+                    submission.region.read32(signal_offset + 56)
                 );
                 info!("NVIDIA notifier {:02x?}", vram.read_bytes(self.notifier as usize, 0x100)?);
                 for offset in [
@@ -448,16 +517,24 @@ impl Compute {
             core::hint::spin_loop();
         }
         fence(Ordering::SeqCst);
-        self.last_wait_cycles = unsafe { core::arch::x86_64::_rdtsc() }.wrapping_sub(wait_start);
+        let wait_cycles = unsafe { core::arch::x86_64::_rdtsc() }.wrapping_sub(wait_start);
+        self.last_wait_cycles = self.last_wait_cycles.wrapping_add(wait_cycles);
+        self.queue_profile.wait_cycles = self.queue_profile.wait_cycles.wrapping_add(wait_cycles);
         if self.device_timing {
-            let start = submission.region.read64(SIGNAL + 24)?;
-            let end = submission.region.read64(SIGNAL + 8)?;
+            let start = submission.region.read64(signal_offset + 24)?;
+            let end = submission.region.read64(signal_offset + 8)?;
             if start == 0 || end < start {
                 return Err(Error::Firmware);
             }
             self.last_device_ns = end - start;
         }
         self.engine_configured = true;
+        let submission = self.submission.as_mut().ok_or(Error::Firmware)?;
+        submission.pending.clear();
+        submission.invalidate_code = false;
+        self.queue_profile.batches = self.queue_profile.batches.wrapping_add(1);
+        self.queue_profile.launches = self.queue_profile.launches.wrapping_add(count as u64);
+        self.buffers.reclaim_retired();
         Ok(())
     }
 

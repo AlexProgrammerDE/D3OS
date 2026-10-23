@@ -78,6 +78,7 @@ fn verify_syscall_direction_flag(backend: &Nvidia) -> Result<(), d3os_compute::E
 
 pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     verify_syscall_direction_flag(backend).map_err(|error| format!("{error}"))?;
+    verify_command_scopes(backend).map_err(|error| format!("{error}"))?;
     verify_buffer_reuse(backend).map_err(|error| format!("{error}"))?;
     bf16::run(backend)?;
     selection::run(backend)?;
@@ -133,6 +134,64 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     super::report(format_args!(
         "NVIDIA_INFERENCE_OPERATORS_OK matrix_cases=6 convolution_cases=1 softmax_cases=1 backend=nvidia"
     ));
+    Ok(())
+}
+
+fn verify_command_scopes(backend: &Nvidia) -> d3os_compute::Result<()> {
+    use d3os_nvidia::compute::Kernel;
+    const COUNT: usize = 257;
+    const GUARD: u32 = 0x4b123456;
+    let mut values = vec![0; COUNT + 2];
+    values[0] = GUARD;
+    values[COUNT + 1] = GUARD;
+    let counter = backend.upload_words(&values)?;
+    let increment = backend.upload_words(&vec![0.25f32.to_bits(); COUNT])?;
+    let verify = |steps: usize| -> d3os_compute::Result<()> {
+        let mut values = vec![0; COUNT + 2];
+        backend.read_words_into(&counter, 0, &mut values)?;
+        if values[0] != GUARD || values[COUNT + 1] != GUARD || values[1..COUNT + 1].iter().any(|&v| v != (steps as f32 * 0.25).to_bits()) {
+            return Err(d3os_compute::Error::DeviceFault);
+        }
+        Ok(())
+    };
+    let before = backend.queue_profile()?;
+    backend.with_commands(|| -> d3os_compute::Result<()> {
+        for step in 0..97 {
+            let temporary = backend.allocate_words(COUNT)?;
+            backend.dispatch_words(Kernel::Copy, &[(&counter, 1), (&temporary, 0)], &[COUNT])?;
+            backend.dispatch_words(Kernel::Add, &[(&temporary, 0), (&increment, 0), (&counter, 1)], &[COUNT])?;
+            drop(temporary);
+            if step == 47 {
+                verify(step + 1)?; // Readback must drain the queue inside a scope.
+            }
+            if step == 49 {
+                backend.with_commands(|| -> d3os_compute::Result<()> { backend.dispatch_words(Kernel::Relu, &[(&counter, 1), (&counter, 1)], &[COUNT]) })?;
+            }
+        }
+        Ok(())
+    })?;
+    verify(97)?;
+    let after = backend.queue_profile()?;
+    if after.launches.wrapping_sub(before.launches) <= after.batches.wrapping_sub(before.batches) {
+        return Err(d3os_compute::Error::DeviceFault);
+    }
+    let failed: d3os_compute::Result<()> = backend.with_commands(|| {
+        backend.dispatch_words(Kernel::Add, &[(&counter, 1), (&increment, 0), (&counter, 1)], &[COUNT])?;
+        Err(d3os_compute::Error::InvalidParameter)
+    });
+    if failed != Err(d3os_compute::Error::InvalidParameter) {
+        return Err(d3os_compute::Error::DeviceFault);
+    }
+    verify(98)?;
+    let before = backend.queue_profile()?;
+    for _ in 0..2 {
+        backend.dispatch_words(Kernel::Relu, &[(&counter, 1), (&counter, 1)], &[COUNT])?;
+    }
+    let after = backend.queue_profile()?;
+    if after.batches.wrapping_sub(before.batches) != 2 || after.launches.wrapping_sub(before.launches) != 2 {
+        return Err(d3os_compute::Error::DeviceFault);
+    }
+    super::report(format_args!("NVIDIA_COMMAND_SCOPES_OK steps=98 count={COUNT} backend=nvidia"));
     Ok(())
 }
 
