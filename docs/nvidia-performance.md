@@ -27,6 +27,35 @@ The boot check calibrates a cuTile kernel to run for at least 10 ms and compares
 The first `mean_us` pass runs without timestamp instrumentation.
 These measurements separate end-to-end overhead from device throughput. They are not interchangeable timers.
 
+## Latest retained measurements
+
+The final retained sample on 2026-10-23 uses the cached QMD templates and two submission waves described below.
+All GPU programs still use cuTile Rust. The corner overlay is removed, and FPS remains beside the window title.
+Both guests use host CPUs 8, 10, 12, and 14, with the same audited weights and token work.
+
+| Workload | D3OS | Matched Linux reference |
+| --- | ---: | ---: |
+| Warm Qwen generation, independent sessions | 215.49 and 230.22 tokens/s | 253.11 and 251.36 tokens/s |
+| Warm 22-token prompt | 11 and 10 ms | 7.61 and 7.66 ms |
+| AlexNet forward pass, 20 repeats | 1.30 ms mean | No fresh matched run |
+| Uncapped DOOM `demo1`, three guests | 1153.22, 1270.89, and 1270.89 FPS | Earlier headless software reference only |
+
+The Qwen sample means leave D3OS about 12% below Linux generation throughput.
+Prompt latency also remains higher, so the Linux performance goal stays open.
+Every native session retains the exact 64-token checksum and passes all layer, batch, and final-cache comparisons.
+All six Linux sessions reproduce every greedy choice, with FP32 caches and full GPU offload.
+Linux reset-context warm sessions measure 255.18 to 255.55 tokens/s and 6.62 ms for the prompt.
+
+DOOM renders through the native NVIDIA backend, with a 320-by-200 indexed surface scaled to 640 by 400 for presentation.
+The demo runs uncapped for 7117 game ticks. These figures do not describe the interactive frame limiter.
+The host runs concurrent Java builds; recorded load averages vary around 12 to 14 during this final suite.
+The earlier A-B-B-A comparison below records the timing variation and does not isolate a driver-only DOOM regression.
+The retained build also passes the separate 600-frame pixel comparison and GPU checks after game exit.
+The production image, host tests, SDK Clippy checks, and both pushed CI workflows pass.
+
+Further projection layouts, running Tensor Core accumulators, and bulk descriptor copies showed no complete-workload benefit in their measured runs.
+Those experiments are removed from the maintained implementation.
+
 ## Maintained cuTile base
 
 All 38 native inference and rendering operators now use NVIDIA cuTile Rust.
@@ -35,7 +64,7 @@ The host compiler produces Tile IR 13.4 and assembles native Ada binaries with C
 D3OS retains its Rust driver, inference API, and buffer ownership.
 Explicit command scopes now group dependent operations before a completion wait.
 
-Fresh measurements on 2026-10-23 use host CPUs 8, 10, 12, and 14:
+The migration baseline below precedes the later follow-ups. It uses host CPUs 8, 10, 12, and 14 on 2026-10-23:
 
 | Workload | Before migration | cuTile observations |
 | --- | ---: | ---: |
@@ -338,7 +367,8 @@ Both guests use four virtual CPUs on host CPUs 8, 10, 12, and 14, with 12 GiB of
 Attention caches, convolution history, and recurrent state use FP32 in both implementations.
 Linux uses llama.cpp `b11827` with full GPU offload and backend greedy selection.
 Automatic Flash Attention resolves to the enabled CUDA path in the accepted run.
-Each decode step waits for the complete model result. D3OS also waits after its individual kernel submissions.
+Each decode step waits for the complete model result.
+This historical comparison predates command scopes, when D3OS also waited after each individual kernel submission.
 
 The weight audit covers all 320 text tensors and 19 model settings.
 All 187 BF16 tensors match bit for bit.
@@ -742,7 +772,7 @@ The CPU token-selection work now combines only 32 GPU candidates.
 Each change must preserve the existing model reference or define and measure a separate precision policy.
 
 The previous large projection kernels matched Linux device throughput for the measured shapes.
-Command scopes increase native generation to about 192 to 204 tokens/s, compared with about 258 to 261 in the matched Linux reference.
+The latest retained native sessions generate about 215 to 230 tokens/s, compared with about 251 to 256 in the fresh Linux reference.
 The remaining work must reduce complete model latency, rather than optimize already comparable streaming bandwidth.
 
 NVIDIA's cuTile Rust compiler is now the maintained base for every native GPU kernel.
