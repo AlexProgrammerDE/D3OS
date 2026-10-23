@@ -19,6 +19,7 @@ fn gated_projection<B: TransformerBackend>(backend: &B, m: usize, k: usize, n: u
 }
 
 pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
+    borrowed_weights(backend).map_err(|e| format!("borrowed BF16 upload: {e}"))?;
     split_guards(backend).map_err(|e| format!("split projection guards: {e}"))?;
     grouped_guards(backend).map_err(|e| format!("grouped projection guards: {e}"))?;
     for (m, k, n) in [
@@ -125,6 +126,46 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     super::super::report(format_args!(
         "NVIDIA_BF16_WEIGHTS_OK projections=14 residual_projections=14 gated_projections=13 embedding_rows=7 roundtrip=exact guards=typed backend=nvidia"
     ));
+    Ok(())
+}
+
+fn borrowed_weights(backend: &Nvidia) -> d3os_compute::Result<()> {
+    use d3os_nvidia::compute::{ALLOCATE, UPLOAD};
+    let patterns = [0u16, 0x8000, 1, 0x807f, 0x3f80, 0xbf80, 0x7f7f, 0x0080];
+    for elements in [1, 2, 3, 31, 32, 33, 1025, (1 << 19) + 3] {
+        for offset in 0..4 {
+            let mut bytes = vec![0xd3; offset];
+            bytes.extend((0..elements).flat_map(|i| patterns[i % patterns.len()].to_le_bytes()));
+            bytes.push(0xd3);
+            let tensor = Tensor::from_buffer(&[elements], backend.upload_bf16_le(&bytes[offset..bytes.len() - 1])?)?;
+            let values = backend.download(&tensor)?;
+            if values
+                .iter()
+                .enumerate()
+                .any(|(i, value)| value.to_bits() != u32::from(patterns[i % patterns.len()]) << 16)
+            {
+                return Err(Error::DeviceFault);
+            }
+        }
+    }
+    let before = backend.service_profile()?;
+    for invalid in [0x7f80u16, 0xff80, 0x7fc1] {
+        for values in [[0x3f80, invalid, 0xbf80], [0x3f80, 0xbf80, invalid]] {
+            let bytes: Vec<_> = values.into_iter().flat_map(u16::to_le_bytes).collect();
+            if !matches!(backend.upload_bf16_le(&bytes), Err(Error::NonFinite)) {
+                return Err(Error::DeviceFault);
+            }
+        }
+    }
+    for bytes in [&[][..], &[0][..], &[0, 1, 2][..]] {
+        if backend.upload_bf16_le(bytes).is_ok() {
+            return Err(Error::DeviceFault);
+        }
+    }
+    let after = backend.service_profile()?;
+    if [ALLOCATE, UPLOAD].into_iter().any(|op| before[op as usize].calls != after[op as usize].calls) {
+        return Err(Error::DeviceFault);
+    }
     Ok(())
 }
 

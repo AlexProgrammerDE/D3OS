@@ -248,7 +248,7 @@ fn serve(device: &Device, compute: &mut super::rm::Compute, owner: Uuid, request
                 compute.transfer(
                     device,
                     buffer.allocation.virtual_address + request.offset * 4,
-                    request.pointer as *mut u32,
+                    request.pointer as *mut u8,
                     request.elements as usize,
                     request.operation == abi::UPLOAD,
                 )

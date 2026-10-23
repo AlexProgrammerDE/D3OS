@@ -1,6 +1,6 @@
 //! Coherent guest-RAM staging with synchronous GPU ownership transfers.
 use super::{Device, Error, Result, gsp::DmaRegion, rm::Compute};
-use alloc::vec;
+use alloc::{vec, vec::Vec};
 use core::sync::atomic::{Ordering, fence};
 use d3os_nvidia::compute::Kernel;
 
@@ -55,24 +55,25 @@ impl Compute {
     }
 
     /// # Safety
-    /// The CPU range contains `elements` readable (upload) or writable (download)
-    /// words. The GPU range is owned, mapped, and contains that many words.
-    pub(super) unsafe fn transfer(&mut self, device: &Device, gpu: u64, cpu: *mut u32, elements: usize, upload: bool) -> Result<()> {
+    /// The CPU range contains `elements * 4` readable (upload) or writable
+    /// (download) bytes, with no alignment requirement. The GPU range is owned,
+    /// mapped, and contains that many bytes.
+    pub(super) unsafe fn transfer(&mut self, device: &Device, gpu: u64, cpu: *mut u8, elements: usize, upload: bool) -> Result<()> {
         self.flush_pending(device)?;
         let deferred = self.defer_launch;
         self.defer_launch = false;
         let result = (|| {
             let staging = self.staging.as_ref().ok_or(Error::Firmware)?;
-            let (pointer, address, capacity) = (staging.region.address as *mut u32, staging.virtual_address, STAGING_BYTES / 4);
+            let (pointer, address, capacity) = (staging.region.address as *mut u8, staging.virtual_address, STAGING_BYTES / 4);
             for offset in (0..elements).step_by(capacity) {
                 let count = (elements - offset).min(capacity);
-                let cpu = unsafe { cpu.add(offset) };
+                let cpu = unsafe { cpu.add(offset * 4) };
                 let gpu = gpu.checked_add(offset as u64 * 4).ok_or(Error::Alignment)?;
                 if upload {
                     // The previous DMA completed before the CPU regains this range.
                     // The bulk copy stays observable without clobbering SIMD state.
                     unsafe {
-                        d3os_nvidia::dma::copy_owned(pointer.cast(), cpu.cast(), count * 4);
+                        d3os_nvidia::dma::copy_owned(pointer, cpu, count * 4);
                     }
                 }
                 fence(Ordering::SeqCst);
@@ -81,7 +82,7 @@ impl Compute {
                 fence(Ordering::SeqCst);
                 if !upload {
                     unsafe {
-                        d3os_nvidia::dma::copy_owned(cpu.cast(), pointer.cast(), count * 4);
+                        d3os_nvidia::dma::copy_owned(cpu, pointer, count * 4);
                     }
                 }
             }
@@ -150,8 +151,8 @@ impl Compute {
             vram.write(allocation.physical as usize, GUARD)?;
             vram.write(allocation.physical as usize + (count + 1) * 4, GUARD)?;
             unsafe {
-                self.transfer(device, allocation.virtual_address + 4, source.as_mut_ptr(), count, true)?;
-                self.transfer(device, allocation.virtual_address + 4, output.as_mut_ptr(), count, false)?;
+                self.transfer(device, allocation.virtual_address + 4, source.as_mut_ptr().cast(), count, true)?;
+                self.transfer(device, allocation.virtual_address + 4, output.as_mut_ptr().cast(), count, false)?;
             }
             if output[..count] != source[..count]
                 || vram.read(allocation.physical as usize) != Some(GUARD)
@@ -161,14 +162,39 @@ impl Compute {
             }
             self.dispatch(device, Kernel::Zero, &[allocation.virtual_address], &[(allocation.bytes / 4) as u32])?;
             unsafe {
-                self.transfer(device, allocation.virtual_address + 4, output.as_mut_ptr(), count, false)?;
+                self.transfer(device, allocation.virtual_address + 4, output.as_mut_ptr().cast(), count, false)?;
             }
             if output[..count].iter().any(|&word| word != 0) {
                 return Err(Error::Firmware);
             }
         }
+        let count = STAGING_BYTES / 4 + 3;
+        let unaligned_source: Vec<u8> = (0..count * 4 + 8).map(|i| (i as u8).wrapping_mul(73).wrapping_add(19)).collect();
+        for (source_offset, output_offset) in [(1, 3), (2, 1), (3, 2)] {
+            let mut output = vec![0xd3; count * 4 + 8];
+            vram.write(allocation.physical as usize, GUARD)?;
+            vram.write(allocation.physical as usize + (count + 1) * 4, GUARD)?;
+            unsafe {
+                self.transfer(
+                    device,
+                    allocation.virtual_address + 4,
+                    unaligned_source.as_ptr().add(source_offset).cast_mut(),
+                    count,
+                    true,
+                )?;
+                self.transfer(device, allocation.virtual_address + 4, output.as_mut_ptr().add(output_offset), count, false)?;
+            }
+            if output[..output_offset].iter().any(|&byte| byte != 0xd3)
+                || output[output_offset..output_offset + count * 4] != unaligned_source[source_offset..source_offset + count * 4]
+                || output[output_offset + count * 4..].iter().any(|&byte| byte != 0xd3)
+                || vram.read(allocation.physical as usize) != Some(GUARD)
+                || vram.read(allocation.physical as usize + (count + 1) * 4) != Some(GUARD)
+            {
+                return Err(Error::Firmware);
+            }
+        }
         log::info!(
-            "NVIDIA_TRANSFER_OK cases={} guards=ok bits=exact elapsed_ms={} engine=ampere_dma_copy_b",
+            "NVIDIA_TRANSFER_OK cases={} guards=ok bits=exact unaligned_cases=3 elapsed_ms={} engine=ampere_dma_copy_b",
             shapes.len(),
             crate::timer().systime_ms().wrapping_sub(start)
         );
@@ -178,8 +204,8 @@ impl Compute {
         let start = crate::timer().systime_ms();
         for _ in 0..64 {
             unsafe {
-                self.transfer(device, allocation.virtual_address + 4, source.as_mut_ptr(), count, true)?;
-                self.transfer(device, allocation.virtual_address + 4, output.as_mut_ptr(), count, false)?;
+                self.transfer(device, allocation.virtual_address + 4, source.as_mut_ptr().cast(), count, true)?;
+                self.transfer(device, allocation.virtual_address + 4, output.as_mut_ptr().cast(), count, false)?;
             }
         }
         let elapsed = crate::timer().systime_ms().wrapping_sub(start).max(1);

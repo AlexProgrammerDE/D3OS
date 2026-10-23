@@ -69,6 +69,11 @@ Loading a tensor rejects nonfinite values.
 Version 2 inserts a little-endian `u16` dtype after the element count in each record.
 Dtype 0 stores FP32; dtype 1 stores BF16.
 Two-dimensional BF16 records use the backend's packed-weight upload operation.
+They pass borrowed little-endian bytes through `upload_bf16_le()`.
+The NVIDIA backend validates these values once and copies them directly through its staging buffer, without a temporary packed-word vector.
+CPU source alignment is unrestricted; the syscall still checks the complete readable byte range.
+An odd final BF16 value uses a separate padded word, so the upload never reads past the record.
+The upload completes before the borrowed storage can be released.
 The CPU backend expands them exactly to FP32.
 The NVIDIA backend retains packed weights for embedding, projection, and linear operations.
 Other BF16 record shapes still expand before upload.

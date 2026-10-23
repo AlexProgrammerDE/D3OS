@@ -74,6 +74,20 @@ The default audit rejects these traces because it requires identical greedy choi
 The explicit reporting option preserves input, cache, checksum, trace, and device checks while disclosing selection differences.
 This option permits performance measurements; it does not establish identical generated answers.
 
+### Borrowed BF16 uploads
+
+The load profiler attributes approximately 86% of the earlier model-load cycles to application code rather than driver service calls.
+The archive loader scanned each BF16 matrix, then repacked every value into a temporary word vector before uploading it.
+It now sends borrowed little-endian bytes directly to the synchronous upload path after one finite-value check.
+Unaligned CPU sources use byte copies. Odd final values use a padded private word instead of reading past the source.
+
+The earlier short benchmark loads the resident model in 1,932 ms; the sustained control runs measure 1,863 to 1,894 ms.
+The direct-upload short benchmark measures 748 ms, and its sustained run measures 676 ms.
+The sustained warm decode rates remain 237.96 and 235.66 tokens/s with the complete original trace.
+This change reduces loading time without changing weight representation or GPU inference arithmetic.
+GPU tests preserve every source bit across all four alignments and odd tails, including a transfer larger than the staging buffer.
+The boot transfer test also checks unaligned uploads and downloads with CPU and GPU boundary guards.
+
 The first 2026-10-23 follow-up uses native copy-engine transfers, two QMD waves, fused Qwen residual operations, and a versioned DOOM texture cache.
 An A-B-B-A comparison uses the same cuTile binary and host CPUs 8, 10, 12, and 14.
 The control disables only the residual fusions and texture validation shortcut.

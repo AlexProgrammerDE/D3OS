@@ -23,11 +23,7 @@ impl Record<'_> {
 
     pub fn load<B: Backend>(&self, backend: &B) -> Result<Tensor<B>> {
         if self.width == 2 && self.shape.len() == 2 {
-            let values = self.bytes.chunks_exact(2).map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]));
-            if values.clone().any(|value| value & 0x7f80 == 0x7f80) {
-                return Err(d3os_compute::Error::NonFinite.into());
-            }
-            return Ok(Tensor::from_buffer(&self.shape, backend.upload_bf16(values)?)?);
+            return Ok(Tensor::from_buffer(&self.shape, backend.upload_bf16_le(self.bytes)?)?);
         }
         Ok(Tensor::from_vec(backend, &self.shape, self.to_vec()?)?)
     }

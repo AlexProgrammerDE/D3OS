@@ -166,6 +166,15 @@ pub trait Backend: Sized {
         }
         self.upload(expanded)
     }
+    /// Upload borrowed little-endian BF16 bytes, including unaligned sources.
+    /// The backend copies the values before returning and rejects non-finite data.
+    fn upload_bf16_le(&self, bytes: &[u8]) -> Result<Self::Buffer> {
+        if !bytes.len().is_multiple_of(2) {
+            return Err(Error::InvalidParameter);
+        }
+        element_count(&[bytes.len() / 2])?;
+        self.upload_bf16(bytes.chunks_exact(2).map(|pair| u16::from_le_bytes([pair[0], pair[1]])))
+    }
     fn download(&self, tensor: &Tensor<Self>) -> Result<Vec<f32>>;
     /// Index of the largest value, choosing the first index for equal values.
     /// Rejects any non-finite input, including values that cannot win.

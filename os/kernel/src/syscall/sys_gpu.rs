@@ -64,7 +64,7 @@ pub extern "sysv64" fn sys_gpu_compute(pointer: *const Request) -> isize {
         let Some(bytes) = request.elements.checked_mul(4) else {
             return Errno::EINVAL as isize;
         };
-        if request.pointer & 3 != 0 || !valid_range(&process, request.pointer, bytes, request.operation == abi::DOWNLOAD) {
+        if !valid_range(&process, request.pointer, bytes, request.operation == abi::DOWNLOAD) {
             return Errno::EINVAL as isize;
         }
     }

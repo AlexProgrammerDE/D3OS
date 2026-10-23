@@ -416,6 +416,43 @@ impl Backend for Nvidia {
         Ok(buffer)
     }
 
+    fn upload_bf16_le(&self, bytes: &[u8]) -> Result<GpuBuffer> {
+        if !bytes.len().is_multiple_of(2) {
+            return Err(Error::InvalidParameter);
+        }
+        let elements = bytes.len() / 2;
+        element_count(&[elements])?;
+        dimension(elements)?;
+        if bytes.chunks_exact(2).any(|pair| u16::from_le_bytes([pair[0], pair[1]]) & 0x7f80 == 0x7f80) {
+            return Err(Error::NonFinite);
+        }
+        let mut buffer = self.allocate_storage::<f32>(elements.div_ceil(2))?;
+        let words = elements / 2;
+        if words != 0 {
+            request(Request {
+                handle: buffer.handle,
+                pointer: bytes.as_ptr() as u64,
+                elements: words as u64,
+                ..operation(abi::UPLOAD)
+            })?;
+        }
+        if !elements.is_multiple_of(2) {
+            // A final BF16 value owns only two source bytes. Upload a padded
+            // word instead of reading past the borrowed archive record.
+            let tail = u32::from(u16::from_le_bytes([bytes[words * 4], bytes[words * 4 + 1]]));
+            request(Request {
+                handle: buffer.handle,
+                pointer: &tail as *const u32 as u64,
+                elements: 1,
+                offset: words as u64,
+                ..operation(abi::UPLOAD)
+            })?;
+        }
+        buffer.elements = elements;
+        buffer.storage = Storage::Bf16;
+        Ok(buffer)
+    }
+
     fn download(&self, tensor: &Tensor<Self>) -> Result<Vec<f32>> {
         if tensor.buffer.storage == Storage::Bf16 {
             let mut words = Vec::new();
