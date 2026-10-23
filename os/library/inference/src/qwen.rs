@@ -337,8 +337,13 @@ impl<'a, B: TransformerBackend> Session<'a, B> {
         self.position
     }
 
-    /// Consume prompt tokens in order. The output projection runs only for the last token.
+    /// Consume prompt tokens in ordered batches. Project vocabulary logits only for the final token.
     pub fn prefill(&mut self, tokens: &[u32]) -> Result<Tensor<B>> {
+        self.prefill_observed(tokens, |_, _, _| Ok(()))
+    }
+
+    /// Observe each layer's token batch, with its starting sequence position.
+    pub fn prefill_observed(&mut self, tokens: &[u32], mut observe: impl FnMut(usize, usize, &Tensor<B>) -> Result<()>) -> Result<Tensor<B>> {
         if self.failed {
             return Err(Error::SessionFailed);
         }
@@ -349,10 +354,19 @@ impl<'a, B: TransformerBackend> Session<'a, B> {
             return Err(Error::InvalidToken);
         }
         let mut hidden = None;
-        for &token in tokens {
-            hidden = Some(self.hidden(token, |_, _| Ok(()))?);
+        for chunk in tokens.chunks(32) {
+            let start = self.position;
+            hidden = Some(self.hidden_batch(chunk, |layer, output| observe(start, layer, output))?);
         }
-        self.logits(&hidden.ok_or(Error::InvalidToken)?)
+        let hidden = hidden.ok_or(Error::InvalidToken)?;
+        self.failed = true;
+        let last = if hidden.shape()[0] == 1 {
+            hidden
+        } else {
+            let rows = hidden.shape()[0];
+            self.backend.row(&hidden, rows - 1)?
+        };
+        self.logits(&last)
     }
 
     pub fn step(&mut self, token: u32) -> Result<Tensor<B>> {
@@ -361,7 +375,7 @@ impl<'a, B: TransformerBackend> Session<'a, B> {
 
     /// Observe the residual stream after each decoder layer, before the final RMSNorm.
     pub fn step_observed(&mut self, token: u32, observe: impl FnMut(usize, &Tensor<B>) -> Result<()>) -> Result<Tensor<B>> {
-        let hidden = self.hidden(token, observe)?;
+        let hidden = self.hidden_batch(&[token], observe)?;
         self.logits(&hidden)
     }
 
@@ -373,20 +387,24 @@ impl<'a, B: TransformerBackend> Session<'a, B> {
         Ok(logits)
     }
 
-    fn hidden(&mut self, token: u32, mut observe: impl FnMut(usize, &Tensor<B>) -> Result<()>) -> Result<Tensor<B>> {
+    fn hidden_batch(&mut self, tokens: &[u32], mut observe: impl FnMut(usize, &Tensor<B>) -> Result<()>) -> Result<Tensor<B>> {
         if self.failed {
             return Err(Error::SessionFailed);
         }
-        if self.position >= self.capacity {
+        if tokens.is_empty() || tokens.len() > self.capacity - self.position {
             return Err(Error::ContextFull);
         }
-        if token as usize >= self.model.config.vocab {
+        if tokens.iter().any(|&token| token as usize >= self.model.config.vocab) {
             return Err(Error::InvalidToken);
         }
         self.failed = true;
         let backend = self.backend;
         let config = self.model.config;
-        let mut hidden = backend.embedding(&self.model.embedding, token as usize)?;
+        let mut hidden = if tokens.len() == 1 {
+            backend.embedding(&self.model.embedding, tokens[0] as usize)?
+        } else {
+            backend.embedding_batch(&self.model.embedding, tokens)?
+        };
         for (index, (layer, cache)) in self.model.layers.iter().zip(&mut self.caches).enumerate() {
             let normalized = backend.rms_norm(&hidden, &layer.input_norm, config.epsilon)?;
             let mixed = match (&layer.mixer, cache) {
@@ -394,7 +412,7 @@ impl<'a, B: TransformerBackend> Session<'a, B> {
                     let q = backend.project(&normalized, &weights.q)?;
                     let k = backend.project(&normalized, &weights.k)?;
                     let v = backend.project(&normalized, &weights.v)?;
-                    let attention = backend.attention_step(
+                    let attention = backend.attention_batch(
                         AttentionInputs {
                             query_gate: &q,
                             key: &k,
@@ -412,7 +430,7 @@ impl<'a, B: TransformerBackend> Session<'a, B> {
                     let z = backend.project(&normalized, &weights.z)?;
                     let beta = backend.project(&normalized, &weights.beta)?;
                     let alpha = backend.project(&normalized, &weights.alpha)?;
-                    let attention = backend.delta_step(
+                    let attention = backend.delta_batch(
                         DeltaInputs {
                             qkv: &qkv,
                             gate: &z,
@@ -436,7 +454,7 @@ impl<'a, B: TransformerBackend> Session<'a, B> {
             hidden = backend.add(hidden, &backend.project(&activation, &layer.down)?)?;
             observe(index, &hidden)?;
         }
-        self.position += 1;
+        self.position += tokens.len();
         self.failed = false;
         Ok(hidden)
     }
@@ -462,8 +480,8 @@ pub fn greedy<B: Backend>(backend: &B, logits: &Tensor<B>) -> Result<u32> {
     u32::try_from(backend.argmax(logits)?).map_err(|_| Error::InvalidToken)
 }
 
-/// Compare every decoder layer and every vocabulary logit at every fixture position.
-/// The fixture can come from batched upstream prefill followed by cached decoding.
+/// Compare sequential and batched execution with every fixture layer and logit,
+/// then compare their final caches. Upstream fixtures can mix prefill and decode.
 pub fn verify_fixture<B: TransformerBackend>(model: &Qwen<B>, backend: &B, bytes: &[u8]) -> Result<usize> {
     let mut archive = Archive::parse(bytes)?;
     let tokens = archive.take("tokens")?;
@@ -492,6 +510,13 @@ pub fn verify_fixture<B: TransformerBackend>(model: &Qwen<B>, backend: &B, bytes
         references.push(record.to_vec()?);
     }
     archive.finish()?;
+    let reference_token = |values: &[f32]| {
+        values
+            .iter()
+            .enumerate()
+            .max_by(|(ia, a), (ib, b)| a.total_cmp(b).then_with(|| ib.cmp(ia)))
+            .map(|(i, _)| i)
+    };
     let mut session = model.session(backend, ids.len())?;
     for (position, token) in ids.iter().enumerate() {
         let output = session.step_observed(*token, |layer, output| {
@@ -505,16 +530,82 @@ pub fn verify_fixture<B: TransformerBackend>(model: &Qwen<B>, backend: &B, bytes
             layer: model.config.layers,
         })?;
         // Check greedy decisions too, including closely ranked vocabulary entries.
-        let expected_best = expected
-            .iter()
-            .enumerate()
-            .max_by(|(ia, a), (ib, b)| a.total_cmp(b).then_with(|| ib.cmp(ia)))
-            .map(|(i, _)| i);
+        let expected_best = reference_token(expected);
         if Some(greedy(backend, &output)? as usize) != expected_best {
             return Err(Error::VerificationAt {
                 position,
                 layer: model.config.layers,
             });
+        }
+    }
+    let mut batched = model.session(backend, ids.len())?;
+    // Different chunk sizes exercise continuation after a nonzero cache prefix.
+    for chunk in ids.chunks(17) {
+        let start = batched.position();
+        let final_logits = batched.prefill_observed(chunk, |position, layer, output| {
+            let values = backend.download(output)?;
+            for (row, actual) in values.chunks_exact(model.config.hidden).enumerate() {
+                let position = position + row;
+                crate::verify(
+                    actual,
+                    &references[layer][position * model.config.hidden..(position + 1) * model.config.hidden],
+                    2e-3,
+                    5e-4,
+                )
+                .map_err(|_| Error::VerificationAt { position, layer })?;
+            }
+            if layer + 1 == model.config.layers {
+                let normalized = backend.rms_norm(output, &model.norm, model.config.epsilon)?;
+                let batch_logits = backend.project(&normalized, &model.embedding)?;
+                let actual = backend.download(&batch_logits)?;
+                for (row, actual) in actual.chunks_exact(model.config.vocab).enumerate() {
+                    let position = position + row;
+                    let expected = &logits[position * model.config.vocab..(position + 1) * model.config.vocab];
+                    crate::verify(actual, expected, 2e-3, 5e-4).map_err(|_| Error::VerificationAt {
+                        position,
+                        layer: model.config.layers,
+                    })?;
+                    let expected_best = reference_token(expected);
+                    let selected = backend.row(&batch_logits, row)?;
+                    if Some(greedy(backend, &selected)? as usize) != expected_best {
+                        return Err(Error::VerificationAt {
+                            position,
+                            layer: model.config.layers,
+                        });
+                    }
+                }
+            }
+            Ok(())
+        })?;
+        let position = start + chunk.len() - 1;
+        let expected = &logits[position * model.config.vocab..(position + 1) * model.config.vocab];
+        crate::verify(&backend.download(&final_logits)?, expected, 2e-3, 5e-4).map_err(|_| Error::VerificationAt {
+            position,
+            layer: model.config.layers,
+        })?;
+        if Some(greedy(backend, &final_logits)? as usize) != reference_token(expected) {
+            return Err(Error::VerificationAt {
+                position,
+                layer: model.config.layers,
+            });
+        }
+    }
+    for (layer, (actual, expected)) in batched.caches.iter().zip(&session.caches).enumerate() {
+        let tensors = match (actual, expected) {
+            (Cache::Full(a), Cache::Full(e)) if a.position == e.position => [(&a.keys, &e.keys), (&a.values, &e.values)],
+            (Cache::Linear(a), Cache::Linear(e)) => [(&a.convolution, &e.convolution), (&a.recurrent, &e.recurrent)],
+            _ => {
+                return Err(Error::VerificationAt {
+                    position: ids.len() - 1,
+                    layer,
+                });
+            }
+        };
+        for (actual, expected) in tensors {
+            crate::verify(&backend.download(actual)?, &backend.download(expected)?, 2e-3, 5e-4).map_err(|_| Error::VerificationAt {
+                position: ids.len() - 1,
+                layer,
+            })?;
         }
     }
     Ok(ids.len())

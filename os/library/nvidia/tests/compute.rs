@@ -1,6 +1,22 @@
 use d3os_nvidia::compute::Kernel;
 
 #[test]
+fn gather_bounds_packed_tables_tokens_and_the_complete_output() {
+    for packed in [0, 1] {
+        let work = Kernel::Embedding.work(&[7, 11, 5, packed]).unwrap();
+        assert_eq!(work.extents[..3], [if packed == 1 { 39 } else { 77 }, 5, 55]);
+        assert_eq!((work.pointers, work.output), (3, 2));
+        assert!(work.validate_aliases(&[0x1000, 0x2000, 0x3000]).is_ok());
+        assert!(work.validate_aliases(&[0x1000, 0x2000, 0x2004]).is_err());
+    }
+    for dimensions in [[7, 11, 5, 2], [0, 11, 5, 0], [7, 11, 0, 0], [u32::MAX, 2, 1, 0]] {
+        assert!(Kernel::Embedding.work(&dimensions).is_err());
+    }
+    assert!(Kernel::Embedding.allocates_output());
+    assert!(Kernel::Copy.allocates_output());
+}
+
+#[test]
 fn normalization_uses_one_full_block_per_row() {
     for (rows, width) in [(1, 1), (7, 33), (5, 1024), (2, 4097)] {
         let work = Kernel::RmsNorm.work(&[rows, width, 1e-6f32.to_bits(), 1f32.to_bits()]).unwrap();

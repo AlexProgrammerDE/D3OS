@@ -4,6 +4,30 @@ use core::arch::nvptx::{_block_idx_x, _thread_idx_x};
 
 mod delta;
 
+/// # Safety
+/// Table[vocab,width] is FP32 or packed BF16 (packed=1), tokens[rows] are u32,
+/// and output[rows,width] is disjoint FP32. Products fit u32. Invalid token IDs
+/// produce zero rows without reading beyond the table. Launch rows*width threads.
+#[unsafe(no_mangle)]
+pub unsafe extern "ptx-kernel" fn embedding_gather(table: u64, tokens: u64, output: u64, vocab: u32, width: u32, rows: u32, packed: u32) {
+    let i = super::index();
+    if i >= rows * width {
+        return;
+    }
+    let token = unsafe { (tokens as *const u32).add((i / width) as usize).read() };
+    let value = if token >= vocab {
+        0.
+    } else {
+        let offset = token * width + i % width;
+        if packed == 1 {
+            f32::from_bits(u32::from(unsafe { (table as *const u16).add(offset as usize).read() }) << 16)
+        } else {
+            unsafe { read(table, offset) }
+        }
+    };
+    unsafe { write(output, i, value) };
+}
+
 #[inline(always)]
 unsafe fn shared_read(base: u32, index: u32) -> f32 {
     let value;

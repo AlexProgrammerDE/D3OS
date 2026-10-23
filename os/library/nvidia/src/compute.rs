@@ -14,7 +14,7 @@ pub const PROFILE: u32 = 6;
 pub const LAUNCH_ALLOCATE: u32 = 7;
 /// Enable GPU timestamp instrumentation for subsequent launches (elements 0 or 1).
 pub const DEVICE_TIMING: u32 = 8;
-pub const KERNEL_COUNT: usize = 32;
+pub const KERNEL_COUNT: usize = 33;
 
 /// Device-wide CPU cycle counters. Read snapshots around an exclusive workload
 /// and subtract them. Wait cycles include GPU execution and completion polling.
@@ -80,9 +80,10 @@ pub enum Kernel {
     PaletteBytes = 29,
     DeltaFused = 30,
     GatedProjectBf16 = 31,
+    Embedding = 32,
 }
 
-const _: () = assert!(Kernel::GatedProjectBf16 as usize + 1 == KERNEL_COUNT);
+const _: () = assert!(Kernel::Embedding as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -111,7 +112,15 @@ impl Kernel {
     pub fn allocates_output(self) -> bool {
         matches!(
             self,
-            Self::Matmul | Self::Project | Self::RmsNorm | Self::ProjectBf16 | Self::ArgMax | Self::DeltaFused | Self::GatedProjectBf16
+            Self::Matmul
+                | Self::Project
+                | Self::Copy
+                | Self::RmsNorm
+                | Self::ProjectBf16
+                | Self::ArgMax
+                | Self::DeltaFused
+                | Self::GatedProjectBf16
+                | Self::Embedding
         )
     }
 
@@ -149,6 +158,7 @@ impl Kernel {
             29 => Self::PaletteBytes,
             30 => Self::DeltaFused,
             31 => Self::GatedProjectBf16,
+            32 => Self::Embedding,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -187,6 +197,7 @@ impl Kernel {
             Self::PaletteBytes => "palette_scale_bytes",
             Self::DeltaFused => "delta_fused",
             Self::GatedProjectBf16 => "gated_project_bf16_weights",
+            Self::Embedding => "embedding_gather",
         }
     }
 
@@ -195,6 +206,15 @@ impl Kernel {
         let mut mutated = 0;
         let mut threads = 128;
         let (count, pointers, output, in_place) = match (self, p) {
+            (Self::Embedding, &[vocab, width, rows, packed]) => {
+                if packed > 1 {
+                    return Err(Error::InvalidField);
+                }
+                let table = u64::from(product(&[vocab, width])?);
+                let output = product(&[rows, width])?;
+                extents[..3].copy_from_slice(&[if packed == 1 { table.div_ceil(2) } else { table }, u64::from(rows), u64::from(output)]);
+                (output, 3, 2, false)
+            }
             (Self::DeltaFused, &[heads, key, value, kernel, epsilon]) => {
                 let channels = delta_channels(heads, key, value)?;
                 if key > 128 || value > 128 || !(1..=8).contains(&kernel) {

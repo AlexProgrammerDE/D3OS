@@ -101,6 +101,96 @@ fn delta<B: TransformerBackend>(backend: &B, config: DeltaConfig) -> Result<Vec<
     Ok(trace)
 }
 
+fn sequence<B: TransformerBackend>(backend: &B, start: usize, rows: usize, width: usize, seed: usize) -> Result<Tensor<B>> {
+    Tensor::from_vec(
+        backend,
+        &[rows, width],
+        (0..rows * width)
+            .map(|i| (((i % width * 37 + (start + i / width + seed) * 17) % 127) as f32 - 63.) / 71.)
+            .collect(),
+    )
+}
+
+fn batched_trace(trace: &[Vec<f32>]) -> Vec<Vec<f32>> {
+    let mut result = Vec::new();
+    for (start, rows) in [(0, 2), (2, 3), (5, 2)] {
+        result.push((start..start + rows).flat_map(|i| trace[i * 3].iter().copied()).collect());
+        result.push(trace[(start + rows - 1) * 3 + 1].clone());
+        result.push(trace[(start + rows - 1) * 3 + 2].clone());
+    }
+    result
+}
+
+fn attention_batches<B: TransformerBackend>(backend: &B, config: AttentionConfig) -> Result<Vec<Vec<f32>>> {
+    let (heads, kv, dim) = (config.heads, config.kv_heads, config.head_dim);
+    let mut state = AttentionState {
+        keys: Tensor::from_vec(backend, &[7, kv, dim], vec![0.; 7 * kv * dim])?,
+        values: Tensor::from_vec(backend, &[7, kv, dim], vec![0.; 7 * kv * dim])?,
+        position: 0,
+    };
+    let query_norm = tensor(backend, &[dim], 3)?;
+    let key_norm = tensor(backend, &[dim], 5)?;
+    let mut trace = Vec::new();
+    for (start, rows) in [(0, 2), (2, 3), (5, 2)] {
+        let query_gate = sequence(backend, start, rows, 2 * heads * dim, 7)?;
+        let key = sequence(backend, start, rows, kv * dim, 11)?;
+        let value = sequence(backend, start, rows, kv * dim, 17)?;
+        let output = backend.attention_batch(
+            AttentionInputs {
+                query_gate: &query_gate,
+                key: &key,
+                value: &value,
+                query_norm: &query_norm,
+                key_norm: &key_norm,
+            },
+            &mut state,
+            config,
+        )?;
+        trace.push(backend.download(&output)?);
+        trace.push(backend.download(&state.keys)?);
+        trace.push(backend.download(&state.values)?);
+    }
+    Ok(trace)
+}
+
+fn delta_batches<B: TransformerBackend>(backend: &B, config: DeltaConfig) -> Result<Vec<Vec<f32>>> {
+    let (heads, key, value, kernel) = (config.heads, config.key_dim, config.value_dim, config.kernel);
+    let channels = heads * (2 * key + value);
+    let mut state = DeltaState {
+        convolution: Tensor::from_vec(backend, &[channels, kernel], vec![0.; channels * kernel])?,
+        recurrent: Tensor::from_vec(backend, &[heads, key, value], vec![0.; heads * key * value])?,
+    };
+    let convolution = tensor(backend, &[channels, 1, kernel], 3)?;
+    let log_decay = tensor(backend, &[heads], 5)?;
+    let time_bias = tensor(backend, &[heads], 7)?;
+    let norm = tensor(backend, &[value], 11)?;
+    let mut trace = Vec::new();
+    for (start, rows) in [(0, 2), (2, 3), (5, 2)] {
+        let qkv = sequence(backend, start, rows, channels, 13)?;
+        let gate = sequence(backend, start, rows, heads * value, 17)?;
+        let beta = sequence(backend, start, rows, heads, 19)?;
+        let alpha = sequence(backend, start, rows, heads, 23)?;
+        let output = backend.delta_batch(
+            DeltaInputs {
+                qkv: &qkv,
+                gate: &gate,
+                beta: &beta,
+                alpha: &alpha,
+                convolution: &convolution,
+                log_decay: &log_decay,
+                time_bias: &time_bias,
+                norm: &norm,
+            },
+            &mut state,
+            config,
+        )?;
+        trace.push(backend.download(&output)?);
+        trace.push(backend.download(&state.convolution)?);
+        trace.push(backend.download(&state.recurrent)?);
+    }
+    Ok(trace)
+}
+
 fn pointwise<B: TransformerBackend>(backend: &B) -> Result<Vec<f32>> {
     let table = tensor(backend, &[7, 11], 3)?;
     let weights = tensor(backend, &[11], 5)?;
@@ -122,6 +212,32 @@ fn compare_traces(actual: &[Vec<f32>], expected: &[Vec<f32>], name: &str) -> cor
 }
 
 pub(super) fn run(backend: &Nvidia) -> core::result::Result<(), String> {
+    let table = backend
+        .upload_words(&[1f32.to_bits(), 2f32.to_bits(), 3f32.to_bits(), 4f32.to_bits(), 5f32.to_bits(), 6f32.to_bits()])
+        .map_err(|e| format!("{e}"))?;
+    let ids = backend.upload_words(&[1, u32::MAX, 2, 3]).map_err(|e| format!("{e}"))?;
+    let output = backend.upload_words(&[0xd305abcd; 10]).map_err(|e| format!("{e}"))?;
+    backend
+        .dispatch_words(d3os_nvidia::compute::Kernel::Embedding, &[(&table, 0), (&ids, 0), (&output, 1)], &[3, 2, 4, 0])
+        .map_err(|e| format!("{e}"))?;
+    let mut actual = [0; 10];
+    backend.read_words_into(&output, 0, &mut actual).map_err(|e| format!("{e}"))?;
+    if actual
+        != [
+            0xd305abcd,
+            3f32.to_bits(),
+            4f32.to_bits(),
+            0,
+            0,
+            5f32.to_bits(),
+            6f32.to_bits(),
+            0,
+            0,
+            0xd305abcd,
+        ]
+    {
+        return Err("embedding gather escaped its table or output range".into());
+    }
     for (rows, width) in [(1, 1), (7, 33), (3, 129), (5, 1024), (2, 4097)] {
         let gpu_input = tensor(backend, &[rows, width], 3).map_err(|e| format!("{e}"))?;
         let gpu_weights = tensor(backend, &[width], 5).map_err(|e| format!("{e}"))?;
@@ -152,6 +268,8 @@ pub(super) fn run(backend: &Nvidia) -> core::result::Result<(), String> {
         let gpu = attention(backend, config).map_err(|error| format!("attention: {error}"))?;
         let cpu = attention(&Cpu, config).map_err(|error| format!("attention reference: {error}"))?;
         compare_traces(&gpu, &cpu, "grouped attention")?;
+        let batch = attention_batches(backend, config).map_err(|e| format!("{e}"))?;
+        compare_traces(&batch, &batched_trace(&cpu), "batched attention")?;
     }
     for (heads, key_dim, value_dim, kernel) in [(1, 1, 1, 1), (2, 5, 7, 3), (3, 33, 17, 8), (16, 128, 128, 4), (2, 129, 9, 4), (2, 7, 129, 9)] {
         let config = DeltaConfig {
@@ -164,7 +282,11 @@ pub(super) fn run(backend: &Nvidia) -> core::result::Result<(), String> {
         let gpu = delta(backend, config).map_err(|error| format!("delta: {error}"))?;
         let cpu = delta(&Cpu, config).map_err(|error| format!("delta reference: {error}"))?;
         compare_traces(&gpu, &cpu, "gated delta")?;
+        let batch = delta_batches(backend, config).map_err(|e| format!("{e}"))?;
+        compare_traces(&batch, &batched_trace(&cpu), "batched delta")?;
     }
-    super::super::report(format_args!("NVIDIA_TRANSFORMER_OPERATORS_OK attention_cases=14 delta_cases=42 backend=nvidia"));
+    super::super::report(format_args!(
+        "NVIDIA_TRANSFORMER_OPERATORS_OK attention_cases=14 delta_cases=42 batch_attention_rows=14 batch_delta_rows=42 backend=nvidia"
+    ));
     Ok(())
 }

@@ -58,6 +58,18 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
             return Err(format!("BF16 embedding row {token} changed bits"));
         }
     }
+    let tokens = [6u32, 1, 0, 6, 4];
+    let gathered = backend.embedding_batch(&table, &tokens).map_err(|e| format!("{e}"))?;
+    let expected_batch: Vec<_> = tokens
+        .iter()
+        .flat_map(|&token| expected[token as usize * 11..(token as usize + 1) * 11].iter().map(|v| v.to_bits()))
+        .collect();
+    let row = backend.row(&gathered, 1).and_then(|row| backend.relu(row)).map_err(|e| format!("{e}"))?;
+    let actual = backend.download(&gathered).map_err(|e| format!("{e}"))?;
+    if actual.iter().map(|v| v.to_bits()).ne(expected_batch) {
+        return Err("batched embedding or row ownership changed bits".into());
+    }
+    drop(row);
     if !matches!(backend.relu(table), Err(Error::InvalidParameter)) {
         return Err("FP32 kernel accepted packed BF16 storage".into());
     }

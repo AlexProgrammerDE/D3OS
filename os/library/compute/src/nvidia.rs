@@ -150,7 +150,7 @@ impl Nvidia {
             let packed = matches!(
                 (kernel, i),
                 (Kernel::ProjectBf16, 1) | (Kernel::DequantizeBf16, 0) | (Kernel::GatedProjectBf16, 1 | 2)
-            );
+            ) || (kernel == Kernel::Embedding && i == 0 && call.parameters[3] == 1);
             if buffer.storage != Storage::Words && (buffer.storage == Storage::Bf16) != packed {
                 return Err(Error::InvalidParameter);
             }
@@ -240,8 +240,18 @@ impl Nvidia {
     }
 
     pub fn upload_words(&self, values: &[u32]) -> Result<GpuBuffer<u32>> {
-        let buffer = self.allocate_words(values.len())?;
-        self.write_words(&buffer, 0, values)?;
+        self.upload_word_storage(values)
+    }
+
+    fn upload_word_storage<T>(&self, values: &[u32]) -> Result<GpuBuffer<T>> {
+        let mut buffer = self.allocate_storage(values.len())?;
+        buffer.storage = Storage::Words;
+        request(Request {
+            handle: buffer.handle,
+            pointer: values.as_ptr() as u64,
+            elements: values.len() as u64,
+            ..operation(abi::UPLOAD)
+        })?;
         Ok(buffer)
     }
 

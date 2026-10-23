@@ -151,6 +151,18 @@ The native single-row BF16 path writes one complete output without intermediate 
 FP32, mixed-storage, and multi-row calls retain the separate projection path.
 The CPU backend provides the same operation through its existing primitives.
 
+Prompt processing uses chunks of up to 32 consecutive tokens and completes each layer across the whole chunk.
+`embedding_batch()` gathers token rows, and batched attention and recurrent operations advance a single sequence in token order.
+The NVIDIA backend binds row ranges directly and retains scratch storage across those updates.
+It validates the complete batch shape and cache capacity before the first state update.
+`row()` returns independent storage, so consuming an operation's result cannot mutate its parent batch.
+Normal prefill projects vocabulary logits only for the final row, without host activation transfers.
+`prefill_observed()` exposes layer batches and their starting positions for verification.
+
+The fixture verifier checks both sequential and batched layers, logits, greedy decisions, and final caches.
+The numerical tolerances remain unchanged. A failed layer observer invalidates the session.
+The single-token attention and delta APIs retain their one-row validation and use the same native batch primitives.
+
 DOOM uses byte-addressed indexed surfaces and textures with word-addressed command buffers.
 The byte raster kernels receive logical byte lengths, while the syscall validates the enclosing word ranges.
 `Nvidia::upload_bytes()` packs data into aligned words and initializes trailing padding.
@@ -174,7 +186,7 @@ This path supports key and value dimensions up to 128 and convolution widths up 
 Larger configurations retain the separate operator path.
 Both paths keep state in VRAM and pass independent output and state comparisons after each step.
 
-Matrix, RMSNorm, and fused delta operations combine output allocation with the kernel that fills it.
+Matrix, row-copy, embedding-gather, RMSNorm, and fused delta operations combine output allocation with the kernel that fills it.
 The kernel returns the new handle only after a validated full writer completes.
 This removes a redundant zero kernel without exposing previous buffer contents.
 Ordinary allocations remain zeroed, including recycled storage.
@@ -215,7 +227,7 @@ Arbitrary userspace kernel submission still requires memory isolation and a docu
 Qwen3.5-0.8B text generation now uses the native `TransformerBackend` interface.
 It includes recurrent and grouped attention, normalization, rotary positions, SwiGLU, cached decoding, tokenization, and greedy sampling.
 The NVIDIA backend implements these operations with GPU-resident state.
-It prepares and validates every dispatch before the first cache mutation.
+It validates each token row’s dispatch sequence before that row changes its cache.
 The syscall checks every modified buffer, including convolution histories and recurrent state.
 The hardware suite compares outputs and state across multiple attention and gated-delta steps.
 The pretrained model then passes every original reference comparison at 29 token positions.

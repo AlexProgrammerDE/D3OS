@@ -16,7 +16,7 @@ fn now() -> i64 {
     time::systime().num_milliseconds()
 }
 
-fn profile(before: &[d3os_nvidia::compute::ProfileEntry], after: &[d3os_nvidia::compute::ProfileEntry]) {
+fn profile(before: &[d3os_nvidia::compute::ProfileEntry], after: &[d3os_nvidia::compute::ProfileEntry], phase: &str) {
     let total: u64 = before.iter().zip(after).map(|(a, b)| b.cycles.wrapping_sub(a.cycles)).sum();
     for (index, (a, b)) in before.iter().zip(after).enumerate() {
         let calls = b.calls.wrapping_sub(a.calls);
@@ -27,7 +27,7 @@ fn profile(before: &[d3os_nvidia::compute::ProfileEntry], after: &[d3os_nvidia::
         let wait = b.wait_cycles.wrapping_sub(a.wait_cycles);
         let kernel = Kernel::from_raw(index as u32).expect("profile index is a built-in kernel");
         report(format_args!(
-            "NATIVE_KERNEL_PROFILE symbol={} calls={calls} cycles={cycles} wait_cycles={wait} dispatch_share_pct={:.2} wait_pct={:.2}",
+            "NATIVE_KERNEL_PROFILE symbol={} calls={calls} cycles={cycles} wait_cycles={wait} dispatch_share_pct={:.2} wait_pct={:.2} phase={phase}",
             kernel.symbol(),
             cycles as f64 * 100. / total.max(1) as f64,
             wait as f64 * 100. / cycles.max(1) as f64
@@ -240,6 +240,11 @@ pub(super) fn qwen(backend: &Nvidia) -> Result<(), String> {
         let start = now();
         let mut session = model.session(backend, prompt.len() + DECODE).map_err(|error| format!("{error}"))?;
         let state_ms = now() - start;
+        let prefill_profile = if run == 1 {
+            Some(backend.profile().map_err(|error| format!("{error}"))?)
+        } else {
+            None
+        };
         let start = now();
         let mut logits = session.prefill(&prompt).map_err(|error| format!("{error}"))?;
         let prefill_ms = now() - start;
@@ -256,7 +261,10 @@ pub(super) fn qwen(backend: &Nvidia) -> Result<(), String> {
         let decode_ms = now() - start;
         if run == 1 {
             let after = backend.profile().map_err(|error| format!("{error}"))?;
-            profile(&before, &after);
+            if let Some(prefill_before) = prefill_profile {
+                profile(&prefill_before, &before, "prefill");
+            }
+            profile(&before, &after, "decode");
         }
         report(format_args!(
             "INFERENCE_BENCH qwen backend=nvidia run={run} warm={} file_ms={file_ms} load_ms={load_ms} state_ms={state_ms} prompt_tokens={} prefill_ms={prefill_ms} prefill_tps={:.3} decode_tokens={DECODE} decode_ms={decode_ms} decode_tps={:.3} checksum={checksum}",
@@ -269,7 +277,7 @@ pub(super) fn qwen(backend: &Nvidia) -> Result<(), String> {
     let fixture = read_file("/usr/share/inference/qwen-fixture.d3t")?;
     let positions = qwen::verify_fixture(&model, backend, &fixture).map_err(|error| format!("{error}"))?;
     report(format_args!(
-        "INFERENCE_BENCH_OK qwen backend=nvidia reference_positions={positions} reference_layers=24"
+        "INFERENCE_BENCH_OK qwen backend=nvidia reference_positions={positions} reference_layers=24 batch_reference_positions={positions} cache_comparison=ok"
     ));
     Ok(())
 }

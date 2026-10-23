@@ -4,6 +4,44 @@ use d3os_compute::{Backend, Tensor, cpu::Cpu};
 fn tensor(shape: &[usize], values: &[f32]) -> Tensor<Cpu> {
     Tensor::from_vec(&Cpu, shape, values.to_vec()).unwrap()
 }
+
+#[test]
+fn batched_attention_rejects_insufficient_cache_before_any_update() {
+    let config = AttentionConfig {
+        heads: 1,
+        kv_heads: 1,
+        head_dim: 2,
+        rotary_dim: 2,
+        rope_theta: 10000.,
+        epsilon: 1e-6,
+    };
+    let mut state = AttentionState {
+        keys: tensor(&[1, 1, 2], &[7., 8.]),
+        values: tensor(&[1, 1, 2], &[9., 10.]),
+        position: 0,
+    };
+    let query = tensor(&[2, 4], &[0.2; 8]);
+    let key = tensor(&[2, 2], &[0.3; 4]);
+    let value = tensor(&[2, 2], &[0.4; 4]);
+    let norm = tensor(&[2], &[0.; 2]);
+    assert!(
+        Cpu.attention_batch(
+            AttentionInputs {
+                query_gate: &query,
+                key: &key,
+                value: &value,
+                query_norm: &norm,
+                key_norm: &norm
+            },
+            &mut state,
+            config
+        )
+        .is_err()
+    );
+    assert_eq!(state.position, 0);
+    assert_eq!(Cpu.values(&state.keys), &[7., 8.]);
+    assert_eq!(Cpu.values(&state.values), &[9., 10.]);
+}
 fn close(actual: &[f32], expected: &[f64]) {
     assert_eq!(actual.len(), expected.len());
     for (&a, &b) in actual.iter().zip(expected) {

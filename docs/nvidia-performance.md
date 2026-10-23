@@ -33,8 +33,8 @@ Measurements on 2026-10-22 and 2026-10-23:
 
 | Workload | Initial resident baseline | After native optimizations |
 | --- | ---: | ---: |
-| Qwen warm generation | 7.04 to 7.36 tokens/s | 140.97 to 148.49 tokens/s |
-| Qwen warm prompt processing | 7.76 to 7.81 tokens/s | 162.96 to 174.60 tokens/s |
+| Qwen warm generation | 7.04 to 7.36 tokens/s | 125.00 to 149.18 tokens/s |
+| Qwen warm prompt processing | 7.76 to 7.81 tokens/s | 536.59 to 594.59 tokens/s |
 | AlexNet forward pass | 10.0 ms | 1.45 to 1.55 ms |
 | DOOM uncapped `demo1` | 536.84 to 676.89 FPS with word storage | 1431.58 to 1439.86 FPS with resident byte textures |
 
@@ -159,6 +159,27 @@ GPU timestamps measure only the selected projection and activation kernels, excl
 The three fused samples report 42.31 to 42.37 microseconds. Separate kernels report 71.86 to 71.99 microseconds.
 Timestamp instrumentation adds scheduling and completion work, so these samples use a separate `instrumented_device_mean_us` field.
 
+Qwen now processes prompt chunks of up to 32 tokens, one complete layer at a time.
+Embedding gathers token rows on the GPU. Dense projections and normalization operate on the resulting token matrix.
+Multi-row projections use the existing compensated TF32 tensor-core kernels with packed BF16 weights and FP32 activations.
+Attention and recurrent cache updates retain token order within each layer.
+The NVIDIA backend reuses scratch buffers and writes each token directly into the batch output.
+Only the final prompt token receives a vocabulary projection during normal inference.
+An independently owned GPU row copy selects that token without downloading activations.
+
+The recorded 22-token warm prompt time falls from 126–135 ms before batching to 37–41 ms.
+This gives 536.59–594.59 tokens/s across four batched VMs.
+The first prompt in each VM takes 125–136 ms, including initial program loading; file and weight upload remain separate measurements.
+Warm generation spans 125.00–149.18 tokens/s across those runs, with the same decode checksum.
+The final VM also reports slower file and weight loading. These ranges retain that run and do not establish a fixed gain percentage.
+This change targets prompt latency and does not establish a generation speedup.
+
+The independent fixture now checks sequential and batched execution across all 24 layers and all vocabulary logits at 29 positions.
+Its batches use 17 and 12 tokens to exercise cache continuation at a nonzero position.
+It compares greedy selections and final attention, convolution, and recurrent cache contents.
+Existing model tolerances remain unchanged.
+A CPU test also crosses two 32-token boundaries after an existing prefix and checks subsequent decoding exactly.
+
 The DOOM rasterizer builds ordered column and row lists for each command batch.
 Each pixel merges its two relevant lists instead of scanning every command.
 The merge preserves draw order, including overlap between columns and spans.
@@ -260,7 +281,8 @@ Mesa's [QMD v3 implementation](https://chromium.googlesource.com/external/gitlab
 
 ## Per-kernel profile
 
-The resident Qwen benchmark also reads `Nvidia::profile()` before and after the second decode run.
+The resident Qwen benchmark reads `Nvidia::profile()` around prompt processing and decoding in the second session.
+The `phase=prefill` and `phase=decode` records separate the two workloads. Logging occurs after both timed intervals.
 The snapshot reports call counts, CPU launch cycles, and completion-wait cycles for each built-in kernel.
 `dispatch_share_pct` divides a kernel's cycles by the total dispatch cycles in that interval.
 It excludes application work outside dispatch and does not equal that kernel's share of total model latency.
@@ -270,13 +292,17 @@ CPU cycles are useful within a run and are not a portable time unit across machi
 
 ## Remaining work
 
-Qwen still submits synchronous operations separately and processes the prompt one token at a time.
-A faster path still needs batched submission, fused operations, and batched prompt processing.
+Qwen now batches prompt matrices but still submits synchronous operations separately.
+Attention preparation and recurrent updates still launch once per token row.
+In the 22-token prefill profile, packed projections account for about 41% of dispatch cycles.
+Attention preparation accounts for about 21%, and recurrent updates about 19%.
+The next improvements must address these kernels and submission costs.
+The Linux prompt result still uses different tokens, archive provenance, and cache precision; a fully matched model benchmark remains necessary.
 The CPU token-selection work now combines only 32 GPU candidates.
 Each change must preserve the existing model reference or define and measure a separate precision policy.
 
 The large projection kernels now match Linux device throughput for the measured shapes.
-This does not establish model parity: Qwen still generates about 141 to 148 tokens/s, compared with about 265 tokens/s in the pinned Linux BF16 reference.
+This does not establish model parity: Qwen still generates about 125 to 149 tokens/s, compared with about 265 tokens/s in the pinned Linux BF16 reference.
 The remaining work must reduce complete model latency, rather than optimize already comparable streaming bandwidth.
 
 DOOM still transfers packed indexed frames for CPU HUD composition and copies RGB output into the console framebuffer.

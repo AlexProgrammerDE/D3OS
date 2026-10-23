@@ -1,5 +1,7 @@
 use super::{Cpu, zeros};
-use crate::transformer::{AttentionConfig, AttentionInputs, AttentionState, DeltaConfig, DeltaInputs, DeltaState, TransformerBackend};
+use crate::transformer::{
+    AttentionConfig, AttentionInputs, AttentionState, DeltaConfig, DeltaInputs, DeltaState, TransformerBackend, attention_shape, delta_shape,
+};
 use crate::{Backend, Error, Result, Tensor, element_count};
 
 fn dot(a: &[f32], b: &[f32]) -> f32 {
@@ -50,6 +52,80 @@ fn rotate(row: &mut [f32], position: usize, config: AttentionConfig) {
 }
 
 impl TransformerBackend for Cpu {
+    fn embedding_batch(&self, table: &Tensor<Self>, tokens: &[u32]) -> Result<Tensor<Self>> {
+        let [vocab, width] = *table.shape() else {
+            return Err(Error::ShapeMismatch);
+        };
+        if tokens.iter().any(|&token| token as usize >= vocab) {
+            return Err(Error::InvalidParameter);
+        }
+        let mut values = zeros(&[tokens.len(), width])?;
+        for (&token, output) in tokens.iter().zip(values.chunks_exact_mut(width)) {
+            output.copy_from_slice(&self.values(table)[token as usize * width..(token as usize + 1) * width]);
+        }
+        Tensor::from_vec(self, &[tokens.len(), width], values)
+    }
+
+    fn row(&self, input: &Tensor<Self>, row: usize) -> Result<Tensor<Self>> {
+        let [rows, width] = *input.shape() else {
+            return Err(Error::ShapeMismatch);
+        };
+        if row >= rows {
+            return Err(Error::InvalidParameter);
+        }
+        Tensor::from_vec(self, &[1, width], self.values(input)[row * width..(row + 1) * width].to_vec())
+    }
+
+    fn attention_batch(&self, input: AttentionInputs<'_, Self>, state: &mut AttentionState<Self>, config: AttentionConfig) -> Result<Tensor<Self>> {
+        let (rows, width, _) = attention_shape(&input, state, config)?;
+        let mut output = zeros(&[rows, width])?;
+        for row in 0..rows {
+            let query_gate = self.row(input.query_gate, row)?;
+            let key = self.row(input.key, row)?;
+            let value = self.row(input.value, row)?;
+            let result = self.attention_step(
+                AttentionInputs {
+                    query_gate: &query_gate,
+                    key: &key,
+                    value: &value,
+                    query_norm: input.query_norm,
+                    key_norm: input.key_norm,
+                },
+                state,
+                config,
+            )?;
+            output[row * width..(row + 1) * width].copy_from_slice(self.values(&result));
+        }
+        Tensor::from_vec(self, &[rows, width], output)
+    }
+
+    fn delta_batch(&self, input: DeltaInputs<'_, Self>, state: &mut DeltaState<Self>, config: DeltaConfig) -> Result<Tensor<Self>> {
+        let (rows, _, width) = delta_shape(&input, state, config)?;
+        let mut output = zeros(&[rows, width])?;
+        for row in 0..rows {
+            let qkv = self.row(input.qkv, row)?;
+            let gate = self.row(input.gate, row)?;
+            let beta = self.row(input.beta, row)?;
+            let alpha = self.row(input.alpha, row)?;
+            let result = self.delta_step(
+                DeltaInputs {
+                    qkv: &qkv,
+                    gate: &gate,
+                    beta: &beta,
+                    alpha: &alpha,
+                    convolution: input.convolution,
+                    log_decay: input.log_decay,
+                    time_bias: input.time_bias,
+                    norm: input.norm,
+                },
+                state,
+                config,
+            )?;
+            output[row * width..(row + 1) * width].copy_from_slice(self.values(&result));
+        }
+        Tensor::from_vec(self, &[rows, width], output)
+    }
+
     fn embedding(&self, table: &Tensor<Self>, token: usize) -> Result<Tensor<Self>> {
         let [vocab, width] = table.shape() else {
             return Err(Error::ShapeMismatch);

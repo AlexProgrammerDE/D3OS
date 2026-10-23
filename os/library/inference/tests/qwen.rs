@@ -108,6 +108,60 @@ fn prefill_and_incremental_decode_agree_and_sessions_remain_independent() {
 }
 
 #[test]
+fn prompt_batches_preserve_nonzero_prefixes_chunk_boundaries_and_later_decode() {
+    let mut records = model_records();
+    records[0].2[13] = 80.;
+    let model = Qwen::load(&Cpu, &archive(&records)).unwrap();
+    let mut batched = model.session(&Cpu, 80).unwrap();
+    let mut sequential = model.session(&Cpu, 80).unwrap();
+    for token in [1, 7, 2] {
+        batched.step(token).unwrap();
+        sequential.step(token).unwrap();
+    }
+    let tokens: Vec<_> = (0..65).map(|i| (i * 7 % 24) as u32).collect();
+    let mut invalid = tokens.clone();
+    invalid[64] = 24;
+    assert!(matches!(batched.prefill(&invalid), Err(Error::InvalidToken)));
+    assert_eq!(batched.position(), 3);
+    let mut expected = Vec::new();
+    let mut traces = Vec::new();
+    for &token in &tokens {
+        let output = sequential
+            .step_observed(token, |layer, output| {
+                if layer == 0 {
+                    traces.push(Vec::new());
+                }
+                traces.last_mut().unwrap().push(Cpu.download(output)?);
+                Ok(())
+            })
+            .unwrap();
+        expected = Cpu.download(&output).unwrap();
+    }
+    let mut chunks = Vec::new();
+    let actual = batched
+        .prefill_observed(&tokens, |start, layer, output| {
+            let values = Cpu.download(output)?;
+            if layer == 0 {
+                chunks.push((start, output.shape()[0]));
+            }
+            for (row, actual) in values.chunks_exact(8).enumerate() {
+                assert_eq!(actual, traces[start - 3 + row][layer]);
+            }
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(Cpu.download(&actual).unwrap(), expected);
+    assert_eq!(chunks, [(3, 32), (35, 32), (67, 1)]);
+    assert_eq!(batched.position(), 68);
+    for token in [5, 3, 9] {
+        assert_eq!(
+            Cpu.download(&batched.step(token).unwrap()).unwrap(),
+            Cpu.download(&sequential.step(token).unwrap()).unwrap()
+        );
+    }
+}
+
+#[test]
 fn invalid_input_preserves_cache_and_mid_step_errors_invalidate_the_session() {
     let model = Qwen::load(&Cpu, &archive(&model_records())).unwrap();
     let mut session = model.session(&Cpu, 2).unwrap();
@@ -124,6 +178,13 @@ fn invalid_input_preserves_cache_and_mid_step_errors_invalidate_the_session() {
             .is_err()
     );
     assert!(matches!(session.step(2), Err(Error::SessionFailed)));
+    let mut session = model.session(&Cpu, 4).unwrap();
+    assert!(
+        session
+            .prefill_observed(&[1, 2], |_, layer, _| if layer == 1 { Err(Error::VerificationFailed) } else { Ok(()) })
+            .is_err()
+    );
+    assert!(matches!(session.prefill(&[3]), Err(Error::SessionFailed)));
 }
 
 #[test]
