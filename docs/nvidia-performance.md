@@ -42,6 +42,21 @@ These measurements separate end-to-end overhead from device throughput. They are
 
 ## Latest retained measurements
 
+### Burn primitive regression
+
+The first native Burn primitives now support shared GPU storage, checked views, and eleven specialized cuTile elementwise entries.
+GPU checks cover signed strides, broadcasting, scalars, comparisons, mask filling, exact bit copies, partial tiles, and neighboring guards.
+Chained arithmetic uses resident buffers without host activation transfers or separate output clears.
+Invalid view metadata fails before dispatch. All 77 pre-existing device instruction sections remain byte-identical.
+
+The accompanying regression passes AlexNet's eight layer references, Qwen's layer and cache references, and all 600 DOOM views.
+AlexNet averages 0.950 ms across 100 passes.
+Qwen's two warm 64-token samples reach 262.295 and 243.346 tokens/s, with the existing checksum unchanged.
+DOOM reaches 1,576.55 uncapped FPS. Regular gameplay remains capped around 70 FPS.
+These are regression measurements of the existing workloads. Their migration to Burn remains pending.
+The first Burn training check runs on the explicit CPU device inside D3OS and validates gradients and Adam checkpoint resume.
+Full native Burn training and matched performance comparisons remain open.
+
 ### Grouped recurrent attention
 
 The recurrent operator now accepts separate query/key and value head counts.

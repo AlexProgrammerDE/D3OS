@@ -18,6 +18,41 @@ fn main() {
         source.push_str(&fs::read_to_string(format!("src/{file}")).expect("read tile source"));
         source.push('\n');
     }
+    println!("cargo:rerun-if-changed=src/burn-elementwise.rs.in");
+    let elementwise = fs::read_to_string("src/burn-elementwise.rs.in").expect("read Burn elementwise template");
+    let mut parameters: Vec<String> = ["count", "_rank", "operation", "scalar", "offset_a", "offset_b", "extent_a", "extent_b"]
+        .map(str::to_owned)
+        .into();
+    parameters.extend((0..8).map(|axis| format!("dim{axis}")));
+    parameters.extend((0..8).map(|axis| format!("stride_a{axis}")));
+    parameters.extend((0..8).map(|axis| format!("stride_b{axis}")));
+    let parameters = parameters.into_iter().map(|name| format!("{name}: u32")).collect::<Vec<_>>().join(", ");
+    let addresses = (0..8)
+        .rev()
+        .map(|axis| {
+            let advance = if axis == 0 {
+                String::new()
+            } else {
+                format!("linear = linear / broadcast_scalar(dim{axis}, shape![128]);\n")
+            };
+            format!(
+                "let coordinate = linear % broadcast_scalar(dim{axis}, shape![128]);\n\
+         {advance}\
+         let coordinate: Tile<i32, {{ [128] }}> = bitcast(coordinate);\n\
+         address_a = address_a + coordinate * broadcast_scalar(signed(stride_a{axis}), shape![128]);\n\
+         address_b = address_b + coordinate * broadcast_scalar(signed(stride_b{axis}), shape![128]);\n"
+            )
+        })
+        .collect::<String>();
+    for op in d3os_nvidia::compute::elementwise::Elementwise::ALL {
+        source.push_str(
+            &elementwise
+                .replace("BURN_ENTRY", op.symbol())
+                .replace("BURN_PARAMETERS", &parameters)
+                .replace("BURN_ADDRESSES", &addresses)
+                .replace("BURN_OP", &format!("{}u32", op as u32)),
+        );
+    }
     println!("cargo:rerun-if-changed=src/quantized.rs.in");
     let quantized = fs::read_to_string("src/quantized.rs.in").expect("read quantized template");
     for width in [128, 512] {

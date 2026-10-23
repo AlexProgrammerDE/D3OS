@@ -13,5 +13,8 @@ d3os-nvidia = { path = "../../os/library/nvidia" }
 goblin = "0.10"
 serde_json = "1"
 
+[build-dependencies]
+d3os-nvidia = { path = "../../os/library/nvidia" }
+
 [profile.release]
 opt-level = 3

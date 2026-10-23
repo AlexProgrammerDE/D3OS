@@ -4,6 +4,10 @@ D3OS owns the compute API, tensor operations, model execution, and application i
 The CPU backend is a real userspace implementation with `no_std` and `alloc`.
 Host verification builds the same libraries for Linux.
 
+The [Burn migration](burn-migration.md) replaces the public AI framework while retaining the native driver and cuTile kernels.
+Its portable runtime and first native GPU primitives are operational. Model migration and GPU training remain in progress.
+DOOM keeps its separate native rendering API.
+
 The hardware-free phase delivers pretrained AlexNet and Qwen3.5-0.8B text inference inside D3OS.
 The host compiler builds Rust cuTile kernels without GPU hardware.
 The native NVIDIA hardware phase now runs AlexNet on the passed-through RTX 4090 Laptop GPU.
@@ -15,6 +19,8 @@ The [renderer explanation](nvidia-rendering-design.md) describes command orderin
 
 ## Source layout
 
+- `os/library/ai`: Burn-based model definitions and portable training validation.
+- `os/library/burn-native`: Burn tensor primitives, checked views, and native GPU operations.
 - `os/library/compute`: tensor storage, command scopes, CPU operators, and the native NVIDIA backend.
 - `os/library/inference`: checked tensor archives, AlexNet evaluation, Qwen text generation, tokenization, and numerical verification.
 - `os/application/infer`: D3OS file access, shell commands, and serial reports.
@@ -139,9 +145,17 @@ The CI workflow provides repeatable numerical tests and an optional pretrained Q
 The current target is the RTX 4090 Laptop GPU (`10de:2757`, AD103) with one serialized compute queue.
 The driver boots pinned signed firmware and allocates a private, virtually bound compute context.
 The process-owned syscall interface accepts built-in kernels and opaque buffer handles.
-Native compute protocol version 6 includes command scopes, queue profiles, and 44 built-in kernels.
+Native compute protocol version 7 includes command scopes, queue profiles, and 45 built-in kernels.
 Its expanded profile array requires the matching SDK.
 Rebuild compute applications with the matching SDK. The kernel rejects incompatible request versions.
+
+The new elementwise family dispatches eleven specialized cuTile entries for Burn tensor views.
+It supports exact bit copies, FP32 arithmetic, comparisons, and mask filling, including scalar operands and strided broadcasting.
+Its 32 parameters contain dimensions, signed strides, base offsets, storage extents, operation flags, and scalar bits.
+The driver validates every reachable input address before dispatch and rejects output aliasing.
+Every entry writes the complete output, so native allocation avoids a separate clear kernel.
+Empty logical results reuse resident storage without a GPU launch.
+Hardware checks cover partial tiles, neighboring guards, rejected addresses, exact floating-point copies, and chained resident operations.
 
 `Backend::upload_quantized()` accepts borrowed Q8_0, Q3_K, Q4_K, Q5_K, and Q6_K weight blocks.
 It checks block lengths and finite FP16 scales before allocating device storage.

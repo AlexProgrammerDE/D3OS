@@ -236,8 +236,8 @@ impl Nvidia {
         Tensor::from_buffer(shape, self.produce_storage(elements, kernel, inputs, parameters, Storage::F32, &[])?)
     }
 
-    fn produce_storage<T>(
-        &self, elements: usize, kernel: Kernel, inputs: &[(&GpuBuffer, usize)], parameters: &[usize], storage: Storage, before: &[Request],
+    fn produce_storage<T, I>(
+        &self, elements: usize, kernel: Kernel, inputs: &[(&GpuBuffer<I>, usize)], parameters: &[usize], storage: Storage, before: &[Request],
     ) -> Result<GpuBuffer<T>> {
         element_count(&[elements])?;
         let (mut call, work) = self.command(kernel, parameters)?;
@@ -267,6 +267,11 @@ impl Nvidia {
         let mut buffer = self.allocate_storage(elements)?;
         buffer.storage = Storage::Words;
         Ok(buffer)
+    }
+
+    /// Allocate an output for a validated full writer without a redundant clear.
+    pub fn produce_words(&self, elements: usize, kernel: Kernel, inputs: &[(&GpuBuffer<u32>, usize)], parameters: &[usize]) -> Result<GpuBuffer<u32>> {
+        self.produce_storage(elements, kernel, inputs, parameters, Storage::Words, &[])
     }
 
     /// Pack little-endian bytes into owned words. The final word is zero padded;

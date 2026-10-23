@@ -1,0 +1,45 @@
+#[cutile::entry()]
+unsafe fn BURN_ENTRY(a: *const u32, b: *const u32, output: *mut u32, BURN_PARAMETERS) {
+    let i = indices();
+    let mask = lt_tile(i, broadcast_scalar(count, shape![128]));
+    let mut linear = i;
+    let mut address_a = broadcast_scalar(signed(offset_a), shape![128]);
+    let mut address_b = broadcast_scalar(signed(offset_b), shape![128]);
+    BURN_ADDRESSES
+    let address_a: Tile<u32, { [128] }> = bitcast(address_a);
+    let address_b: Tile<u32, { [128] }> = bitcast(address_b);
+    let left = unsafe { read_tile(a, address_a, mask & lt_tile(address_a, broadcast_scalar(extent_a, shape![128])), 0u32) };
+    let right = if operation & 65536u32 != 0u32 {
+        broadcast_scalar(scalar, shape![128])
+    } else {
+        unsafe { read_tile(b, address_b, mask & lt_tile(address_b, broadcast_scalar(extent_b, shape![128])), 0u32) }
+    };
+    let x: Tile<f32, { [128] }> = bitcast(left);
+    let y: Tile<f32, { [128] }> = bitcast(right);
+    let zero = broadcast_scalar(0u32, shape![128]);
+    let one = broadcast_scalar(1u32, shape![128]);
+    let result: Tile<u32, { [128] }> = if BURN_OP == 0u32 {
+        if operation & 65536u32 != 0u32 { broadcast_scalar(scalar, shape![128]) } else { left }
+    } else if BURN_OP == 1u32 {
+        bitcast(x + y)
+    } else if BURN_OP == 2u32 {
+        bitcast(x - y)
+    } else if BURN_OP == 3u32 {
+        bitcast(x * y)
+    } else if BURN_OP == 4u32 {
+        bitcast(x / y)
+    } else if BURN_OP == 5u32 {
+        select(eq_tile(x, y), one, zero)
+    } else if BURN_OP == 6u32 {
+        select(gt_tile(x, y), one, zero)
+    } else if BURN_OP == 7u32 {
+        select(ge_tile(x, y), one, zero)
+    } else if BURN_OP == 8u32 {
+        select(lt_tile(x, y), one, zero)
+    } else if BURN_OP == 9u32 {
+        select(le_tile(x, y), one, zero)
+    } else {
+        select(eq_tile(right, zero), left, broadcast_scalar(scalar, shape![128]))
+    };
+    unsafe { write_tile(output, i, result, mask) };
+}

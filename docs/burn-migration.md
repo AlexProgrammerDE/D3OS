@@ -106,7 +106,12 @@ The native backend now has a Burn tensor primitive with shared GPU storage and c
 Host checks cover every three-dimensional permutation and reversal, composed slices, broadcasts, overlapping windows, empty tensors, and invalid address ranges.
 Physical GPU checks pass view addressing, aliasing, lifetime, exact floating-point bits, boolean storage, and empty tensors.
 View construction performs no GPU allocation or transfer. The existing GPU operator checks also pass.
-These checks validate storage. Burn device dispatch, native arithmetic, and autodiff integration still need implementation.
+Eleven specialized cuTile entries now provide exact copies, FP32 arithmetic, comparisons, and mask filling for these views.
+They support strided broadcasting and scalar operands without host activation transfers.
+The driver rejects invalid address ranges before dispatch. Full writers avoid redundant output clears.
+GPU checks pass partial tiles, neighboring guards, malformed metadata, chained resident operations, and exact bit copies.
+All 77 existing device instruction sections remain byte-identical.
+These checks validate native primitives. Burn device dispatch and autodiff integration still need implementation.
 The native Burn GPU backend, full dataset training, and workload migration remain incomplete.
 The retained Linux and D3OS measurements are in [Native NVIDIA performance](nvidia-performance.md).
 

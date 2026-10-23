@@ -1,6 +1,54 @@
 use d3os_nvidia::compute::Kernel;
 
 #[test]
+fn strided_elementwise_validates_every_reachable_address_before_dispatch() {
+    use d3os_nvidia::compute::elementwise::{Elementwise, SCALAR_RHS};
+    let mut p = [0u32; 32];
+    p[..8].copy_from_slice(&[6, 2, Elementwise::Add as u32, 0, 5, 0, 6, 3]);
+    p[8..16].fill(1);
+    p[8..10].copy_from_slice(&[2, 3]);
+    p[16..18].copy_from_slice(&[(-3i32) as u32, (-1i32) as u32]);
+    p[25] = 1;
+    let work = Kernel::TensorElementwise.work(&p).unwrap();
+    assert_eq!(work.extents[..3], [6, 3, 6]);
+    assert_eq!((work.threads, work.blocks, work.pointers, work.output), (128, 1, 3, 2));
+    assert!(Kernel::TensorElementwise.allocates_output());
+    assert!(work.validate_aliases(&[0x1000, 0x1000, 0x2000]).is_ok());
+    assert!(work.validate_aliases(&[0x1000, 0x2000, 0x1004]).is_err());
+    assert!(work.validate_aliases(&[0x1000, 0x2000, 0x2004]).is_err());
+    for (index, value) in [
+        (0, 7),
+        (1, 0),
+        (1, 9),
+        (2, 11),
+        (2, 1 << 17),
+        (3, 1),
+        (4, 4),
+        (4, 6),
+        (5, 1),
+        (6, 0),
+        (6, u32::MAX),
+        (7, 2),
+        (8, u32::MAX),
+        (10, 2),
+        (18, 1),
+        (26, 1),
+        (16, i32::MIN as u32),
+    ] {
+        let mut invalid = p;
+        invalid[index] = value;
+        assert!(Kernel::TensorElementwise.work(&invalid).is_err());
+    }
+    let mut scalar = p;
+    scalar[2] |= SCALAR_RHS;
+    scalar[3] = 0.25f32.to_bits();
+    assert!(Kernel::TensorElementwise.work(&scalar).is_ok());
+    scalar[2] = Elementwise::MaskFill as u32 | SCALAR_RHS;
+    assert!(Kernel::TensorElementwise.work(&scalar).is_err());
+    assert!(Kernel::TensorElementwise.work(&p[..31]).is_err());
+}
+
+#[test]
 fn grouped_projection_checks_every_matrix_and_the_complete_packed_output() {
     let work = Kernel::GroupedProjectBf16.work(&[6, 4, 8, 4]).unwrap();
     assert_eq!(work.extents[..6], [6, 12, 24, 12, 12, 20]);
@@ -481,7 +529,18 @@ fn grouped_recurrence_uses_shared_key_channels_and_separate_value_states() {
     for heads in [32u32, 48] {
         let work = Kernel::DeltaUpdate.work(&[heads, 128, 128, 3, 16]).unwrap();
         let channels = 2 * 16 * 128 + heads * 128;
-        assert_eq!(work.extents[..7], [u64::from(3 * channels), u64::from(3 * heads), u64::from(3 * heads), u64::from(heads), u64::from(heads), u64::from(heads * 128 * 128), u64::from(3 * heads * 128)]);
+        assert_eq!(
+            work.extents[..7],
+            [
+                u64::from(3 * channels),
+                u64::from(3 * heads),
+                u64::from(3 * heads),
+                u64::from(heads),
+                u64::from(heads),
+                u64::from(heads * 128 * 128),
+                u64::from(3 * heads * 128)
+            ]
+        );
         assert_eq!(work.mutated, 1 << 5);
         assert_eq!(work.output, 6);
         assert_eq!(work.blocks, heads * 4);

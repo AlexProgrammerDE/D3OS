@@ -118,6 +118,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "timestamp_probe",
             "local_stack_probe",
         ]);
+        inference.extend(d3os_nvidia::compute::elementwise::Elementwise::ALL.iter().skip(1).map(|op| op.symbol()));
         compile(&output, "inference", &inference, &toolkit)?;
     } else {
         let names: Vec<&str> = names.iter().map(String::as_str).collect();

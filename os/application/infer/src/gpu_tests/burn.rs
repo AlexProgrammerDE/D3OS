@@ -1,4 +1,5 @@
 //! Check Burn tensor ownership and views on real native GPU allocations.
+use abi::elementwise::Elementwise;
 use alloc::{format, string::String, vec::Vec};
 use d3os_ai::{
     burn::backend::{BoolStore, DType, Shape, Slice, TensorData, TensorMetadata},
@@ -77,5 +78,177 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     crate::report(format_args!(
         "NVIDIA_BURN_STORAGE_OK views=ok aliasing=ok lifetime=ok ieee_bits=ok bool=ok empty=ok backend=nvidia"
     ));
+    verify_elementwise(backend).map_err(|e| format!("Burn native elementwise: {e}"))?;
+    verify_guarded_elementwise(backend).map_err(|e| format!("Burn native elementwise guards: {e}"))?;
+    crate::report(format_args!(
+        "NVIDIA_BURN_ELEMENTWISE_OK operations=11 views=strided_broadcast scalar=ok guards=ok resident=ok backend=nvidia"
+    ));
+    Ok(())
+}
+
+fn check_values(tensor: &NativeTensor, expected: &[f32]) -> Result<(), Error> {
+    let actual = tensor.read()?;
+    let actual = actual.as_slice::<f32>().map_err(|_| Error::DeviceFault)?;
+    if actual.len() != expected.len()
+        || actual
+            .iter()
+            .zip(expected)
+            .any(|(&a, &b)| !a.is_finite() || (a - b).abs() > 1e-6 + 1e-6 * b.abs())
+    {
+        return Err(Error::DeviceFault);
+    }
+    Ok(())
+}
+
+fn verify_elementwise(backend: &Nvidia) -> Result<(), Error> {
+    let values: Vec<f32> = (0..2 * 3 * 131).map(|i| (i % 37) as f32 / 8.0 - 2.25).collect();
+    let original = NativeTensor::from_data(TensorData::new(values.clone(), [2, 3, 131]))?;
+    let input = original.clone().permute(&[2, 0, 1])?.flip(&[0])?;
+    let rhs = NativeTensor::from_data(TensorData::new(alloc::vec![2.0f32, -4.0], [1, 2, 1]))?;
+    let expected: Vec<f32> = (0..131)
+        .flat_map(|x| (0..2).flat_map(move |row| (0..3).map(move |col| (row * 3 + col) * 131 + (130 - x))))
+        .map(|i| values[i])
+        .collect();
+    let factors: Vec<f32> = (0..131).flat_map(|_| [2.0f32, 2.0, 2.0, -4.0, -4.0, -4.0]).collect();
+    check_values(&input.copy()?, &expected)?;
+    for op in [Elementwise::Add, Elementwise::Subtract, Elementwise::Multiply, Elementwise::Divide] {
+        let reference: Vec<_> = expected
+            .iter()
+            .zip(&factors)
+            .map(|(&a, &b)| match op {
+                Elementwise::Add => a + b,
+                Elementwise::Subtract => a - b,
+                Elementwise::Multiply => a * b,
+                _ => a / b,
+            })
+            .collect();
+        check_values(&input.binary(&rhs, op)?, &reference)?;
+        let reference: Vec<_> = expected
+            .iter()
+            .map(|&a| match op {
+                Elementwise::Add => a + 0.5,
+                Elementwise::Subtract => a - 0.5,
+                Elementwise::Multiply => a * 0.5,
+                _ => a / 0.5,
+            })
+            .collect();
+        check_values(&input.scalar(op, 0.5)?, &reference)?;
+    }
+    for op in [
+        Elementwise::Equal,
+        Elementwise::Greater,
+        Elementwise::GreaterEqual,
+        Elementwise::Less,
+        Elementwise::LessEqual,
+    ] {
+        for scalar in [false, true] {
+            let actual = if scalar { input.scalar(op, 0.5)? } else { input.binary(&rhs, op)? };
+            if actual.dtype() != DType::Bool(BoolStore::U32) {
+                return Err(Error::DeviceFault);
+            }
+            let reference: Vec<u8> = expected
+                .iter()
+                .zip(&factors)
+                .flat_map(|(&a, &b)| {
+                    let b = if scalar { 0.5 } else { b };
+                    let result = match op {
+                        Elementwise::Equal => a == b,
+                        Elementwise::Greater => a > b,
+                        Elementwise::GreaterEqual => a >= b,
+                        Elementwise::Less => a < b,
+                        _ => a <= b,
+                    };
+                    u32::from(result).to_le_bytes()
+                })
+                .collect();
+            if actual.read()?.as_bytes() != reference {
+                return Err(Error::DeviceFault);
+            }
+        }
+    }
+    let before = backend.service_profile()?;
+    let shifted = input.binary(&rhs, Elementwise::Add)?;
+    let mask = shifted.scalar(Elementwise::Less, 0.0)?;
+    let masked = shifted.mask_fill(&mask, -123.5)?;
+    let after = backend.service_profile()?;
+    if [abi::UPLOAD, abi::DOWNLOAD, abi::ALLOCATE]
+        .iter()
+        .any(|&op| before[op as usize].calls != after[op as usize].calls)
+        || after[abi::LAUNCH_ALLOCATE as usize].calls - before[abi::LAUNCH_ALLOCATE as usize].calls != 3
+    {
+        return Err(Error::DeviceFault);
+    }
+    let reference: Vec<_> = expected.iter().zip(&factors).map(|(&a, &b)| if a + b < 0.0 { -123.5 } else { a + b }).collect();
+    check_values(&masked, &reference)?;
+    let small_mask = NativeTensor::from_data(TensorData::new(alloc::vec![false, true, false], [3]))?;
+    let reference: Vec<_> = expected.iter().enumerate().map(|(i, &v)| if i % 3 == 1 { 9.0 } else { v }).collect();
+    check_values(&input.mask_fill(&small_mask, 9.0)?, &reference)?;
+    check_values(&original, &values)?;
+    let special_bits = [0x8000_0000u32, 0x7fc0_1234, 0x7f80_0000];
+    let special = NativeTensor::from_data(TensorData::new(special_bits.map(f32::from_bits).to_vec(), [3]))?
+        .flip(&[0])?
+        .copy()?;
+    let special = special.read()?;
+    let actual: Vec<_> = special.as_slice::<f32>().map_err(|_| Error::DeviceFault)?.iter().map(|v| v.to_bits()).collect();
+    if actual != special_bits.into_iter().rev().collect::<Vec<_>>() {
+        return Err(Error::DeviceFault);
+    }
+    let integers = NativeTensor::from_data(TensorData::new(alloc::vec![i32::MIN, -1, 0, i32::MAX], [4]))?
+        .flip(&[0])?
+        .copy()?;
+    if integers.read()?.as_slice::<i32>().map_err(|_| Error::DeviceFault)? != [i32::MAX, 0, -1, i32::MIN] {
+        return Err(Error::DeviceFault);
+    }
+    let empty = NativeTensor::from_data(TensorData::new(Vec::<f32>::new(), [2, 0, 3]))?;
+    let before = backend.queue_profile()?;
+    let empty = empty.scalar(Elementwise::Equal, 0.5)?;
+    let after = backend.queue_profile()?;
+    if !empty.layout().is_empty() || !empty.read()?.as_bytes().is_empty() || before.launches != after.launches {
+        return Err(Error::DeviceFault);
+    }
+    Ok(())
+}
+
+fn verify_guarded_elementwise(backend: &Nvidia) -> Result<(), Error> {
+    use d3os_ai::native::layout::Layout;
+    let count = 257;
+    let left: Vec<u32> = (0..count).map(|i| (i as f32 / 16.0 - 4.0).to_bits()).collect();
+    let mut guarded = alloc::vec![0x6bad_beefu32];
+    guarded.extend(&left);
+    guarded.push(0x6bad_beef);
+    let a = backend.upload_words(&guarded)?;
+    let right = [0x6bad_beef, 0.25f32.to_bits(), 0x6bad_beef];
+    let b = backend.upload_words(&right)?;
+    let output = backend.upload_words(&alloc::vec![0x6bad_beef; count+2])?;
+    let lhs = Layout::contiguous(Shape::new([count]))?.flip(&[0])?;
+    let rhs = Layout::contiguous(Shape::new([1]))?.expand(Shape::new([count]))?;
+    let parameters = lhs.elementwise_parameters(&rhs, Elementwise::Add, 0, false)?;
+    backend.dispatch_words(abi::Kernel::TensorElementwise, &[(&a, 1), (&b, 1), (&output, 1)], &parameters)?;
+    let mut actual = alloc::vec![0; count+2];
+    backend.read_words_into(&output, 0, &mut actual)?;
+    let mut expected = alloc::vec![0x6bad_beef];
+    expected.extend(left.iter().rev().map(|&v| (f32::from_bits(v) + 0.25).to_bits()));
+    expected.push(0x6bad_beef);
+    if actual != expected {
+        return Err(Error::DeviceFault);
+    }
+    let mut malformed = parameters;
+    malformed[4] += count;
+    if backend.dispatch_words(abi::Kernel::TensorElementwise, &[(&a, 1), (&b, 1), (&output, 1)], &malformed) != Err(Error::InvalidParameter) {
+        return Err(Error::DeviceFault);
+    }
+    backend.read_words_into(&output, 0, &mut actual)?;
+    if actual != expected {
+        return Err(Error::DeviceFault);
+    }
+    backend.read_words_into(&a, 0, &mut actual)?;
+    if actual != guarded {
+        return Err(Error::DeviceFault);
+    }
+    let mut actual = [0u32; 3];
+    backend.read_words_into(&b, 0, &mut actual)?;
+    if actual != right {
+        return Err(Error::DeviceFault);
+    }
     Ok(())
 }

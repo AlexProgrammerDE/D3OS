@@ -2,7 +2,9 @@
 
 use crate::{Error, Result};
 
-pub const VERSION: u32 = 6;
+pub mod elementwise;
+
+pub const VERSION: u32 = 7;
 pub const INFO: u32 = 0;
 pub const ALLOCATE: u32 = 1;
 pub const FREE: u32 = 2;
@@ -22,7 +24,7 @@ pub const END_COMMANDS: u32 = 10;
 pub const QUEUE_PROFILE: u32 = 11;
 pub const SERVICE_PROFILE: u32 = 12;
 pub const SERVICE_OPERATIONS: usize = 13;
-pub const KERNEL_COUNT: usize = 44;
+pub const KERNEL_COUNT: usize = 45;
 
 /// CPU service costs by request operation, including queue work within it.
 #[derive(Clone, Copy, Debug, Default)]
@@ -121,9 +123,10 @@ pub enum Kernel {
     ProjectQuantized = 41,
     Dequantize = 42,
     EmbeddingQuantized = 43,
+    TensorElementwise = 44,
 }
 
-const _: () = assert!(Kernel::EmbeddingQuantized as usize + 1 == KERNEL_COUNT);
+const _: () = assert!(Kernel::TensorElementwise as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -167,7 +170,8 @@ impl Kernel {
     pub fn allocates_output(self) -> bool {
         matches!(
             self,
-            Self::Matmul
+            Self::TensorElementwise
+                | Self::Matmul
                 | Self::Im2col
                 | Self::MaxPool
                 | Self::Project
@@ -242,6 +246,7 @@ impl Kernel {
             41 => Self::ProjectQuantized,
             42 => Self::Dequantize,
             43 => Self::EmbeddingQuantized,
+            44 => Self::TensorElementwise,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -292,12 +297,16 @@ impl Kernel {
             Self::ProjectQuantized => "project_quantized",
             Self::Dequantize => "dequantize_weights",
             Self::EmbeddingQuantized => "embedding_quantized",
+            Self::TensorElementwise => "burn_strided_copy",
         }
     }
 
     /// Select the cuTile specialization without changing the public request ABI.
     pub fn entry(self, parameters: &[u32]) -> &'static str {
         match (self, parameters) {
+            (Self::TensorElementwise, p) if p.len() == elementwise::PARAMETERS => {
+                elementwise::Elementwise::from_raw(p[2] & 0xff).map_or(self.symbol(), |op| op.symbol())
+            }
             (Self::ProjectQuantized, [1, _, _, 8]) => "vector_project_q8_0",
             (Self::ProjectQuantized, [1, _, _, 11]) => "vector_project_q3k",
             (Self::ProjectQuantized, [_, _, _, 11]) => "project_q3k",
@@ -338,6 +347,10 @@ impl Kernel {
         let mut mutated = 0;
         let mut threads = 128;
         let (count, pointers, output, in_place) = match (self, p) {
+            (Self::TensorElementwise, p) => {
+                extents[..3].copy_from_slice(&elementwise::validate(p)?);
+                (p[0], 3, 2, false)
+            }
             (Self::ProjectQuantized, &[m, k, n, format]) => {
                 quantized_words(k, format)?;
                 extents[..3].copy_from_slice(&[product(&[m, k])? as u64, quantized_words(product(&[k, n])?, format)?, product(&[m, n])? as u64]);
