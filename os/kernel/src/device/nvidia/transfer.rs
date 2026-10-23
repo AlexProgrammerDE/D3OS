@@ -60,12 +60,10 @@ impl Compute {
             let cpu = unsafe { cpu.add(offset) };
             let gpu = gpu.checked_add(offset as u64 * 4).ok_or(Error::Alignment)?;
             if upload {
-                // The GPU is an external DMA agent. Volatile staging accesses
-                // preserve the CPU memory operations across ownership changes.
-                for i in 0..count {
-                    unsafe {
-                        pointer.add(i).write_volatile(cpu.add(i).read());
-                    }
+                // The previous DMA completed before the CPU regains this range.
+                // The bulk copy stays observable without clobbering SIMD state.
+                unsafe {
+                    d3os_nvidia::dma::copy_owned(pointer.cast(), cpu.cast(), count * 4);
                 }
             }
             fence(Ordering::SeqCst);
@@ -73,10 +71,8 @@ impl Compute {
             self.dispatch(device, Kernel::Copy, &addresses, &[count as u32])?;
             fence(Ordering::SeqCst);
             if !upload {
-                for i in 0..count {
-                    unsafe {
-                        cpu.add(i).write(pointer.add(i).read_volatile());
-                    }
+                unsafe {
+                    d3os_nvidia::dma::copy_owned(cpu.cast(), pointer.cast(), count * 4);
                 }
             }
         }

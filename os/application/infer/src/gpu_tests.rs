@@ -33,7 +33,51 @@ fn verify_buffer_reuse(backend: &Nvidia) -> Result<(), d3os_compute::Error> {
     Ok(())
 }
 
+fn verify_syscall_direction_flag(backend: &Nvidia) -> Result<(), d3os_compute::Error> {
+    use d3os_nvidia::compute::{self as abi, ProfileEntry, Request};
+
+    let expected = backend.profile()?;
+    let mut actual = vec![ProfileEntry::default(); abi::KERNEL_COUNT];
+    let request = Request {
+        version: abi::VERSION,
+        operation: abi::PROFILE,
+        pointer: actual.as_mut_ptr() as u64,
+        elements: actual.len() as u64,
+        ..Request::default()
+    };
+    let status: isize;
+    let returned_flags: u64;
+    // Keep DF manipulation inside one assembly block. Rust sees DF clear on
+    // both sides, while the kernel must clear it before copying the profile.
+    unsafe {
+        core::arch::asm!(
+            "std",
+            "syscall",
+            "pushfq",
+            "pop {returned_flags}",
+            "cld",
+            inlateout("rax") syscall::SystemCall::GpuCompute as usize => status,
+            in("rdi") &request as *const Request,
+            lateout("rcx") _,
+            lateout("r11") _,
+            returned_flags = lateout(reg) returned_flags,
+        );
+    }
+    if status != 0
+        || returned_flags & (1 << 10) == 0
+        || expected
+            .iter()
+            .zip(&actual)
+            .any(|(a, b)| (a.calls, a.cycles, a.wait_cycles, a.device_ns) != (b.calls, b.cycles, b.wait_cycles, b.device_ns))
+    {
+        return Err(d3os_compute::Error::DeviceFault);
+    }
+    super::report(format_args!("NVIDIA_SYSCALL_DIRECTION_OK backend=nvidia"));
+    Ok(())
+}
+
 pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
+    verify_syscall_direction_flag(backend).map_err(|error| format!("{error}"))?;
     verify_buffer_reuse(backend).map_err(|error| format!("{error}"))?;
     bf16::run(backend)?;
     selection::run(backend)?;

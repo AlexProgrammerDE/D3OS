@@ -816,6 +816,7 @@ dependencies = [
  "logger",
  "naming",
  "runtime",
+ "syscall",
  "terminal",
  "time",
 ]

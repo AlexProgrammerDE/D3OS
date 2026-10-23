@@ -7,6 +7,7 @@ pub mod abi;
 pub mod compute;
 pub mod context;
 pub mod cubin;
+pub mod dma;
 pub mod firmware;
 pub mod rpc;
 

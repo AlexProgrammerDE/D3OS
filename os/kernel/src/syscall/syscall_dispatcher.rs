@@ -72,9 +72,9 @@ pub fn init() {
     // Set rip for syscall
     LStar::write(VirtAddr::new(syscall_handler as *const () as u64));
 
-    // Make sure interrupts are disabled during system calls
-    // The CPU clears every flag that is set in the SFMask register
-    SFMask::write(RFlags::INTERRUPT_FLAG);
+    // Enter with interrupts disabled and DF clear, as required by the Rust ABI.
+    // SYSCALL saves the original user flags in r11 for SYSRET to restore.
+    SFMask::write(RFlags::INTERRUPT_FLAG | RFlags::DIRECTION_FLAG);
 
     // Initialize TSS rsp0 in core local storage (accessible via 'swapgs')
     //let mut core_local_storage = core_local_storage().lock();

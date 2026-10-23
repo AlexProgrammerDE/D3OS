@@ -112,6 +112,20 @@ The timestamp scopes differ as described above, and these are individual samples
 The vocabulary kernel reaches comparable throughput in both systems.
 The other results leave both scheduling costs and matrix-kernel efficiency as optimization work.
 
+### CPU copies of DMA storage
+
+The staging path uses bulk CPU copies after DMA completion and before the next GPU submission.
+On x86, `REP MOVSB` preserves observable memory accesses without using SIMD registers in the kernel.
+The existing completion waits and memory barriers still protect staging ownership.
+Syscall entry also clears the direction flag before Rust runs, then restores the caller's flags on return.
+A hardware check enters with the flag set and verifies the profile copy and restored user flag.
+
+Three runs keep the same cuTile bundle, CPU affinity, WAD, and 7,116 rendered frames.
+Mean palette-phase cycles per frame decrease from 465,954 to 431,296, about 7.4%.
+Overall DOOM rates are 1324.97 to 1339.22 FPS before and 1332.06 to 1361.17 FPS after.
+The overlapping ranges do not establish a reliable overall FPS improvement.
+The final runs retain all model references and 600 frames of independent pixel verification.
+
 The following sections preserve the earlier NVPTX measurements and implementation history.
 They do not describe the current compiler-generated register layouts.
 
