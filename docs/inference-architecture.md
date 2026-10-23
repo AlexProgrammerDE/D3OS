@@ -196,6 +196,11 @@ The block streams the causal prefix in tiles of 32 positions, with a running max
 It normalizes each tile's weights before multiplying values and rescales the previous normalized output when the maximum changes.
 This keeps the intermediate storage bounded and avoids overflow from an unnormalized sum of large finite values.
 All attention arithmetic remains FP32. Larger head dimensions retain the separate operator path.
+Single-token decoding with at most 16 query heads splits prefixes of at least 512 positions across 16 blocks per head.
+Each block writes a normalized partial output, its maximum score, and its normalization mass.
+A second kernel rescales these partials against their shared maximum, combines them, and applies the output gate.
+Empty tail partitions write zero mass and do not affect the result.
+This follows the sequence partitioning used by [Flash-Decoding](https://crfm.stanford.edu/2023/10/12/flashdecoding.html).
 The fused path allocates its complete output during dispatch and removes the separate score tensor.
 The backend checks the consumer and cache-write requests before executing the cache updates.
 For supported recurrent dimensions, prompt batches separate convolution, recurrent updates, and output normalization.

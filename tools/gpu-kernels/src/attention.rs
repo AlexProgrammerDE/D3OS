@@ -112,12 +112,11 @@ unsafe fn attention_output(
     let gate = unsafe { read_tile(query_gate, col + broadcast_scalar(head * 2u32 * dim + dim, shape![128]), mask, 0f32) };
     unsafe { write_tile(output, col + broadcast_scalar(head * dim, shape![128]), sum * sigmoid_tile(gate), mask) };
 }
-#[cutile::entry()]
-unsafe fn attention_fused_batch(
-    query: *const f32, keys: *const f32, values: *const f32, query_gate: *const f32, output: *mut f32, _rows: u32, heads: u32, kv_heads: u32, dim: u32,
-    position: u32,
+unsafe fn attention_sequence<const SPLIT: bool>(
+    query: *const f32, keys: *const f32, values: *const f32, query_gate: *const f32, output: *mut f32, heads: u32, kv_heads: u32, dim: u32,
+    position: u32, splits: u32,
 ) {
-    let head = block_id();
+    let head = if SPLIT { block_id() / splits } else { block_id() };
     let kv = head % heads / (heads / kv_heads);
     let visible = position + head / heads + 1u32;
     let d = lanes::<256>();
@@ -130,8 +129,10 @@ unsafe fn attention_fused_batch(
     let mut maximum = bits_f32(unsigned(-8388608i32));
     let mut mass = 0f32;
     let mut accumulated: Tile<f32, { [256] }> = broadcast_scalar(0f32, shape![256]);
-    let mut start = 0u32;
-    while start < visible {
+    let chunk = if SPLIT { (visible + splits * 32u32 - 1u32) / (splits * 32u32) * 32u32 } else { 0u32 };
+    let mut start = if SPLIT { block_id() % splits * chunk } else { 0u32 };
+    let end = if SPLIT { min(start + chunk, visible) } else { visible };
+    while start < end {
         let p = lanes::<32>() + broadcast_scalar(start, shape![32]);
         let pm = lt_tile(p, broadcast_scalar(visible, shape![32]));
         let pp: Tile<u32, { [32, 1] }> = p.reshape(shape![32, 1]);
@@ -164,6 +165,60 @@ unsafe fn attention_fused_batch(
         accumulated = accumulated * broadcast_scalar(old / mass, shape![256]) + total;
         start = start + 32u32;
     }
+    if SPLIT {
+        let base = block_id() * (dim + 2u32);
+        unsafe { write_tile(output, d + broadcast_scalar(base, shape![256]), accumulated, dm) };
+        unsafe { write_scalar(output, base + dim, maximum) };
+        unsafe { write_scalar(output, base + dim + 1u32, mass) };
+    } else {
+        let gate = unsafe { read_tile(query_gate, d + broadcast_scalar(head * 2u32 * dim + dim, shape![256]), dm, 0f32) };
+        unsafe { write_tile(output, d + broadcast_scalar(head * dim, shape![256]), accumulated * sigmoid_tile(gate), dm) };
+    }
+}
+
+#[cutile::entry()]
+unsafe fn attention_fused_batch(
+    query: *const f32, keys: *const f32, values: *const f32, query_gate: *const f32, output: *mut f32, _rows: u32, heads: u32, kv_heads: u32, dim: u32,
+    position: u32,
+) {
+    unsafe { attention_sequence::<false>(query, keys, values, query_gate, output, heads, kv_heads, dim, position, 1u32) }
+}
+
+#[cutile::entry()]
+unsafe fn attention_split_batch(
+    query: *const f32, keys: *const f32, values: *const f32, query_gate: *const f32, output: *mut f32, _rows: u32, heads: u32, kv_heads: u32, dim: u32,
+    position: u32, splits: u32,
+) {
+    unsafe { attention_sequence::<true>(query, keys, values, query_gate, output, heads, kv_heads, dim, position, splits) }
+}
+
+#[cutile::entry()]
+unsafe fn attention_merge_splits(partials: *const f32, query_gate: *const f32, output: *mut f32, _heads: u32, dim: u32, splits: u32) {
+    let head = block_id();
+    let p = lanes::<32>();
+    let pm = lt_tile(p, broadcast_scalar(splits, shape![32]));
+    let index = (p + broadcast_scalar(head * splits, shape![32])) * broadcast_scalar(dim + 2u32, shape![32]);
+    let maxima = unsafe { read_tile(partials, index + broadcast_scalar(dim, shape![32]), pm, bits_f32(unsigned(-8388608i32))) };
+    let masses = unsafe { read_tile(partials, index + broadcast_scalar(dim + 1u32, shape![32]), pm, 0f32) };
+    let maximum: Tile<f32, { [] }> = reduce_max(maxima, 0i32);
+    let maximum: f32 = tile_to_scalar(maximum);
+    let weights = masses * exp(maxima - broadcast_scalar(maximum, shape![32]));
+    let mass: Tile<f32, { [] }> = reduce_sum(weights, 0i32);
+    let mass: f32 = tile_to_scalar(mass);
+    let weights = weights / broadcast_scalar(mass, shape![32]);
+    let weights: Tile<f32, { [32, 1] }> = weights.reshape(shape![32, 1]);
+    let weights: Tile<f32, { [32, 256] }> = weights.broadcast(shape![32, 256]);
+    let index: Tile<u32, { [32, 1] }> = index.reshape(shape![32, 1]);
+    let index: Tile<u32, { [32, 256] }> = index.broadcast(shape![32, 256]);
+    let pm: Tile<bool, { [32, 1] }> = pm.reshape(shape![32, 1]);
+    let pm: Tile<bool, { [32, 256] }> = pm.broadcast(shape![32, 256]);
+    let d = lanes::<256>();
+    let dm = lt_tile(d, broadcast_scalar(dim, shape![256]));
+    let dd: Tile<u32, { [1, 256] }> = d.reshape(shape![1, 256]);
+    let dd: Tile<u32, { [32, 256] }> = dd.broadcast(shape![32, 256]);
+    let mask = pm & lt_tile(dd, broadcast_scalar(dim, shape![32, 256]));
+    let values = unsafe { read_matrix(partials, index + dd, mask, 0f32, shape![8192]) };
+    let sum: Tile<f32, { [256] }> = reduce_sum(values * weights, 0i32);
     let gate = unsafe { read_tile(query_gate, d + broadcast_scalar(head * 2u32 * dim + dim, shape![256]), dm, 0f32) };
-    unsafe { write_tile(output, d + broadcast_scalar(head * dim, shape![256]), accumulated * sigmoid_tile(gate), dm) };
+    unsafe { write_tile(output, d + broadcast_scalar(head * dim, shape![256]), sum * sigmoid_tile(gate), dm) };
 }

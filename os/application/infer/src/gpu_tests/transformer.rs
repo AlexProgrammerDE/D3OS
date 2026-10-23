@@ -153,6 +153,52 @@ fn attention_batches<B: TransformerBackend>(backend: &B, config: AttentionConfig
     Ok(trace)
 }
 
+fn attention_prefix<B: TransformerBackend>(backend: &B, position: usize) -> Result<Vec<Vec<f32>>> {
+    let config = AttentionConfig {
+        heads: 8,
+        kv_heads: 2,
+        head_dim: 256,
+        rotary_dim: 64,
+        rope_theta: 10000000.,
+        epsilon: 1e-6,
+    };
+    let shape = [position + 2, config.kv_heads, config.head_dim];
+    let keys = tensor(backend, &shape, 41)?;
+    let values = tensor(backend, &shape, 43)?;
+    let original_keys = backend.download(&keys)?;
+    let original_values = backend.download(&values)?;
+    let mut state = AttentionState { keys, values, position };
+    let query_gate = tensor(backend, &[1, 2 * config.heads * config.head_dim], 7)?;
+    let key = tensor(backend, &[1, config.kv_heads * config.head_dim], 11)?;
+    let value = tensor(backend, &[1, config.kv_heads * config.head_dim], 17)?;
+    let query_norm = tensor(backend, &[config.head_dim], 3)?;
+    let key_norm = tensor(backend, &[config.head_dim], 5)?;
+    let output = backend.attention_step(
+        AttentionInputs {
+            query_gate: &query_gate,
+            key: &key,
+            value: &value,
+            query_norm: &query_norm,
+            key_norm: &key_norm,
+        },
+        &mut state,
+        config,
+    )?;
+    let keys = backend.download(&state.keys)?;
+    let values = backend.download(&state.values)?;
+    let prefix = position * config.kv_heads * config.head_dim;
+    let end = (position + 1) * config.kv_heads * config.head_dim;
+    if state.position != position + 1
+        || keys[..prefix] != original_keys[..prefix]
+        || values[..prefix] != original_values[..prefix]
+        || keys[end..] != original_keys[end..]
+        || values[end..] != original_values[end..]
+    {
+        return Err(d3os_compute::Error::DeviceFault);
+    }
+    Ok(vec![backend.download(&output)?, keys[prefix..end].to_vec(), values[prefix..end].to_vec()])
+}
+
 fn delta_batches<B: TransformerBackend>(backend: &B, config: DeltaConfig) -> Result<Vec<Vec<f32>>> {
     let (heads, key, value, kernel) = (config.heads, config.key_dim, config.value_dim, config.kernel);
     let channels = heads * (2 * key + value);
@@ -322,6 +368,11 @@ pub(super) fn run(backend: &Nvidia) -> core::result::Result<(), String> {
         compare_traces(&gpu, &cpu, "grouped attention")?;
         let batch = attention_batches(backend, config).map_err(|e| format!("{e}"))?;
         compare_traces(&batch, &batched_trace(&cpu), "batched attention")?;
+    }
+    for position in [511, 512, 1024, 4096] {
+        let gpu = attention_prefix(backend, position).map_err(|error| format!("attention prefix {position}: {error}"))?;
+        let cpu = attention_prefix(&Cpu, position).map_err(|error| format!("attention prefix reference {position}: {error}"))?;
+        compare_traces(&gpu, &cpu, "long-context attention")?;
     }
     rejected_delta_storage(backend).map_err(|error| format!("delta storage rejection: {error}"))?;
     for (heads, key_dim, value_dim, kernel) in [(1, 1, 1, 1), (2, 5, 7, 3), (3, 33, 17, 8), (16, 128, 128, 4), (2, 129, 9, 4), (2, 7, 129, 9)] {
@@ -525,6 +576,7 @@ fn fused_attention(backend: &Nvidia) -> core::result::Result<(), String> {
         (2, 8, 2, 256, 255, false),
         (1, 2, 1, 31, 1024, false),
         (2, 2, 2, 256, 1023, false),
+        (1, 8, 2, 256, 4096, false),
         (1, 1, 1, 1, 128, true),
     ] {
         let run = || -> Result<_> {
@@ -584,6 +636,32 @@ fn fused_attention(backend: &Nvidia) -> core::result::Result<(), String> {
             backend.read_words_into(&actual, 0, &mut new)?;
             if old[0] != GUARD || new[0] != GUARD || old[old.len() - 1] != GUARD || new[new.len() - 1] != GUARD {
                 return Err(d3os_compute::Error::DeviceFault);
+            }
+            let reference: Vec<_> = old[1..old.len() - 1].iter().map(|&v| f32::from_bits(v)).collect();
+            for splits in [1, 3, 16, 32] {
+                let count = rows * heads * splits * (dim + 2);
+                let partials = backend.upload_words(&vec![GUARD; count + 2])?;
+                backend.dispatch_words(
+                    Kernel::AttentionFusedBatch,
+                    &[(&query, 1), (&keys, 1), (&values, 1), (&gate, 1), (&partials, 1)],
+                    &[rows, heads, kv_heads, dim, position, splits],
+                )?;
+                let merged = backend.upload_words(&vec![GUARD; rows * width + 2])?;
+                backend.dispatch_words(
+                    Kernel::AttentionOutput,
+                    &[(&partials, 1), (&gate, 1), (&merged, 1)],
+                    &[rows * heads, dim, splits],
+                )?;
+                let mut result = vec![0; rows * width + 2];
+                backend.read_words_into(&merged, 0, &mut result)?;
+                let mut boundaries = [0; 2];
+                backend.read_words_into(&partials, 0, &mut boundaries[..1])?;
+                backend.read_words_into(&partials, count + 1, &mut boundaries[1..])?;
+                if boundaries != [GUARD; 2] || result[0] != GUARD || result[result.len() - 1] != GUARD {
+                    return Err(d3os_compute::Error::DeviceFault);
+                }
+                let result: Vec<_> = result[1..result.len() - 1].iter().map(|&v| f32::from_bits(v)).collect();
+                super::compare(&result, &reference, "split attention").map_err(|_| d3os_compute::Error::DeviceFault)?;
             }
             Ok((
                 old[1..old.len() - 1].iter().map(|&v| f32::from_bits(v)).collect::<Vec<_>>(),

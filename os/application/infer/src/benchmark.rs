@@ -275,7 +275,7 @@ impl Drop for DeviceTiming<'_> {
     }
 }
 
-pub(super) fn qwen(backend: &Nvidia, device_timing: bool) -> Result<(), String> {
+pub(super) fn qwen<const DECODE: usize>(backend: &Nvidia, device_timing: bool) -> Result<(), String> {
     let start = now();
     let tokenizer = read_file("/usr/share/inference/qwen3.5.bpe")?;
     let tokenizer = Tokenizer::parse(&tokenizer).map_err(|error| format!("{error}"))?;
@@ -284,13 +284,22 @@ pub(super) fn qwen(backend: &Nvidia, device_timing: bool) -> Result<(), String> 
         .map_err(|error| format!("{error}"))?;
     let weights = read_file("/usr/share/inference/qwen3.5-0.8b.d3t")?;
     let file_ms = now() - start;
+    let load_profile = backend.service_profile().map_err(|error| format!("{error}"))?;
     let start = now();
+    let load_cycles = unsafe { core::arch::x86_64::_rdtsc() };
     let model = Qwen::load(backend, &weights).map_err(|error| format!("{error}"))?;
+    let load_cycles = unsafe { core::arch::x86_64::_rdtsc() }.wrapping_sub(load_cycles);
     let load_ms = now() - start;
+    let loaded_profile = backend.service_profile().map_err(|error| format!("{error}"))?;
     drop(weights);
+    service_profile(&load_profile, &loaded_profile, "load");
+    let service_cycles: u64 = load_profile.iter().zip(loaded_profile).map(|(a, b)| b.cycles.wrapping_sub(a.cycles)).sum();
+    report(format_args!(
+        "NATIVE_LOAD_PROFILE total_cycles={load_cycles} service_cycles={service_cycles} application_cycles={}",
+        load_cycles.saturating_sub(service_cycles)
+    ));
     report(format_args!("INFERENCE_BENCH_TOKENS phase=prompt ids={prompt:?}"));
-    const DECODE: usize = 64;
-    const CAPACITY: usize = 256;
+    let capacity = (prompt.len() + DECODE).div_ceil(256) * 256;
     for run in 0..3 {
         let instrumented = device_timing && run == 1;
         let timing = if instrumented {
@@ -300,7 +309,7 @@ pub(super) fn qwen(backend: &Nvidia, device_timing: bool) -> Result<(), String> 
             None
         };
         let start = now();
-        let mut session = model.session(backend, CAPACITY).map_err(|error| format!("{error}"))?;
+        let mut session = model.session(backend, capacity).map_err(|error| format!("{error}"))?;
         let state_ms = now() - start;
         let prefill_profile = if run == 1 {
             Some((
@@ -350,13 +359,15 @@ pub(super) fn qwen(backend: &Nvidia, device_timing: bool) -> Result<(), String> 
             timing.finish().map_err(|error| format!("{error}"))?;
         }
         report(format_args!(
-            "INFERENCE_BENCH qwen backend=nvidia run={run} warm={} instrumented={instrumented} file_ms={file_ms} load_ms={load_ms} state_ms={state_ms} session_capacity={CAPACITY} prompt_tokens={} prefill_ms={prefill_ms} prefill_tps={:.3} decode_tokens={DECODE} decode_ms={decode_ms} decode_tps={:.3} checksum={checksum}",
+            "INFERENCE_BENCH qwen backend=nvidia run={run} warm={} instrumented={instrumented} file_ms={file_ms} load_ms={load_ms} state_ms={state_ms} session_capacity={capacity} prompt_tokens={} prefill_ms={prefill_ms} prefill_tps={:.3} decode_tokens={DECODE} decode_ms={decode_ms} decode_tps={:.3} checksum={checksum}",
             run != 0,
             prompt.len(),
             prompt.len() as f64 * 1000. / prefill_ms.max(1) as f64,
             DECODE as f64 * 1000. / decode_ms.max(1) as f64
         ));
-        report(format_args!("INFERENCE_BENCH_TOKENS phase=decode run={run} ids={tokens:?}"));
+        // Long traces are benchmark evidence. Sending thousands of token IDs
+        // through the interactive terminal can fill its output queue.
+        log::info!("INFERENCE_BENCH_TOKENS phase=decode run={run} ids={tokens:?}");
     }
     let fixture = read_file("/usr/share/inference/qwen-fixture.d3t")?;
     let positions = qwen::verify_fixture(&model, backend, &fixture).map_err(|error| format!("{error}"))?;

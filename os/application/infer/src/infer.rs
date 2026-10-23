@@ -64,8 +64,16 @@ fn run() -> Result<(), String> {
         }
         Some("gpu-kernel-bench") if args.len() == 1 => benchmark::kernels(&Nvidia::new().map_err(|error| format!("{error}"))?)?,
         Some("gpu-alexnet-bench") if args.len() == 1 => benchmark::alexnet(&Nvidia::new().map_err(|error| format!("{error}"))?)?,
-        Some("gpu-qwen-bench") if args.len() == 1 || (args.len() == 2 && args[1] == "device-timing") => {
-            benchmark::qwen(&Nvidia::new().map_err(|error| format!("{error}"))?, args.len() == 2)?;
+        Some("gpu-qwen-bench")
+            if args.len() <= 3 && args[1..].iter().all(|arg| arg == "long" || arg == "device-timing") && (args.len() != 3 || args[1] != args[2]) =>
+        {
+            let backend = Nvidia::new().map_err(|error| format!("{error}"))?;
+            let device_timing = args[1..].iter().any(|arg| arg == "device-timing");
+            if args[1..].iter().any(|arg| arg == "long") {
+                benchmark::qwen::<4096>(&backend, device_timing)?;
+            } else {
+                benchmark::qwen::<64>(&backend, device_timing)?;
+            }
         }
         Some("gpu-alexnet") if args.len() == 1 || args.len() == 3 => {
             let backend = Nvidia::new().map_err(|error| format!("{error}"))?;
@@ -86,7 +94,7 @@ fn run() -> Result<(), String> {
         }
         _ => {
             return Err(String::from(
-                "usage: infer self-test | gpu-self-test | gpu-kernel-bench | alexnet [MODEL FIXTURE] | gpu-alexnet [MODEL FIXTURE] | gpu-alexnet-bench | qwen [MAX_TOKENS PROMPT...] | qwen-verify | gpu-qwen [MAX_TOKENS PROMPT...] | gpu-qwen-verify | gpu-qwen-bench [device-timing]",
+                "usage: infer self-test | gpu-self-test | gpu-kernel-bench | alexnet [MODEL FIXTURE] | gpu-alexnet [MODEL FIXTURE] | gpu-alexnet-bench | qwen [MAX_TOKENS PROMPT...] | qwen-verify | gpu-qwen [MAX_TOKENS PROMPT...] | gpu-qwen-verify | gpu-qwen-bench [long] [device-timing]",
             ));
         }
     }

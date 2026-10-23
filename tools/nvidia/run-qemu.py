@@ -77,6 +77,11 @@ def main():
         action="store_true",
         help="serialize Qwen benchmark run 1 for per-kernel GPU timestamps",
     )
+    parser.add_argument(
+        "--qwen-long-bench",
+        action="store_true",
+        help="generate 4096 tokens per Qwen benchmark run with a 4352-token cache",
+    )
     parser.add_argument("--cpus", type=int, default=4)
     parser.add_argument("--display", choices=("none", "gtk", "sdl"), default="none")
     parser.add_argument(
@@ -92,6 +97,8 @@ def main():
     args = parser.parse_args()
     if args.qwen_device_timing and args.inference != "gpu-qwen-bench":
         parser.error("--qwen-device-timing requires --inference gpu-qwen-bench")
+    if args.qwen_long_bench and args.inference != "gpu-qwen-bench":
+        parser.error("--qwen-long-bench requires --inference gpu-qwen-bench")
     affinity = ",".join(str(cpu) for cpu in sorted(os.sched_getaffinity(0)))
     print(f"NVIDIA_HOST_CPU_AFFINITY cpus={affinity}", flush=True)
     if (
@@ -275,6 +282,7 @@ def main():
                             if args.inference == "cpu-self-test"
                             else f"infer {args.inference}"
                             + (" device-timing" if args.qwen_device_timing else "")
+                            + (" long" if args.qwen_long_bench else "")
                         )
                     started = True
                 if (

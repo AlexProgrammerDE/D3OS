@@ -15,6 +15,8 @@ The resident-model benchmarks separate file access, model upload, session alloca
 Reference comparisons run after the timed work.
 AlexNet reports 20 forward passes after one warmup pass.
 Qwen reports three independent sessions with a 22-token prompt, 64 decode steps, and capacity for 256 tokens.
+The optional `long` benchmark generates 4,096 tokens per session with capacity for 4,352 tokens.
+It writes complete token traces to the serial log without filling the interactive terminal output queue.
 The decode loop continues after EOS to measure a fixed amount of work.
 Its checksum describes benchmark work, not a conversational answer.
 
@@ -28,6 +30,49 @@ The first `mean_us` pass runs without timestamp instrumentation.
 These measurements separate end-to-end overhead from device throughput. They are not interchangeable timers.
 
 ## Latest retained measurements
+
+The sustained benchmark uses these commands, with one GPU guest at a time:
+
+```bash
+taskset -c 8,10,12,14 python3 tools/nvidia/run-qemu.py \
+  --firmware target/nvidia/firmware --kernels target/nvidia/kernels \
+  --memory-mib 12288 --boot-check --inference gpu-qwen-bench \
+  --qwen-long-bench --timeout 240
+target/qwen-venv/bin/python tools/nvidia/prepare-linux-qwen.py \
+  --gguf target/nvidia/linux-model/Qwen3.5-0.8B-BF16.gguf \
+  --d3os-log target/nvidia/vm/serial.log --decode-tokens 4096 \
+  --output target/nvidia/matched-qwen-long
+taskset -c 8,10,12,14 python3 tools/nvidia/linux-reference.py \
+  --llama-directory target/nvidia/linux-llama/llama-b11827 \
+  --model target/nvidia/linux-model/Qwen3.5-0.8B-BF16.gguf \
+  --matched-qwen-input target/nvidia/matched-qwen-long \
+  --matched-qwen-report-selection --memory-mib 12288
+```
+
+The first four-tap baseline reaches 181.63, 174.06, and 169.30 tokens/s across its three sustained sessions.
+All three produce the same 4,096-token trace and pass the numerical references after timing.
+The first split-attention sessions reach 239.90, 235.62, and 232.05 tokens/s with the same complete trace.
+The two warm sessions improve by about 36% over this baseline.
+The corresponding Linux warm sessions range from 217.18 to 227.25 tokens/s.
+These are initial samples. Repeated comparisons remain necessary because throughput changes with host and GPU conditions.
+
+A subsequent A-B-B-A comparison retains the same cuTile binary and changes only the native attention dispatcher.
+The control warm sessions reach 178.54, 173.70, 171.41, and 169.37 tokens/s.
+The split sessions reach 235.19, 232.53, 233.94, and 232.27 tokens/s.
+Their means are 173.25 and 233.48 tokens/s, an improvement of 34.8%.
+All twelve sessions preserve the complete token trace and pass the layer, batch, and cache references.
+The final short-decode regression reaches 252.96 and 263.37 tokens/s with the original 64-token checksum.
+AlexNet averages 1.25 ms over 20 forward passes and passes all eight layer references.
+DOOM passes 600 pixel-reference views and reports 1,596.76 FPS in its uncapped `demo1` benchmark.
+Regular gameplay remains capped around 70 FPS. These regression samples do not establish a rendering improvement from attention changes.
+
+Linux receives every native token as input, so both stacks perform the same decoding workload.
+It selects a different token at position 138 in each run, before the split-attention threshold.
+Its two leading scores differ by 0.000061; D3OS reverses their order with a margin of 0.002686.
+The two scores differ across stacks by at most 0.004311.
+The default audit rejects these traces because it requires identical greedy choices.
+The explicit reporting option preserves input, cache, checksum, trace, and device checks while disclosing selection differences.
+This option permits performance measurements; it does not establish identical generated answers.
 
 The first 2026-10-23 follow-up uses native copy-engine transfers, two QMD waves, fused Qwen residual operations, and a versioned DOOM texture cache.
 An A-B-B-A comparison uses the same cuTile binary and host CPUs 8, 10, 12, and 14.

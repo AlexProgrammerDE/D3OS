@@ -94,6 +94,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "delta_convolution_batch",
             "delta_recurrent_batch",
             "delta_fused_four_taps",
+            "attention_split_batch",
+            "attention_merge_splits",
             "timestamp_probe",
             "local_stack_probe",
         ]);

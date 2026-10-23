@@ -4,6 +4,7 @@
 import argparse
 import importlib.util
 import json
+import re
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -26,6 +27,8 @@ def main():
     parser.add_argument("--gguf", type=Path, required=True)
     parser.add_argument("--d3os-log", type=Path, required=True)
     parser.add_argument("--linux-log", type=Path, required=True)
+    parser.add_argument("--decode-tokens", type=int, choices=(64, 4096), default=64)
+    parser.add_argument("--report-selection", action="store_true")
     parser.add_argument(
         "--inputs", type=Path, default=ROOT / "target/nvidia/matched-qwen"
     )
@@ -84,16 +87,18 @@ def main():
             reader.tensors.pop()
 
     text = args.d3os_log.read_text(errors="replace")
-    prompt, decode = auditor.trace_tokens(text)
-    assert len(prompt) == 22 and len(decode) == 64
+    prompt, decode = auditor.trace_tokens(text, args.decode_tokens)
+    assert len(prompt) == 22 and len(decode) == args.decode_tokens
+    capacity = ((len(prompt) + len(decode) + 255) // 256) * 256
     reject(
         lambda: auditor.trace_tokens(
-            text.replace("phase=decode run=2", "phase=decode run=1")
+            text.replace("phase=decode run=2", "phase=decode run=1"), args.decode_tokens
         )
     )
     reject(
         lambda: auditor.trace_tokens(
-            text.replace("session_capacity=256", "session_capacity=128")
+            text.replace(f"session_capacity={capacity}", "session_capacity=128"),
+            args.decode_tokens,
         )
     )
     changed = decode.copy()
@@ -101,7 +106,9 @@ def main():
     before = f"phase=decode run=2 ids={json.dumps(decode)}"
     after = f"phase=decode run=2 ids={json.dumps(changed)}"
     assert before in text
-    reject(lambda: auditor.trace_tokens(text.replace(before, after)))
+    reject(
+        lambda: auditor.trace_tokens(text.replace(before, after), args.decode_tokens)
+    )
     print("MATCHED_QWEN_AUDIT_TEST_OK weight_corruptions=5 trace_corruptions=3")
     spec = importlib.util.spec_from_file_location(
         "linux_reference", ROOT / "tools/nvidia/linux-reference.py"
@@ -110,24 +117,27 @@ def main():
     spec.loader.exec_module(reference)
     text = args.linux_log.read_text()
     manifest = json.loads((args.inputs / "manifest.json").read_text())
-    reference.validate_matched_qwen(text, manifest, "auto")
+
+    def validate(value):
+        return reference.validate_matched_qwen(
+            value, manifest, "auto", strict_selection=not args.report_selection
+        )
+
+    differences = validate(text)
+    if any(differences):
+        reject(lambda: reference.validate_matched_qwen(text, manifest, "auto"))
     reject(
-        lambda: reference.validate_matched_qwen(
-            text.replace("selection_mismatches=0", "selection_mismatches=1"),
-            manifest,
-            "auto",
+        lambda: validate(
+            re.sub(
+                r"selection_mismatches=(\d+)",
+                lambda match: f"selection_mismatches={int(match[1]) + 1}",
+                text,
+                count=1,
+            )
         )
     )
-    reject(
-        lambda: reference.validate_matched_qwen(
-            text.replace("n_ctx=256", "n_ctx=128"), manifest, "auto"
-        )
-    )
-    reject(
-        lambda: reference.validate_matched_qwen(
-            text.replace("K (f32):", "K (f16):"), manifest, "auto"
-        )
-    )
+    reject(lambda: validate(text.replace(f"n_ctx={capacity}", "n_ctx=128")))
+    reject(lambda: validate(text.replace("K (f32):", "K (f16):")))
     print("MATCHED_QWEN_REFERENCE_TEST_OK corruptions=3")
 
 

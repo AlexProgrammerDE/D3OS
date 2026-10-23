@@ -107,6 +107,40 @@ fn residual_norm_checks_both_writers_and_all_read_ranges() {
 }
 
 #[test]
+fn split_attention_checks_partial_storage_merge_ranges_and_overflow() {
+    let split = Kernel::AttentionFusedBatch.work(&[3, 4, 2, 129, 127, 16]).unwrap();
+    assert_eq!((split.threads, split.blocks, split.pointers, split.output), (128, 192, 5, 4));
+    assert_eq!(split.extents[..5], [1548, 33540, 33540, 3096, 25152]);
+    let merge = Kernel::AttentionOutput.work(&[12, 129, 16]).unwrap();
+    assert_eq!((merge.threads, merge.blocks, merge.pointers, merge.output), (128, 12, 3, 2));
+    assert_eq!(merge.extents[..3], [25152, 3096, 1548]);
+    for work in [split, merge] {
+        let pointers: Vec<_> = (1..=work.pointers).map(|i| i as u64 * 0x100000).collect();
+        assert!(work.validate_aliases(&pointers).is_ok());
+        for source in 0..work.output {
+            let mut aliased = pointers.clone();
+            aliased[work.output] = aliased[source] + 4;
+            assert!(work.validate_aliases(&aliased).is_err());
+        }
+    }
+    for p in [
+        [0, 4, 2, 129, 127, 16],
+        [1, 3, 2, 129, 127, 16],
+        [1, 4, 0, 129, 127, 16],
+        [1, 4, 2, 257, 127, 16],
+        [1, 4, 2, 129, 127, 0],
+        [1, 4, 2, 129, 127, 33],
+        [1, 1, 1, 1, u32::MAX - 1, 32],
+        [u32::MAX, 1, 1, 1, 0, 16],
+    ] {
+        assert!(Kernel::AttentionFusedBatch.work(&p).is_err());
+    }
+    for p in [[0, 129, 16], [1, 0, 16], [1, 257, 16], [1, 129, 0], [1, 129, 33], [u32::MAX, 256, 32]] {
+        assert!(Kernel::AttentionOutput.work(&p).is_err());
+    }
+}
+
+#[test]
 fn fused_attention_checks_all_rows_cache_prefixes_and_complete_output() {
     let work = Kernel::AttentionFusedBatch.work(&[3, 4, 2, 129, 127]).unwrap();
     assert_eq!((work.threads, work.blocks), (128, 12));

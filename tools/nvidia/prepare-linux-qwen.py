@@ -233,7 +233,7 @@ def audit_weights(archive, model):
     return records, settings
 
 
-def trace_tokens(text):
+def trace_tokens(text, decode_tokens=64):
     text = re.sub(r"\x1b\[[0-9;]*m", "", text)
     prompt = re.findall(r"INFERENCE_BENCH_TOKENS phase=prompt ids=(\[.*?\])", text)
     decode = re.findall(
@@ -247,7 +247,10 @@ def trace_tokens(text):
     if [int(run) for run, _ in decode] != [0, 1, 2]:
         raise ValueError("require three distinct D3OS benchmark runs in order")
     decoded = [json.loads(value) for _, value in decode]
-    if any(value != decoded[0] for value in decoded) or len(decoded[0]) != 64:
+    if (
+        any(value != decoded[0] for value in decoded)
+        or len(decoded[0]) != decode_tokens
+    ):
         raise ValueError("D3OS decode traces disagree or have the wrong length")
     if not 1 <= len(prompt) <= 32 or any(
         type(n) is not int or not 0 <= n < 248320 for n in prompt + decoded[0]
@@ -263,9 +266,9 @@ def trace_tokens(text):
         fields = dict(re.findall(r"(\w+)=([^\s]+)", line))
         expected = {
             "run": run,
-            "session_capacity": 256,
+            "session_capacity": ((len(prompt) + decode_tokens + 255) // 256) * 256,
             "prompt_tokens": len(prompt),
-            "decode_tokens": 64,
+            "decode_tokens": decode_tokens,
             "checksum": checksum,
         }
         if any(fields.get(key) != str(value) for key, value in expected.items()):
@@ -281,6 +284,7 @@ def main():
     parser.add_argument("--tokenizer-json", type=Path)
     parser.add_argument("--gguf", type=Path, required=True)
     parser.add_argument("--d3os-log", type=Path, required=True)
+    parser.add_argument("--decode-tokens", type=int, choices=(64, 4096), default=64)
     parser.add_argument(
         "--output", type=Path, default=ROOT / "target/nvidia/matched-qwen"
     )
@@ -320,7 +324,10 @@ def main():
         tokenizer_path = args.qwen_directory / "tokenizer.json"
     if digest(tokenizer_path) != exporter.TOKENIZER_SHA:
         raise ValueError("upstream tokenizer checksum mismatch")
-    prompt, decode = trace_tokens(args.d3os_log.read_text(errors="replace"))
+    prompt, decode = trace_tokens(
+        args.d3os_log.read_text(errors="replace"), args.decode_tokens
+    )
+    capacity = ((len(prompt) + len(decode) + 255) // 256) * 256
     user = (ROOT / "tools/inference/qwen-benchmark.prompt").read_text().strip()
     chat = f"<|im_start|>user\n{user}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
     if (
@@ -332,7 +339,9 @@ def main():
         raise ValueError("D3OS prompt does not match the upstream tokenizer")
     records, settings = audit_weights(archive, args.gguf)
     args.output.mkdir(parents=True, exist_ok=True)
-    contract = b"QWBENCH\0" + struct.pack("<IIII", 2, len(prompt), len(decode), 256)
+    contract = b"QWBENCH\0" + struct.pack(
+        "<IIII", 2, len(prompt), len(decode), capacity
+    )
     contract += struct.pack("<" + "I" * (len(prompt) + len(decode)), *prompt, *decode)
     (args.output / "tokens.bin").write_bytes(contract)
     evidence = {
@@ -358,7 +367,7 @@ def main():
         "decode_ids": decode,
         "cache_type": "f32",
         "batch_size": 32,
-        "context_capacity": 256,
+        "context_capacity": capacity,
         "model_settings": settings,
         "tensors": records,
     }

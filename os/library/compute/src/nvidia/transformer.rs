@@ -294,6 +294,32 @@ impl TransformerBackend for Nvidia {
                     &[rows * kv_width],
                 )?,
             ];
+            if rows == 1 && heads <= 16 && positions >= 512 {
+                const SPLITS: usize = 16;
+                let partials = self.produce_storage(
+                    rows * heads * SPLITS * (dim + 2),
+                    Kernel::AttentionFusedBatch,
+                    &[
+                        (&query.buffer, 0),
+                        (&state.keys.buffer, 0),
+                        (&state.values.buffer, 0),
+                        (&input.query_gate.buffer, 0),
+                    ],
+                    &[rows, heads, kv_heads, dim, state.position, SPLITS],
+                    Storage::F32,
+                    &before,
+                )?;
+                let buffer = self.produce_storage(
+                    rows * q_width,
+                    Kernel::AttentionOutput,
+                    &[(&partials, 0), (&input.query_gate.buffer, 0)],
+                    &[rows * heads, dim, SPLITS],
+                    Storage::F32,
+                    &[],
+                )?;
+                state.position = positions;
+                return Tensor::from_buffer(&[rows, q_width], buffer);
+            }
             let buffer = self.produce_storage(
                 rows * q_width,
                 Kernel::AttentionFusedBatch,

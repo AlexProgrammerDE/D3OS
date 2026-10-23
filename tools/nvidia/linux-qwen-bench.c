@@ -10,7 +10,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#define DECODE 64
+#define MAX_DECODE 4096
 #define BATCH 32
 
 static void require(bool condition, const char *operation) {
@@ -84,23 +84,24 @@ int main(int argc, char **argv) {
     require(fread(magic, 1, 8, contract) == 8 && memcmp(magic, "QWBENCH\0", 8) == 0, "contract magic");
     require(read_u32(contract) == 2, "contract version");
     uint32_t count = read_u32(contract);
-    require(count > 0 && count <= BATCH && read_u32(contract) == DECODE, "contract lengths");
+    int decode = (int)read_u32(contract);
+    require(count > 0 && count <= BATCH && (decode == 64 || decode == MAX_DECODE), "contract lengths");
     uint32_t capacity = read_u32(contract);
-    require(capacity == 256 && count + DECODE <= capacity, "matched context capacity");
-    llama_token prompt[BATCH], expected[DECODE];
+    require(capacity == (count + (uint32_t)decode + 255) / 256 * 256, "matched context capacity");
+    llama_token prompt[BATCH], expected[MAX_DECODE];
     for (uint32_t i = 0; i < count; ++i) {
         uint32_t token = read_u32(contract);
         require(token < 248320, "prompt token range");
         prompt[i] = (llama_token)token;
     }
-    for (int i = 0; i < DECODE; ++i) {
+    for (int i = 0; i < decode; ++i) {
         uint32_t token = read_u32(contract);
         require(token < 248320, "decode token range");
         expected[i] = (llama_token)token;
     }
     require(fgetc(contract) == EOF && !ferror(contract) && fclose(contract) == 0, "contract end");
     print_tokens("prompt", -1, prompt, (int)count);
-    print_tokens("decode_input", -1, expected, DECODE);
+    print_tokens("decode_input", -1, expected, decode);
 
     ggml_backend_load_all_from_path("/bin");
     llama_backend_init();
@@ -169,11 +170,11 @@ int main(int argc, char **argv) {
             start = now_ms();
             evaluate(context, &batch, prompt, (int)count, 0);
             double prefill_ms = now_ms() - start;
-            llama_token sampled[DECODE];
+            llama_token sampled[MAX_DECODE];
             uint64_t input_checksum = 0, sampled_checksum = 0;
             int mismatches = 0;
             start = now_ms();
-            for (int i = 0; i < DECODE; ++i) {
+            for (int i = 0; i < decode; ++i) {
                 sampled[i] = llama_get_sampled_token_ith(context, -1);
                 require(sampled[i] != LLAMA_TOKEN_NULL, "backend greedy sampling required");
                 llama_sampler_accept(sampler, sampled[i]);
@@ -184,15 +185,15 @@ int main(int argc, char **argv) {
             }
             double decode_ms = now_ms() - start;
             struct llama_perf_context_data perf = llama_perf_context(context);
-            require(perf.n_p_eval == (int)count && perf.n_eval == DECODE, "exact evaluated token counts");
+            require(perf.n_p_eval == (int)count && perf.n_eval == decode, "exact evaluated token counts");
             printf("LINUX_MATCHED_QWEN_BENCH mode=%s run=%d warm=%s file_ms=%.3f load_ms=%.3f state_ms=%.3f "
                    "prompt_tokens=%u prefill_ms=%.3f prefill_tps=%.3f decode_tokens=%d decode_ms=%.3f decode_tps=%.3f "
                    "input_checksum=%" PRIu64 " sampled_checksum=%" PRIu64 " selection_mismatches=%d "
                    "cache=f32 batch=%d ubatch=%d n_ctx=%u sampler=backend_greedy flash_attention_requested=%s\n",
                    reuse ? "reset_context" : "new_context", run, run ? "true" : "false", file_ms, load_ms, state_ms,
-                   count, prefill_ms, count * 1000.0 / prefill_ms, DECODE, decode_ms, DECODE * 1000.0 / decode_ms,
+                   count, prefill_ms, count * 1000.0 / prefill_ms, decode, decode_ms, decode * 1000.0 / decode_ms,
                    input_checksum, sampled_checksum, mismatches, BATCH, BATCH, llama_n_ctx(context), argv[3]);
-            print_tokens("sampled", run, sampled, DECODE);
+            print_tokens("sampled", run, sampled, decode);
             llama_batch_free(batch);
             if (!reuse || run == 2) {
                 llama_free(context);

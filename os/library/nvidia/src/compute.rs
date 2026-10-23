@@ -161,6 +161,7 @@ impl Kernel {
                 | Self::Embedding
                 | Self::AttentionPrepareBatch
                 | Self::AttentionFusedBatch
+                | Self::AttentionOutput
                 | Self::ProjectBf16Split
                 | Self::SumProjectionPartials
                 | Self::ResidualNorm
@@ -268,6 +269,8 @@ impl Kernel {
     /// Select the cuTile specialization without changing the public request ABI.
     pub fn entry(self, parameters: &[u32]) -> &'static str {
         match (self, parameters) {
+            (Self::AttentionFusedBatch, [_, _, _, _, _, _]) => "attention_split_batch",
+            (Self::AttentionOutput, [_, _, _]) => "attention_merge_splits",
             (Self::DeltaFused, [_, _, _, kernel, _]) if *kernel <= 4 => "delta_fused_four_taps",
             (Self::DeltaConvolution, [_, _, _]) => "delta_convolution_batch",
             (Self::DeltaUpdate, [_, _, _, _]) => "delta_recurrent_batch",
@@ -304,6 +307,31 @@ impl Kernel {
                     product(&[total])? as u64,
                 ]);
                 (product(&[total.div_ceil(4), 128])?, 6, 5, false)
+            }
+            (Self::AttentionFusedBatch, &[rows, heads, kv_heads, dim, position, splits]) => {
+                let positions = position.checked_add(rows).ok_or(Error::InvalidField)?;
+                if kv_heads == 0 || heads % kv_heads != 0 || !(1..=256).contains(&dim) || !(1..=32).contains(&splits) {
+                    return Err(Error::InvalidField);
+                }
+                positions.checked_add(splits * 32 - 1).ok_or(Error::InvalidField)?;
+                let n = product(&[rows, heads, dim])?;
+                let cache = product(&[positions, kv_heads, dim])?;
+                extents[..5].copy_from_slice(&[
+                    u64::from(n),
+                    u64::from(cache),
+                    u64::from(cache),
+                    u64::from(product(&[n, 2])?),
+                    u64::from(product(&[rows, heads, splits, dim + 2])?),
+                ]);
+                (product(&[rows, heads, splits, 128])?, 5, 4, false)
+            }
+            (Self::AttentionOutput, &[heads, dim, splits]) => {
+                if !(1..=256).contains(&dim) || !(1..=32).contains(&splits) {
+                    return Err(Error::InvalidField);
+                }
+                let n = product(&[heads, dim])?;
+                extents[..3].copy_from_slice(&[u64::from(product(&[heads, splits, dim + 2])?), u64::from(product(&[n, 2])?), u64::from(n)]);
+                (product(&[heads, 128])?, 3, 2, false)
             }
             (Self::AttentionFusedBatch, &[rows, heads, kv_heads, dim, position]) => {
                 let positions = position.checked_add(rows).ok_or(Error::InvalidField)?;

@@ -177,7 +177,7 @@ export LD_LIBRARY_PATH=/bin:/lib64
     )
 
 
-def validate_matched_qwen(text, manifest, flash_attention):
+def validate_matched_qwen(text, manifest, flash_attention, *, strict_selection=True):
     rows = re.findall(r"LINUX_MATCHED_QWEN_BENCH ([^\r\n]*)", text)
     if len(rows) != 6 or "offloaded 25/25 layers to GPU" not in text:
         raise ValueError("matched benchmark requires six runs and full GPU offload")
@@ -188,9 +188,25 @@ def validate_matched_qwen(text, manifest, flash_attention):
     checksum = 0
     for token in manifest["decode_ids"]:
         checksum = (checksum * 31 + token) % (1 << 64)
+    sampled = re.findall(
+        r"LINUX_MATCHED_QWEN_TOKENS phase=sampled run=(\d+) ids=(\[.*?\])", text
+    )
+    if [int(run) for run, _ in sampled] != [0, 1, 2, 0, 1, 2]:
+        raise ValueError("require six ordered Linux selection traces")
+    sampled = [json.loads(trace) for _, trace in sampled]
+    differences = []
+    for tokens in sampled:
+        if len(tokens) != len(manifest["decode_ids"]) or any(
+            type(token) is not int or not 0 <= token < 248320 for token in tokens
+        ):
+            raise ValueError("invalid Linux selection trace")
+        differences.append(sum(a != b for a, b in zip(tokens, manifest["decode_ids"])))
     for index, row in enumerate(rows):
         run = index % 3
         fields = dict(re.findall(r"(\w+)=([^\s]+)", row))
+        sampled_checksum = 0
+        for token in sampled[index]:
+            sampled_checksum = (sampled_checksum * 31 + token) % (1 << 64)
         expected = {
             "mode": "new_context" if index < 3 else "reset_context",
             "run": run,
@@ -198,8 +214,8 @@ def validate_matched_qwen(text, manifest, flash_attention):
             "prompt_tokens": len(manifest["prompt_ids"]),
             "decode_tokens": len(manifest["decode_ids"]),
             "input_checksum": checksum,
-            "sampled_checksum": checksum,
-            "selection_mismatches": 0,
+            "sampled_checksum": sampled_checksum,
+            "selection_mismatches": differences[index],
             "cache": "f32",
             "n_ctx": manifest["context_capacity"],
             "batch": manifest["batch_size"],
@@ -209,12 +225,11 @@ def validate_matched_qwen(text, manifest, flash_attention):
         }
         if any(fields.get(key) != str(value) for key, value in expected.items()):
             raise ValueError(
-                "Linux settings or greedy choices differ from the matched workload"
+                "Linux settings or reported choices differ from the matched workload"
             )
     for phase, expected, count in [
         ("prompt", manifest["prompt_ids"], 1),
         ("decode_input", manifest["decode_ids"], 1),
-        ("sampled", manifest["decode_ids"], 6),
     ]:
         traces = re.findall(
             rf"LINUX_MATCHED_QWEN_TOKENS phase={phase} run=-?\d+ ids=(\[.*?\])", text
@@ -223,6 +238,9 @@ def validate_matched_qwen(text, manifest, flash_attention):
             json.loads(trace) != expected for trace in traces
         ):
             raise ValueError("Linux token trace differs from the matched workload")
+    if strict_selection and any(differences):
+        raise ValueError("Linux greedy choices differ from the matched workload")
+    return differences
 
 
 def doom_benchmark(root):
@@ -428,6 +446,11 @@ def main():
     parser.add_argument("--llama-directory", type=Path)
     parser.add_argument("--matched-qwen-input", type=Path)
     parser.add_argument(
+        "--matched-qwen-report-selection",
+        action="store_true",
+        help="report greedy differences while enforcing identical teacher-forced inputs",
+    )
+    parser.add_argument(
         "--llama-flash-attention", choices=("auto", "off"), default="auto"
     )
     parser.add_argument(
@@ -450,6 +473,8 @@ def main():
         parser.error("--llama-directory and --model must be supplied together")
     if args.matched_qwen_input and not args.llama_directory:
         parser.error("--matched-qwen-input requires --llama-directory and --model")
+    if args.matched_qwen_report_selection and not args.matched_qwen_input:
+        parser.error("--matched-qwen-report-selection requires --matched-qwen-input")
     if args.memory_mib <= 0:
         parser.error("--memory-mib must be positive")
     args.directory = args.directory.resolve()
@@ -562,7 +587,18 @@ def main():
             manifest = json.loads(
                 (args.matched_qwen_input / "manifest.json").read_text()
             )
-            validate_matched_qwen(text, manifest, args.llama_flash_attention)
+            differences = validate_matched_qwen(
+                text,
+                manifest,
+                args.llama_flash_attention,
+                strict_selection=not args.matched_qwen_report_selection,
+            )
+            policy = "report" if args.matched_qwen_report_selection else "strict"
+            print(
+                f"LINUX_MATCHED_QWEN_SELECTION policy={policy} "
+                f"mismatches={sum(differences)} choices={6 * len(manifest['decode_ids'])}",
+                flush=True,
+            )
     if args.doom_benchmark and not re.search(
         r"LINUX_DOOM_ENGINE_REPORT timed \d+ gametics in \d+ realtics \([0-9.]+ fps\)",
         text,
