@@ -90,6 +90,22 @@ Several experiments were rejected after measurement:
 
 cuTile remains the maintained compiler throughout these comparisons.
 
+The Linux kernel reference now includes the driver's dynamically loaded compiler libraries.
+Without these libraries, loading the CUDA 13.4 CUBIN failed with error 221.
+The reference records the driver library hashes and the benchmark source, executable, and CUBIN hashes.
+A fresh same-binary comparison reports these FP32 projection times in microseconds:
+
+| Shape (rows, inner, columns) | Native GPU timestamps | Linux CUDA events | Linux cuBLAS |
+| --- | ---: | ---: | ---: |
+| 1, 1024, 3584 | 10.62 | 8.67 | 8.06 |
+| 1, 3584, 1024 | 11.71 | 10.04 | 8.53 |
+| 1, 1024, 248320 | 1814.69 | 1813.33 | 1815.76 |
+| 3025, 363, 64 | 33.59 | 30.52 | 14.95 |
+
+The timestamp scopes differ as described above, and these are individual samples on a shared host.
+The vocabulary kernel reaches comparable throughput in both systems.
+The other results leave both scheduling costs and matrix-kernel efficiency as optimization work.
+
 The following sections preserve the earlier NVPTX measurements and implementation history.
 They do not describe the current compiler-generated register layouts.
 

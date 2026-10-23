@@ -65,6 +65,18 @@ def kernel_benchmark(root):
         for library in re.findall(r"/[^\s()]+", dependencies):
             copy_file(root, library)
     copy_file(root, ROOT / "target/nvidia/kernels/inference.cubin", "/inference.cubin")
+    manifest = {
+        "source_sha256": hashlib.sha256(
+            (ROOT / "tools/nvidia/linux-kernel-bench.c").read_bytes()
+        ).hexdigest(),
+        "binary_sha256": hashlib.sha256(destination.read_bytes()).hexdigest(),
+        "cubin_sha256": hashlib.sha256(
+            (root / "inference.cubin").read_bytes()
+        ).hexdigest(),
+    }
+    (root.parent / "kernel-benchmark-manifest.json").write_text(
+        json.dumps(manifest, indent=2) + "\n"
+    )
 
 
 def llama_libraries(root, directory):
@@ -322,8 +334,27 @@ def prepare(directory, kernel):
         ],
         check=True,
     )
-    for library in ("libcuda.so.1", "libnvidia-ml.so.1"):
-        copy_file(root, Path("/usr/lib64") / library, Path("/lib64") / library)
+    # These compiler components are loaded through dlopen, so ldd cannot
+    # discover them. Newer CUBIN files can require the driver's linker too.
+    libraries = ["libcuda.so.1", "libnvidia-ml.so.1", "libnvidia-ptxjitcompiler.so.1"]
+    driver_version = (
+        (Path("/usr/lib64") / "libcuda.so.1").resolve().name.removeprefix("libcuda.so.")
+    )
+    for library in (
+        "libnvidia-nvvm.so.4",
+        f"libnvidia-gpucomp.so.{driver_version}",
+        f"libnvidia-tileiras.so.{driver_version}",
+    ):
+        if (Path("/usr/lib64") / library).exists():
+            libraries.append(library)
+    driver_libraries = {}
+    for library in libraries:
+        source = Path("/usr/lib64") / library
+        copy_file(root, source, Path("/lib64") / library)
+        driver_libraries[library] = hashlib.sha256(source.read_bytes()).hexdigest()
+        dependencies = subprocess.check_output(["ldd", str(source)], text=True)
+        for dependency in re.findall(r"/[^\s()]+", dependencies):
+            copy_file(root, dependency)
     firmware = subprocess.check_output(
         ["modinfo", "-k", kernel, "-F", "firmware", "nvidia"], text=True
     )
@@ -375,6 +406,7 @@ exec /bin/poweroff-guest
     archive(bootstrap, directory / "bootstrap.cpio")
     manifest = {
         "kernel": kernel,
+        "driver_libraries_sha256": driver_libraries,
         "nvidia": subprocess.check_output(
             ["modinfo", "-k", kernel, "-F", "version", "nvidia"], text=True
         ).strip(),
