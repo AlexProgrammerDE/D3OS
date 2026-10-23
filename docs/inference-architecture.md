@@ -80,6 +80,13 @@ Other BF16 record shapes still expand before upload.
 The rest of the record layout stays the same.
 AlexNet archives from version 1 remain supported.
 
+Qwen configuration records accept either 16 legacy fields or 18 fields.
+The extra fields specify the recurrent query/key head count and whether word embeddings and output weights are tied.
+An untied model loads `lm_head.weight` separately. Legacy records retain tied weights and equal recurrent head counts.
+`Qwen::load_weights()` accepts a validated configuration and a callback that supplies each named tensor.
+The callback can release its input bytes after the backend upload completes.
+This interface supports streamed storage and packed weights without retaining a complete archive in application memory.
+
 The format stores explicit data and dimensions rather than serialized Rust objects.
 AlexNet separately validates every parameter name and shape before allocating its weight buffers.
 The exporter writes a SHA-256 manifest alongside generated archives.

@@ -305,3 +305,78 @@ fn streaming_decoder_preserves_split_scalars_and_matches_lossy_batch_decoding() 
     assert!(decoder.push(u32::MAX).is_err());
     assert_eq!(decoder.push(0xa9).unwrap(), "é");
 }
+#[test]
+fn independent_output_weights_control_logits() {
+    let mut records = model_records();
+    records[0].1 = vec![18];
+    records[0].2.extend([2., 0.]);
+    records.push(("lm_head.weight".into(), vec![24, 8], vec![0.; 24 * 8]));
+    let model = Qwen::load(&Cpu, &archive(&records)).unwrap();
+    assert!(!model.config().tied_embeddings);
+    let mut session = model.session(&Cpu, 8).unwrap();
+    assert!(Cpu.download(&session.step(1).unwrap()).unwrap().iter().all(|&x| x == 0.));
+    let tied = Qwen::load(&Cpu, &archive(&model_records())).unwrap();
+    let mut tied = tied.session(&Cpu, 8).unwrap();
+    assert!(Cpu.download(&tied.step(1).unwrap()).unwrap().iter().any(|&x| x != 0.));
+}
+
+#[test]
+fn grouped_model_prefill_and_incremental_sessions_agree() {
+    let mut records = model_records();
+    records[0].1 = vec![18];
+    records[0].2.extend([1., 1.]);
+    for (name, shape, values) in &mut records {
+        if name.ends_with("linear_attn.in_proj_qkv.weight") || name.ends_with("linear_attn.conv1d.weight") {
+            shape[0] = 10;
+            values.truncate(shape.iter().product());
+        }
+    }
+    let model = Qwen::load(&Cpu, &archive(&records)).unwrap();
+    assert_eq!(model.config().linear_key_heads, 1);
+    let mut sequential = model.session(&Cpu, 8).unwrap();
+    let mut expected = Vec::new();
+    for token in [1, 7, 12, 3] {
+        expected = Cpu.download(&sequential.step(token).unwrap()).unwrap();
+    }
+    let mut batched = model.session(&Cpu, 8).unwrap();
+    assert_eq!(Cpu.download(&batched.prefill(&[1, 7, 12, 3]).unwrap()).unwrap(), expected);
+    assert_eq!(
+        Cpu.download(&batched.step(5).unwrap()).unwrap(),
+        Cpu.download(&sequential.step(5).unwrap()).unwrap()
+    );
+}
+
+#[test]
+fn caller_owned_tensor_loading_matches_archives_and_validates_before_reading() {
+    use d3os_inference::qwen::Config;
+    use std::collections::BTreeMap;
+    let archive_model = Qwen::load(&Cpu, &archive(&model_records())).unwrap();
+    let mut records: BTreeMap<_, _> = model_records()
+        .into_iter()
+        .filter(|(name, _, _)| name != "qwen3_5.config")
+        .map(|(name, shape, data)| (name, (shape, data)))
+        .collect();
+    let streamed = Qwen::load_weights(archive_model.config(), |name, expected_shape| {
+        let (shape, data) = records.remove(name).unwrap();
+        assert_eq!(shape, expected_shape);
+        Ok(d3os_compute::Tensor::from_vec(&Cpu, &shape, data)?)
+    })
+    .unwrap();
+    assert!(records.is_empty());
+    let mut a = archive_model.session(&Cpu, 8).unwrap();
+    let mut b = streamed.session(&Cpu, 8).unwrap();
+    assert_eq!(
+        Cpu.download(&a.prefill(&[1, 7, 12, 3]).unwrap()).unwrap(),
+        Cpu.download(&b.prefill(&[1, 7, 12, 3]).unwrap()).unwrap()
+    );
+    assert!(matches!(
+        Qwen::<Cpu>::load_weights(Config { hidden: 0, ..Config::SMALL }, |_, _| panic!(
+            "invalid configuration must not read weights"
+        )),
+        Err(Error::InvalidConfig)
+    ));
+    assert!(matches!(
+        Qwen::<Cpu>::load_weights(archive_model.config(), |_, _| Ok(d3os_compute::Tensor::from_vec(&Cpu, &[1], vec![0.])?)),
+        Err(Error::InvalidModelShape)
+    ));
+}

@@ -17,6 +17,8 @@ pub struct Config {
     pub head_dim: usize,
     pub rotary_dim: usize,
     pub linear_heads: usize,
+    pub linear_key_heads: usize,
+    pub tied_embeddings: bool,
     pub linear_key_dim: usize,
     pub linear_value_dim: usize,
     pub convolution_kernel: usize,
@@ -37,6 +39,8 @@ impl Config {
         head_dim: 256,
         rotary_dim: 64,
         linear_heads: 16,
+        linear_key_heads: 16,
+        tied_embeddings: true,
         linear_key_dim: 128,
         linear_value_dim: 128,
         convolution_kernel: 4,
@@ -47,7 +51,7 @@ impl Config {
     };
 
     fn parse(values: &[f32]) -> Result<Self> {
-        if values.len() != 16 {
+        if !matches!(values.len(), 16 | 18) {
             return Err(Error::InvalidConfig);
         }
         let mut dims = [0usize; 14];
@@ -73,7 +77,25 @@ impl Config {
             full_attention_interval,
             max_positions,
         ] = dims;
+        let (linear_key_heads, tied_embeddings) = if values.len() == 18 {
+            let heads = values[16];
+            if !heads.is_finite() || !(1. ..=1_048_576.).contains(&heads) || heads != (heads as usize) as f32 {
+                return Err(Error::InvalidConfig);
+            }
+            (
+                heads as usize,
+                match values[17] {
+                    0. => false,
+                    1. => true,
+                    _ => return Err(Error::InvalidConfig),
+                },
+            )
+        } else {
+            (linear_heads, true)
+        };
         let config = Self {
+            linear_key_heads,
+            tied_embeddings,
             hidden,
             intermediate,
             layers,
@@ -91,21 +113,68 @@ impl Config {
             rope_theta: values[14],
             epsilon: values[15],
         };
-        if layers > 128
-            || heads % kv_heads != 0
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn validate(self) -> Result<()> {
+        let Self {
+            hidden,
+            intermediate,
+            layers,
+            vocab,
+            heads,
+            kv_heads,
+            head_dim,
+            rotary_dim,
+            linear_heads,
+            linear_key_heads,
+            linear_key_dim,
+            linear_value_dim,
+            convolution_kernel,
+            full_attention_interval,
+            max_positions,
+            ..
+        } = self;
+        let dimensions = [
+            hidden,
+            intermediate,
+            layers,
+            vocab,
+            heads,
+            kv_heads,
+            head_dim,
+            rotary_dim,
+            linear_heads,
+            linear_key_heads,
+            linear_key_dim,
+            linear_value_dim,
+            convolution_kernel,
+            full_attention_interval,
+            max_positions,
+        ];
+        if dimensions.iter().any(|&n| n == 0 || n > 1_048_576)
+            || layers > 128
+            || !heads.is_multiple_of(kv_heads)
+            || !linear_heads.is_multiple_of(linear_key_heads)
             || rotary_dim > head_dim
-            || rotary_dim % 2 != 0
-            || !config.rope_theta.is_finite()
-            || config.rope_theta <= 0.
-            || !config.epsilon.is_finite()
-            || config.epsilon <= 0.
+            || !rotary_dim.is_multiple_of(2)
+            || !self.rope_theta.is_finite()
+            || self.rope_theta <= 0.
+            || !self.epsilon.is_finite()
+            || self.epsilon <= 0.
         {
             return Err(Error::InvalidConfig);
         }
         element_count(&[vocab, hidden])?;
         element_count(&[heads, head_dim, 2])?;
+        element_count(&[intermediate, hidden])?;
         element_count(&[linear_heads, linear_key_dim, linear_value_dim])?;
-        Ok(config)
+        let keys = element_count(&[linear_key_heads, linear_key_dim, 2])?;
+        let values = element_count(&[linear_heads, linear_value_dim])?;
+        let channels = keys.checked_add(values).ok_or(d3os_compute::Error::SizeOverflow)?;
+        element_count(&[channels, hidden])?;
+        Ok(())
     }
 
     fn attention(self) -> AttentionConfig {
@@ -120,7 +189,7 @@ impl Config {
     }
     fn delta(self) -> DeltaConfig {
         DeltaConfig {
-            key_heads: self.linear_heads,
+            key_heads: self.linear_key_heads,
             heads: self.linear_heads,
             key_dim: self.linear_key_dim,
             value_dim: self.linear_value_dim,
@@ -132,7 +201,7 @@ impl Config {
         self.linear_heads * self.linear_value_dim
     }
     fn conv_width(self) -> usize {
-        self.linear_heads * (2 * self.linear_key_dim + self.linear_value_dim)
+        2 * self.linear_key_heads * self.linear_key_dim + self.linear_heads * self.linear_value_dim
     }
 }
 
@@ -171,6 +240,7 @@ struct Layer<B: Backend> {
 pub struct Qwen<B: TransformerBackend> {
     config: Config,
     embedding: Tensor<B>,
+    output: Option<Tensor<B>>,
     norm: Tensor<B>,
     layers: Vec<Layer<B>>,
 }
@@ -192,20 +262,41 @@ fn zeros<B: Backend>(backend: &B, shape: &[usize]) -> Result<Tensor<B>> {
 }
 
 impl<B: TransformerBackend> Qwen<B> {
-    /// Load text-only Qwen3.5 weights. Word embeddings and the output head are tied.
+    /// Load text-only Qwen3.5/3.6 weights from a native tensor archive.
     pub fn load(backend: &B, bytes: &[u8]) -> Result<Self> {
         let mut archive = Archive::parse(bytes)?;
         let metadata = archive.take("qwen3_5.config")?;
-        if metadata.shape() != [16] {
+        if metadata.shape() != [16] && metadata.shape() != [18] {
             return Err(Error::InvalidConfig);
         }
         let config = Config::parse(&metadata.to_vec()?)?;
-        let embedding = load(&mut archive, backend, "embed_tokens.weight", &[config.vocab, config.hidden])?;
-        let norm = load(&mut archive, backend, "norm.weight", &[config.hidden])?;
+        let model = Self::load_weights(config, |name, shape| load(&mut archive, backend, name, shape))?;
+        archive.finish()?;
+        Ok(model)
+    }
+
+    /// Load one tensor at a time from caller-owned storage. The callback can
+    /// release each source buffer once its backend upload completes.
+    pub fn load_weights(config: Config, mut source: impl FnMut(&str, &[usize]) -> Result<Tensor<B>>) -> Result<Self> {
+        config.validate()?;
+        let mut load = |name: &str, shape: &[usize]| {
+            let tensor = source(name, shape)?;
+            if tensor.shape() != shape {
+                return Err(Error::InvalidModelShape);
+            }
+            Ok(tensor)
+        };
+        let embedding = load("embed_tokens.weight", &[config.vocab, config.hidden])?;
+        let output = if config.tied_embeddings {
+            None
+        } else {
+            Some(load("lm_head.weight", &[config.vocab, config.hidden])?)
+        };
+        let norm = load("norm.weight", &[config.hidden])?;
         let mut layers = Vec::with_capacity(config.layers);
         for index in 0..config.layers {
             let prefix = format!("layers.{index}");
-            let mut weight = |suffix: &str, shape: &[usize]| load(&mut archive, backend, &format!("{prefix}.{suffix}"), shape);
+            let mut weight = |suffix: &str, shape: &[usize]| load(&format!("{prefix}.{suffix}"), shape);
             let input_norm = weight("input_layernorm.weight", &[config.hidden])?;
             let post_norm = weight("post_attention_layernorm.weight", &[config.hidden])?;
             let gate = weight("mlp.gate_proj.weight", &[config.intermediate, config.hidden])?;
@@ -242,13 +333,17 @@ impl<B: TransformerBackend> Qwen<B> {
                 mixer,
             });
         }
-        archive.finish()?;
         Ok(Self {
             config,
             embedding,
+            output,
             norm,
             layers,
         })
+    }
+
+    fn output_weights(&self) -> &Tensor<B> {
+        self.output.as_ref().unwrap_or(&self.embedding)
     }
 
     pub fn config(&self) -> Config {
@@ -390,7 +485,7 @@ impl<'a, B: TransformerBackend> Session<'a, B> {
     fn logits(&mut self, hidden: &Tensor<B>) -> Result<Tensor<B>> {
         self.failed = true;
         let normalized = self.backend.rms_norm(hidden, &self.model.norm, self.model.config.epsilon)?;
-        let logits = self.backend.project(&normalized, &self.model.embedding)?;
+        let logits = self.backend.project(&normalized, self.model.output_weights())?;
         self.failed = false;
         Ok(logits)
     }
@@ -564,7 +659,7 @@ pub fn verify_fixture<B: TransformerBackend>(model: &Qwen<B>, backend: &B, bytes
             }
             if layer + 1 == model.config.layers {
                 let normalized = backend.rms_norm(output, &model.norm, model.config.epsilon)?;
-                let batch_logits = backend.project(&normalized, &model.embedding)?;
+                let batch_logits = backend.project(&normalized, model.output_weights())?;
                 let actual = backend.download(&batch_logits)?;
                 for (row, actual) in actual.chunks_exact(model.config.vocab).enumerate() {
                     let position = position + row;
