@@ -895,9 +895,19 @@ version = "0.1.0"
 dependencies = [
  "burn",
  "concurrent",
+ "d3os-burn-native",
  "embassy-time-driver",
  "spin 0.10.0",
  "time",
+]
+
+[[package]]
+name = "d3os-burn-native"
+version = "0.1.0"
+dependencies = [
+ "burn-backend",
+ "d3os-compute",
+ "d3os-nvidia",
 ]
 
 [[package]]

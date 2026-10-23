@@ -36,6 +36,7 @@ condition = { files_modified = { input = [
     "${CARGO_MAKE_WORKING_DIRECTORY}/Cargo.toml", "${SOURCE_DIRECTORY}/**/*.rs",
     "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/Cargo.lock",
     "${LIBRARY_DIRECTORY}/ai/Cargo.toml", "${LIBRARY_DIRECTORY}/ai/src/**/*.rs",
+    "${LIBRARY_DIRECTORY}/burn-native/Cargo.toml", "${LIBRARY_DIRECTORY}/burn-native/src/**/*.rs",
     "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/third_party/burn-optim/Cargo.toml",
     "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/third_party/burn-optim/src/**/*.rs",
     "${LIBRARY_DIRECTORY}/compute/Cargo.toml", "${LIBRARY_DIRECTORY}/compute/src/**/*.rs",

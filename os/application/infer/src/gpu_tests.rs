@@ -3,6 +3,7 @@ use alloc::{format, string::String, vec, vec::Vec};
 use d3os_compute::{Backend, Conv2d, Pool2d, Tensor, cpu::Cpu, nvidia::Nvidia};
 
 mod bf16;
+mod burn;
 mod quantized;
 mod raster;
 mod raster_bytes;
@@ -81,6 +82,7 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     verify_syscall_direction_flag(backend).map_err(|error| format!("{error}"))?;
     verify_command_scopes(backend).map_err(|error| format!("{error}"))?;
     verify_buffer_reuse(backend).map_err(|error| format!("{error}"))?;
+    burn::run(backend)?;
     bf16::run(backend)?;
     quantized::run(backend)?;
     selection::run(backend)?;

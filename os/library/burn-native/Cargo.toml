@@ -1,0 +1,9 @@
+[package]
+name = "d3os-burn-native"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+burn-backend = { version = "=0.22.1", default-features = false }
+d3os-compute = { path = "../compute", features = ["nvidia"] }
+d3os-nvidia = { path = "../nvidia" }

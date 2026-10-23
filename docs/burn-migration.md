@@ -102,6 +102,11 @@ The D3OS AI library supplies native clock and timer wakeups for the portable run
 The first VM validation uses Burn's explicit Flex CPU device.
 It passes analytic gradients, SGD updates, shared-tensor preservation, Adam checkpoint resume, and native timer wakeups.
 The MNIST model definition uses Burn convolutions, pooling, and linear layers.
+The native backend now has a Burn tensor primitive with shared GPU storage and checked tensor views.
+Host checks cover every three-dimensional permutation and reversal, composed slices, broadcasts, overlapping windows, empty tensors, and invalid address ranges.
+Physical GPU checks pass view addressing, aliasing, lifetime, exact floating-point bits, boolean storage, and empty tensors.
+View construction performs no GPU allocation or transfer. The existing GPU operator checks also pass.
+These checks validate storage. Burn device dispatch, native arithmetic, and autodiff integration still need implementation.
 The native Burn GPU backend, full dataset training, and workload migration remain incomplete.
 The retained Linux and D3OS measurements are in [Native NVIDIA performance](nvidia-performance.md).
 

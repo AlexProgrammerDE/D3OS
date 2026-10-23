@@ -7,9 +7,11 @@ edition = "2024"
 default = []
 cpu = ["burn/flex"]
 training = ["burn/optim"]
+native = ["dep:d3os-burn-native"]
 
 [dependencies]
 burn = { version = "=0.22.1", default-features = false, features = ["extension"] }
+d3os-burn-native = { path = "../burn-native", optional = true }
 
 [target.'cfg(target_os = "none")'.dependencies]
 concurrent = { path = "../concurrent" }

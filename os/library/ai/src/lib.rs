@@ -4,6 +4,8 @@
 extern crate alloc;
 
 pub use burn;
+#[cfg(feature = "native")]
+pub use d3os_burn_native as native;
 
 pub mod mnist;
 #[cfg(target_os = "none")]
