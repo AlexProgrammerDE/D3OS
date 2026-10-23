@@ -6,6 +6,7 @@ extern crate alloc;
 pub mod cpu;
 #[cfg(feature = "nvidia")]
 pub mod nvidia;
+pub mod quantized;
 pub mod raster;
 pub mod transformer;
 
@@ -153,6 +154,9 @@ pub trait Backend: Sized {
 
     fn name(&self) -> &'static str;
     fn upload(&self, values: Vec<f32>) -> Result<Self::Buffer>;
+    fn upload_quantized(&self, format: quantized::Quantization, elements: usize, bytes: &[u8]) -> Result<Self::Buffer> {
+        self.upload(format.decode(elements, bytes)?)
+    }
     /// Upload finite, exact BF16 weights. Backends can keep packed storage for supported
     /// weight operations or expand it without changing the represented values.
     fn upload_bf16(&self, values: impl ExactSizeIterator<Item = u16>) -> Result<Self::Buffer> {

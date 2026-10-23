@@ -191,7 +191,8 @@ Nested scopes wait before returning, and closure errors still close their scopes
 NVIDIA scopes apply to the process, including calls from its other threads.
 Qwen uses scopes automatically for transformer execution.
 
-Protocol version 5 adds grouped projections and expands the kernel profile array to 41 entries.
+Protocol version 6 adds quantized weight operators and expands the kernel profile array to 44 entries.
+Version 5 adds grouped projections.
 It retains the residual fusions from version 4 and the command scopes and queue profiles from version 3.
 Rebuild the kernel and compute applications together. Incompatible versions return an error.
 

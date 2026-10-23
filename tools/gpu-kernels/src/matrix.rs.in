@@ -1,6 +1,6 @@
 // Split FP32 activations into high and residual Tensor Core operands.
 // Packed weights use BF16 products; FP32 weights retain TF32 decomposition.
-unsafe fn compensated_matrix_template<const TRANSPOSE: bool, const BF16: bool, const MATRIX_LOAD: bool>(
+unsafe fn compensated_matrix_template<const TRANSPOSE: bool, const BF16: bool, const MATRIX_LOAD: bool, const QUANT: u32>(
     a: *const f32, b: *const f32, output: *mut f32, rows: u32, inner: u32, cols: u32, splits: u32,
 ) {
     let block: u32 = block_id();
@@ -52,7 +52,7 @@ unsafe fn compensated_matrix_template<const TRANSPOSE: bool, const BF16: bool, c
             let al: Tile<bf16, { [16, TILE_INNER] }> = ftof(av - ar, rounding::NearestEven);
             (mmaf(ah, weight, zero), mmaf(al, weight, zero))
         } else {
-            let bv: Tile<f32, { [TILE_INNER, 32] }> = unsafe { read_weights::<false, MATRIX_LOAD, TILE_INNER, 32, TILE_B_VALUES>(b, bi, bm, shape![TILE_B_VALUES]) };
+            let bv: Tile<f32, { [TILE_INNER, 32] }> = if QUANT == 0 { unsafe { read_weights::<false, MATRIX_LOAD, TILE_INNER, 32, TILE_B_VALUES>(b, bi, bm, shape![TILE_B_VALUES]) } } else { unsafe { read_quantized_matrix::<QUANT, TILE_INNER, 32, TILE_B_VALUES>(b, bi, bm, shape![TILE_B_VALUES]) } };
             let ah: Tile<tf32, { [16, TILE_INNER] }> = ftof(av, rounding::NearestAway);
             let bh: Tile<tf32, { [TILE_INNER, 32] }> = ftof(bv, rounding::NearestAway);
             let ar: Tile<f32, { [16, TILE_INNER] }> = ftof(ah, rounding::NearestEven);

@@ -3,6 +3,7 @@ use alloc::{format, string::String, vec, vec::Vec};
 use d3os_compute::{Backend, Conv2d, Pool2d, Tensor, cpu::Cpu, nvidia::Nvidia};
 
 mod bf16;
+mod quantized;
 mod raster;
 mod raster_bytes;
 mod selection;
@@ -81,6 +82,7 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     verify_command_scopes(backend).map_err(|error| format!("{error}"))?;
     verify_buffer_reuse(backend).map_err(|error| format!("{error}"))?;
     bf16::run(backend)?;
+    quantized::run(backend)?;
     selection::run(backend)?;
     for (m, k, n) in [(17, 33, 9), (37, 65, 257), (65, 259, 97), (1, 9216, 17)] {
         let a: Vec<f32> = (0..m * k).map(|i| ((i * 73 % 251) as f32 - 125.) / 127.).collect();

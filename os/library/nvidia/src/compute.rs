@@ -2,7 +2,7 @@
 
 use crate::{Error, Result};
 
-pub const VERSION: u32 = 5;
+pub const VERSION: u32 = 6;
 pub const INFO: u32 = 0;
 pub const ALLOCATE: u32 = 1;
 pub const FREE: u32 = 2;
@@ -22,7 +22,7 @@ pub const END_COMMANDS: u32 = 10;
 pub const QUEUE_PROFILE: u32 = 11;
 pub const SERVICE_PROFILE: u32 = 12;
 pub const SERVICE_OPERATIONS: usize = 13;
-pub const KERNEL_COUNT: usize = 41;
+pub const KERNEL_COUNT: usize = 44;
 
 /// CPU service costs by request operation, including queue work within it.
 #[derive(Clone, Copy, Debug, Default)]
@@ -118,9 +118,12 @@ pub enum Kernel {
     ResidualNorm = 38,
     ProjectResidualBf16 = 39,
     GroupedProjectBf16 = 40,
+    ProjectQuantized = 41,
+    Dequantize = 42,
+    EmbeddingQuantized = 43,
 }
 
-const _: () = assert!(Kernel::GroupedProjectBf16 as usize + 1 == KERNEL_COUNT);
+const _: () = assert!(Kernel::EmbeddingQuantized as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -141,6 +144,21 @@ fn product(values: &[u32]) -> Result<u32> {
         return Err(Error::InvalidField);
     }
     values.iter().try_fold(1u32, |v, &n| v.checked_mul(n).ok_or(Error::InvalidField))
+}
+
+fn quantized_words(elements: u32, format: u32) -> Result<u64> {
+    let (block, bytes) = match format {
+        8 => (32, 34),
+        11 => (256, 110),
+        12 => (256, 144),
+        13 => (256, 176),
+        14 => (256, 210),
+        _ => return Err(Error::InvalidField),
+    };
+    if elements == 0 || !elements.is_multiple_of(block) {
+        return Err(Error::InvalidField);
+    }
+    Ok((u64::from(elements / block) * bytes).div_ceil(4))
 }
 
 impl Kernel {
@@ -172,6 +190,9 @@ impl Kernel {
                 | Self::DeltaUpdate
                 | Self::DeltaOutput
                 | Self::GroupedProjectBf16
+                | Self::ProjectQuantized
+                | Self::Dequantize
+                | Self::EmbeddingQuantized
         )
     }
 
@@ -218,6 +239,9 @@ impl Kernel {
             38 => Self::ResidualNorm,
             39 => Self::ProjectResidualBf16,
             40 => Self::GroupedProjectBf16,
+            41 => Self::ProjectQuantized,
+            42 => Self::Dequantize,
+            43 => Self::EmbeddingQuantized,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -265,12 +289,32 @@ impl Kernel {
             Self::ResidualNorm => "residual_norm",
             Self::ProjectResidualBf16 => "project_residual_bf16_weights",
             Self::GroupedProjectBf16 => "group_project_bf16_weights",
+            Self::ProjectQuantized => "project_quantized",
+            Self::Dequantize => "dequantize_weights",
+            Self::EmbeddingQuantized => "embedding_quantized",
         }
     }
 
     /// Select the cuTile specialization without changing the public request ABI.
     pub fn entry(self, parameters: &[u32]) -> &'static str {
         match (self, parameters) {
+            (Self::ProjectQuantized, [1, _, _, 8]) => "vector_project_q8_0",
+            (Self::ProjectQuantized, [1, _, _, 11]) => "vector_project_q3k",
+            (Self::ProjectQuantized, [_, _, _, 11]) => "project_q3k",
+            (Self::Dequantize, [_, 11]) => "dequantize_q3k",
+            (Self::EmbeddingQuantized, [_, _, _, 11]) => "embedding_q3k",
+            (Self::ProjectQuantized, [1, _, _, 12]) => "vector_project_q4k",
+            (Self::ProjectQuantized, [_, _, _, 12]) => "project_q4k",
+            (Self::Dequantize, [_, 12]) => "dequantize_q4k",
+            (Self::EmbeddingQuantized, [_, _, _, 12]) => "embedding_q4k",
+            (Self::ProjectQuantized, [1, _, _, 13]) => "vector_project_q5k",
+            (Self::ProjectQuantized, [_, _, _, 13]) => "project_q5k",
+            (Self::Dequantize, [_, 13]) => "dequantize_q5k",
+            (Self::EmbeddingQuantized, [_, _, _, 13]) => "embedding_q5k",
+            (Self::ProjectQuantized, [1, _, _, 14]) => "vector_project_q6k",
+            (Self::ProjectQuantized, [_, _, _, 14]) => "project_q6k",
+            (Self::Dequantize, [_, 14]) => "dequantize_q6k",
+            (Self::EmbeddingQuantized, [_, _, _, 14]) => "embedding_q6k",
             (Self::Matmul, [m, k, n]) if *m >= 64 && *k >= 256 && *n >= 64 => "tensor_matmul_tf32x3_k16",
             (Self::AttentionFusedBatch, [_, _, _, _, _, _]) => "attention_split_batch",
             (Self::AttentionOutput, [_, _, _]) => "attention_merge_splits",
@@ -293,6 +337,24 @@ impl Kernel {
         let mut mutated = 0;
         let mut threads = 128;
         let (count, pointers, output, in_place) = match (self, p) {
+            (Self::ProjectQuantized, &[m, k, n, format]) => {
+                quantized_words(k, format)?;
+                extents[..3].copy_from_slice(&[product(&[m, k])? as u64, quantized_words(product(&[k, n])?, format)?, product(&[m, n])? as u64]);
+                (product(&[m.div_ceil(16), n.div_ceil(if m == 1 { 4 } else { 32 }), 128])?, 3, 2, false)
+            }
+            (Self::Dequantize, &[n, format]) => {
+                extents[..2].copy_from_slice(&[quantized_words(n, format)?, product(&[n])? as u64]);
+                (n, 2, 1, false)
+            }
+            (Self::EmbeddingQuantized, &[vocab, width, rows, format]) => {
+                quantized_words(width, format)?;
+                extents[..3].copy_from_slice(&[
+                    quantized_words(product(&[vocab, width])?, format)?,
+                    product(&[rows])? as u64,
+                    product(&[rows, width])? as u64,
+                ]);
+                (product(&[rows, width])?, 3, 2, false)
+            }
             (Self::GroupedProjectBf16, &[k, q, z, h]) => {
                 if !k.is_multiple_of(2) || !q.is_multiple_of(4) || !z.is_multiple_of(4) || !h.is_multiple_of(4) {
                     return Err(Error::InvalidField);

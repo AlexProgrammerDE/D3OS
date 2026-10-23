@@ -41,6 +41,7 @@ enum Storage {
     F32,
     Bf16,
     Words,
+    Quantized(crate::quantized::Quantization),
 }
 
 #[derive(Debug)]
@@ -118,6 +119,33 @@ impl Nvidia {
         Ok(Self)
     }
 
+    fn upload_packed(&self, elements: usize, bytes: &[u8], storage: Storage) -> Result<GpuBuffer> {
+        let mut buffer = self.allocate_storage::<f32>(bytes.len().div_ceil(4))?;
+        let words = bytes.len() / 4;
+        if words != 0 {
+            request(Request {
+                handle: buffer.handle,
+                pointer: bytes.as_ptr() as u64,
+                elements: words as u64,
+                ..operation(abi::UPLOAD)
+            })?;
+        }
+        if !bytes.len().is_multiple_of(4) {
+            let mut tail = [0u8; 4];
+            tail[..bytes.len() % 4].copy_from_slice(&bytes[words * 4..]);
+            request(Request {
+                handle: buffer.handle,
+                pointer: tail.as_ptr() as u64,
+                elements: 1,
+                offset: words as u64,
+                ..operation(abi::UPLOAD)
+            })?;
+        }
+        buffer.elements = elements;
+        buffer.storage = storage;
+        Ok(buffer)
+    }
+
     fn allocate(&self, shape: &[usize]) -> Result<Tensor<Self>> {
         let elements = element_count(shape)?;
         Tensor::from_buffer(shape, self.allocate_storage(elements)?)
@@ -175,7 +203,17 @@ impl Nvidia {
                     | (Kernel::GatedProjectBf16, 1 | 2)
                     | (Kernel::GroupedProjectBf16, 1..=4)
             ) || (kernel == Kernel::Embedding && i == 0 && call.parameters[3] == 1);
-            if buffer.storage != Storage::Words && (buffer.storage == Storage::Bf16) != packed {
+            let quantized = match (kernel, i) {
+                (Kernel::ProjectQuantized, 1) => Some(call.parameters[3]),
+                (Kernel::Dequantize, 0) => Some(call.parameters[1]),
+                (Kernel::EmbeddingQuantized, 0) => Some(call.parameters[3]),
+                _ => None,
+            };
+            if let Some(format) = quantized {
+                if buffer.storage != Storage::Words && buffer.storage != Storage::Quantized(crate::quantized::Quantization::from_raw(format)?) {
+                    return Err(Error::InvalidParameter);
+                }
+            } else if matches!(buffer.storage, Storage::Quantized(_)) || (buffer.storage != Storage::Words && (buffer.storage == Storage::Bf16) != packed) {
                 return Err(Error::InvalidParameter);
             }
             if (offset as u64).checked_add(extent).is_none_or(|end| end > buffer.words as u64) {
@@ -416,6 +454,12 @@ impl Backend for Nvidia {
         Ok(buffer)
     }
 
+    fn upload_quantized(&self, format: crate::quantized::Quantization, elements: usize, bytes: &[u8]) -> Result<GpuBuffer> {
+        format.validate(elements, bytes)?;
+        dimension(elements)?;
+        self.upload_packed(elements, bytes, Storage::Quantized(format))
+    }
+
     fn upload_bf16_le(&self, bytes: &[u8]) -> Result<GpuBuffer> {
         if !bytes.len().is_multiple_of(2) {
             return Err(Error::InvalidParameter);
@@ -454,6 +498,11 @@ impl Backend for Nvidia {
     }
 
     fn download(&self, tensor: &Tensor<Self>) -> Result<Vec<f32>> {
+        if let Storage::Quantized(format) = tensor.buffer.storage {
+            let unpacked = self.produce(tensor.shape(), Kernel::Dequantize, &[(&tensor.buffer, 0)], &[tensor.len(), format as usize])?;
+            return self.download(&unpacked);
+        }
+
         if tensor.buffer.storage == Storage::Bf16 {
             let mut words = Vec::new();
             words.try_reserve_exact(tensor.buffer.words).map_err(|_| Error::AllocationFailed)?;

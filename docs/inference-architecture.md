@@ -132,9 +132,18 @@ The CI workflow provides repeatable numerical tests and an optional pretrained Q
 The current target is the RTX 4090 Laptop GPU (`10de:2757`, AD103) with one serialized compute queue.
 The driver boots pinned signed firmware and allocates a private, virtually bound compute context.
 The process-owned syscall interface accepts built-in kernels and opaque buffer handles.
-Native compute protocol version 5 includes command scopes, queue profiles, and 41 built-in kernels.
+Native compute protocol version 6 includes command scopes, queue profiles, and 44 built-in kernels.
 Its expanded profile array requires the matching SDK.
 Rebuild compute applications with the matching SDK. The kernel rejects incompatible request versions.
+
+`Backend::upload_quantized()` accepts borrowed Q8_0, Q3_K, Q4_K, Q5_K, and Q6_K weight blocks.
+It checks block lengths and finite FP16 scales before allocating device storage.
+The CPU backend decodes these blocks to FP32. The NVIDIA backend retains the original packed bytes in VRAM.
+Embedding gathers and projections decode weights inside the GPU kernels.
+Single-token projections use vector kernels. Batched projections use three compensated TF32 Tensor Core products.
+Explicit weight downloads decode into a separate FP32 output buffer.
+The tensor archive and complete large-model loader still require separate integration.
+
 The D3OS kernel verifies handle arithmetic and launch dimensions before dispatch.
 GPU tensor kernels use native Ada SASS compiled from Rust device code.
 

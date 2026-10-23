@@ -452,3 +452,27 @@ fn fused_delta_covers_all_writers_and_checks_cta_limits() {
     }
     assert!(Kernel::DeltaFused.work(&[1, 1, 1, 1, f32::NAN.to_bits()]).is_err());
 }
+#[test]
+fn quantized_weights_validate_block_rows_and_exact_word_extents() {
+    for (format, block, bytes) in [(8, 32, 34u32), (11, 256, 110), (12, 256, 144), (13, 256, 176), (14, 256, 210)] {
+        let inner = block * 3;
+        let work = Kernel::ProjectQuantized.work(&[17, inner, 33, format]).unwrap();
+        assert_eq!(work.extents[..3], [u64::from(17 * inner), (u64::from(99 * bytes)).div_ceil(4), 17 * 33]);
+        assert_eq!(work.blocks, 4);
+        assert_eq!(Kernel::ProjectQuantized.work(&[1, inner, 33, format]).unwrap().blocks, 9);
+        let decode = Kernel::Dequantize.work(&[block, format]).unwrap();
+        assert_eq!(decode.extents[..2], [u64::from(bytes).div_ceil(4), u64::from(block)]);
+        let gather = Kernel::EmbeddingQuantized.work(&[5, block, 3, format]).unwrap();
+        assert_eq!(gather.extents[..3], [u64::from(5 * bytes).div_ceil(4), 3, u64::from(3 * block)]);
+        assert!(Kernel::ProjectQuantized.work(&[1, block - 1, 5, format]).is_err());
+        assert!(Kernel::ProjectQuantized.work(&[1, block, u32::MAX, format]).is_err());
+        assert!(Kernel::Dequantize.work(&[block - 1, format]).is_err());
+        assert!(Kernel::EmbeddingQuantized.work(&[0, block, 1, format]).is_err());
+        assert!(Kernel::EmbeddingQuantized.work(&[5, block - 1, 3, format]).is_err());
+    }
+    for format in [0, 1, 9, 10, 15, u32::MAX] {
+        assert!(Kernel::ProjectQuantized.work(&[1, 256, 1, format]).is_err());
+        assert!(Kernel::Dequantize.work(&[256, format]).is_err());
+        assert!(Kernel::EmbeddingQuantized.work(&[1, 256, 1, format]).is_err());
+    }
+}

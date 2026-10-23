@@ -38,6 +38,26 @@ These measurements separate end-to-end overhead from device throughput. They are
 
 ## Latest retained measurements
 
+### Native quantized operators
+
+The native Rust/cuTile backend now accepts all five packed weight formats used by the larger Qwen files.
+Independent samples cover 5,120 values from the checksum-pinned checkpoints.
+CPU and GPU decoding match the reference bits exactly.
+The GPU checks also cover embedding gathers, single-token projections, batched Tensor Core projections, unaligned uploads, partial tiles, and neighboring guards.
+Invalid raw embedding indices produce zero rows without reading outside the table.
+
+All 56 existing device instruction sections remain byte-identical. The compiler audits actual Tensor Core instructions in each new batched projection.
+The final regression passes AlexNet's eight layer references, Qwen-0.8B's layer and cache references, and all 600 DOOM views.
+The accompanying DOOM run reaches 1,566.64 uncapped FPS. Regular gameplay remains capped around 70 FPS.
+These checks validate the operators. Full native 9B and 27B model execution remains pending.
+
+The small binary fixture and its provenance are under `os/library/compute/tests/fixtures`.
+With the pinned models and reference tools available, regenerate it with:
+
+```bash
+target/qwen-venv/bin/python tools/inference/prepare-quantized-fixture.py
+```
+
 ### Larger Qwen targets
 
 The Linux reference now runs [Qwen3.5-9B](https://huggingface.co/Qwen/Qwen3.5-9B) and [Qwen3.6-27B](https://huggingface.co/Qwen/Qwen3.6-27B).

@@ -1,0 +1,142 @@
+unsafe fn quant_byte_QUANT_WIDTH(p: *const f32, index: Tile<u32, { [QUANT_WIDTH] }>, mask: Tile<bool, { [QUANT_WIDTH] }>) -> Tile<u32, { [QUANT_WIDTH] }> {
+    let p: PointerTile<*const f32, { [] }> = pointer_to_tile(p);
+    let p: PointerTile<*mut f32, { [] }> = cast_tile_mut(p);
+    let p: PointerTile<*mut u8, { [] }> = ptr_to_ptr(p);
+    let p: PointerTile<*const u8, { [] }> = cast_tile_const(p);
+    let value = unsafe { read_tile(tile_to_pointer(p), index, mask, 0u8) };
+    exti(value)
+}
+unsafe fn quant_half_QUANT_WIDTH(p: *const f32, index: Tile<u32, { [QUANT_WIDTH] }>, mask: Tile<bool, { [QUANT_WIDTH] }>) -> Tile<f32, { [QUANT_WIDTH] }> {
+    let value = unsafe { read_tile(bf16_pointer(p), index / broadcast_scalar(2u32, shape![QUANT_WIDTH]), mask, 0u16) };
+    let value: Tile<f16, { [QUANT_WIDTH] }> = bitcast(value);
+    ftof(value, rounding::NearestEven)
+}
+fn quant_signed_byte_QUANT_WIDTH(value: Tile<u32, { [QUANT_WIDTH] }>) -> Tile<f32, { [QUANT_WIDTH] }> {
+    let number: Tile<f32, { [QUANT_WIDTH] }> = itof(value, rounding::NearestEven);
+    number
+        - select(
+            ge_tile(value, broadcast_scalar(128u32, shape![QUANT_WIDTH])),
+            broadcast_scalar(256f32, shape![QUANT_WIDTH]),
+            broadcast_scalar(0f32, shape![QUANT_WIDTH]),
+        )
+}
+unsafe fn read_quantized_QUANT_WIDTH<const FORMAT: u32>(p: *const f32, index: Tile<u32, { [QUANT_WIDTH] }>, mask: Tile<bool, { [QUANT_WIDTH] }>) -> Tile<f32, { [QUANT_WIDTH] }> {
+    let block = if FORMAT == 8 { 32u32 } else { 256u32 };
+    let bytes = if FORMAT == 8 {
+        34u32
+    } else if FORMAT == 11 {
+        110u32
+    } else if FORMAT == 12 {
+        144u32
+    } else if FORMAT == 13 {
+        176u32
+    } else {
+        210u32
+    };
+    let base = index / broadcast_scalar(block, shape![QUANT_WIDTH]) * broadcast_scalar(bytes, shape![QUANT_WIDTH]);
+    let i = index % broadcast_scalar(block, shape![QUANT_WIDTH]);
+    if FORMAT == 8 {
+        let scale = unsafe { quant_half_QUANT_WIDTH(p, base, mask) };
+        let value = unsafe { quant_byte_QUANT_WIDTH(p, base + broadcast_scalar(2u32, shape![QUANT_WIDTH]) + i, mask) };
+        scale * quant_signed_byte_QUANT_WIDTH(value)
+    } else if FORMAT == 11 {
+        let group = i / broadcast_scalar(16u32, shape![QUANT_WIDTH]);
+        let low = unsafe { quant_byte_QUANT_WIDTH(p, base + broadcast_scalar(96u32, shape![QUANT_WIDTH]) + group % broadcast_scalar(8u32, shape![QUANT_WIDTH]), mask) };
+        let low = (low >> (broadcast_scalar(4u32, shape![QUANT_WIDTH]) * (group / broadcast_scalar(8u32, shape![QUANT_WIDTH])))) & broadcast_scalar(15u32, shape![QUANT_WIDTH]);
+        let high = unsafe { quant_byte_QUANT_WIDTH(p, base + broadcast_scalar(104u32, shape![QUANT_WIDTH]) + group % broadcast_scalar(4u32, shape![QUANT_WIDTH]), mask) };
+        let high = (high >> (broadcast_scalar(2u32, shape![QUANT_WIDTH]) * (group / broadcast_scalar(4u32, shape![QUANT_WIDTH])))) & broadcast_scalar(3u32, shape![QUANT_WIDTH]);
+        let scale: Tile<f32, { [QUANT_WIDTH] }> = itof(low | (high << broadcast_scalar(4u32, shape![QUANT_WIDTH])), rounding::NearestEven);
+        let scale = scale - broadcast_scalar(32f32, shape![QUANT_WIDTH]);
+        let quant = unsafe {
+            quant_byte_QUANT_WIDTH(
+                p,
+                base + broadcast_scalar(32u32, shape![QUANT_WIDTH])
+                    + i / broadcast_scalar(128u32, shape![QUANT_WIDTH]) * broadcast_scalar(32u32, shape![QUANT_WIDTH])
+                    + i % broadcast_scalar(32u32, shape![QUANT_WIDTH]),
+                mask,
+            )
+        };
+        let quant = (quant >> (broadcast_scalar(2u32, shape![QUANT_WIDTH]) * (i / broadcast_scalar(32u32, shape![QUANT_WIDTH]) % broadcast_scalar(4u32, shape![QUANT_WIDTH]))))
+            & broadcast_scalar(3u32, shape![QUANT_WIDTH]);
+        let hmask = unsafe { quant_byte_QUANT_WIDTH(p, base + i % broadcast_scalar(32u32, shape![QUANT_WIDTH]), mask) };
+        let bit = (hmask >> (i / broadcast_scalar(32u32, shape![QUANT_WIDTH]))) & broadcast_scalar(1u32, shape![QUANT_WIDTH]);
+        let quant: Tile<f32, { [QUANT_WIDTH] }> = itof(quant, rounding::NearestEven);
+        let quant = quant
+            - select(
+                eq_tile(bit, broadcast_scalar(0u32, shape![QUANT_WIDTH])),
+                broadcast_scalar(4f32, shape![QUANT_WIDTH]),
+                broadcast_scalar(0f32, shape![QUANT_WIDTH]),
+            );
+        let d = unsafe { quant_half_QUANT_WIDTH(p, base + broadcast_scalar(108u32, shape![QUANT_WIDTH]), mask) };
+        (d * scale) * quant
+    } else if FORMAT == 12 || FORMAT == 13 {
+        let group = i / broadcast_scalar(32u32, shape![QUANT_WIDTH]);
+        // Clamp inactive branch indices as both selections can be evaluated.
+        let g = group % broadcast_scalar(4u32, shape![QUANT_WIDTH]);
+        let a = unsafe { quant_byte_QUANT_WIDTH(p, base + broadcast_scalar(4u32, shape![QUANT_WIDTH]) + g, mask) };
+        let b = unsafe { quant_byte_QUANT_WIDTH(p, base + broadcast_scalar(8u32, shape![QUANT_WIDTH]) + g, mask) };
+        let c = unsafe { quant_byte_QUANT_WIDTH(p, base + broadcast_scalar(12u32, shape![QUANT_WIDTH]) + g, mask) };
+        let first = lt_tile(group, broadcast_scalar(4u32, shape![QUANT_WIDTH]));
+        let scale = select(
+            first,
+            a & broadcast_scalar(63u32, shape![QUANT_WIDTH]),
+            (c & broadcast_scalar(15u32, shape![QUANT_WIDTH])) | ((a >> broadcast_scalar(6u32, shape![QUANT_WIDTH])) << broadcast_scalar(4u32, shape![QUANT_WIDTH])),
+        );
+        let minimum = select(
+            first,
+            b & broadcast_scalar(63u32, shape![QUANT_WIDTH]),
+            (c >> broadcast_scalar(4u32, shape![QUANT_WIDTH])) | ((b >> broadcast_scalar(6u32, shape![QUANT_WIDTH])) << broadcast_scalar(4u32, shape![QUANT_WIDTH])),
+        );
+        let offset = if FORMAT == 13 { 48u32 } else { 16u32 };
+        let quant = unsafe {
+            quant_byte_QUANT_WIDTH(
+                p,
+                base + broadcast_scalar(offset, shape![QUANT_WIDTH])
+                    + i / broadcast_scalar(64u32, shape![QUANT_WIDTH]) * broadcast_scalar(32u32, shape![QUANT_WIDTH])
+                    + i % broadcast_scalar(32u32, shape![QUANT_WIDTH]),
+                mask,
+            )
+        };
+        let quant = (quant >> (broadcast_scalar(4u32, shape![QUANT_WIDTH]) * (group % broadcast_scalar(2u32, shape![QUANT_WIDTH])))) & broadcast_scalar(15u32, shape![QUANT_WIDTH]);
+        let quant = if FORMAT == 13 {
+            let high = unsafe { quant_byte_QUANT_WIDTH(p, base + broadcast_scalar(16u32, shape![QUANT_WIDTH]) + i % broadcast_scalar(32u32, shape![QUANT_WIDTH]), mask) };
+            quant | (((high >> group) & broadcast_scalar(1u32, shape![QUANT_WIDTH])) << broadcast_scalar(4u32, shape![QUANT_WIDTH]))
+        } else {
+            quant
+        };
+        let scale: Tile<f32, { [QUANT_WIDTH] }> = itof(scale, rounding::NearestEven);
+        let minimum: Tile<f32, { [QUANT_WIDTH] }> = itof(minimum, rounding::NearestEven);
+        let quant: Tile<f32, { [QUANT_WIDTH] }> = itof(quant, rounding::NearestEven);
+        let d = unsafe { quant_half_QUANT_WIDTH(p, base, mask) };
+        let dmin = unsafe { quant_half_QUANT_WIDTH(p, base + broadcast_scalar(2u32, shape![QUANT_WIDTH]), mask) };
+        (d * scale) * quant - dmin * minimum
+    } else {
+        let segment = i % broadcast_scalar(128u32, shape![QUANT_WIDTH]) / broadcast_scalar(32u32, shape![QUANT_WIDTH]);
+        let low = unsafe {
+            quant_byte_QUANT_WIDTH(
+                p,
+                base + i / broadcast_scalar(128u32, shape![QUANT_WIDTH]) * broadcast_scalar(64u32, shape![QUANT_WIDTH])
+                    + segment % broadcast_scalar(2u32, shape![QUANT_WIDTH]) * broadcast_scalar(32u32, shape![QUANT_WIDTH])
+                    + i % broadcast_scalar(32u32, shape![QUANT_WIDTH]),
+                mask,
+            )
+        };
+        let low = (low >> (broadcast_scalar(4u32, shape![QUANT_WIDTH]) * (segment / broadcast_scalar(2u32, shape![QUANT_WIDTH])))) & broadcast_scalar(15u32, shape![QUANT_WIDTH]);
+        let high = unsafe {
+            quant_byte_QUANT_WIDTH(
+                p,
+                base + broadcast_scalar(128u32, shape![QUANT_WIDTH])
+                    + i / broadcast_scalar(128u32, shape![QUANT_WIDTH]) * broadcast_scalar(32u32, shape![QUANT_WIDTH])
+                    + i % broadcast_scalar(32u32, shape![QUANT_WIDTH]),
+                mask,
+            )
+        };
+        let high = (high >> (broadcast_scalar(2u32, shape![QUANT_WIDTH]) * segment)) & broadcast_scalar(3u32, shape![QUANT_WIDTH]);
+        let quant: Tile<f32, { [QUANT_WIDTH] }> = itof(low | (high << broadcast_scalar(4u32, shape![QUANT_WIDTH])), rounding::NearestEven);
+        let quant = quant - broadcast_scalar(32f32, shape![QUANT_WIDTH]);
+        let scale = unsafe { quant_byte_QUANT_WIDTH(p, base + broadcast_scalar(192u32, shape![QUANT_WIDTH]) + i / broadcast_scalar(16u32, shape![QUANT_WIDTH]), mask) };
+        let scale = quant_signed_byte_QUANT_WIDTH(scale);
+        let d = unsafe { quant_half_QUANT_WIDTH(p, base + broadcast_scalar(208u32, shape![QUANT_WIDTH]), mask) };
+        (d * scale) * quant
+    }
+}

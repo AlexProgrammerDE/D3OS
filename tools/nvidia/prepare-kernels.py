@@ -22,6 +22,16 @@ TENSOR_INSTRUCTIONS = {
         "tensor_matmul_bf16": r"\bHMMA\.16816\.F32\.BF16\s",
     },
     "inference": {
+        **dict.fromkeys(
+            [
+                "project_quantized",
+                "project_q3k",
+                "project_q4k",
+                "project_q5k",
+                "project_q6k",
+            ],
+            r"\bHMMA\.1688\.F32\.TF32\s",
+        ),
         "tensor_matmul_tf32x3": r"\bHMMA\.1688\.F32\.TF32\s",
         "tensor_matmul_tf32x3_k16": r"\bHMMA\.1688\.F32\.TF32\s",
         "tensor_project_tf32x3": r"\bHMMA\.1688\.F32\.TF32\s",

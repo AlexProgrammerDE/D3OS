@@ -102,6 +102,15 @@ impl TransformerBackend for Nvidia {
             return Err(Error::InvalidParameter);
         }
         let ids = self.upload_word_storage::<f32>(tokens)?;
+        if let Storage::Quantized(format) = table.buffer.storage {
+            return self.produce(
+                &[tokens.len(), width],
+                Kernel::EmbeddingQuantized,
+                &[(&table.buffer, 0), (&ids, 0)],
+                &[vocab, width, tokens.len(), format as usize],
+            );
+        }
+
         self.produce(
             &[tokens.len(), width],
             Kernel::Embedding,
@@ -130,6 +139,9 @@ impl TransformerBackend for Nvidia {
         if token >= *vocab {
             return Err(Error::InvalidParameter);
         }
+        if matches!(table.buffer.storage, Storage::Quantized(_)) {
+            return self.embedding_batch(table, &[token as u32]);
+        }
         let output = self.allocate(&[1, *width])?;
         if table.buffer.storage == Storage::Bf16 {
             self.launch(
@@ -149,6 +161,14 @@ impl TransformerBackend for Nvidia {
         };
         if width != inner {
             return Err(Error::ShapeMismatch);
+        }
+        if let Storage::Quantized(format) = weights.buffer.storage {
+            return self.produce(
+                &[*batch, *outputs],
+                Kernel::ProjectQuantized,
+                &[(&input.buffer, 0), (&weights.buffer, 0)],
+                &[*batch, *width, *outputs, format as usize],
+            );
         }
         if weights.buffer.storage == Storage::Bf16 && (2..=32).contains(batch) && (256..=2048).contains(outputs) && *width >= 512 {
             let partials = self.produce(

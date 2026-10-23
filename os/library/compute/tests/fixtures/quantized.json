@@ -1,0 +1,102 @@
+{
+  "llama_source_sha256": "988d6834bd8b57ba973922ac0bda27f282a50f17c42fcdf30817915434f06c3a",
+  "models": {
+    "Qwen3.5-9B-Q8_0.gguf": "809626574d0cb43d4becfa56169980da2bb448f2299270f7be443cb89d0a6ae4",
+    "Qwen3.6-27B-Q3_K_M.gguf": "bdfa99d488b501f5ca711f35c930f005319a064eabcaae23290571a25c499eeb"
+  },
+  "fixtures": [
+    {
+      "file": "Qwen3.5-9B-Q8_0.gguf",
+      "tensor": "output.weight",
+      "format": "Q8_0",
+      "block_indices": [
+        0,
+        1025321,
+        2050642,
+        3075963,
+        4101285,
+        5126606,
+        6151927,
+        7177248,
+        8202570,
+        9227891,
+        10253212,
+        11278533,
+        12303855,
+        13329176,
+        14354497,
+        15379818,
+        16405140,
+        17430461,
+        18455782,
+        19481103,
+        20506425,
+        21531746,
+        22557067,
+        23582388,
+        24607710,
+        25633031,
+        26658352,
+        27683673,
+        28708995,
+        29734316,
+        30759637,
+        31784959
+      ],
+      "raw_sha256": "3ea3a27e0b5a9cff3d0fea11bede31a86e8512f87a66d3f844bc7b12624ff126",
+      "reference_sha256": "7603e78639e0a8bb6dd1f077e35227bdaa764a543095451c7b0431eeeea28f53"
+    },
+    {
+      "file": "Qwen3.6-27B-Q3_K_M.gguf",
+      "tensor": "token_embd.weight",
+      "format": "Q3_K",
+      "block_indices": [
+        0,
+        1655466,
+        3310932,
+        4966399
+      ],
+      "raw_sha256": "d04571c58a14b21ba9712a37715f02c275b37989ffb04aaef12c61250b5339b5",
+      "reference_sha256": "974d271a79bfe9cc435e122629e137545d8b7c63e066eabc69cf45df835fa92e"
+    },
+    {
+      "file": "Qwen3.6-27B-Q3_K_M.gguf",
+      "tensor": "blk.0.ssm_out.weight",
+      "format": "Q4_K",
+      "block_indices": [
+        0,
+        40959,
+        81919,
+        122879
+      ],
+      "raw_sha256": "0b4bb756d1f101b6bf150c069caf4866b4aac00040dec17c7bbeaeeb4fd9c0c2",
+      "reference_sha256": "1bdcde2a1103dfd0d7949bdeb74c07943991cd0b8c2d4af3a77e2bab94bc6add"
+    },
+    {
+      "file": "Qwen3.6-27B-Q3_K_M.gguf",
+      "tensor": "blk.0.attn_qkv.weight",
+      "format": "Q5_K",
+      "block_indices": [
+        0,
+        68266,
+        136532,
+        204799
+      ],
+      "raw_sha256": "2e1a568933b875e1a36d5b33f17f9190f45919497603e20395f1108fc879bc4f",
+      "reference_sha256": "e5bb54b0cc262e18dad34ee643ee44f91115b35187ec94c48e25247c5a37805d"
+    },
+    {
+      "file": "Qwen3.6-27B-Q3_K_M.gguf",
+      "tensor": "output.weight",
+      "format": "Q6_K",
+      "block_indices": [
+        0,
+        1655466,
+        3310932,
+        4966399
+      ],
+      "raw_sha256": "a996f56ae4c5866cd0210f9ceb150075eef50db05cbfb4c235964d7d49a7bc64",
+      "reference_sha256": "700ef286070ba539326627e774685c112429e3d95ea5a607e8b0798795365cc1"
+    }
+  ]
+}

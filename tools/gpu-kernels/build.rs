@@ -3,6 +3,7 @@ fn main() {
     let mut source = String::from("#[cutile::module] pub mod kernels { use cutile::core::*;\n");
     for file in [
         "common.rs",
+        "quantized.rs",
         "quad.rs",
         "elementwise.rs",
         "matrix.rs",
@@ -16,6 +17,11 @@ fn main() {
         println!("cargo:rerun-if-changed=src/{file}");
         source.push_str(&fs::read_to_string(format!("src/{file}")).expect("read tile source"));
         source.push('\n');
+    }
+    println!("cargo:rerun-if-changed=src/quantized.rs.in");
+    let quantized = fs::read_to_string("src/quantized.rs.in").expect("read quantized template");
+    for width in [128, 512] {
+        source.push_str(&quantized.replace("QUANT_WIDTH", &width.to_string()));
     }
     println!("cargo:rerun-if-changed=src/delta-sequence.rs.in");
     let delta = fs::read_to_string("src/delta-sequence.rs.in").expect("read recurrent template");
@@ -77,6 +83,32 @@ fn main() {
                 .replace("padding: E", &format!("padding: {element}"))
                 .replace("*const E", &format!("*const {element}")),
         );
+    }
+    for (format, name) in [(8, "q8_0"), (11, "q3k"), (12, "q4k"), (13, "q5k"), (14, "q6k")] {
+        source.push_str(&format!("#[cutile::entry()] unsafe fn vector_project_{name}(a:*const f32,b:*const f32,out:*mut f32,_m:u32,k:u32,n:u32,_format:u32){{unsafe{{ vector_project_4::<false,false,{format}>(a,b,b,out,k,n) }} }}\n"));
+        for (prefix, base, arguments, body) in [
+            (
+                "project",
+                "project_quantized",
+                "a:*const f32,b:*const f32,out:*mut f32,m:u32,k:u32,n:u32,_format:u32",
+                format!("compensated_matrix_16::<true,false,false,{format}>(a,b,out,m,k,n,1u32)"),
+            ),
+            (
+                "dequantize",
+                "dequantize_weights",
+                "a:*const f32,out:*mut f32,n:u32,_format:u32",
+                format!("unpack_quantized::<{format}>(a,out,n)"),
+            ),
+            (
+                "embedding",
+                "embedding_quantized",
+                "a:*const f32,ids:*const u32,out:*mut f32,vocab:u32,width:u32,rows:u32,_format:u32",
+                format!("gather_quantized::<{format}>(a,ids,out,vocab,width,rows)"),
+            ),
+        ] {
+            let entry = if format == 8 { base.to_owned() } else { format!("{prefix}_{name}") };
+            source.push_str(&format!("#[cutile::entry()] unsafe fn {entry}({arguments}){{unsafe{{{body}}}}}\n"));
+        }
     }
     source.push('}');
     fs::write(PathBuf::from(env::var_os("OUT_DIR").expect("build directory")).join("programs.rs"), source).expect("write tile module");
