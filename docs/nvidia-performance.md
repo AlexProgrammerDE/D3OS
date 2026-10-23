@@ -101,6 +101,22 @@ A separate 64-bit weight-load experiment preserves correctness but increases reg
 Its immediate control measures 238.81 tokens/s in both warm sessions. The experiment is removed.
 A single-token Tensor Core output-head variant also shows no complete-workload benefit and is removed.
 
+### Four-tap decode specialization
+
+Qwen uses four convolution taps, while the generic combined recurrent kernel reserves space for eight.
+The four-tap specialization halves the live history and convolution-weight tiles.
+It still uses 256 threads and reaches 255 registers per thread, but emits no local spill loads or stores.
+The compiler audit rejects future spill instructions in this entry.
+Larger convolution histories retain the generic kernel.
+All earlier kernel instruction sections remain byte-identical.
+
+The first warm decode samples reach 262.30 and 263.37 tokens/s with 8 and 9 ms prompt times.
+The fresh matched Linux reference measures 262.31 and 262.82 tokens/s.
+These short-decode samples reach the Linux throughput range while preserving the exact token checksum and every numerical reference.
+A repeat reaches 234.43 and 252.96 tokens/s, while its following Linux reference reaches 262.76 and 262.93 tokens/s.
+The first sample shows that throughput is achievable, but repeated runs do not yet establish consistent parity.
+Prompt latency, cold loading, and longer contexts still require separate measurements.
+
 ## Earlier retained measurements
 
 The final retained sample on 2026-10-23 uses the cached QMD templates and two submission waves described below.

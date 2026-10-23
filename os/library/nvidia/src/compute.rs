@@ -268,6 +268,7 @@ impl Kernel {
     /// Select the cuTile specialization without changing the public request ABI.
     pub fn entry(self, parameters: &[u32]) -> &'static str {
         match (self, parameters) {
+            (Self::DeltaFused, [_, _, _, kernel, _]) if *kernel <= 4 => "delta_fused_four_taps",
             (Self::DeltaConvolution, [_, _, _]) => "delta_convolution_batch",
             (Self::DeltaUpdate, [_, _, _, _]) => "delta_recurrent_batch",
             (Self::GatedProjectBf16, [k, _]) if k.is_multiple_of(2) => "gated_project_paired_bf16_weights",

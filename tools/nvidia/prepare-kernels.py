@@ -43,6 +43,11 @@ def audit(family, sass):
         if name not in bodies or not re.search(instruction, bodies[name]):
             raise RuntimeError(f"{name}: missing Tensor Core instruction")
     if family == "inference":
+        recurrent = bodies.get("delta_fused_four_taps", "")
+        if not recurrent or re.search(r"\b(?:LDL|STL)\b", recurrent):
+            raise RuntimeError(
+                "four-tap recurrent specialization must remain spill-free"
+            )
         for pattern in (r"\bLDL\b", r"\bSTL\b"):
             if not re.search(pattern, bodies.get("local_stack_probe", "")):
                 raise RuntimeError("scratch diagnostic did not generate local spills")

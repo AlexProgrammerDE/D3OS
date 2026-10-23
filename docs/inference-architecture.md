@@ -204,6 +204,9 @@ The recurrent kernel distributes each head across groups of 32 value columns.
 Each block retains its private state columns across rows and writes their final values when the chunk completes.
 This division removes register spills from the batch kernels and increases the number of independent blocks.
 Single-token decoding retains the combined kernel because the additional launches outweigh its lower device work.
+Convolution histories of up to four taps use a smaller compile-time tile in that kernel.
+The eight-tap tile remains available for larger histories.
+This specialization removes decode spills without adding dispatches or changing the recurrent state layout.
 Larger recurrent configurations retain the separate operator path.
 The batch dispatch validates all input, output, history, and recurrent extents before changing state.
 It initializes the entire output directly, without a separate clear.

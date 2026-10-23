@@ -14,7 +14,7 @@ mod link;
 
 fn threads(name: &str) -> u32 {
     match name {
-        "delta_fused" | "delta_fused_batch" => 256,
+        "delta_fused" | "delta_fused_batch" | "delta_fused_four_taps" => 256,
         "raster_fuzz" | "raster_fuzz_bytes" => 32,
         _ => 128,
     }
@@ -93,6 +93,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "gated_project_paired_bf16_weights",
             "delta_convolution_batch",
             "delta_recurrent_batch",
+            "delta_fused_four_taps",
             "timestamp_probe",
             "local_stack_probe",
         ]);

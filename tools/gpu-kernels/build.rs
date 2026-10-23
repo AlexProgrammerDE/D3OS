@@ -17,6 +17,16 @@ fn main() {
         source.push_str(&fs::read_to_string(format!("src/{file}")).expect("read tile source"));
         source.push('\n');
     }
+    println!("cargo:rerun-if-changed=src/delta-sequence.rs.in");
+    let delta = fs::read_to_string("src/delta-sequence.rs.in").expect("read recurrent template");
+    for (history, name) in [(4, "delta_sequence_four_taps"), (8, "delta_sequence")] {
+        source.push_str(
+            &delta
+                .replace("DELTA_SEQUENCE_HELPER", name)
+                .replace("HISTORY_WIDTH", &history.to_string())
+                .replace("HISTORY_VALUES", &(512 * history).to_string()),
+        );
+    }
     println!("cargo:rerun-if-changed=src/matrix.rs.in");
     let matrix = fs::read_to_string("src/matrix.rs.in").expect("read matrix tile template");
     for inner in [8, 16, 64] {
