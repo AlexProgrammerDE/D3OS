@@ -26,11 +26,12 @@ This has been tested on Ubuntu 24.04.
 For macOS, the same can be achieved with:
 ```bash
 xcode-select --install
-brew install rustup dosfstools nasm x86_64-elf-gcc gnu-tar wget qemu
+brew install rustup dosfstools nasm x86_64-elf-gcc filosottile/musl-cross/musl-cross gnu-tar wget qemu
 brew link --force rustup
 ```
 
 This has been tested on macOS 14.
+DOOM uses the musl cross-compiler's C/POSIX headers during compilation and links D3OS libc in the final application.
 
 [rustup](https://rustup.rs/) will download a _rust nightly_ toolchain on the first compile.
 

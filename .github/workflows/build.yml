@@ -60,7 +60,7 @@ jobs:
       - name: Install packages
         uses: amitie10g/install-package@v1.2.5
         with:
-          brew: x86_64-elf-binutils x86_64-elf-gcc nasm dosfstools
+          brew: x86_64-elf-binutils x86_64-elf-gcc filosottile/musl-cross/musl-cross nasm dosfstools
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@nightly

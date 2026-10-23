@@ -25,7 +25,9 @@ LINKER_FILE = "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/os/application/link.ld"
 RUST_OBJECT = "${BUILD_DIRECTORY}/lib${CARGO_MAKE_PROJECT_NAME}.a"
 APPLICATION = "${INITRD_DIRECTORY}/bin/${CARGO_MAKE_PROJECT_NAME}"
 
-CC = { source = "${CARGO_MAKE_RUST_TARGET_OS}", default_value = "gcc", mapping = { "macos" = "x86_64-elf-gcc" } }
+# DOOM includes C/POSIX headers that the bare-metal GCC sysroot does not supply.
+# Linking still uses D3OS libc through the Rust archive and the OS linker script.
+CC = { source = "${CARGO_MAKE_RUST_TARGET_OS}", default_value = "gcc", mapping = { "macos" = "x86_64-linux-musl-gcc" } }
 AR = { source = "${CARGO_MAKE_RUST_TARGET_OS}", default_value = "ar", mapping = { "macos" = "x86_64-elf-ar" } }
 
 # Build tasks
