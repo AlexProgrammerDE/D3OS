@@ -71,7 +71,7 @@ fn sigmoid(value: f32) -> f32 {
 }
 
 #[inline(always)]
-fn silu(value: f32) -> f32 {
+pub(super) fn silu(value: f32) -> f32 {
     value * sigmoid(value)
 }
 

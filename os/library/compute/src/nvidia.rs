@@ -147,7 +147,10 @@ impl Nvidia {
         }
         let kernel = Kernel::from_raw(call.kernel).map_err(|_| Error::InvalidParameter)?;
         for (i, (&(buffer, offset), &extent)) in buffers.iter().zip(extents).enumerate() {
-            let packed = matches!((kernel, i), (Kernel::ProjectBf16, 1) | (Kernel::DequantizeBf16, 0));
+            let packed = matches!(
+                (kernel, i),
+                (Kernel::ProjectBf16, 1) | (Kernel::DequantizeBf16, 0) | (Kernel::GatedProjectBf16, 1 | 2)
+            );
             if buffer.storage != Storage::Words && (buffer.storage == Storage::Bf16) != packed {
                 return Err(Error::InvalidParameter);
             }

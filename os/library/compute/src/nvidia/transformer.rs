@@ -47,6 +47,26 @@ impl TransformerBackend for Nvidia {
         )
     }
 
+    fn gated_project(&self, input: &Tensor<Self>, gate: &Tensor<Self>, up: &Tensor<Self>) -> Result<Tensor<Self>> {
+        let ([batch, width], [outputs, inner]) = (input.shape(), gate.shape()) else {
+            return Err(Error::ShapeMismatch);
+        };
+        if width != inner || up.shape() != gate.shape() {
+            return Err(Error::ShapeMismatch);
+        }
+        if *batch == 1 && gate.buffer.storage == Storage::Bf16 && up.buffer.storage == Storage::Bf16 {
+            return self.produce(
+                &[1, *outputs],
+                Kernel::GatedProjectBf16,
+                &[(&input.buffer, 0), (&gate.buffer, 0), (&up.buffer, 0)],
+                &[*width, *outputs],
+            );
+        }
+        let gate = self.project(input, gate)?;
+        let up = self.project(input, up)?;
+        self.silu_mul(gate, &up)
+    }
+
     fn rms_norm(&self, input: &Tensor<Self>, weights: &Tensor<Self>, epsilon: f32) -> Result<Tensor<Self>> {
         let Some(&width) = input.shape().last() else {
             return Err(Error::ShapeMismatch);

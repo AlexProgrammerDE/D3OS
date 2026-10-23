@@ -33,9 +33,9 @@ Measurements on 2026-10-22 and 2026-10-23:
 
 | Workload | Initial resident baseline | After native optimizations |
 | --- | ---: | ---: |
-| Qwen warm generation | 7.04 to 7.36 tokens/s | 127.75 to 138.83 tokens/s |
-| Qwen warm prompt processing | 7.76 to 7.81 tokens/s | 162.96 to 164.18 tokens/s |
-| AlexNet forward pass | 10.0 ms | 1.55 ms |
+| Qwen warm generation | 7.04 to 7.36 tokens/s | 140.97 to 148.49 tokens/s |
+| Qwen warm prompt processing | 7.76 to 7.81 tokens/s | 162.96 to 174.60 tokens/s |
+| AlexNet forward pass | 10.0 ms | 1.45 to 1.55 ms |
 | DOOM uncapped `demo1` | 536.84 to 676.89 FPS with word storage | 800.95 to 943.54 FPS with byte storage |
 
 The AlexNet result excludes input upload and final download.
@@ -134,6 +134,27 @@ Embedding converts only the selected row into FP32.
 Projection converts weights as it reads them and retains FP32 accumulation.
 This changes storage density without rounding activations or weakening the model reference tolerances.
 
+Qwen's feed-forward gate and up projections can share one dispatch with their SiLU multiplication.
+The single-row BF16 kernel reads each input for both projections and writes only the final activation.
+This removes two launches per layer, or 48 launches per generated token.
+Accumulation stays FP32. Mixed storage, FP32 weights, and batched inputs retain the existing separate path.
+Nine operator cases compare this operation with the CPU backend, including odd output and packed-weight tails.
+Wide gated projections use four outputs per warp, compared with eight for ordinary projections.
+Each gated output needs two accumulators. This layout increases active warps without doubling the accumulator count.
+The assembled gated kernel uses 36 registers without stack storage or spills.
+With this layout, two Qwen VMs report 148.49, 144.80, 143.18, and 140.97 tokens/s in their warm sessions.
+Both VMs pass the complete model reference with the existing checksum.
+
+The kernel benchmark also compares fused and separate feed-forward calls with resident weights.
+It alternates their order across three rounds and includes allocation, dispatch, synchronization, and output release.
+The small weight set can remain in GPU cache. These times do not represent streaming weights across a complete model.
+The four-output layout reports 15 to 16 microseconds for fused calls, compared with 39 to 50 microseconds for separate calls.
+
+A second pass writes a separate 128 MiB buffer before each call to create cache pressure.
+GPU timestamps measure only the selected projection and activation kernels, excluding the eviction writes and CPU allocation work.
+The three fused samples report 42.31 to 42.37 microseconds. Separate kernels report 71.86 to 71.99 microseconds.
+Timestamp instrumentation adds scheduling and completion work, so these samples use a separate `instrumented_device_mean_us` field.
+
 The DOOM rasterizer builds ordered column and row lists for each command batch.
 Each pixel merges its two relevant lists instead of scanning every command.
 The merge preserves draw order, including overlap between columns and spans.
@@ -230,7 +251,7 @@ The CPU token-selection work now combines only 32 GPU candidates.
 Each change must preserve the existing model reference or define and measure a separate precision policy.
 
 The large projection kernels now match Linux device throughput for the measured shapes.
-This does not establish model parity: Qwen still generates about 128 to 139 tokens/s, compared with about 265 tokens/s in the pinned Linux BF16 reference.
+This does not establish model parity: Qwen still generates about 141 to 148 tokens/s, compared with about 265 tokens/s in the pinned Linux BF16 reference.
 The remaining work must reduce complete model latency, rather than optimize already comparable streaming bandwidth.
 
 DOOM still transfers packed indexed frames for CPU HUD composition and copies RGB output into the console framebuffer.

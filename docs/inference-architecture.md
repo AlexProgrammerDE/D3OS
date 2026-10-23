@@ -146,6 +146,10 @@ Qwen matrix weights remain in packed BF16 storage while activations and accumula
 Single-row projections use coalesced warp reductions.
 Multi-row projections use the tensor path with exact BF16 weight expansion and the existing TF32 decomposition.
 The SDK checks storage types before dispatch and rejects packed weights in unsupported FP32 operations.
+`TransformerBackend::gated_project()` combines the feed-forward gate projection, up projection, and SiLU multiplication.
+The native single-row BF16 path writes one complete output without intermediate activation buffers.
+FP32, mixed-storage, and multi-row calls retain the separate projection path.
+The CPU backend provides the same operation through its existing primitives.
 
 DOOM uses byte-addressed indexed surfaces and textures with word-addressed command buffers.
 The byte raster kernels receive logical byte lengths, while the syscall validates the enclosing word ranges.

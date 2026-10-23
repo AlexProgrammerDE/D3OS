@@ -432,9 +432,7 @@ impl<'a, B: TransformerBackend> Session<'a, B> {
             };
             hidden = backend.add(hidden, &mixed)?;
             let normalized = backend.rms_norm(&hidden, &layer.post_norm, config.epsilon)?;
-            let gate = backend.project(&normalized, &layer.gate)?;
-            let up = backend.project(&normalized, &layer.up)?;
-            let activation = backend.silu_mul(gate, &up)?;
+            let activation = backend.gated_project(&normalized, &layer.gate, &layer.up)?;
             hidden = backend.add(hidden, &backend.project(&activation, &layer.down)?)?;
             observe(index, &hidden)?;
         }

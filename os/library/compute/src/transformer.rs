@@ -60,6 +60,12 @@ pub struct DeltaInputs<'a, B: Backend> {
 pub trait TransformerBackend: Backend {
     fn embedding(&self, table: &Tensor<Self>, token: usize) -> Result<Tensor<Self>>;
     fn project(&self, input: &Tensor<Self>, weights: &Tensor<Self>) -> Result<Tensor<Self>>;
+    /// SiLU(input * gateᵀ) * (input * upᵀ), with no host activation transfer.
+    fn gated_project(&self, input: &Tensor<Self>, gate: &Tensor<Self>, up: &Tensor<Self>) -> Result<Tensor<Self>> {
+        let gate = self.project(input, gate)?;
+        let up = self.project(input, up)?;
+        self.silu_mul(gate, &up)
+    }
     fn rms_norm(&self, input: &Tensor<Self>, weights: &Tensor<Self>, epsilon: f32) -> Result<Tensor<Self>>;
     fn add(&self, input: Tensor<Self>, residual: &Tensor<Self>) -> Result<Tensor<Self>>;
     fn silu_mul(&self, input: Tensor<Self>, other: &Tensor<Self>) -> Result<Tensor<Self>>;

@@ -2,6 +2,22 @@
 use alloc::{format, string::String, vec, vec::Vec};
 use d3os_compute::{Backend, Error, Tensor, nvidia::Nvidia, transformer::TransformerBackend};
 
+fn gated_projection<B: TransformerBackend>(backend: &B, m: usize, k: usize, n: usize, packed: [bool; 2]) -> d3os_compute::Result<Vec<f32>> {
+    let input = Tensor::from_vec(backend, &[m, k], (0..m * k).map(|i| ((i * 73 % 251) as f32 - 125.) / 127.).collect())?;
+    let weight = |salt: usize, packed: bool| {
+        let bits = (0..n * k).map(|i| (((((i * 37 + salt * 17) % 127) as f32 - 63.) / 71.).to_bits() >> 16) as u16);
+        let buffer = if packed {
+            backend.upload_bf16(bits)?
+        } else {
+            backend.upload(bits.map(|bits| f32::from_bits(u32::from(bits) << 16)).collect())?
+        };
+        Tensor::from_buffer(&[n, k], buffer)
+    };
+    let gate = weight(3, packed[0])?;
+    let up = weight(7, packed[1])?;
+    backend.download(&backend.gated_project(&input, &gate, &up)?)
+}
+
 pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     for (m, k, n) in [(1, 1, 1), (1, 33, 17), (3, 11, 5), (17, 33, 9), (1, 1024, 1024)] {
         let input: Vec<f32> = (0..m * k).map(|i| ((i * 73 % 251) as f32 - 125.) / 127.).collect();
@@ -50,8 +66,23 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
             return Err("BF16 upload accepted a non-finite weight".into());
         }
     }
+    for (m, k, n, packed) in [
+        (1, 1, 1, [true, true]),
+        (1, 33, 17, [true, true]),
+        (1, 129, 65, [true, true]),
+        (1, 33, 2051, [true, true]),
+        (1, 1024, 3584, [true, true]),
+        (3, 11, 5, [true, true]),
+        (1, 33, 17, [false, false]),
+        (1, 33, 17, [true, false]),
+        (1, 33, 17, [false, true]),
+    ] {
+        let gpu = gated_projection(backend, m, k, n, packed).map_err(|e| format!("{e}"))?;
+        let cpu = gated_projection(&d3os_compute::cpu::Cpu, m, k, n, packed).map_err(|e| format!("{e}"))?;
+        super::compare(&gpu, &cpu, "gated projection")?;
+    }
     super::super::report(format_args!(
-        "NVIDIA_BF16_WEIGHTS_OK projections=5 embedding_rows=7 roundtrip=exact guards=typed backend=nvidia"
+        "NVIDIA_BF16_WEIGHTS_OK projections=5 gated_projections=9 embedding_rows=7 roundtrip=exact guards=typed backend=nvidia"
     ));
     Ok(())
 }

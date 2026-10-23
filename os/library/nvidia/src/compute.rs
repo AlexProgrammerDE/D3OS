@@ -14,7 +14,7 @@ pub const PROFILE: u32 = 6;
 pub const LAUNCH_ALLOCATE: u32 = 7;
 /// Enable GPU timestamp instrumentation for subsequent launches (elements 0 or 1).
 pub const DEVICE_TIMING: u32 = 8;
-pub const KERNEL_COUNT: usize = 31;
+pub const KERNEL_COUNT: usize = 32;
 
 /// Device-wide CPU cycle counters. Read snapshots around an exclusive workload
 /// and subtract them. Wait cycles include GPU execution and completion polling.
@@ -79,9 +79,10 @@ pub enum Kernel {
     FuzzBytes = 28,
     PaletteBytes = 29,
     DeltaFused = 30,
+    GatedProjectBf16 = 31,
 }
 
-const _: () = assert!(Kernel::DeltaFused as usize + 1 == KERNEL_COUNT);
+const _: () = assert!(Kernel::GatedProjectBf16 as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -110,7 +111,7 @@ impl Kernel {
     pub fn allocates_output(self) -> bool {
         matches!(
             self,
-            Self::Matmul | Self::Project | Self::RmsNorm | Self::ProjectBf16 | Self::ArgMax | Self::DeltaFused
+            Self::Matmul | Self::Project | Self::RmsNorm | Self::ProjectBf16 | Self::ArgMax | Self::DeltaFused | Self::GatedProjectBf16
         )
     }
 
@@ -147,6 +148,7 @@ impl Kernel {
             28 => Self::FuzzBytes,
             29 => Self::PaletteBytes,
             30 => Self::DeltaFused,
+            31 => Self::GatedProjectBf16,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -184,6 +186,7 @@ impl Kernel {
             Self::FuzzBytes => "raster_fuzz_bytes",
             Self::PaletteBytes => "palette_scale_bytes",
             Self::DeltaFused => "delta_fused",
+            Self::GatedProjectBf16 => "gated_project_bf16_weights",
         }
     }
 
@@ -221,6 +224,13 @@ impl Kernel {
                 product(&[n])?;
                 extents[..2].copy_from_slice(&[u64::from(n), 64]);
                 (1024, 2, 1, false)
+            }
+            (Self::GatedProjectBf16, &[k, n]) => {
+                product(&[k])?;
+                let weights = u64::from(product(&[k, n])?).div_ceil(2);
+                extents[..4].copy_from_slice(&[u64::from(k), weights, weights, u64::from(n)]);
+                let tile = if n <= 2048 { 1 } else { 4 };
+                (product(&[n.div_ceil(tile), 32])?, 4, 3, false)
             }
             (Self::ProjectBf16, &[m, k, n]) => {
                 extents[..3].copy_from_slice(&[product(&[m, k])? as u64, u64::from(product(&[k, n])?).div_ceil(2), product(&[m, n])? as u64]);

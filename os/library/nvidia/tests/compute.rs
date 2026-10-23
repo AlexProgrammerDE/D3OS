@@ -22,6 +22,26 @@ fn packed_weight_extents_cover_odd_tails_and_half_word_offsets() {
 }
 
 #[test]
+fn gated_projection_checks_both_weight_ranges_and_covers_odd_outputs() {
+    for n in [17, 2051] {
+        let work = Kernel::GatedProjectBf16.work(&[33, n]).unwrap();
+        assert_eq!(
+            work.extents[..4],
+            [33, u64::from(33 * n).div_ceil(2), u64::from(33 * n).div_ceil(2), u64::from(n)]
+        );
+        assert_eq!((work.pointers, work.output), (4, 3));
+        let columns = if n <= 2048 { 1 } else { 4 };
+        assert_eq!(work.blocks, n.div_ceil(columns).div_ceil(4));
+        for writer_alias in [0x1000, 0x20004, 0x40004] {
+            assert!(work.validate_aliases(&[0x1000, 0x20000, 0x40000, writer_alias]).is_err());
+        }
+    }
+    assert!(Kernel::GatedProjectBf16.allocates_output());
+    assert!(Kernel::GatedProjectBf16.work(&[0, 1]).is_err());
+    assert!(Kernel::GatedProjectBf16.work(&[u32::MAX, 2]).is_err());
+}
+
+#[test]
 fn binned_raster_checks_header_and_address_extents() {
     let work = Kernel::RasterBinned.work(&[320, 200, 1500, 4096, 5000]).unwrap();
     assert_eq!(work.extents[..5], [64000, 18000, 4096, 64000, 5000]);

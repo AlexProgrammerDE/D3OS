@@ -1,6 +1,7 @@
 //! Resident-model measurements. Reference comparisons remain outside timed work.
 use alloc::{format, string::String, vec::Vec};
-use d3os_compute::{Backend, Tensor, nvidia::Nvidia};
+use d3os_compute::transformer::TransformerBackend;
+use d3os_compute::{Backend, Buffer, Tensor, nvidia::Nvidia};
 use d3os_inference::{
     alexnet::AlexNet,
     archive::Archive,
@@ -94,7 +95,90 @@ pub(super) fn kernels(backend: &Nvidia) -> Result<(), String> {
             timed_elapsed as f64 * 1000. / REPEATS as f64
         ));
     }
+    gated_projection(backend).map_err(|error| format!("{error}"))?;
     report(format_args!("INFERENCE_BENCH_OK kernels backend=nvidia"));
+    Ok(())
+}
+
+fn gated_projection(backend: &Nvidia) -> d3os_compute::Result<()> {
+    const INNER: usize = 1024;
+    const OUTPUTS: usize = 3584;
+    const REPEATS: usize = 1000;
+    let input = Tensor::from_vec(backend, &[1, INNER], (0..INNER).map(|i| ((i % 31) as f32 - 15.) / 32.).collect())?;
+    let weights = |salt| {
+        Tensor::from_buffer(
+            &[OUTPUTS, INNER],
+            backend.upload_bf16((0..INNER * OUTPUTS).map(|i| (((((i + salt) % 127) as f32 - 63.) / 128.).to_bits() >> 16) as u16))?,
+        )
+    };
+    let gate = weights(3)?;
+    let up = weights(7)?;
+    let run = |fused| {
+        if fused {
+            backend.gated_project(&input, &gate, &up)
+        } else {
+            let gate = backend.project(&input, &gate)?;
+            let up = backend.project(&input, &up)?;
+            backend.silu_mul(gate, &up)
+        }
+    };
+    let expected = backend.download(&run(false)?)?;
+    for round in 0..3 {
+        for fused in if round % 2 == 0 { [false, true] } else { [true, false] } {
+            drop(run(fused)?);
+            let start = now();
+            for _ in 0..REPEATS {
+                drop(run(fused)?);
+            }
+            let elapsed = now() - start;
+            let actual = backend.download(&run(fused)?)?;
+            if actual
+                .iter()
+                .zip(&expected)
+                .any(|(a, e)| !a.is_finite() || (a - e).abs() > 0.0002 + 0.0002 * e.abs())
+            {
+                return Err(d3os_compute::Error::DeviceFault);
+            }
+            report(format_args!(
+                "NATIVE_GATED_BENCH round={round} fused={fused} inner={INNER} outputs={OUTPUTS} repeats={REPEATS} mean_us={:.3}",
+                elapsed as f64 * 1000. / REPEATS as f64
+            ));
+        }
+    }
+    // Evict the small weight set between calls. Otherwise repeated calls can
+    // remain in L2 and hide the streaming behavior of a complete model.
+    let eviction = backend.allocate_words(128 * 1024 * 1024 / 4)?;
+    const COLD_REPEATS: usize = 200;
+    backend.set_device_timing(true)?;
+    let measured = (|| {
+        for round in 0..3 {
+            for fused in if round % 2 == 0 { [false, true] } else { [true, false] } {
+                let before = backend.profile()?;
+                for _ in 0..COLD_REPEATS {
+                    backend.dispatch_words(Kernel::Zero, &[(&eviction, 0)], &[eviction.len()])?;
+                    drop(run(fused)?);
+                }
+                let after = backend.profile()?;
+                let kernels: &[Kernel] = if fused {
+                    &[Kernel::GatedProjectBf16]
+                } else {
+                    &[Kernel::ProjectBf16, Kernel::SiluMul]
+                };
+                let device_ns: u64 = kernels
+                    .iter()
+                    .map(|&kernel| after[kernel as usize].device_ns.wrapping_sub(before[kernel as usize].device_ns))
+                    .sum();
+                report(format_args!(
+                    "NATIVE_GATED_COLD_BENCH round={round} fused={fused} inner={INNER} outputs={OUTPUTS} repeats={COLD_REPEATS} eviction_bytes=134217728 instrumented_device_mean_us={:.3}",
+                    device_ns as f64 / (COLD_REPEATS as f64 * 1000.)
+                ));
+            }
+        }
+        Ok(())
+    })();
+    let stopped = backend.set_device_timing(false);
+    measured?;
+    stopped?;
     Ok(())
 }
 
