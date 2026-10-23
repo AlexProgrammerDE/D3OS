@@ -57,6 +57,7 @@ The recurrent batch path instead keeps history and state in tiles until the sequ
 BF16 matrix projections preserve two-dimensional pointer tiles through memory lowering.
 Their masked loads select padding explicitly because the pinned frontend expands scalar padding with rank one.
 FP32 matrix products and vector projections retain flattened loads, which measured faster for those paths.
+The matrix template uses 16-element reductions for regular BF16 projections and 8-element reductions for split and FP32 products.
 
 Add numerical cases to the GPU operator suite when the operation has complex behavior.
 Preserve partial-tile checks, buffer guards, and existing model tolerances.

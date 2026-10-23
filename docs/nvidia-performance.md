@@ -81,6 +81,12 @@ Every session retained the exact token checksum and passed the full model refere
 The binary audit found changes in only two entries: `tensor_project_bf16_weights` and `project_bf16_split`.
 All other kernel instruction sections match the baseline byte for byte.
 
+A further BF16 sweep compared 8-, 16-, and 32-element reduction tiles with the retained matrix layout.
+Regular projections use 16 elements; split projections retain 8 elements.
+The regular-projection phase decreased from 17.13 to 15.07 million dispatch cycles, including waiting.
+The combined layout measured 14 to 15 ms for the prompt, with the same exact tokens and reference checks.
+The 32-element variant measured 18 to 19 ms and was rejected.
+
 Several experiments were rejected after measurement:
 
 - Applying this layout to every matrix load increased the large FP32 projection microbenchmark from 33.49 to 47.54 microseconds.

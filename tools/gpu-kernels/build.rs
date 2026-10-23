@@ -15,6 +15,18 @@ fn main() {
         source.push_str(&fs::read_to_string(format!("src/{file}")).expect("read tile source"));
         source.push('\n');
     }
+    println!("cargo:rerun-if-changed=src/matrix.rs.in");
+    let matrix = fs::read_to_string("src/matrix.rs.in").expect("read matrix tile template");
+    for inner in [8, 16] {
+        source.push_str(
+            &matrix
+                .replace("compensated_matrix_template", &format!("compensated_matrix_{inner}"))
+                .replace("TILE_INNER_U32", &format!("{inner}u32"))
+                .replace("TILE_INNER", &inner.to_string())
+                .replace("TILE_A_VALUES", &(16 * inner).to_string())
+                .replace("TILE_B_VALUES", &(32 * inner).to_string()),
+        );
+    }
     println!("cargo:rerun-if-changed=src/vector.rs.in");
     let vector = fs::read_to_string("src/vector.rs.in").expect("read vector tile template");
     for columns in [4, 32] {
