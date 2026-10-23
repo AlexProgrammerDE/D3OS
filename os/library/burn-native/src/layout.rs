@@ -291,3 +291,30 @@ pub fn broadcast(lhs: &Shape, rhs: &Shape) -> Result<Shape> {
     count(&dimensions)?;
     Ok(Shape::from(dimensions))
 }
+
+/// Broadcast batch dimensions and retain the two matrix output dimensions.
+pub fn matmul_shape(lhs: &Shape, rhs: &Shape) -> Result<Shape> {
+    count(lhs.as_slice())?;
+    count(rhs.as_slice())?;
+    let (left_rank, right_rank) = (lhs.num_dims(), rhs.num_dims());
+    if left_rank < 2 || right_rank < 2 || lhs[left_rank - 1] != rhs[right_rank - 2] {
+        return Err(Error::ShapeMismatch);
+    }
+    let rank = left_rank.max(right_rank);
+    let mut dimensions = vec![1; rank];
+    for (axis, dim) in dimensions.iter_mut().enumerate().take(rank - 2) {
+        let left = axis.checked_sub(rank - left_rank).map_or(1, |a| lhs[a]);
+        let right = axis.checked_sub(rank - right_rank).map_or(1, |a| rhs[a]);
+        *dim = if left == right || right == 1 {
+            left
+        } else if left == 1 {
+            right
+        } else {
+            return Err(Error::ShapeMismatch);
+        };
+    }
+    dimensions[rank - 2] = lhs[left_rank - 2];
+    dimensions[rank - 1] = rhs[right_rank - 1];
+    count(&dimensions)?;
+    Ok(Shape::from(dimensions))
+}

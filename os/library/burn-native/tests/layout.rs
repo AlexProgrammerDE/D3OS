@@ -1,5 +1,5 @@
 use burn_backend::{Shape, Slice};
-use d3os_burn_native::layout::{Layout, broadcast};
+use d3os_burn_native::layout::{Layout, broadcast, matmul_shape};
 
 fn offsets(layout: &Layout) -> Vec<usize> {
     (0..layout.len()).map(|index| layout.element_offset(index).unwrap()).collect()
@@ -115,4 +115,20 @@ fn invalid_or_overflowing_views_are_rejected() {
     assert!(broadcast(&Shape::new([2, 3]), &Shape::new([4, 3])).is_err());
     let edge = Layout::from_parts(Shape::new([1]), vec![i64::from(i32::MIN)], 0, 1).unwrap();
     assert!(edge.flip(&[0]).is_err());
+}
+
+#[test]
+fn matrix_outputs_broadcast_batches_without_confusing_matrix_dimensions() {
+    for (lhs, rhs, output) in [
+        (vec![3, 5], vec![5, 7], vec![3, 7]),
+        (vec![2, 3, 5], vec![5, 7], vec![2, 3, 7]),
+        (vec![2, 1, 3, 5], vec![4, 5, 7], vec![2, 4, 3, 7]),
+        (vec![2, 0, 3, 5], vec![1, 5, 7], vec![2, 0, 3, 7]),
+        (vec![3, 0], vec![0, 7], vec![3, 7]),
+    ] {
+        assert_eq!(matmul_shape(&Shape::from(lhs), &Shape::from(rhs)).unwrap().as_slice(), output);
+    }
+    for (lhs, rhs) in [(vec![5], vec![5, 7]), (vec![3, 5], vec![4, 7]), (vec![2, 3, 5], vec![3, 5, 7])] {
+        assert!(matmul_shape(&Shape::from(lhs), &Shape::from(rhs)).is_err());
+    }
 }

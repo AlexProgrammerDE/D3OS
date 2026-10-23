@@ -83,6 +83,83 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     crate::report(format_args!(
         "NVIDIA_BURN_ELEMENTWISE_OK operations=11 views=strided_broadcast scalar=ok guards=ok resident=ok backend=nvidia"
     ));
+    verify_matrices(backend).map_err(|e| format!("Burn native matrices: {e}"))?;
+    crate::report(format_args!(
+        "NVIDIA_BURN_MATRIX_OK cases=5 batched=ok subviews=ok empty=ok tensor_cores=true backend=nvidia"
+    ));
+    Ok(())
+}
+
+fn matrix_reference(a: &[f32], b: &[f32], rows: usize, inner: usize, cols: usize) -> Vec<f32> {
+    (0..rows * cols)
+        .map(|i| {
+            (0..inner)
+                .map(|k| f64::from(a[(i / cols) * inner + k]) * f64::from(b[k * cols + i % cols]))
+                .sum::<f64>() as f32
+        })
+        .collect()
+}
+
+fn verify_matrices(backend: &Nvidia) -> Result<(), Error> {
+    let a: Vec<f32> = (0..30).map(|i| (i % 11) as f32 / 8.0 - 0.75).collect();
+    let b: Vec<f32> = (0..35).map(|i| (i % 13) as f32 / 16.0 - 0.25).collect();
+    let left = NativeTensor::from_data(TensorData::new(a.clone(), [2, 3, 5]))?.flip(&[1])?;
+    let right = NativeTensor::from_data(TensorData::new(b.clone(), [1, 7, 5]))?.permute(&[0, 2, 1])?;
+    let before = backend.service_profile()?;
+    let output = left.matmul(&right)?;
+    let after = backend.service_profile()?;
+    if [abi::UPLOAD, abi::DOWNLOAD]
+        .iter()
+        .any(|&op| before[op as usize].calls != after[op as usize].calls)
+    {
+        return Err(Error::DeviceFault);
+    }
+    let mut expected = Vec::new();
+    for batch in 0..2 {
+        let reversed: Vec<_> = (0..15).map(|i| a[batch * 15 + (2 - i / 5) * 5 + i % 5]).collect();
+        let transposed: Vec<_> = (0..35).map(|i| b[(i % 7) * 5 + i / 7]).collect();
+        expected.extend(matrix_reference(&reversed, &transposed, 3, 5, 7));
+    }
+    check_values(&output, &expected)?;
+    if output.shape().as_slice() != [2, 3, 7] {
+        return Err(Error::DeviceFault);
+    }
+
+    let a: Vec<f32> = (0..20).map(|i| i as f32 / 16.0 - 0.5).collect();
+    let b: Vec<f32> = (0..42).map(|i| (i % 17) as f32 / 8.0 - 1.0).collect();
+    let left = NativeTensor::from_data(TensorData::new(a.clone(), [4, 5]))?.slice(&[Slice::new(1, Some(4), 1)])?;
+    let right = NativeTensor::from_data(TensorData::new(b.clone(), [6, 7]))?.slice(&[Slice::new(1, Some(6), 1)])?;
+    check_values(&left.matmul(&right)?, &matrix_reference(&a[5..], &b[7..], 3, 5, 7))?;
+
+    let a: Vec<f32> = (0..30).map(|i| (i % 11) as f32 / 8.0 - 0.5).collect();
+    let b: Vec<f32> = (0..140).map(|i| (i % 13) as f32 / 16.0 - 0.25).collect();
+    let left = NativeTensor::from_data(TensorData::new(a.clone(), [2, 1, 3, 5]))?;
+    let right = NativeTensor::from_data(TensorData::new(b.clone(), [1, 4, 5, 7]))?;
+    let output = left.matmul(&right)?;
+    let expected: Vec<_> = (0..2)
+        .flat_map(|i| (0..4).map(move |j| (i, j)))
+        .flat_map(|(i, j)| matrix_reference(&a[i * 15..(i + 1) * 15], &b[j * 35..(j + 1) * 35], 3, 5, 7))
+        .collect();
+    check_values(&output, &expected)?;
+    if output.shape().as_slice() != [2, 4, 3, 7] {
+        return Err(Error::DeviceFault);
+    }
+
+    let empty = NativeTensor::from_data(TensorData::new(Vec::<f32>::new(), [2, 0, 5]))?;
+    let rhs = NativeTensor::from_data(TensorData::new(alloc::vec![1.0f32;35], [5, 7]))?;
+    let zero_inner_a = NativeTensor::from_data(TensorData::new(Vec::<f32>::new(), [3, 0]))?;
+    let zero_inner_b = NativeTensor::from_data(TensorData::new(Vec::<f32>::new(), [0, 2]))?;
+    let before = backend.profile()?;
+    let empty = empty.matmul(&rhs)?;
+    let zeros = zero_inner_a.matmul(&zero_inner_b)?;
+    let after = backend.profile()?;
+    if empty.shape().as_slice() != [2, 0, 7]
+        || !empty.read()?.as_bytes().is_empty()
+        || before[abi::Kernel::Matmul as usize].calls != after[abi::Kernel::Matmul as usize].calls
+    {
+        return Err(Error::DeviceFault);
+    }
+    check_values(&zeros, &[0.0; 6])?;
     Ok(())
 }
 

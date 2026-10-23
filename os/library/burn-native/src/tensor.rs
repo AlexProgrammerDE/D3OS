@@ -148,6 +148,74 @@ impl NativeTensor {
         self.elementwise(mask, Elementwise::MaskFill, value.to_bits(), false, DType::F32)
     }
 
+    /// FP32 matrix multiplication with Tensor Core accumulation and broadcast batches.
+    pub fn matmul(&self, rhs: &Self) -> Result<Self> {
+        if self.dtype != DType::F32 || rhs.dtype != DType::F32 {
+            return Err(Error::InvalidParameter);
+        }
+        let shape = crate::layout::matmul_shape(self.layout.shape(), rhs.layout.shape())?;
+        let layout = Layout::contiguous(shape.clone())?;
+        if layout.is_empty() {
+            return Ok(Self {
+                buffer: self.buffer.clone(),
+                layout,
+                dtype: DType::F32,
+            });
+        }
+        let rank = shape.num_dims();
+        let rows = shape[rank - 2];
+        let cols = shape[rank - 1];
+        let inner = self.layout.shape()[self.layout.shape().num_dims() - 1];
+        if inner == 0 {
+            return Self::empty(shape, DType::F32);
+        }
+        let matrix_contiguous = |tensor: &Self| {
+            let rank = tensor.layout.shape().num_dims();
+            let rows = tensor.layout.shape()[rank - 2];
+            let cols = tensor.layout.shape()[rank - 1];
+            (rows == 1 || tensor.layout.strides()[rank - 2] == cols as i64) && (cols == 1 || tensor.layout.strides()[rank - 1] == 1)
+        };
+        // Materialize only an input with a noncontiguous matrix, before batch
+        // expansion. Broadcast batches then reuse its original resident storage.
+        let left = if matrix_contiguous(self) { self.clone() } else { self.copy()? };
+        let right = if matrix_contiguous(rhs) { rhs.clone() } else { rhs.copy()? };
+        let mut left_shape = shape.to_vec();
+        left_shape[rank - 1] = inner;
+        let mut right_shape = shape.to_vec();
+        right_shape[rank - 2] = inner;
+        let left_layout = left.layout.expand(Shape::from(left_shape))?;
+        let right_layout = right.layout.expand(Shape::from(right_shape))?;
+        let batches = layout.len() / (rows * cols);
+        let parameters = [rows, inner, cols];
+        let buffer = if batches == 1 {
+            Nvidia.produce_words(
+                rows * cols,
+                Kernel::Matmul,
+                &[(&left.buffer, left_layout.offset()), (&right.buffer, right_layout.offset())],
+                &parameters,
+            )?
+        } else {
+            let buffer = Nvidia.allocate_words(layout.len())?;
+            for batch in 0..batches {
+                Nvidia.dispatch_words(
+                    Kernel::Matmul,
+                    &[
+                        (&left.buffer, left_layout.element_offset(batch * rows * inner)?),
+                        (&right.buffer, right_layout.element_offset(batch * inner * cols)?),
+                        (&buffer, batch * rows * cols),
+                    ],
+                    &parameters,
+                )?;
+            }
+            buffer
+        };
+        Ok(Self {
+            buffer: Arc::new(buffer),
+            layout,
+            dtype: DType::F32,
+        })
+    }
+
     /// Explicit host readback gathers the requested view in logical order.
     /// GPU arithmetic must use the resident storage and its layout instead.
     pub fn read(&self) -> Result<TensorData> {

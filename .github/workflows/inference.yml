@@ -65,9 +65,16 @@ jobs:
           components: rust-src, rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - name: Verify CPU operators and model loading
-        run: cargo test --locked -p d3os-compute -p d3os-inference -p d3os-nvidia --features d3os-compute/nvidia
+        run: >-
+          cargo test --locked -p d3os-compute -p d3os-inference -p d3os-nvidia
+          -p d3os-ai -p d3os-burn-native
+          --features d3os-compute/nvidia,d3os-ai/cpu,d3os-ai/training,d3os-ai/native
       - name: Check compute and inference code
-        run: cargo clippy --locked -p d3os-compute -p d3os-inference -p d3os-nvidia --features d3os-compute/nvidia --all-targets -- -D warnings
+        run: >-
+          cargo clippy --locked -p d3os-compute -p d3os-inference -p d3os-nvidia
+          -p d3os-ai -p d3os-burn-native
+          --features d3os-compute/nvidia,d3os-ai/cpu,d3os-ai/training,d3os-ai/native
+          --all-targets -- -D warnings
       - name: Install cuTile host compiler dependencies
         run: |
           sudo apt-get update

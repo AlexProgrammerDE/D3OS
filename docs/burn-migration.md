@@ -111,6 +111,10 @@ They support strided broadcasting and scalar operands without host activation tr
 The driver rejects invalid address ranges before dispatch. Full writers avoid redundant output clears.
 GPU checks pass partial tiles, neighboring guards, malformed metadata, chained resident operations, and exact bit copies.
 All 77 existing device instruction sections remain byte-identical.
+The tensor primitive also uses the existing Tensor Core kernel for FP32 matrix products.
+GPU checks pass broadcast batches, transposed inputs, reversed rows, subviews, empty outputs, and zero inner dimensions.
+Matrix execution keeps inputs and outputs resident. Noncontiguous matrices use an explicit GPU copy before batch expansion.
+The CI operator suite includes the portable AI library and native tensor package.
 These checks validate native primitives. Burn device dispatch and autodiff integration still need implementation.
 The native Burn GPU backend, full dataset training, and workload migration remain incomplete.
 The retained Linux and D3OS measurements are in [Native NVIDIA performance](nvidia-performance.md).
