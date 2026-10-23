@@ -67,6 +67,20 @@ unsafe fn read_matrix<E: ElementType, const R: i32, const C: i32, const F: i32>(
     let value: Tile<E, { [F] }> = unsafe { read_tile(p, index, mask, padding) };
     value.reshape(shape![R, C])
 }
+// Keep the matrix rank through memory lowering for projection tiles.
+unsafe fn read_matrix_tile<E: ElementType, const R: i32, const C: i32>(
+    p: *const E, index: Tile<u32, { [R, C] }>, mask: Tile<bool, { [R, C] }>, padding: E,
+) -> Tile<E, { [R, C] }> {
+    let base: PointerTile<*const E, { [] }> = pointer_to_tile(p);
+    let base: PointerTile<*const E, { [1, 1] }> = base.reshape(shape![1, 1]);
+    let base: PointerTile<*const E, { [R, C] }> = base.broadcast(shape![R, C]);
+    let pointer = base.offset_tile(index);
+    // The frontend currently expands scalar load padding to rank one.
+    // Explicit selection preserves rank and defines every inactive element.
+    let (value, _): (Tile<E, { [R, C] }>, Token) =
+        unsafe { load_ptr_tko(pointer, ordering::Weak, None::<scope::TileBlock>, Some(mask), None, None, Latency::<0>) };
+    select(mask, value, broadcast_scalar(padding, shape![R, C]))
+}
 unsafe fn write_matrix<E: ElementType, const R: i32, const C: i32, const F: i32>(
     p: *mut E, index: Tile<u32, { [R, C] }>, value: Tile<E, { [R, C] }>, mask: Tile<bool, { [R, C] }>, flat: Shape<{ [F] }>,
 ) {
@@ -82,17 +96,25 @@ fn bf16_pointer(p: *const f32) -> *const u16 {
     let pointer: PointerTile<*const u16, { [] }> = cast_tile_const(pointer);
     tile_to_pointer(pointer)
 }
-unsafe fn read_weights<const BF16: bool, const R: i32, const C: i32, const F: i32>(
+unsafe fn read_weights<const BF16: bool, const MATRIX_TILE: bool, const R: i32, const C: i32, const F: i32>(
     p: *const f32, index: Tile<u32, { [R, C] }>, mask: Tile<bool, { [R, C] }>, flat: Shape<{ [F] }>,
 ) -> Tile<f32, { [R, C] }> {
     if BF16 {
-        let bits = unsafe { read_matrix(bf16_pointer(p), index, mask, 0u16, flat) };
+        let bits = if MATRIX_TILE {
+            unsafe { read_matrix_tile(bf16_pointer(p), index, mask, 0u16) }
+        } else {
+            unsafe { read_matrix(bf16_pointer(p), index, mask, 0u16, flat) }
+        };
         let bits: Tile<u32, { [R, C] }> = exti(bits);
         let shifted = bits << broadcast_scalar(16u32, shape![R, C]);
         let value: Tile<f32, { [R, C] }> = bitcast(shifted);
         value
     } else {
-        unsafe { read_matrix(p, index, mask, 0f32, flat) }
+        if MATRIX_TILE {
+            unsafe { read_matrix_tile(p, index, mask, 0f32) }
+        } else {
+            unsafe { read_matrix(p, index, mask, 0f32, flat) }
+        }
     }
 }
 fn signed(value: u32) -> i32 {

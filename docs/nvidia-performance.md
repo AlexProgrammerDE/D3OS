@@ -66,6 +66,30 @@ The scratch check runs a cuTile kernel with real local-memory spills and verifie
 cuTile remains the maintained base despite the remaining regressions.
 The Linux throughput target is still open.
 Projection latency, matrix scheduling, recurrent tile layout, submission overhead, and presentation remain optimization work.
+
+### Projection layout follow-up
+
+BF16 matrix projection kernels now preserve two-dimensional tiles through masked memory loads.
+The pinned Rust frontend broadcasts scalar load padding with the wrong rank for these loads.
+An explicit tile selection supplies zero padding after the masked load.
+FP32 matrix products, convolution, and single-token projections retain their measured layouts.
+
+Fresh baseline sessions measured 20 ms for the 22-token prompt and 148.15 to 159.20 tokens/s for generation.
+The final BF16 layout measured 15 ms and 156.10 to 160.00 tokens/s with the same native launcher.
+This reduces prompt latency by 25%; these decode samples do not establish a generation speedup.
+Every session retained the exact token checksum and passed the full model reference checks.
+The binary audit found changes in only two entries: `tensor_project_bf16_weights` and `project_bf16_split`.
+All other kernel instruction sections match the baseline byte for byte.
+
+Several experiments were rejected after measurement:
+
+- Applying this layout to every matrix load increased the large FP32 projection microbenchmark from 33.49 to 47.54 microseconds.
+- Increasing the Tensor Core reduction tile from 8 to 32 elements increased prompt time to 22 ms.
+- Larger shared-memory carveouts showed no clear workload gain and inconsistent convolution timing.
+- Expanding small-vector reduction tiles from 128 to 512 elements increased register use without improving generation throughput.
+
+cuTile remains the maintained compiler throughout these comparisons.
+
 The following sections preserve the earlier NVPTX measurements and implementation history.
 They do not describe the current compiler-generated register layouts.
 

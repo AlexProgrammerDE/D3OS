@@ -1,5 +1,5 @@
 // Tensor Core matrix products retain FP32 operands through TF32 decomposition.
-unsafe fn compensated_matrix<const TRANSPOSE: bool, const BF16: bool>(
+unsafe fn compensated_matrix<const TRANSPOSE: bool, const BF16: bool, const MATRIX_LOAD: bool>(
     a: *const f32, b: *const f32, output: *mut f32, rows: u32, inner: u32, cols: u32, splits: u32,
 ) {
     let block: u32 = block_id();
@@ -31,13 +31,18 @@ unsafe fn compensated_matrix<const TRANSPOSE: bool, const BF16: bool>(
         let bk = kb + broadcast_scalar(step * 8u32, shape![8, 32]);
         let am = lt_tile(r, broadcast_scalar(rows, shape![16, 8])) & lt_tile(ak, broadcast_scalar(inner, shape![16, 8]));
         let bm = lt_tile(c, broadcast_scalar(cols, shape![8, 32])) & lt_tile(bk, broadcast_scalar(inner, shape![8, 32]));
-        let av: Tile<f32, { [16, 8] }> = unsafe { read_matrix(a, r * broadcast_scalar(inner, shape![16, 8]) + ak, am, 0f32, shape![128]) };
+        let ai = r * broadcast_scalar(inner, shape![16, 8]) + ak;
+        let av: Tile<f32, { [16, 8] }> = if MATRIX_LOAD {
+            unsafe { read_matrix_tile(a, ai, am, 0f32) }
+        } else {
+            unsafe { read_matrix(a, ai, am, 0f32, shape![128]) }
+        };
         let bi = if TRANSPOSE {
             c * broadcast_scalar(inner, shape![8, 32]) + bk
         } else {
             bk * broadcast_scalar(cols, shape![8, 32]) + c
         };
-        let bv: Tile<f32, { [8, 32] }> = unsafe { read_weights::<BF16, 8, 32, 256>(b, bi, bm, shape![256]) };
+        let bv: Tile<f32, { [8, 32] }> = unsafe { read_weights::<BF16, MATRIX_LOAD, 8, 32, 256>(b, bi, bm, shape![256]) };
         let ah: Tile<tf32, { [16, 8] }> = ftof(av, rounding::NearestAway);
         let bh: Tile<tf32, { [8, 32] }> = ftof(bv, rounding::NearestAway);
         let ar: Tile<f32, { [16, 8] }> = ftof(ah, rounding::NearestEven);
@@ -73,15 +78,15 @@ unsafe fn compensated_matrix<const TRANSPOSE: bool, const BF16: bool>(
 }
 #[cutile::entry()]
 unsafe fn tensor_matmul_tf32x3(a: *const f32, b: *const f32, out: *mut f32, m: u32, k: u32, n: u32) {
-    unsafe { compensated_matrix::<false, false>(a, b, out, m, k, n, 1u32) }
+    unsafe { compensated_matrix::<false, false, false>(a, b, out, m, k, n, 1u32) }
 }
 #[cutile::entry()]
 unsafe fn tensor_project_tf32x3(a: *const f32, b: *const f32, out: *mut f32, m: u32, k: u32, n: u32) {
-    unsafe { compensated_matrix::<true, false>(a, b, out, m, k, n, 1u32) }
+    unsafe { compensated_matrix::<true, false, false>(a, b, out, m, k, n, 1u32) }
 }
 #[cutile::entry()]
 unsafe fn tensor_project_bf16_weights(a: *const f32, b: *const f32, out: *mut f32, m: u32, k: u32, n: u32) {
-    unsafe { compensated_matrix::<true, true>(a, b, out, m, k, n, 1u32) }
+    unsafe { compensated_matrix::<true, true, true>(a, b, out, m, k, n, 1u32) }
 }
 // Separate entries keep the matrix tile's shared-memory reservation out of
 // every single-token vector launch.
@@ -95,7 +100,7 @@ unsafe fn vector_project_bf16_weights(a: *const f32, b: *const f32, out: *mut f3
 }
 #[cutile::entry()]
 unsafe fn project_bf16_split(a: *const f32, b: *const f32, out: *mut f32, m: u32, k: u32, n: u32, splits: u32) {
-    unsafe { compensated_matrix::<true, true>(a, b, out, m, k, n, splits) }
+    unsafe { compensated_matrix::<true, true, true>(a, b, out, m, k, n, splits) }
 }
 #[cutile::entry()]
 unsafe fn sum_projection_partials(input: *const f32, output: *mut f32, rows: u32, cols: u32, splits: u32) {

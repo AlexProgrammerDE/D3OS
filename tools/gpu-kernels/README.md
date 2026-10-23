@@ -54,6 +54,10 @@ It binds compiler constant banks and allocates shared memory and scratch from bi
 Use dependency tokens when a read depends on an earlier global-memory write.
 The recurrent batch path instead keeps history and state in tiles until the sequence completes.
 
+BF16 matrix projections preserve two-dimensional pointer tiles through memory lowering.
+Their masked loads select padding explicitly because the pinned frontend expands scalar padding with rank one.
+FP32 matrix products and vector projections retain flattened loads, which measured faster for those paths.
+
 Add numerical cases to the GPU operator suite when the operation has complex behavior.
 Preserve partial-tile checks, buffer guards, and existing model tolerances.
 Measure the complete workload as well as individual kernels.

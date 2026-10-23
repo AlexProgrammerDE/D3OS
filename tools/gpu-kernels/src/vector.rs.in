@@ -19,12 +19,12 @@ unsafe fn vector_project_template<const BF16: bool, const GATED: bool>(a: *const
         let input: Tile<f32, { [1, 128] }> = input.reshape(shape![1, 128]);
         let x: Tile<f32, { [TILE_COLUMNS, 128] }> = input.broadcast(shape![TILE_COLUMNS, 128]);
         let index = col * broadcast_scalar(inner, shape![TILE_COLUMNS, 128]) + k;
-        let w: Tile<f32, { [TILE_COLUMNS, 128] }> = unsafe { read_weights::<BF16, TILE_COLUMNS, 128, FLAT_VALUES>(b, index, mask, shape![FLAT_VALUES]) };
+        let w: Tile<f32, { [TILE_COLUMNS, 128] }> = unsafe { read_weights::<BF16, false, TILE_COLUMNS, 128, FLAT_VALUES>(b, index, mask, shape![FLAT_VALUES]) };
         let x: Tile<f32, { [TILE_COLUMNS, 128] }> = x.reshape(shape![TILE_COLUMNS, 128]);
         let w: Tile<f32, { [TILE_COLUMNS, 128] }> = w.reshape(shape![TILE_COLUMNS, 128]);
         sum = fma(x, w, sum, rounding::NearestEven, ftz::Disabled);
         if GATED {
-            let w: Tile<f32, { [TILE_COLUMNS, 128] }> = unsafe { read_weights::<BF16, TILE_COLUMNS, 128, FLAT_VALUES>(up, index, mask, shape![FLAT_VALUES]) };
+            let w: Tile<f32, { [TILE_COLUMNS, 128] }> = unsafe { read_weights::<BF16, false, TILE_COLUMNS, 128, FLAT_VALUES>(up, index, mask, shape![FLAT_VALUES]) };
             let w: Tile<f32, { [TILE_COLUMNS, 128] }> = w.reshape(shape![TILE_COLUMNS, 128]);
             up_sum = fma(x, w, up_sum, rounding::NearestEven, ftz::Disabled);
         }
