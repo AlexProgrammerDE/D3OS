@@ -486,14 +486,45 @@ sha256sum --check <<'EOF'
 c1f538781281ec07841badf0f3972ed88e4f4b60b5aa7598139cadfa3d51a484  target/nvidia/linux-llama/llama-b11827-bin-ubuntu-cuda-12.8-x64.tar.gz
 cedf89af31c9041b601fa58303285bc46d99c51baee1b13f5e919626ca526ee5  target/nvidia/linux-model/Qwen3.5-0.8B-BF16.gguf
 EOF
-tar -xzf target/nvidia/linux-llama/llama-b11827-bin-ubuntu-cuda-12.8-x64.tar.gz \
-    -C target/nvidia/linux-llama
-python3 tools/nvidia/linux-reference.py --memory-mib 12288 \
-    --llama-directory target/nvidia/linux-llama/llama-b11827 \
-    --model target/nvidia/linux-model/Qwen3.5-0.8B-BF16.gguf
 ```
 
-For the FP32 comparison, convert the same model without quantization:
+Build the current D3OS image and prepare the [native Qwen assets](qwen.howto.md#prepare-the-model) before continuing.
+Use the existing Qwen Python environment for the model audit.
+The preparation tool downloads pinned llama.cpp headers and extracts the checked binary archive.
+If you used a separate exporter cache, add `--tokenizer-json PATH` to select its upstream `tokenizer.json`.
+The selected CPU IDs must name four available performance cores on your host.
+
+```bash
+set -e
+taskset -c 8,10,12,14 python3 tools/nvidia/run-qemu.py \
+    --firmware target/nvidia/firmware --kernels target/nvidia/kernels \
+    --memory-mib 12288 --boot-check --inference gpu-qwen-bench --timeout 180 \
+    > target/nvidia/d3os-qwen-bench.log 2>&1
+cp target/nvidia/vm/serial.log target/nvidia/d3os-qwen-bench-serial.log
+target/qwen-venv/bin/python tools/nvidia/prepare-linux-qwen.py \
+    --gguf target/nvidia/linux-model/Qwen3.5-0.8B-BF16.gguf \
+    --d3os-log target/nvidia/d3os-qwen-bench-serial.log
+taskset -c 8,10,12,14 python3 tools/nvidia/linux-reference.py --memory-mib 12288 \
+    --llama-directory target/nvidia/linux-llama/llama-b11827 \
+    --model target/nvidia/linux-model/Qwen3.5-0.8B-BF16.gguf \
+    --matched-qwen-input target/nvidia/matched-qwen
+cp target/nvidia/linux-reference/serial.log target/nvidia/linux-qwen-bench-serial.log
+target/qwen-venv/bin/python tools/nvidia/test-matched-qwen.py \
+    --gguf target/nvidia/linux-model/Qwen3.5-0.8B-BF16.gguf \
+    --d3os-log target/nvidia/d3os-qwen-bench-serial.log \
+    --linux-log target/nvidia/linux-qwen-bench-serial.log
+```
+
+The audit checks every text tensor and model setting against the native archive.
+It exports exactly 22 prompt tokens and 64 decode inputs, with FP32 caches and capacity for 256 tokens.
+Linux reports new-context and reset-context runs separately. Each reset clears model state instead of reusing the prompt.
+The launcher requires complete GPU offload and identical greedy choices across all six runs.
+The tests corrupt private model views and copied traces; the original model files stay unchanged.
+Read `target/nvidia/matched-qwen/manifest.json` and `target/nvidia/linux-reference/matched-qwen-manifest.json` for checksums and settings.
+Add `--llama-flash-attention off` to the Linux command to measure the unfused attention path.
+
+The older synthetic `llama-bench` mode remains available by omitting `--matched-qwen-input`.
+For its FP32 storage comparison, convert the same model without quantization:
 
 ```bash
 LD_LIBRARY_PATH="$PWD/target/nvidia/linux-llama/llama-b11827:/usr/local/lib/ollama/cuda_v12" \

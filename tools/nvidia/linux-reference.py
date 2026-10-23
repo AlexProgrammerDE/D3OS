@@ -67,7 +67,7 @@ def kernel_benchmark(root):
     copy_file(root, ROOT / "target/nvidia/kernels/inference.cubin", "/inference.cubin")
 
 
-def llama_benchmark(root, directory, model):
+def llama_libraries(root, directory):
     environment = dict(
         os.environ, LD_LIBRARY_PATH=f"{directory}:/usr/local/lib/ollama/cuda_v12"
     )
@@ -79,6 +79,10 @@ def llama_benchmark(root, directory, model):
             )
             for library in re.findall(r"/[^\s()]+", dependencies):
                 copy_file(root, library, Path("/lib64") / Path(library).name)
+
+
+def llama_benchmark(root, directory, model):
+    llama_libraries(root, directory)
     copy_file(root, model, "/model.gguf")
     benchmark = root / "benchmark"
     benchmark.write_text("""#!/bin/bash
@@ -88,6 +92,125 @@ export LD_LIBRARY_PATH=/bin:/lib64
 echo LINUX_LLAMA_BENCH_OK
 """)
     benchmark.chmod(0o755)
+
+
+def matched_qwen_benchmark(root, directory, source, model, inputs, flash_attention):
+    manifest = json.loads((inputs / "manifest.json").read_text())
+
+    def verify(path, expected):
+        with path.open("rb") as file:
+            actual = hashlib.file_digest(file, "sha256").hexdigest()
+        if actual != expected:
+            raise ValueError(f"matched benchmark checksum mismatch: {path}")
+
+    verify(model, manifest["gguf_sha256"])
+    verify(inputs / "tokens.bin", manifest["tokens_sha256"])
+    for name, expected in manifest["source_headers"].items():
+        verify(source / name, expected)
+    for name, expected in manifest["libraries"].items():
+        verify(directory / name, expected)
+    llama_libraries(root, directory)
+    binary = root / "bin/linux-qwen-bench"
+    subprocess.run(
+        [
+            "gcc",
+            "-std=c11",
+            "-O2",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-I",
+            str(source / "include"),
+            "-I",
+            str(source / "ggml/include"),
+            str(ROOT / "tools/nvidia/linux-qwen-bench.c"),
+            "-L",
+            str(directory),
+            f"-Wl,-rpath-link,{directory}",
+            "-lllama",
+            "-lggml",
+            "-lggml-base",
+            "-o",
+            str(binary),
+        ],
+        check=True,
+    )
+    for library in re.findall(
+        r"/[^\s()]+",
+        subprocess.check_output(
+            ["ldd", str(binary)],
+            text=True,
+            env=dict(os.environ, LD_LIBRARY_PATH=str(directory)),
+        ),
+    ):
+        copy_file(root, library)
+    copy_file(root, model, "/model.gguf")
+    copy_file(root, inputs / "tokens.bin", "/tokens.bin")
+    benchmark = root / "benchmark"
+    benchmark.write_text(f"""#!/bin/bash
+set -eux
+export LD_LIBRARY_PATH=/bin:/lib64
+/bin/linux-qwen-bench /model.gguf /tokens.bin {flash_attention}
+""")
+    benchmark.chmod(0o755)
+    manifest["flash_attention_requested"] = flash_attention
+    manifest["benchmark_source_sha256"] = hashlib.sha256(
+        (ROOT / "tools/nvidia/linux-qwen-bench.c").read_bytes()
+    ).hexdigest()
+    manifest["benchmark_binary_sha256"] = hashlib.sha256(
+        binary.read_bytes()
+    ).hexdigest()
+    (root.parent / "matched-qwen-manifest.json").write_text(
+        json.dumps(manifest, indent=2) + "\n"
+    )
+
+
+def validate_matched_qwen(text, manifest, flash_attention):
+    rows = re.findall(r"LINUX_MATCHED_QWEN_BENCH ([^\r\n]*)", text)
+    if len(rows) != 6 or "offloaded 25/25 layers to GPU" not in text:
+        raise ValueError("matched benchmark requires six runs and full GPU offload")
+    if "K (f32):" not in text or "V (f32):" not in text or "S (f32):" not in text:
+        raise ValueError(
+            "matched benchmark requires FP32 attention and recurrent caches"
+        )
+    checksum = 0
+    for token in manifest["decode_ids"]:
+        checksum = (checksum * 31 + token) % (1 << 64)
+    for index, row in enumerate(rows):
+        run = index % 3
+        fields = dict(re.findall(r"(\w+)=([^\s]+)", row))
+        expected = {
+            "mode": "new_context" if index < 3 else "reset_context",
+            "run": run,
+            "warm": "true" if run else "false",
+            "prompt_tokens": len(manifest["prompt_ids"]),
+            "decode_tokens": len(manifest["decode_ids"]),
+            "input_checksum": checksum,
+            "sampled_checksum": checksum,
+            "selection_mismatches": 0,
+            "cache": "f32",
+            "n_ctx": manifest["context_capacity"],
+            "batch": manifest["batch_size"],
+            "ubatch": manifest["batch_size"],
+            "sampler": "backend_greedy",
+            "flash_attention_requested": flash_attention,
+        }
+        if any(fields.get(key) != str(value) for key, value in expected.items()):
+            raise ValueError(
+                "Linux settings or greedy choices differ from the matched workload"
+            )
+    for phase, expected, count in [
+        ("prompt", manifest["prompt_ids"], 1),
+        ("decode_input", manifest["decode_ids"], 1),
+        ("sampled", manifest["decode_ids"], 6),
+    ]:
+        traces = re.findall(
+            rf"LINUX_MATCHED_QWEN_TOKENS phase={phase} run=-?\d+ ids=(\[.*?\])", text
+        )
+        if len(traces) != count or any(
+            json.loads(trace) != expected for trace in traces
+        ):
+            raise ValueError("Linux token trace differs from the matched workload")
 
 
 def doom_benchmark(root):
@@ -271,6 +394,15 @@ def main():
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--kernel-benchmark", action="store_true")
     parser.add_argument("--llama-directory", type=Path)
+    parser.add_argument("--matched-qwen-input", type=Path)
+    parser.add_argument(
+        "--llama-flash-attention", choices=("auto", "off"), default="auto"
+    )
+    parser.add_argument(
+        "--llama-source",
+        type=Path,
+        default=ROOT / "target/nvidia/linux-llama/source-b11827",
+    )
     parser.add_argument("--model", type=Path)
     parser.add_argument("--memory-mib", type=int, default=4096)
     parser.add_argument("--doom-benchmark", action="store_true")
@@ -284,6 +416,8 @@ def main():
         parser.error("select only one Linux reference workload")
     if bool(args.llama_directory) != bool(args.model):
         parser.error("--llama-directory and --model must be supplied together")
+    if args.matched_qwen_input and not args.llama_directory:
+        parser.error("--matched-qwen-input requires --llama-directory and --model")
     if args.memory_mib <= 0:
         parser.error("--memory-mib must be positive")
     args.directory = args.directory.resolve()
@@ -297,13 +431,21 @@ def main():
     if args.kernel_benchmark:
         kernel_benchmark(args.directory / "root")
     elif args.llama_directory:
-        if not args.model:
-            parser.error("--llama-directory requires --model")
-        llama_benchmark(
-            args.directory / "root",
-            args.llama_directory.resolve(),
-            args.model.resolve(),
-        )
+        if args.matched_qwen_input:
+            matched_qwen_benchmark(
+                args.directory / "root",
+                args.llama_directory.resolve(),
+                args.llama_source.resolve(),
+                args.model.resolve(),
+                args.matched_qwen_input.resolve(),
+                args.llama_flash_attention,
+            )
+        else:
+            llama_benchmark(
+                args.directory / "root",
+                args.llama_directory.resolve(),
+                args.model.resolve(),
+            )
     elif args.doom_benchmark:
         doom_benchmark(args.directory / "root")
     elif (args.directory / "root/benchmark").exists():
@@ -376,8 +518,19 @@ def main():
         )
     if args.kernel_benchmark and "LINUX_KERNEL_BENCH_OK" not in text:
         raise RuntimeError("Linux kernel benchmark did not pass")
-    if args.llama_directory and "LINUX_LLAMA_BENCH_OK" not in text:
-        raise RuntimeError("Linux llama benchmark did not pass")
+    if args.llama_directory:
+        marker = (
+            "LINUX_MATCHED_QWEN_OK"
+            if args.matched_qwen_input
+            else "LINUX_LLAMA_BENCH_OK"
+        )
+        if marker not in text:
+            raise RuntimeError("Linux llama benchmark did not pass")
+        if args.matched_qwen_input:
+            manifest = json.loads(
+                (args.matched_qwen_input / "manifest.json").read_text()
+            )
+            validate_matched_qwen(text, manifest, args.llama_flash_attention)
     if args.doom_benchmark and not re.search(
         r"LINUX_DOOM_ENGINE_REPORT timed \d+ gametics in \d+ realtics \([0-9.]+ fps\)",
         text,

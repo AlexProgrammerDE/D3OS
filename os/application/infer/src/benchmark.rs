@@ -227,7 +227,7 @@ pub(super) fn qwen(backend: &Nvidia) -> Result<(), String> {
     let tokenizer = read_file("/usr/share/inference/qwen3.5.bpe")?;
     let tokenizer = Tokenizer::parse(&tokenizer).map_err(|error| format!("{error}"))?;
     let prompt = tokenizer
-        .encode_chat("What country is largest by size? Answer briefly.")
+        .encode_chat(include_str!("../../../../tools/inference/qwen-benchmark.prompt"))
         .map_err(|error| format!("{error}"))?;
     let weights = read_file("/usr/share/inference/qwen3.5-0.8b.d3t")?;
     let file_ms = now() - start;
@@ -235,10 +235,12 @@ pub(super) fn qwen(backend: &Nvidia) -> Result<(), String> {
     let model = Qwen::load(backend, &weights).map_err(|error| format!("{error}"))?;
     let load_ms = now() - start;
     drop(weights);
+    report(format_args!("INFERENCE_BENCH_TOKENS phase=prompt ids={prompt:?}"));
     const DECODE: usize = 64;
+    const CAPACITY: usize = 256;
     for run in 0..3 {
         let start = now();
-        let mut session = model.session(backend, prompt.len() + DECODE).map_err(|error| format!("{error}"))?;
+        let mut session = model.session(backend, CAPACITY).map_err(|error| format!("{error}"))?;
         let state_ms = now() - start;
         let prefill_profile = if run == 1 {
             Some(backend.profile().map_err(|error| format!("{error}"))?)
@@ -249,6 +251,7 @@ pub(super) fn qwen(backend: &Nvidia) -> Result<(), String> {
         let mut logits = session.prefill(&prompt).map_err(|error| format!("{error}"))?;
         let prefill_ms = now() - start;
         let before = backend.profile().map_err(|error| format!("{error}"))?;
+        let mut tokens = Vec::with_capacity(DECODE);
         let start = now();
         let mut checksum = 0u64;
         // Fixed-length synthetic decode measures work after EOS too, like a
@@ -256,6 +259,7 @@ pub(super) fn qwen(backend: &Nvidia) -> Result<(), String> {
         for _ in 0..DECODE {
             let token = qwen::greedy(backend, &logits).map_err(|error| format!("{error}"))?;
             checksum = checksum.wrapping_mul(31).wrapping_add(u64::from(token));
+            tokens.push(token);
             logits = session.step(token).map_err(|error| format!("{error}"))?;
         }
         let decode_ms = now() - start;
@@ -267,12 +271,13 @@ pub(super) fn qwen(backend: &Nvidia) -> Result<(), String> {
             profile(&before, &after, "decode");
         }
         report(format_args!(
-            "INFERENCE_BENCH qwen backend=nvidia run={run} warm={} file_ms={file_ms} load_ms={load_ms} state_ms={state_ms} prompt_tokens={} prefill_ms={prefill_ms} prefill_tps={:.3} decode_tokens={DECODE} decode_ms={decode_ms} decode_tps={:.3} checksum={checksum}",
+            "INFERENCE_BENCH qwen backend=nvidia run={run} warm={} file_ms={file_ms} load_ms={load_ms} state_ms={state_ms} session_capacity={CAPACITY} prompt_tokens={} prefill_ms={prefill_ms} prefill_tps={:.3} decode_tokens={DECODE} decode_ms={decode_ms} decode_tps={:.3} checksum={checksum}",
             run != 0,
             prompt.len(),
             prompt.len() as f64 * 1000. / prefill_ms.max(1) as f64,
             DECODE as f64 * 1000. / decode_ms.max(1) as f64
         ));
+        report(format_args!("INFERENCE_BENCH_TOKENS phase=decode run={run} ids={tokens:?}"));
     }
     let fixture = read_file("/usr/share/inference/qwen-fixture.d3t")?;
     let positions = qwen::verify_fixture(&model, backend, &fixture).map_err(|error| format!("{error}"))?;

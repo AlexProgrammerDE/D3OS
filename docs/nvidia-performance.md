@@ -14,7 +14,7 @@ Those libraries remain inside the reference guest. D3OS does not link or load th
 The resident-model benchmarks separate file access, model upload, session allocation, prompt processing, and generation.
 Reference comparisons run after the timed work.
 AlexNet reports 20 forward passes after one warmup pass.
-Qwen reports three independent sessions with a 22-token prompt and 64 decode steps.
+Qwen reports three independent sessions with a 22-token prompt, 64 decode steps, and capacity for 256 tokens.
 The decode loop continues after EOS to measure a fixed amount of work.
 Its checksum describes benchmark work, not a conversational answer.
 
@@ -33,7 +33,7 @@ Measurements on 2026-10-22 and 2026-10-23:
 
 | Workload | Initial resident baseline | After native optimizations |
 | --- | ---: | ---: |
-| Qwen warm generation | 7.04 to 7.36 tokens/s | 146.79 to 156.86 tokens/s |
+| Qwen warm generation | 7.04 to 7.36 tokens/s | 145.45 to 157.25 tokens/s |
 | Qwen warm prompt processing | 7.76 to 7.81 tokens/s | 1047.62 to 1157.89 tokens/s |
 | AlexNet forward pass | 10.0 ms | 1.45 to 1.55 ms |
 | DOOM uncapped `demo1` | 536.84 to 676.89 FPS with word storage | 1290.65 to 1439.86 FPS with resident byte textures |
@@ -71,12 +71,12 @@ taskset -c 8,10,12,14 python3 tools/nvidia/linux-reference.py --doom-benchmark
 
 These CPU IDs are machine-specific. The earlier Qwen Linux measurements used unrestricted host affinity.
 A new BF16 reference on these pinned cores reports 264.90 tokens/s and shuts down cleanly.
-The other model-comparison limitations below still apply.
+Those earlier results remain historical. The matched benchmark below replaces them for current model comparisons.
 
 The Linux llama.cpp reference uses build `b11827`, full GPU offload, and three repetitions.
 The earlier unrestricted runs report about 250 tokens/s with BF16 weights and 156 tokens/s with FP32 weights.
 The FP32 file is a conversion of the same BF16 GGUF file without quantization.
-The Linux reference retains its default FP16 attention cache. D3OS uses FP32 state.
+The earlier `llama-bench` reference retains its default FP16 attention cache. D3OS uses FP32 state.
 Both benchmarks request 22 prompt tokens and 64 generated tokens, but they use different token sequences.
 The Linux hybrid-model benchmark can round prompt work to its required chunk size.
 Its reported prompt throughput therefore cannot serve as an exact 22-token latency comparison.
@@ -84,6 +84,69 @@ These results establish the remaining gap, rather than an exact application spee
 
 The GGUF reference comes from `unsloth/Qwen3.5-0.8B-GGUF` revision `6ab461498e2023f6e3c1baea90a8f0fe38ab64d0`.
 The D3OS archive retains the pinned Qwen revision and original Transformers fixture described in [the Qwen guide](qwen.howto.md).
+
+## Matched Qwen reference
+
+The accepted comparison uses the same 22 prompt tokens, 64 decode inputs, batch limit of 32, and 256-token cache capacity.
+Both guests use four virtual CPUs on host CPUs 8, 10, 12, and 14, with 12 GiB of guest RAM.
+Attention caches, convolution history, and recurrent state use FP32 in both implementations.
+Linux uses llama.cpp `b11827` with full GPU offload and backend greedy selection.
+Automatic Flash Attention resolves to the enabled CUDA path in the accepted run.
+Each decode step waits for the complete model result. D3OS also waits after its individual kernel submissions.
+
+The weight audit covers all 320 text tensors and 19 model settings.
+All 187 BF16 tensors match bit for bit.
+The other 133 tensors match exact FP32 expansion or the converter's normalization and decay transformations.
+Recomputed negative exponentials differ by at most two FP32 rounding units across the local and converter implementations.
+Other converted tensors match exactly. The inference reference tolerances remain unchanged.
+The archive hash, source checkpoint, GGUF hash, headers, libraries, and token contract are recorded in manifests.
+
+D3OS exports its complete token traces outside the timed intervals.
+The preparation tool independently checks the prompt with the pinned upstream tokenizer.
+Linux feeds the exported decode tokens and separately computes every greedy choice.
+All 12 Linux sessions across two VMs reproduce all 64 D3OS choices, with checksum `11137929795425568356`.
+The launcher checks the full traces, actual FP32 cache reports, settings, offload, and evaluated token counts.
+A differing greedy choice rejects the accepted comparison instead of silently changing the workload.
+
+Accepted paired measurements on the RTX 4090 Laptop GPU, with two VMs per operating system:
+
+| Phase | D3OS | Linux, new context | Linux, reset context |
+| --- | ---: | ---: | ---: |
+| Read model into RAM | 1,794 to 1,925 ms | 5,543 to 7,077 ms | Same resident model |
+| Load model from RAM | 1,932 to 2,268 ms | 815 to 1,148 ms | Same resident model |
+| Create or reset session state | 6 to 22 ms | 308 to 375 ms | 0.062 to 0.068 ms after creation |
+| First prompt after model load | 146 to 160 ms | 194 to 306 ms | Already warmed |
+| Warm 22-token prompt | 19 to 21 ms | 6.78 to 6.90 ms | 6.32 to 6.43 ms |
+| Warm prompt throughput | 1047.62 to 1157.89 tokens/s | 3187.02 to 3246.19 tokens/s | 3423.12 to 3479.17 tokens/s |
+| First 64-step decode | 462 to 465 ms | 251 to 260 ms | Already warmed |
+| Warm 64-step decode | 407 to 440 ms | 245.35 to 248.14 ms | 245.97 to 247.49 ms |
+| Warm generation | 145.45 to 157.25 tokens/s | 257.92 to 260.85 tokens/s | 258.60 to 260.19 tokens/s |
+
+The first Linux model call includes initial kernel and graph setup.
+These first-use values do not establish an uncached driver-installation cost.
+New-context measurements match D3OS's independent-session structure.
+Reset-context measurements retain Linux's context and graph allocations, with cleared model state and no prompt-cache reuse.
+They provide a second target for a service that keeps its inference context alive.
+Linux's long context-creation time remains outside the throughput intervals, just as D3OS session allocation does.
+
+Both model files enter guest RAM before model loading starts.
+Linux uses a private RAM file and disables model mmap. Its loader completes asynchronous weight uploads before returning.
+Filesystem paths and archive layouts differ, so the file and load measurements do not establish identical storage performance.
+Linux computes backend greedy selection with its model graph, including one unused candidate after the final decode step.
+D3OS selects immediately before each decode step. This shifts one selection across the prompt/decode timing boundary.
+The measured 64 choices and model inputs still match exactly.
+
+Intermediate arithmetic can still differ between implementations.
+The library's [BF16 GEMM path](https://github.com/ggml-org/llama.cpp/blob/b11827/ggml/src/ggml-cuda/ggml-cuda.cu) can convert activation operands to BF16 while accumulating in FP32.
+D3OS retains FP32 activations through compensated TF32 decomposition.
+Matching weights, cache storage, and token work does not establish identical intermediate rounding for every operator.
+A separate precision policy must be measured explicitly before adopting lower-precision native operands.
+
+The matched result confirms roughly a threefold prompt-latency gap and a 1.6 to 1.8 times decode-latency gap across these pairs.
+Host performance still varies; these samples do not promise a fixed ratio for other prompts or context lengths.
+The profile continues to identify native projection work and synchronous submission as major decode costs.
+Prompt attention still requires separate scoring, softmax, and output launches for each token.
+Read the [Linux comparison procedure](nvidia-vfio.howto.md#compare-against-linux) to reproduce the audit and both guests.
 
 ## Changes that reduce overhead
 
@@ -225,7 +288,7 @@ Their share of prompt dispatch cycles falls from about 30% to 16–17%.
 An intermediate batch implementation without private state measured about 9.05 million recurrent dispatch cycles.
 These profiles include CPU submission and completion polling; they do not isolate GPU execution.
 
-The final two VMs report warm prompt times of 20, 20, 21, and 19 ms, or 1047.62 to 1157.89 tokens/s.
+The recurrent-kernel validation VMs report warm prompt times of 20, 20, 21, and 19 ms, or 1047.62 to 1157.89 tokens/s.
 Their first prompt takes 146 and 156 ms, excluding file access and weight upload.
 Warm generation spans 146.79 to 156.86 tokens/s, with the existing checksum.
 Both VMs pass every sequential and batched layer, vocabulary, greedy-token, and final-cache comparison.
@@ -364,12 +427,13 @@ Attention scoring, softmax, and output still launch separately for every token a
 Recurrent updates now use one launch per layer and prompt chunk.
 The latest prompt profiles put recurrent work at 16–17% of dispatch cycles.
 The next improvements must address attention, the remaining matrix kernels, and submission costs.
-The Linux prompt result still uses different tokens, archive provenance, and cache precision; a fully matched model benchmark remains necessary.
+The matched benchmark now uses identical token work, audited weights, FP32 caches, and equal cache capacity.
+Longer contexts and prompts still need matched measurements.
 The CPU token-selection work now combines only 32 GPU candidates.
 Each change must preserve the existing model reference or define and measure a separate precision policy.
 
 The large projection kernels now match Linux device throughput for the measured shapes.
-This does not establish model parity: Qwen still generates about 147 to 157 tokens/s, compared with about 265 tokens/s in the pinned Linux BF16 reference.
+This does not establish model parity: The current paired runs generate about 145 to 157 tokens/s, compared with about 258 to 261 tokens/s in the matched Linux reference.
 The remaining work must reduce complete model latency, rather than optimize already comparable streaming bandwidth.
 
 DOOM still transfers packed indexed frames for CPU HUD composition and copies RGB output into the console framebuffer.
@@ -407,3 +471,6 @@ The collective annotations follow the [Rust assembly options](https://doc.rust-l
 The BF16 precision argument follows NVIDIA's [alternate floating-point format definitions](https://docs.nvidia.com/cuda/parallel-thread-execution/#alternate-floating-point-data-formats).
 TF32 register encoding is implementation-defined, so the Rust kernels retain explicit PTX conversion instructions.
 The independent Rust split-reduction design follows the parallel reduction approach described in NVIDIA's [CUTLASS GEMM guide](https://docs.nvidia.com/cutlass/latest/media/docs/cpp/efficient_gemm.html).
+
+The matched reference uses the pinned [llama.cpp C API](https://github.com/ggml-org/llama.cpp/blob/b11827/include/llama.h).
+The weight audit follows its [Qwen conversion rules](https://github.com/ggml-org/llama.cpp/blob/b11827/conversion/qwen.py).
