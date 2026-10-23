@@ -171,11 +171,11 @@ impl Nvidia {
 
     fn produce(&self, shape: &[usize], kernel: Kernel, inputs: &[(&GpuBuffer, usize)], parameters: &[usize]) -> Result<Tensor<Self>> {
         let elements = element_count(shape)?;
-        Tensor::from_buffer(shape, self.produce_storage(elements, kernel, inputs, parameters, Storage::F32)?)
+        Tensor::from_buffer(shape, self.produce_storage(elements, kernel, inputs, parameters, Storage::F32, &[])?)
     }
 
     fn produce_storage<T>(
-        &self, elements: usize, kernel: Kernel, inputs: &[(&GpuBuffer, usize)], parameters: &[usize], storage: Storage,
+        &self, elements: usize, kernel: Kernel, inputs: &[(&GpuBuffer, usize)], parameters: &[usize], storage: Storage, before: &[Request],
     ) -> Result<GpuBuffer<T>> {
         element_count(&[elements])?;
         let (mut call, work) = self.command(kernel, parameters)?;
@@ -185,6 +185,11 @@ impl Nvidia {
         Self::bind(&mut call, inputs, &work.extents[..inputs.len()])?;
         call.operation = abi::LAUNCH_ALLOCATE;
         call.elements = elements as u64;
+        // Validate the consumer before any cache-writing prelude. Its output
+        // stays private until the complete writer finishes successfully.
+        for &prelude in before {
+            request(prelude)?;
+        }
         let handle = request(call)? as u64;
         Ok(GpuBuffer {
             handle,
@@ -318,7 +323,7 @@ impl Backend for Nvidia {
     fn argmax(&self, input: &Tensor<Self>) -> Result<usize> {
         // Each of 32 warps returns an exact index and value. Combining 32 pairs
         // avoids downloading and scanning the complete vocabulary on the CPU.
-        let output = self.produce_storage(64, Kernel::ArgMax, &[(&input.buffer, 0)], &[input.len()], Storage::Words)?;
+        let output = self.produce_storage(64, Kernel::ArgMax, &[(&input.buffer, 0)], &[input.len()], Storage::Words, &[])?;
         let mut partials = [0u32; 64];
         self.read_words_into(&output, 0, &mut partials)?;
         let mut best = (usize::MAX, f32::NEG_INFINITY);

@@ -213,6 +213,7 @@ fn compare_traces(actual: &[Vec<f32>], expected: &[Vec<f32>], name: &str) -> cor
 
 pub(super) fn run(backend: &Nvidia) -> core::result::Result<(), String> {
     preparation(backend)?;
+    fused_attention(backend)?;
     recurrent_guards(backend).map_err(|e| format!("recurrent batch guards: {e}"))?;
     let table = backend
         .upload_words(&[1f32.to_bits(), 2f32.to_bits(), 3f32.to_bits(), 4f32.to_bits(), 5f32.to_bits(), 6f32.to_bits()])
@@ -258,7 +259,7 @@ pub(super) fn run(backend: &Nvidia) -> core::result::Result<(), String> {
     let pointwise_gpu = pointwise(backend).map_err(|error| format!("{error}"))?;
     let pointwise_cpu = pointwise(&Cpu).map_err(|error| format!("{error}"))?;
     super::compare(&pointwise_gpu, &pointwise_cpu, "transformer pointwise")?;
-    for (heads, kv_heads, head_dim, rotary_dim) in [(4, 2, 10, 6), (8, 2, 256, 64)] {
+    for (heads, kv_heads, head_dim, rotary_dim) in [(4, 2, 10, 6), (8, 2, 256, 64), (2, 1, 257, 64)] {
         let config = AttentionConfig {
             heads,
             kv_heads,
@@ -288,7 +289,7 @@ pub(super) fn run(backend: &Nvidia) -> core::result::Result<(), String> {
         compare_traces(&batch, &batched_trace(&cpu), "batched delta")?;
     }
     super::super::report(format_args!(
-        "NVIDIA_TRANSFORMER_OPERATORS_OK attention_cases=14 delta_cases=42 batch_attention_rows=14 batch_delta_rows=42 backend=nvidia"
+        "NVIDIA_TRANSFORMER_OPERATORS_OK attention_cases=21 delta_cases=42 batch_attention_rows=21 batch_delta_rows=42 backend=nvidia"
     ));
     Ok(())
 }
@@ -413,6 +414,87 @@ fn recurrent_guards(backend: &Nvidia) -> Result<()> {
             let actual: Vec<_> = actual[1..actual.len() - 1].iter().map(|&v| f32::from_bits(v)).collect();
             super::compare(&actual, &expected, "recurrent batch storage").map_err(|_| d3os_compute::Error::DeviceFault)?;
         }
+    }
+    Ok(())
+}
+
+fn fused_attention(backend: &Nvidia) -> core::result::Result<(), String> {
+    use d3os_nvidia::compute::Kernel;
+    const GUARD: u32 = 0xd305abcd;
+    for (rows, heads, kv_heads, dim, position, large) in [
+        (1, 1, 1, 1, 0, false),
+        (3, 4, 2, 10, 5, false),
+        (3, 4, 2, 129, 127, false),
+        (2, 8, 2, 256, 255, false),
+        (1, 2, 1, 31, 1024, false),
+        (2, 2, 2, 256, 1023, false),
+        (1, 1, 1, 1, 128, true),
+    ] {
+        let run = || -> Result<_> {
+            let width = heads * dim;
+            let positions = position + rows;
+            let upload = |values: Vec<f32>| {
+                let mut words = Vec::with_capacity(values.len() + 2);
+                words.push(GUARD);
+                words.extend(values.into_iter().map(f32::to_bits));
+                words.push(GUARD);
+                backend.upload_words(&words)
+            };
+            let query = upload((0..rows * width).map(|i| 0.25 + (i * 11 % 31) as f32 / 32.).collect())?;
+            let keys = upload(
+                (0..positions * kv_heads * dim)
+                    .map(|i| {
+                        if large {
+                            0.
+                        } else {
+                            let sign = if i / dim % kv_heads % 2 == 0 { 1. } else { -1. };
+                            ((i * 37 % 127) as f32 - 63.) / 127. + (i / (kv_heads * dim)) as f32 * 0.004 * sign
+                        }
+                    })
+                    .collect(),
+            )?;
+            let values = upload(
+                (0..positions * kv_heads * dim)
+                    .map(|i| if large { 1e37 } else { ((i * 73 % 251) as f32 - 125.) / 127. })
+                    .collect(),
+            )?;
+            let gate = upload((0..rows * width * 2).map(|i| ((i * 13 % 71) as f32 - 35.) / 41.).collect())?;
+            let expected = backend.upload_words(&vec![GUARD; rows * width + 2])?;
+            let actual = backend.upload_words(&vec![GUARD; rows * width + 2])?;
+            let scores = backend.allocate_words(heads * positions)?;
+            for row in 0..rows {
+                let visible = position + row + 1;
+                backend.dispatch_words(
+                    Kernel::AttentionScores,
+                    &[(&query, 1 + row * width), (&keys, 1), (&scores, 0)],
+                    &[heads, kv_heads, dim, visible],
+                )?;
+                backend.dispatch_words(Kernel::Softmax, &[(&scores, 0), (&scores, 0)], &[heads, visible])?;
+                backend.dispatch_words(
+                    Kernel::AttentionOutput,
+                    &[(&scores, 0), (&values, 1), (&gate, 1 + row * width * 2), (&expected, 1 + row * width)],
+                    &[heads, kv_heads, dim, visible],
+                )?;
+            }
+            backend.dispatch_words(
+                Kernel::AttentionFusedBatch,
+                &[(&query, 1), (&keys, 1), (&values, 1), (&gate, 1), (&actual, 1)],
+                &[rows, heads, kv_heads, dim, position],
+            )?;
+            let mut old = vec![0; rows * width + 2];
+            let mut new = old.clone();
+            backend.read_words_into(&expected, 0, &mut old)?;
+            backend.read_words_into(&actual, 0, &mut new)?;
+            if old[0] != GUARD || new[0] != GUARD || old[old.len() - 1] != GUARD || new[new.len() - 1] != GUARD {
+                return Err(d3os_compute::Error::DeviceFault);
+            }
+            Ok((
+                old[1..old.len() - 1].iter().map(|&v| f32::from_bits(v)).collect::<Vec<_>>(),
+                new[1..new.len() - 1].iter().map(|&v| f32::from_bits(v)).collect::<Vec<_>>(),
+            ))
+        };
+        let (expected, actual) = run().map_err(|e| format!("fused attention {rows}x{heads}x{dim} position={position}: {e}"))?;
+        super::compare(&actual, &expected, "streaming attention")?;
     }
     Ok(())
 }

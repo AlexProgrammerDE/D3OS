@@ -165,6 +165,13 @@ The NVIDIA backend prepares all attention queries and keys cooperatively, with o
 Each warp combines its normalization sum and rotates independent pairs without global scratch reads.
 The backend copies the value batch once, then scores each token against only its causal cache prefix.
 It checks the complete attention request list before the first cache write.
+For head dimensions up to 256, one block per token and head fuses scoring, softmax, value accumulation, and output gating.
+The block streams the causal prefix in tiles of 128 positions, with a running maximum and normalization mass.
+It normalizes each tile's weights before multiplying values and rescales the previous normalized output when the maximum changes.
+This keeps the intermediate storage bounded and avoids overflow from an unnormalized sum of large finite values.
+All attention arithmetic remains FP32. Larger head dimensions retain the separate operator path.
+The fused path allocates its complete output during dispatch and removes the separate score tensor.
+The backend checks the consumer and cache-write requests before executing the cache updates.
 For supported recurrent dimensions, one block per head processes an entire prompt chunk in token order.
 The block retains private recurrent state across rows and writes the final state when the chunk completes.
 Eight value columns share each warp, limiting the batch block to 512 threads.

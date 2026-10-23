@@ -140,7 +140,12 @@ def main():
                                 f"{entry} has no expected byte memory instructions"
                             )
                     tensor["byte_raster_sass_verified"] = True
-                    for entry in ("rms_norm", "delta_fused", "delta_fused_batch"):
+                    for entry in (
+                        "rms_norm",
+                        "delta_fused",
+                        "delta_fused_batch",
+                        "attention_fused_batch",
+                    ):
                         body = re.search(
                             rf"^\.text\.{entry}:$(.*?)(?=^\.text\.|\Z)",
                             sass,

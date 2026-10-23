@@ -37,3 +37,25 @@ pub(super) unsafe fn broadcast(value: f32) -> f32 {
     }
     result
 }
+
+#[inline(always)]
+unsafe fn max_partner<const SHIFT: u32>(value: f32) -> f32 {
+    let other: f32;
+    unsafe {
+        asm!("shfl.sync.bfly.b32 {d}, {a}, {shift}, 31, -1;",
+            d = out(reg32) other, a = in(reg32) value, shift = const SHIFT,
+            options(nostack));
+    }
+    value.max(other)
+}
+
+/// # Safety
+/// Every lane in the full warp executes this function in the same order.
+#[inline(always)]
+pub(super) unsafe fn maximum(mut value: f32) -> f32 {
+    value = unsafe { max_partner::<16>(value) };
+    value = unsafe { max_partner::<8>(value) };
+    value = unsafe { max_partner::<4>(value) };
+    value = unsafe { max_partner::<2>(value) };
+    unsafe { max_partner::<1>(value) }
+}

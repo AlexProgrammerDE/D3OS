@@ -33,8 +33,8 @@ Measurements on 2026-10-22 and 2026-10-23:
 
 | Workload | Initial resident baseline | After native optimizations |
 | --- | ---: | ---: |
-| Qwen warm generation | 7.04 to 7.36 tokens/s | 145.45 to 157.25 tokens/s |
-| Qwen warm prompt processing | 7.76 to 7.81 tokens/s | 1047.62 to 1157.89 tokens/s |
+| Qwen warm generation | 7.04 to 7.36 tokens/s | 154.59 to 162.85 tokens/s |
+| Qwen warm prompt processing | 7.76 to 7.81 tokens/s | 1466.67 tokens/s |
 | AlexNet forward pass | 10.0 ms | 1.45 to 1.55 ms |
 | DOOM uncapped `demo1` | 536.84 to 676.89 FPS with word storage | 1290.65 to 1439.86 FPS with resident byte textures |
 
@@ -55,7 +55,7 @@ The fresh per-batch baseline reports 880.19, 880.19, and 980.69 FPS.
 The resident version reports 1431.58, 1431.58, and 1439.86 FPS.
 Both render 7,116 frames across the same 7,117-tick demo, with the same WAD and host affinity.
 The GPU shader bundle is identical in these six runs.
-Later inference-kernel regression runs report 1290.65 and 1407.32 FPS with the resident renderer.
+Later inference-kernel regression runs report 1290.65, 1407.32, and 1376.22 FPS with the resident renderer.
 The final run retains the same 7,116 frames, upload counts, and five buffer-growth clears.
 These later samples remain included in the table's range; they do not establish a rendering speedup from the inference changes.
 
@@ -108,19 +108,20 @@ All 12 Linux sessions across two VMs reproduce all 64 D3OS choices, with checksu
 The launcher checks the full traces, actual FP32 cache reports, settings, offload, and evaluated token counts.
 A differing greedy choice rejects the accepted comparison instead of silently changing the workload.
 
-Accepted paired measurements on the RTX 4090 Laptop GPU, with two VMs per operating system:
+Current measurements use three D3OS VMs with fused attention and the two matched Linux reference VMs on the same GPU.
+Every prompt and decode token in the new D3OS runs still matches those Linux references.
 
 | Phase | D3OS | Linux, new context | Linux, reset context |
 | --- | ---: | ---: | ---: |
-| Read model into RAM | 1,794 to 1,925 ms | 5,543 to 7,077 ms | Same resident model |
-| Load model from RAM | 1,932 to 2,268 ms | 815 to 1,148 ms | Same resident model |
-| Create or reset session state | 6 to 22 ms | 308 to 375 ms | 0.062 to 0.068 ms after creation |
-| First prompt after model load | 146 to 160 ms | 194 to 306 ms | Already warmed |
-| Warm 22-token prompt | 19 to 21 ms | 6.78 to 6.90 ms | 6.32 to 6.43 ms |
-| Warm prompt throughput | 1047.62 to 1157.89 tokens/s | 3187.02 to 3246.19 tokens/s | 3423.12 to 3479.17 tokens/s |
-| First 64-step decode | 462 to 465 ms | 251 to 260 ms | Already warmed |
-| Warm 64-step decode | 407 to 440 ms | 245.35 to 248.14 ms | 245.97 to 247.49 ms |
-| Warm generation | 145.45 to 157.25 tokens/s | 257.92 to 260.85 tokens/s | 258.60 to 260.19 tokens/s |
+| Read model into RAM | 1,683 to 2,056 ms | 5,543 to 7,077 ms | Same resident model |
+| Load model from RAM | 1,900 to 1,988 ms | 815 to 1,148 ms | Same resident model |
+| Create or reset session state | 6 to 20 ms | 308 to 375 ms | 0.062 to 0.068 ms after creation |
+| First prompt after model load | 129 to 130 ms | 194 to 306 ms | Already warmed |
+| Warm 22-token prompt | 15 ms | 6.78 to 6.90 ms | 6.32 to 6.43 ms |
+| Warm prompt throughput | 1466.67 tokens/s | 3187.02 to 3246.19 tokens/s | 3423.12 to 3479.17 tokens/s |
+| First 64-step decode | 442 to 458 ms | 251 to 260 ms | Already warmed |
+| Warm 64-step decode | 393 to 414 ms | 245.35 to 248.14 ms | 245.97 to 247.49 ms |
+| Warm generation | 154.59 to 162.85 tokens/s | 257.92 to 260.85 tokens/s | 258.60 to 260.19 tokens/s |
 
 The first Linux model call includes initial kernel and graph setup.
 These first-use values do not establish an uncached driver-installation cost.
@@ -142,10 +143,10 @@ D3OS retains FP32 activations through compensated TF32 decomposition.
 Matching weights, cache storage, and token work does not establish identical intermediate rounding for every operator.
 A separate precision policy must be measured explicitly before adopting lower-precision native operands.
 
-The matched result confirms roughly a threefold prompt-latency gap and a 1.6 to 1.8 times decode-latency gap across these pairs.
+The matched result confirms a prompt-latency gap of about 2.2 to 2.4 times and a decode-latency gap of about 1.6 to 1.7 times.
 Host performance still varies; these samples do not promise a fixed ratio for other prompts or context lengths.
 The profile continues to identify native projection work and synchronous submission as major decode costs.
-Prompt attention still requires separate scoring, softmax, and output launches for each token.
+Prompt attention now uses one fused launch per attention layer; projection work still dominates the remaining interval.
 Read the [Linux comparison procedure](nvidia-vfio.howto.md#compare-against-linux) to reproduce the audit and both guests.
 
 ## Changes that reduce overhead
@@ -296,6 +297,35 @@ Operator checks also compare guarded batch buffers against consecutive single-to
 They retain the existing numerical tolerances, including for the changed batch reduction order.
 The input guards and read-only contents remain exact.
 
+Attention now fuses scores, softmax, value accumulation, and gating for an entire token batch.
+One 128-thread block owns each token and query head, with grouped heads selecting their corresponding key/value head.
+The block streams 128-position tiles and retains its running maximum, normalization mass, and normalized output.
+It rescales earlier contributions when a later tile raises the maximum.
+Weights are normalized before value multiplication, which avoids overflow from a large unnormalized weighted sum.
+All query, key, value, and accumulator values remain FP32.
+Head dimensions up to 256 use this kernel; larger dimensions retain the existing separate kernels.
+
+Each block uses 540 bytes of static shared storage, independent of prefix length.
+The driver allocates 1,664 bytes including CUDA's reserved prefix and alignment.
+The assembled entrypoint uses 43 registers, without local stack storage or register spills.
+The build checks its shared loads, stores, and block barriers in SASS.
+The SDK validates the complete consumer before executing its checked cache-write requests.
+The output uses a full-writer allocation, without a score tensor or output clear.
+
+In the 22-token prompt profile, 396 scoring, softmax, and output calls become six fused calls.
+Their dispatch cycles fall from 11.07 million to 0.23 million, with the same token work and cache capacity.
+Prefill clear calls fall from 13 to one. Across 64 decode steps, clear calls fall from 832 to 64.
+In the profiled decode interval, the three attention kernels previously used 49.73 million dispatch cycles; the fused kernel uses about 30.8 million.
+These counters include CPU submission and completion waiting, rather than isolated GPU execution.
+
+All six warm sessions across three new VMs report 15 ms for the 22-token prompt, compared with 19–21 ms in the preceding matched runs.
+Warm generation spans 154.59 to 162.85 tokens/s. These overlapping ranges do not establish a fixed generation gain percentage.
+Every new run passes the complete model fixture and matches the previous Linux prompt and decode traces exactly.
+Raw guarded checks cover partial dimensions, multiple cache tiles, rising and falling score maxima, and prefixes through 1,025 positions.
+A large-value case also remains finite where an unnormalized sum would overflow.
+The independent CPU operator suite checks the fused path and a 257-dimensional fallback, with unchanged tolerances.
+The final AlexNet regression reports 1.45 ms per forward pass. DOOM passes its full pixel checks and reports 1376.22 FPS.
+
 The independent fixture now checks sequential and batched execution across all 24 layers and all vocabulary logits at 29 positions.
 Its batches use 17 and 12 tokens to exercise cache continuation at a nonzero position.
 It compares greedy selections and final attention, convolution, and recurrent cache contents.
@@ -379,7 +409,7 @@ It records 24,975,852 cache hits and 44,594 new snapshots, without atlas rollove
 `NVIDIA_DOOM_UPLOAD_PROFILE` reports uploaded bytes, hits, new snapshots, rollover count, and buffer growth count.
 
 Verification uses a 16 KiB atlas to force rollover within live draw batches.
-The earlier 600-frame test reports 6,474 resets; the latest regression reports 6,488.
+The earlier 600-frame test reports 6,474 resets; the latest regression reports 6,447.
 Both match C-rendered pixels, including low detail and fuzz feedback.
 The launcher requires rollover coverage and checks that GPU inference still works after game exit.
 The byte operator suite also checks incremental updates, shrinking odd-length writes, padding, untouched guards, and rejected ranges.
@@ -423,17 +453,17 @@ CPU cycles are useful within a run and are not a portable time unit across machi
 ## Remaining work
 
 Qwen now batches prompt matrices but still submits synchronous operations separately.
-Attention scoring, softmax, and output still launch separately for every token and attention layer.
+Attention scoring, softmax, and output now share one tiled launch per attention layer and prompt chunk.
 Recurrent updates now use one launch per layer and prompt chunk.
-The latest prompt profiles put recurrent work at 16–17% of dispatch cycles.
-The next improvements must address attention, the remaining matrix kernels, and submission costs.
+The latest prompt profile puts projections and their partial reductions at about 68% of dispatch cycles, and recurrent work at about 22%.
+The next improvements must address matrix efficiency, recurrent execution, and submission costs.
 The matched benchmark now uses identical token work, audited weights, FP32 caches, and equal cache capacity.
 Longer contexts and prompts still need matched measurements.
 The CPU token-selection work now combines only 32 GPU candidates.
 Each change must preserve the existing model reference or define and measure a separate precision policy.
 
 The large projection kernels now match Linux device throughput for the measured shapes.
-This does not establish model parity: The current paired runs generate about 145 to 157 tokens/s, compared with about 258 to 261 tokens/s in the matched Linux reference.
+The current native runs generate about 155 to 163 tokens/s, compared with about 258 to 261 tokens/s in the matched Linux reference.
 The remaining work must reduce complete model latency, rather than optimize already comparable streaming bandwidth.
 
 DOOM still transfers packed indexed frames for CPU HUD composition and copies RGB output into the console framebuffer.
@@ -474,3 +504,6 @@ The independent Rust split-reduction design follows the parallel reduction appro
 
 The matched reference uses the pinned [llama.cpp C API](https://github.com/ggml-org/llama.cpp/blob/b11827/include/llama.h).
 The weight audit follows its [Qwen conversion rules](https://github.com/ggml-org/llama.cpp/blob/b11827/conversion/qwen.py).
+
+The tiled attention design uses the running softmax normalization described in [FlashAttention](https://arxiv.org/abs/2205.14135).
+This Rust kernel retains FP32 operands and does not reuse the Linux library's attention kernels.

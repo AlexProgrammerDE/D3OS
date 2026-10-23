@@ -173,6 +173,39 @@ impl TransformerBackend for Nvidia {
             &[(&input.query_gate.buffer, 0), (&input.query_norm.buffer, 0)],
             &parameters(heads, 2),
         )?;
+        if dim <= 256 {
+            let before = [
+                self.prepare(
+                    Kernel::AttentionPrepareBatch,
+                    &[
+                        (&input.key.buffer, 0),
+                        (&input.key_norm.buffer, 0),
+                        (&state.keys.buffer, state.position * kv_width),
+                    ],
+                    &parameters(kv_heads, 1),
+                )?,
+                self.prepare(
+                    Kernel::Copy,
+                    &[(&input.value.buffer, 0), (&state.values.buffer, state.position * kv_width)],
+                    &[rows * kv_width],
+                )?,
+            ];
+            let buffer = self.produce_storage(
+                rows * q_width,
+                Kernel::AttentionFusedBatch,
+                &[
+                    (&query.buffer, 0),
+                    (&state.keys.buffer, 0),
+                    (&state.values.buffer, 0),
+                    (&input.query_gate.buffer, 0),
+                ],
+                &[rows, heads, kv_heads, dim, state.position],
+                Storage::F32,
+                &before,
+            )?;
+            state.position = positions;
+            return Tensor::from_buffer(&[rows, q_width], buffer);
+        }
         let scores = self.allocate(&[heads, positions])?;
         let output = self.allocate(&[rows, q_width])?;
         // Validate the entire request list before the first cache write. Future

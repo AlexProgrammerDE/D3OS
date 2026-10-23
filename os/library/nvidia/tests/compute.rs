@@ -1,6 +1,33 @@
 use d3os_nvidia::compute::Kernel;
 
 #[test]
+fn fused_attention_checks_all_rows_cache_prefixes_and_complete_output() {
+    let work = Kernel::AttentionFusedBatch.work(&[3, 4, 2, 129, 127]).unwrap();
+    assert_eq!((work.threads, work.blocks), (128, 12));
+    assert_eq!(work.extents[..5], [1548, 33540, 33540, 3096, 1548]);
+    let inputs = [0x10000, 0x100000, 0x200000, 0x300000, 0x400000];
+    assert!(work.validate_aliases(&inputs).is_ok());
+    for i in 0..4 {
+        let mut aliased = inputs;
+        aliased[4] = aliased[i] + 4;
+        assert!(work.validate_aliases(&aliased).is_err());
+    }
+    assert!(Kernel::AttentionFusedBatch.allocates_output());
+    for p in [
+        [0, 4, 2, 129, 127],
+        [1, 0, 1, 1, 0],
+        [1, 1, 0, 1, 0],
+        [1, 3, 2, 1, 0],
+        [1, 1, 1, 0, 0],
+        [1, 1, 1, 257, 0],
+        [1, 1, 1, 1, u32::MAX],
+        [u32::MAX, 1, 1, 1, 0],
+    ] {
+        assert!(Kernel::AttentionFusedBatch.work(&p).is_err());
+    }
+}
+
+#[test]
 fn fused_batch_checks_sequence_extents_and_state_aliases() {
     let p = [16, 128, 128, 4, 1e-6f32.to_bits(), 32];
     let work = Kernel::DeltaFusedBatch.work(&p).unwrap();
