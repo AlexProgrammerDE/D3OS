@@ -1,6 +1,40 @@
 use d3os_nvidia::compute::Kernel;
 
 #[test]
+fn fused_batch_checks_sequence_extents_and_state_aliases() {
+    let p = [16, 128, 128, 4, 1e-6f32.to_bits(), 32];
+    let work = Kernel::DeltaFusedBatch.work(&p).unwrap();
+    assert_eq!(work.extents[..11], [196608, 65536, 512, 512, 24576, 16, 16, 128, 24576, 262144, 65536]);
+    assert_eq!((work.threads, work.blocks), (512, 16));
+    assert_eq!(work.mutated, (1 << 8) | (1 << 9));
+    let pointers: Vec<_> = (1..=11).map(|i| i * 0x200000u64).collect();
+    assert!(work.validate_aliases(&pointers).is_ok());
+    for writer in [8, 9, 10] {
+        for other in 0..11 {
+            if writer != other {
+                let mut aliased = pointers.clone();
+                aliased[writer] = aliased[other] + 4;
+                assert!(work.validate_aliases(&aliased).is_err());
+            }
+        }
+    }
+    assert!(Kernel::DeltaFusedBatch.allocates_output());
+    let mut single = p;
+    single[5] = 1;
+    assert_eq!(
+        Kernel::DeltaFusedBatch.work(&single).unwrap().extents,
+        Kernel::DeltaFused.work(&single[..5]).unwrap().extents
+    );
+    for rows in [0, u32::MAX] {
+        let mut invalid = p;
+        invalid[5] = rows;
+        assert!(Kernel::DeltaFusedBatch.work(&invalid).is_err());
+    }
+    assert!(Kernel::DeltaFusedBatch.work(&p[..5]).is_err());
+    assert!(Kernel::DeltaFused.work(&p).is_err());
+}
+
+#[test]
 fn split_projection_bounds_partial_tiles_and_reduction_storage() {
     let split = Kernel::ProjectBf16Split.work(&[17, 1025, 257, 16]).unwrap();
     assert_eq!(split.extents[..3], [17425, 131713, 69904]);

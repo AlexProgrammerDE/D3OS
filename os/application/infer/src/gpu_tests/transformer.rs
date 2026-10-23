@@ -213,6 +213,7 @@ fn compare_traces(actual: &[Vec<f32>], expected: &[Vec<f32>], name: &str) -> cor
 
 pub(super) fn run(backend: &Nvidia) -> core::result::Result<(), String> {
     preparation(backend)?;
+    recurrent_guards(backend).map_err(|e| format!("recurrent batch guards: {e}"))?;
     let table = backend
         .upload_words(&[1f32.to_bits(), 2f32.to_bits(), 3f32.to_bits(), 4f32.to_bits(), 5f32.to_bits(), 6f32.to_bits()])
         .map_err(|e| format!("{e}"))?;
@@ -356,6 +357,62 @@ fn preparation(backend: &Nvidia) -> core::result::Result<(), String> {
         };
         let (expected, actual) = run().map_err(|e| format!("attention preparation {rows}x{heads}x{dim} rotary={rotary}: {e}"))?;
         super::compare(&actual, &expected, "cooperative attention preparation")?;
+    }
+    Ok(())
+}
+
+fn recurrent_guards(backend: &Nvidia) -> Result<()> {
+    use d3os_nvidia::compute::Kernel;
+    const GUARD: u32 = 0xd305abcd;
+    let parameters = [2, 5, 7, 3, 1e-6f32.to_bits(), 3];
+    let work = Kernel::DeltaFusedBatch.work(&parameters).map_err(|_| d3os_compute::Error::InvalidParameter)?;
+    let mut sequential = Vec::new();
+    let mut batched = Vec::new();
+    for (i, &extent) in work.extents[..11].iter().enumerate() {
+        let mut values = vec![GUARD; extent as usize + 2];
+        if i != 10 {
+            for (j, value) in values[1..extent as usize + 1].iter_mut().enumerate() {
+                *value = ((((j * 37 + i * 17) % 127) as f32 - 63.) / 71.).to_bits();
+            }
+        }
+        sequential.push(backend.upload_words(&values)?);
+        batched.push(backend.upload_words(&values)?);
+    }
+    for row in 0..3 {
+        let buffers: Vec<_> = sequential
+            .iter()
+            .enumerate()
+            .map(|(i, buffer)| {
+                let width = match i {
+                    0 => 34,
+                    1 | 10 => 14,
+                    2 | 3 => 2,
+                    _ => 0,
+                };
+                (buffer, 1 + row * width)
+            })
+            .collect();
+        backend.dispatch_words(Kernel::DeltaFused, &buffers, &parameters[..5].iter().map(|&p| p as usize).collect::<Vec<_>>())?;
+    }
+    let buffers: Vec<_> = batched.iter().map(|buffer| (buffer, 1)).collect();
+    backend.dispatch_words(Kernel::DeltaFusedBatch, &buffers, &parameters.iter().map(|&p| p as usize).collect::<Vec<_>>())?;
+    for (i, &extent) in work.extents[..11].iter().enumerate() {
+        let mut expected = vec![0; extent as usize + 2];
+        let mut actual = expected.clone();
+        backend.read_words_into(&sequential[i], 0, &mut expected)?;
+        backend.read_words_into(&batched[i], 0, &mut actual)?;
+        if actual[0] != GUARD || actual[actual.len() - 1] != GUARD {
+            return Err(d3os_compute::Error::DeviceFault);
+        }
+        if i < 8 {
+            if actual != expected {
+                return Err(d3os_compute::Error::DeviceFault);
+            }
+        } else {
+            let expected: Vec<_> = expected[1..expected.len() - 1].iter().map(|&v| f32::from_bits(v)).collect();
+            let actual: Vec<_> = actual[1..actual.len() - 1].iter().map(|&v| f32::from_bits(v)).collect();
+            super::compare(&actual, &expected, "recurrent batch storage").map_err(|_| d3os_compute::Error::DeviceFault)?;
+        }
     }
     Ok(())
 }

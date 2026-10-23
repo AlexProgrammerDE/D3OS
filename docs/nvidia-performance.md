@@ -33,8 +33,8 @@ Measurements on 2026-10-22 and 2026-10-23:
 
 | Workload | Initial resident baseline | After native optimizations |
 | --- | ---: | ---: |
-| Qwen warm generation | 7.04 to 7.36 tokens/s | 140.04 to 157.25 tokens/s |
-| Qwen warm prompt processing | 7.76 to 7.81 tokens/s | 628.57 to 956.52 tokens/s |
+| Qwen warm generation | 7.04 to 7.36 tokens/s | 146.79 to 156.86 tokens/s |
+| Qwen warm prompt processing | 7.76 to 7.81 tokens/s | 1047.62 to 1157.89 tokens/s |
 | AlexNet forward pass | 10.0 ms | 1.45 to 1.55 ms |
 | DOOM uncapped `demo1` | 536.84 to 676.89 FPS with word storage | 1290.65 to 1439.86 FPS with resident byte textures |
 
@@ -211,6 +211,28 @@ The first prompt takes 142 to 152 ms, excluding file access and weight upload.
 All runs preserve the decode checksum and complete sequential, batched, and cache reference checks.
 These changes primarily improve prompt processing; the generation gap remains open.
 
+Recurrent prompt updates now process the entire chunk within one launch per layer.
+Each block owns one head and advances its tokens in order, without synchronization between blocks.
+Its private recurrent state persists across the chunk, with one final write to the global cache.
+The batch layout assigns eight value columns per warp and uses at most 512 threads per block.
+Single-token decoding retains its existing four-column layout.
+The batch kernel uses 40 registers and 128 bytes of local stack per thread, with no assembler-reported register spills.
+The driver allocates this local storage from module metadata before launch.
+
+In the 22-token profile, recurrent calls fall from 396 to 18, and separate output clears fall from 31 to 13.
+Recurrent dispatch cycles fall from 16.68 million to 7.79 and 7.83 million in the two final VMs.
+Their share of prompt dispatch cycles falls from about 30% to 16–17%.
+An intermediate batch implementation without private state measured about 9.05 million recurrent dispatch cycles.
+These profiles include CPU submission and completion polling; they do not isolate GPU execution.
+
+The final two VMs report warm prompt times of 20, 20, 21, and 19 ms, or 1047.62 to 1157.89 tokens/s.
+Their first prompt takes 146 and 156 ms, excluding file access and weight upload.
+Warm generation spans 146.79 to 156.86 tokens/s, with the existing checksum.
+Both VMs pass every sequential and batched layer, vocabulary, greedy-token, and final-cache comparison.
+Operator checks also compare guarded batch buffers against consecutive single-token launches from nonzero initial state.
+They retain the existing numerical tolerances, including for the changed batch reduction order.
+The input guards and read-only contents remain exact.
+
 The independent fixture now checks sequential and batched execution across all 24 layers and all vocabulary logits at 29 positions.
 Its batches use 17 and 12 tokens to exercise cache continuation at a nonzero position.
 It compares greedy selections and final attention, convolution, and recurrent cache contents.
@@ -294,7 +316,7 @@ It records 24,975,852 cache hits and 44,594 new snapshots, without atlas rollove
 `NVIDIA_DOOM_UPLOAD_PROFILE` reports uploaded bytes, hits, new snapshots, rollover count, and buffer growth count.
 
 Verification uses a 16 KiB atlas to force rollover within live draw batches.
-The earlier 600-frame test reports 6,474 resets; the latest regression reports 6,477.
+The earlier 600-frame test reports 6,474 resets; the latest regression reports 6,488.
 Both match C-rendered pixels, including low detail and fuzz feedback.
 The launcher requires rollover coverage and checks that GPU inference still works after game exit.
 The byte operator suite also checks incremental updates, shrinking odd-length writes, padding, untouched guards, and rejected ranges.
@@ -314,6 +336,13 @@ It updates the channel's local-memory base, per-TPC allocation, and QMD limit wh
 The original failing cubin then passed the complete Qwen reference with the same decode checksum.
 A boot diagnostic deliberately uses volatile local storage across 257 GPU threads to preserve this coverage.
 
+A state-retention experiment requested 80 registers per thread in a 1,024-thread block and timed out before producing model output.
+That launch exceeds Ada's 64K-register budget. The accepted batch layout uses at most 512 threads and 40 registers per thread.
+The driver now rejects excessive register requests before queue submission, including rounded allocation units and partial warps.
+Unit checks cover the failing configuration, exact limits, rounding, and overflow inputs.
+The check follows NVIDIA's [Ada resource limits](https://docs.nvidia.com/cuda/ada-tuning-guide/index.html) and [register allocation guidance](https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#calculating-occupancy).
+It validates a necessary launch limit and does not predict full kernel occupancy.
+
 The QMD constant-buffer size uses 16-byte units. The encoded size now matches the actual 1 KiB launch buffer.
 Mesa's [QMD v3 implementation](https://chromium.googlesource.com/external/gitlab.freedesktop.org/mesa/mesa/+/a5af649fb690c96e3d1a1e5efb2ca199666c0ff1/src/nouveau/compiler/nak/qmd.rs) provides the same size conversion.
 
@@ -331,16 +360,16 @@ CPU cycles are useful within a run and are not a portable time unit across machi
 ## Remaining work
 
 Qwen now batches prompt matrices but still submits synchronous operations separately.
-Recurrent updates still launch once per token row.
-In the latest 22-token prefill profile, projections and their partial reductions account for about 42% of dispatch cycles.
-Recurrent updates account for about 30%, while cooperative attention preparation accounts for less than 1%.
-The next improvements must address recurrent work, the remaining matrix kernels, and submission costs.
+Attention scoring, softmax, and output still launch separately for every token and attention layer.
+Recurrent updates now use one launch per layer and prompt chunk.
+The latest prompt profiles put recurrent work at 16–17% of dispatch cycles.
+The next improvements must address attention, the remaining matrix kernels, and submission costs.
 The Linux prompt result still uses different tokens, archive provenance, and cache precision; a fully matched model benchmark remains necessary.
 The CPU token-selection work now combines only 32 GPU candidates.
 Each change must preserve the existing model reference or define and measure a separate precision policy.
 
 The large projection kernels now match Linux device throughput for the measured shapes.
-This does not establish model parity: Qwen still generates about 140 to 157 tokens/s, compared with about 265 tokens/s in the pinned Linux BF16 reference.
+This does not establish model parity: Qwen still generates about 147 to 157 tokens/s, compared with about 265 tokens/s in the pinned Linux BF16 reference.
 The remaining work must reduce complete model latency, rather than optimize already comparable streaming bandwidth.
 
 DOOM still transfers packed indexed frames for CPU HUD composition and copies RGB output into the console framebuffer.

@@ -231,32 +231,25 @@ impl TransformerBackend for Nvidia {
         } = config;
         let (rows, channels, value_width) = delta_shape(&input, state, config)?;
         if key_dim <= 128 && value_dim <= 128 && kernel <= 8 {
-            let inputs = |row| {
-                [
-                    (&input.qkv.buffer, row * channels),
-                    (&input.gate.buffer, row * value_width),
-                    (&input.beta.buffer, row * heads),
-                    (&input.alpha.buffer, row * heads),
-                    (&input.convolution.buffer, 0),
-                    (&input.log_decay.buffer, 0),
-                    (&input.time_bias.buffer, 0),
-                    (&input.norm.buffer, 0),
-                    (&state.convolution.buffer, 0),
-                    (&state.recurrent.buffer, 0),
-                ]
+            let inputs = [
+                (&input.qkv.buffer, 0),
+                (&input.gate.buffer, 0),
+                (&input.beta.buffer, 0),
+                (&input.alpha.buffer, 0),
+                (&input.convolution.buffer, 0),
+                (&input.log_decay.buffer, 0),
+                (&input.time_bias.buffer, 0),
+                (&input.norm.buffer, 0),
+                (&state.convolution.buffer, 0),
+                (&state.recurrent.buffer, 0),
+            ];
+            let parameters = [heads, key_dim, value_dim, kernel, epsilon.to_bits() as usize, rows];
+            let (entry, parameters) = if rows == 1 {
+                (Kernel::DeltaFused, &parameters[..5])
+            } else {
+                (Kernel::DeltaFusedBatch, &parameters[..])
             };
-            let parameters = [heads, key_dim, value_dim, kernel, epsilon.to_bits() as usize];
-            if rows == 1 {
-                return self.produce(&[1, value_width], Kernel::DeltaFused, &inputs(0), &parameters);
-            }
-            let output = self.allocate(&[rows, value_width])?;
-            for row in 0..rows {
-                let mut buffers = [(&output.buffer, 0); 11];
-                buffers[..10].copy_from_slice(&inputs(row));
-                buffers[10] = (&output.buffer, row * value_width);
-                self.launch(Kernel::DeltaFused, &buffers, &parameters)?;
-            }
-            return Ok(output);
+            return self.produce(&[rows, value_width], entry, &inputs, parameters);
         }
         let mixed = self.allocate(&[channels])?;
         let scales = self.allocate(&[heads, 4])?;

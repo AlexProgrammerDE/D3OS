@@ -14,7 +14,7 @@ pub const PROFILE: u32 = 6;
 pub const LAUNCH_ALLOCATE: u32 = 7;
 /// Enable GPU timestamp instrumentation for subsequent launches (elements 0 or 1).
 pub const DEVICE_TIMING: u32 = 8;
-pub const KERNEL_COUNT: usize = 36;
+pub const KERNEL_COUNT: usize = 37;
 
 /// Device-wide CPU cycle counters. Read snapshots around an exclusive workload
 /// and subtract them. Wait cycles include GPU execution and completion polling.
@@ -84,9 +84,10 @@ pub enum Kernel {
     AttentionPrepareBatch = 33,
     ProjectBf16Split = 34,
     SumProjectionPartials = 35,
+    DeltaFusedBatch = 36,
 }
 
-const _: () = assert!(Kernel::SumProjectionPartials as usize + 1 == KERNEL_COUNT);
+const _: () = assert!(Kernel::DeltaFusedBatch as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -122,6 +123,7 @@ impl Kernel {
                 | Self::ProjectBf16
                 | Self::ArgMax
                 | Self::DeltaFused
+                | Self::DeltaFusedBatch
                 | Self::GatedProjectBf16
                 | Self::Embedding
                 | Self::AttentionPrepareBatch
@@ -168,6 +170,7 @@ impl Kernel {
             33 => Self::AttentionPrepareBatch,
             34 => Self::ProjectBf16Split,
             35 => Self::SumProjectionPartials,
+            36 => Self::DeltaFusedBatch,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -205,6 +208,7 @@ impl Kernel {
             Self::FuzzBytes => "raster_fuzz_bytes",
             Self::PaletteBytes => "palette_scale_bytes",
             Self::DeltaFused => "delta_fused",
+            Self::DeltaFusedBatch => "delta_fused_batch",
             Self::GatedProjectBf16 => "gated_project_bf16_weights",
             Self::Embedding => "embedding_gather",
             Self::AttentionPrepareBatch => "attention_prepare_batch",
@@ -251,29 +255,35 @@ impl Kernel {
                 extents[..3].copy_from_slice(&[if packed == 1 { table.div_ceil(2) } else { table }, u64::from(rows), u64::from(output)]);
                 (output, 3, 2, false)
             }
-            (Self::DeltaFused, &[heads, key, value, kernel, epsilon]) => {
+            (Self::DeltaFused | Self::DeltaFusedBatch, [heads, key, value, kernel, epsilon, tail @ ..]) => {
+                let (heads, key, value, kernel, epsilon) = (*heads, *key, *value, *kernel, *epsilon);
+                let rows = match (self, tail) {
+                    (Self::DeltaFused, []) => 1,
+                    (Self::DeltaFusedBatch, [rows]) => *rows,
+                    _ => return Err(Error::InvalidField),
+                };
                 let channels = delta_channels(heads, key, value)?;
                 if key > 128 || value > 128 || !(1..=8).contains(&kernel) {
                     return Err(Error::InvalidField);
                 }
                 positive_float(epsilon)?;
                 let history = product(&[channels, kernel])? as u64;
-                let output = product(&[heads, value])? as u64;
                 extents[..11].copy_from_slice(&[
-                    channels as u64,
-                    output,
-                    heads as u64,
-                    heads as u64,
+                    u64::from(product(&[rows, channels])?),
+                    u64::from(product(&[rows, heads, value])?),
+                    u64::from(product(&[rows, heads])?),
+                    u64::from(product(&[rows, heads])?),
                     history,
                     heads as u64,
                     heads as u64,
                     value as u64,
                     history,
                     product(&[heads, key, value])? as u64,
-                    output,
+                    u64::from(product(&[rows, heads, value])?),
                 ]);
                 mutated = (1 << 8) | (1 << 9);
-                threads = product(&[value.div_ceil(4), 32])?;
+                let columns = if self == Self::DeltaFusedBatch { 8 } else { 4 };
+                threads = product(&[value.div_ceil(columns), 32])?;
                 (product(&[heads, threads])?, 11, 10, false)
             }
             (Self::ArgMax, &[n]) => {

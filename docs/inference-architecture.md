@@ -140,6 +140,9 @@ The hardware operator suite also covers partial tiles, long reductions, batched 
 The loader reads module stack metadata and sizes local scratch storage before submission.
 It also reads each entrypoint’s static shared-memory section and includes the reserved CUDA prefix in its QMD allocation.
 The current shared-memory partition accepts at most 32 KiB, including that prefix.
+Before submission, the driver also checks the entrypoint's register count against Ada's 64K-register budget per block.
+It accounts for register allocation granularity and partial warps.
+An oversized launch returns an error before the driver queues GPU work.
 A GPU boot diagnostic exercises a real local stack frame across partial blocks.
 
 Qwen matrix weights remain in packed BF16 storage while activations and accumulators retain FP32 values.
@@ -162,7 +165,13 @@ The NVIDIA backend prepares all attention queries and keys cooperatively, with o
 Each warp combines its normalization sum and rotates independent pairs without global scratch reads.
 The backend copies the value batch once, then scores each token against only its causal cache prefix.
 It checks the complete attention request list before the first cache write.
-The NVIDIA backend binds row ranges directly and retains scratch storage across recurrent updates.
+For supported recurrent dimensions, one block per head processes an entire prompt chunk in token order.
+The block retains private recurrent state across rows and writes the final state when the chunk completes.
+Eight value columns share each warp, limiting the batch block to 512 threads.
+Single-token decoding retains its four-column layout. Larger recurrent configurations retain the separate operator path.
+The batch dispatch validates all input, output, history, and recurrent extents before changing state.
+It initializes the entire output directly, without a separate clear.
+The NVIDIA backend binds row ranges directly and retains scratch storage for the fallback operations.
 It validates the complete batch shape and cache capacity before the first state update.
 `row()` returns independent storage, so consuming an operation's result cannot mutate its parent batch.
 Normal prefill projects vocabulary logits only for the final row, without host activation transfers.
