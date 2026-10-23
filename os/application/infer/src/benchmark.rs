@@ -44,6 +44,21 @@ fn queue_profile(before: d3os_nvidia::compute::QueueProfile, after: d3os_nvidia:
     ));
 }
 
+fn service_profile(before: &[d3os_nvidia::compute::ServiceEntry], after: &[d3os_nvidia::compute::ServiceEntry], phase: &str) {
+    for (operation, (before, after)) in before.iter().zip(after).enumerate() {
+        let calls = after.calls.wrapping_sub(before.calls);
+        if calls == 0 {
+            continue;
+        }
+        let cycles = after.cycles.wrapping_sub(before.cycles);
+        let queue_cycles = after.queue_cycles.wrapping_sub(before.queue_cycles);
+        report(format_args!(
+            "NATIVE_SERVICE_PROFILE operation={operation} calls={calls} total_cycles={cycles} queue_cycles={queue_cycles} cpu_cycles={} phase={phase}",
+            cycles.saturating_sub(queue_cycles)
+        ));
+    }
+}
+
 pub(super) fn kernels(backend: &Nvidia) -> Result<(), String> {
     for (packed, rows, inner, cols) in [
         (false, 1usize, 9216usize, 4096usize),
@@ -263,6 +278,7 @@ pub(super) fn qwen(backend: &Nvidia) -> Result<(), String> {
             Some((
                 backend.profile().map_err(|error| format!("{error}"))?,
                 backend.queue_profile().map_err(|error| format!("{error}"))?,
+                backend.service_profile().map_err(|error| format!("{error}"))?,
             ))
         } else {
             None
@@ -272,6 +288,11 @@ pub(super) fn qwen(backend: &Nvidia) -> Result<(), String> {
         let prefill_ms = now() - start;
         let before = backend.profile().map_err(|error| format!("{error}"))?;
         let queue_before = backend.queue_profile().map_err(|error| format!("{error}"))?;
+        let service_before = if run == 1 {
+            Some(backend.service_profile().map_err(|error| format!("{error}"))?)
+        } else {
+            None
+        };
         let mut tokens = Vec::with_capacity(DECODE);
         let start = now();
         let mut checksum = 0u64;
@@ -287,12 +308,15 @@ pub(super) fn qwen(backend: &Nvidia) -> Result<(), String> {
         if run == 1 {
             let after = backend.profile().map_err(|error| format!("{error}"))?;
             let queue_after = backend.queue_profile().map_err(|error| format!("{error}"))?;
-            if let Some((prefill_before, queue_prefill)) = prefill_profile {
+            let service_after = backend.service_profile().map_err(|error| format!("{error}"))?;
+            if let Some((prefill_before, queue_prefill, service_prefill)) = prefill_profile {
                 profile(&prefill_before, &before, "prefill");
                 queue_profile(queue_prefill, queue_before, "prefill");
+                service_profile(&service_prefill, service_before.as_ref().expect("warm profile"), "prefill");
             }
             profile(&before, &after, "decode");
             queue_profile(queue_before, queue_after, "decode");
+            service_profile(service_before.as_ref().expect("warm profile"), &service_after, "decode");
         }
         report(format_args!(
             "INFERENCE_BENCH qwen backend=nvidia run={run} warm={} file_ms={file_ms} load_ms={load_ms} state_ms={state_ms} session_capacity={CAPACITY} prompt_tokens={} prefill_ms={prefill_ms} prefill_tps={:.3} decode_tokens={DECODE} decode_ms={decode_ms} decode_tps={:.3} checksum={checksum}",

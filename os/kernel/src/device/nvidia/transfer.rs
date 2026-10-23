@@ -15,10 +15,12 @@ impl Compute {
     pub(super) fn prepare_staging(&mut self, device: &Device) -> Result<()> {
         // Bootstrap runs before userspace. Allocate here so runtime dispatch
         // never acquires the process-manager lock while holding DEVICE.
-        let region = DmaRegion::new(STAGING_BYTES)?;
+        // A separate final page retains copy commands and both completion
+        // reports while the payload belongs to the copy engine.
+        let region = DmaRegion::new(STAGING_BYTES + 4096)?;
         let physical = region.address as u64;
         self.staging = Some(Staging { region, virtual_address: 0 });
-        let address = self.memory.map_system(device, physical, STAGING_BYTES as u64)?;
+        let address = self.memory.map_system(device, physical, (STAGING_BYTES + 4096) as u64)?;
         self.staging.as_mut().ok_or(Error::Firmware)?.virtual_address = address;
         log::info!("NVIDIA_STAGING_READY physical={physical:#x} virtual={address:#x} bytes={STAGING_BYTES}");
         Ok(())
@@ -61,7 +63,7 @@ impl Compute {
         self.defer_launch = false;
         let result = (|| {
             let staging = self.staging.as_ref().ok_or(Error::Firmware)?;
-            let (pointer, address, capacity) = (staging.region.address as *mut u32, staging.virtual_address, staging.region.size / 4);
+            let (pointer, address, capacity) = (staging.region.address as *mut u32, staging.virtual_address, STAGING_BYTES / 4);
             for offset in (0..elements).step_by(capacity) {
                 let count = (elements - offset).min(capacity);
                 let cpu = unsafe { cpu.add(offset) };
@@ -75,7 +77,7 @@ impl Compute {
                 }
                 fence(Ordering::SeqCst);
                 let addresses = if upload { [address, gpu] } else { [gpu, address] };
-                self.dispatch(device, Kernel::Copy, &addresses, &[count as u32])?;
+                self.copy_transfer(device, addresses[1], addresses[0], (count * 4) as u32)?;
                 fence(Ordering::SeqCst);
                 if !upload {
                     unsafe {
@@ -86,7 +88,47 @@ impl Compute {
             Ok(())
         })();
         self.defer_launch = deferred;
+        if result.is_err() {
+            self.healthy = false;
+        }
         result
+    }
+
+    fn copy_transfer(&mut self, device: &Device, destination: u64, source: u64, bytes: u32) -> Result<()> {
+        const REPORT: usize = STAGING_BYTES + 4096 - 64;
+        let record_start = unsafe { core::arch::x86_64::_rdtsc() };
+        let staging = self.staging.as_ref().ok_or(Error::Firmware)?;
+        let report = staging.virtual_address + REPORT as u64;
+        let commands = d3os_nvidia::copy::commands(destination, source, bytes, report)?;
+        for offset in [REPORT, REPORT + 8, REPORT + 12] {
+            staging.region.write32(offset, 0)?;
+        }
+        for (index, word) in commands.iter().copied().enumerate() {
+            staging.region.write32(STAGING_BYTES + index * 4, word)?;
+        }
+        let address = staging.virtual_address + STAGING_BYTES as u64;
+        self.submit_fifo(device, address, commands.len())?;
+        let staging = self.staging.as_ref().ok_or(Error::Firmware)?;
+        let start = crate::timer().systime_ms();
+        let wait_start = unsafe { core::arch::x86_64::_rdtsc() };
+        while staging.region.read32(REPORT)? != 1 || staging.region.read64(REPORT + 8)? != 1 {
+            if crate::timer().systime_ms().wrapping_sub(start) >= 5000 {
+                self.dump_instance(device)?;
+                log::warn!(
+                    "NVIDIA copy timeout source={source:#x} destination={destination:#x} bytes={bytes} copy={:?} fifo={:?}",
+                    staging.region.read32(REPORT),
+                    staging.region.read64(REPORT + 8)
+                );
+                return Err(Error::Firmware);
+            }
+            core::hint::spin_loop();
+        }
+        fence(Ordering::SeqCst);
+        let end = unsafe { core::arch::x86_64::_rdtsc() };
+        self.queue_profile.batches = self.queue_profile.batches.wrapping_add(1);
+        self.queue_profile.cycles = self.queue_profile.cycles.wrapping_add(end.wrapping_sub(record_start));
+        self.queue_profile.wait_cycles = self.queue_profile.wait_cycles.wrapping_add(end.wrapping_sub(wait_start));
+        Ok(())
     }
 
     pub(super) fn transfer_test(&mut self, device: &Device) -> Result<()> {
@@ -126,7 +168,7 @@ impl Compute {
             }
         }
         log::info!(
-            "NVIDIA_TRANSFER_OK cases={} guards=ok bits=exact elapsed_ms={}",
+            "NVIDIA_TRANSFER_OK cases={} guards=ok bits=exact elapsed_ms={} engine=ampere_dma_copy_b",
             shapes.len(),
             crate::timer().systime_ms().wrapping_sub(start)
         );

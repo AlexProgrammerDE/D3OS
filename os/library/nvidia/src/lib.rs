@@ -6,6 +6,7 @@ extern crate alloc;
 pub mod abi;
 pub mod compute;
 pub mod context;
+pub mod copy;
 pub mod cubin;
 pub mod dma;
 pub mod fence;

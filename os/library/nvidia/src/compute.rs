@@ -20,7 +20,18 @@ pub const BEGIN_COMMANDS: u32 = 9;
 /// Complete queued work before closing one command scope.
 pub const END_COMMANDS: u32 = 10;
 pub const QUEUE_PROFILE: u32 = 11;
+pub const SERVICE_PROFILE: u32 = 12;
+pub const SERVICE_OPERATIONS: usize = 13;
 pub const KERNEL_COUNT: usize = 38;
+
+/// CPU service costs by request operation, including queue work within it.
+#[derive(Clone, Copy, Debug, Default)]
+#[repr(C)]
+pub struct ServiceEntry {
+    pub calls: u64,
+    pub cycles: u64,
+    pub queue_cycles: u64,
+}
 
 /// Device-wide submission counters, including waits outside kernel dispatch.
 #[derive(Clone, Copy, Debug, Default)]

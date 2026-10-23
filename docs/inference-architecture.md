@@ -241,6 +241,10 @@ Circular 64-bit semaphore acquires order consecutive waves. An already completed
 The reports retain their monotonic values, so reusing slots cannot erase a signal that another wave still needs.
 Dropped buffers retain their retirement sequence until that sequence completes, including during process cleanup.
 CPU transfers and scope completion drain both waves. Page-table growth also drains the queue before it changes mappings.
+Transfers now use the Ampere DMA COPY B engine on the existing channel, with separate staging, command, and completion storage.
+The CPU waits for both the copy-engine release and FIFO tail before it reuses that storage.
+The copy launch uses virtual addresses, pitched layouts, and a system-memory flush.
+The transfer checks preserve exact bits across partial chunks and allocation guards.
 GPU errors retain mapped storage and mark the device unhealthy.
 The loader shares each immutable CUBIN image across entry points, with separate resource metadata for each entry.
 Each program also caches its fixed QMD fields, including code addresses, resource limits, and compiler constant banks.

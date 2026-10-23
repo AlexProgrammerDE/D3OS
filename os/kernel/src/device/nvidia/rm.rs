@@ -53,6 +53,7 @@ pub(super) struct Compute {
     pub(super) defer_launch: bool,
     pub(super) last_flush_cycles: u64,
     pub(super) queue_profile: d3os_nvidia::compute::QueueProfile,
+    pub(super) service_profile: [d3os_nvidia::compute::ServiceEntry; d3os_nvidia::compute::SERVICE_OPERATIONS],
     telemetry: Option<super::gsp::DmaRegion>,
     telemetry_object: u32,
 }
@@ -105,6 +106,7 @@ impl Compute {
             defer_launch: false,
             last_flush_cycles: 0,
             queue_profile: d3os_nvidia::compute::QueueProfile::default(),
+            service_profile: [d3os_nvidia::compute::ServiceEntry::default(); d3os_nvidia::compute::SERVICE_OPERATIONS],
             telemetry: None,
             telemetry_object: 0,
         })
@@ -457,6 +459,7 @@ impl Compute {
         bind.set(ChannelBind::engineType, 1)?;
         self.control(device, client, channel, NVA06F_CTRL_CMD_BIND, &bind)?;
         self.alloc(device, client, channel, ADA_COMPUTE_A, &[])?;
+        self.alloc(device, client, channel, AMPERE_DMA_COPY_B, &[])?;
         self.initialize_context_image(device)?;
         self.copy_reserved(device, client, vaspace, self.reserved_virtual)?;
         let mut token_request = Record::<{ WorkToken::SIZE }>::default();

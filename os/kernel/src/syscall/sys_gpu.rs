@@ -44,6 +44,17 @@ pub extern "sysv64" fn sys_gpu_compute(pointer: *const Request) -> isize {
             return Errno::EINVAL as isize;
         }
     }
+    if request.operation == abi::SERVICE_PROFILE
+        && (request.elements != abi::SERVICE_OPERATIONS as u64
+            || !valid_range(
+                &process,
+                request.pointer,
+                (size_of::<abi::ServiceEntry>() * abi::SERVICE_OPERATIONS) as u64,
+                true,
+            ))
+    {
+        return Errno::EINVAL as isize;
+    }
     if request.operation == abi::QUEUE_PROFILE
         && (request.elements != 1 || !valid_range(&process, request.pointer, size_of::<abi::QueueProfile>() as u64, true))
     {

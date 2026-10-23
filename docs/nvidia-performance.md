@@ -97,6 +97,27 @@ cuTile remains the maintained base despite the remaining regressions.
 The Linux throughput target is still open.
 Projection latency, matrix scheduling, recurrent tile layout, submission overhead, and presentation remain optimization work.
 
+### Copy-engine and service-profile follow-up
+
+Host transfers now use the dedicated Ampere DMA COPY B engine instead of a compute copy kernel.
+This path retains the existing channel and drains compute work before transferring ownership.
+Its separate command page remains owned until both engine completion and the FIFO tail arrive.
+The command encoding follows NVIDIA's [DMA COPY B methods](https://github.com/NVIDIA/open-gpu-kernel-modules/blob/570.144/src/common/sdk/nvidia/inc/class/clc7b5.h).
+
+The first exact-bit transfer suite passes all six sizes, including partial chunks and neighboring guards.
+Its warm round-trip sample measures 7,529 MiB/s, compared with 6,736 MiB/s in an earlier compute-copy sample.
+These initial samples do not isolate shared-host variation.
+The first DOOM timedemo measures 1361.17 FPS, and the separate 600-frame pixel and input checks pass.
+Qwen retains its exact tokens and full numerical references, with warm samples of 214.77 and 225.35 tokens/s.
+
+`Nvidia::service_profile()` separates request handling from queue submission and waiting, indexed by the native operation ID.
+The additive query retains request ABI version 3 and validates the complete writable destination before copying counters.
+Service cycles include locking and buffer management; syscall pointer validation happens before this measurement.
+The benchmark takes snapshots outside its timed intervals and reports the differences for prompt processing and decoding.
+An initial 64-token decode uses 6.2 million CPU cycles for frees, excluding queue work.
+Output-producing requests use 41.7 million.
+This evidence favors reducing dependent launches rather than replacing the allocator without further measurements.
+
 ### Projection layout follow-up
 
 BF16 matrix projection kernels now preserve two-dimensional tiles through masked memory loads.

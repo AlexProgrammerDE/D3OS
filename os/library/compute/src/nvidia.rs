@@ -71,6 +71,16 @@ impl<T> Drop for GpuBuffer<T> {
 pub struct Nvidia;
 
 impl Nvidia {
+    pub fn service_profile(&self) -> Result<[abi::ServiceEntry; abi::SERVICE_OPERATIONS]> {
+        let mut entries = [abi::ServiceEntry::default(); abi::SERVICE_OPERATIONS];
+        request(Request {
+            pointer: entries.as_mut_ptr() as u64,
+            elements: abi::SERVICE_OPERATIONS as u64,
+            ..operation(abi::SERVICE_PROFILE)
+        })?;
+        Ok(entries)
+    }
+
     pub fn queue_profile(&self) -> Result<abi::QueueProfile> {
         let mut profile = abi::QueueProfile::default();
         request(Request {

@@ -121,13 +121,22 @@ impl Compute {
             return Err(Error::Alignment);
         }
         let submission = self.submission.as_ref().ok_or(Error::Firmware)?;
-        let vram = device.vram.as_ref().ok_or(Error::Firmware)?;
         let offset = submission.current * WAVE_BYTES + COMMANDS;
         for (i, word) in commands.iter().copied().enumerate() {
             submission.region.write32(offset + i * 4, word)?;
         }
+        let address = submission.address + offset as u64;
+        self.submit_fifo(device, address, commands.len())
+    }
+
+    // The caller retains command storage until the FIFO tail completes.
+    pub(super) fn submit_fifo(&mut self, device: &Device, address: u64, words: usize) -> Result<()> {
+        if address & 3 != 0 || address >= 1 << 40 || words == 0 || words > 1024 {
+            return Err(Error::Alignment);
+        }
+        let vram = device.vram.as_ref().ok_or(Error::Firmware)?;
         fence(Ordering::SeqCst);
-        let entry = (submission.address + offset as u64) | (1 << 41) | ((commands.len() as u64) << 42);
+        let entry = address | (1 << 41) | ((words as u64) << 42);
         let slot = self.put % self.entries;
         vram.write(self.fifo.physical as usize + slot * 8, entry as u32)?;
         vram.write(self.fifo.physical as usize + slot * 8 + 4, (entry >> 32) as u32)?;

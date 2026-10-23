@@ -102,21 +102,43 @@ pub(crate) fn request(owner: Uuid, request: &Request) -> SyscallResult {
     }
     // Keep the spinlock owner runnable until its synchronous GPU transaction
     // completes. Interrupts remain enabled for timers and cross-core work.
+    let start = unsafe { core::arch::x86_64::_rdtsc() };
     let _preempt = crate::process::core_local_storage::PreemptGuard::new();
     let mut device = DEVICE.get().ok_or(Errno::ENOTSUP)?.lock();
     let mut compute = device.compute.take().ok_or(Errno::ENOTSUP)?;
+    let queue_before = compute.queue_profile.cycles;
     compute.defer_launch = compute.command_scopes.contains_key(&owner) && !compute.device_timing;
     let result = if compute.healthy {
         serve(&device, &mut compute, owner, request)
     } else {
         Err(Errno::EUNKN)
     };
+    let queue_cycles = compute.queue_profile.cycles.wrapping_sub(queue_before);
+    if let Some(entry) = compute.service_profile.get_mut(request.operation as usize) {
+        entry.calls = entry.calls.wrapping_add(1);
+        entry.cycles = entry.cycles.wrapping_add(unsafe { core::arch::x86_64::_rdtsc() }.wrapping_sub(start));
+        entry.queue_cycles = entry.queue_cycles.wrapping_add(queue_cycles);
+    }
     device.compute = Some(compute);
     result
 }
 
 fn serve(device: &Device, compute: &mut super::rm::Compute, owner: Uuid, request: &Request) -> SyscallResult {
     match request.operation {
+        abi::SERVICE_PROFILE => {
+            if request.elements != abi::SERVICE_OPERATIONS as u64 {
+                return Err(Errno::EINVAL);
+            }
+            gpu_result(compute.flush_pending(device))?;
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    compute.service_profile.as_ptr().cast::<u8>(),
+                    request.pointer as *mut u8,
+                    size_of_val(&compute.service_profile),
+                );
+            }
+            Ok(0)
+        }
         abi::BEGIN_COMMANDS => {
             let depth = compute.command_scopes.entry(owner).or_default();
             *depth = depth.checked_add(1).ok_or(Errno::EINVAL)?;
