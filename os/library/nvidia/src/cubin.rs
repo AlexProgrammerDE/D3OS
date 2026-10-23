@@ -33,3 +33,17 @@ pub fn shared_bytes(static_bytes: u64) -> Result<u32> {
     }
     Ok(bytes as u32)
 }
+
+/// Reject blocks that exceed Ada's 64K-register budget. Registers are allocated
+/// in groups of eight per thread, and partial warps still occupy 32 lanes.
+/// This validates a launch limit, rather than predicting kernel occupancy.
+pub fn validate_ada_registers(registers: u64, threads: u32) -> Result<()> {
+    if registers > 255 || !(1..=1024).contains(&threads) {
+        return Err(Error::InvalidField);
+    }
+    let required = registers.div_ceil(8) * 8 * 32 * u64::from(threads.div_ceil(32));
+    if required > 65536 {
+        return Err(Error::InvalidField);
+    }
+    Ok(())
+}

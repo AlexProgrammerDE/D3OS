@@ -8,7 +8,7 @@ use goblin::elf::{
     Elf,
     section_header::{SHF_ALLOC, SHT_PROGBITS},
 };
-use log::info;
+use log::{info, warn};
 
 #[derive(Clone, Copy)]
 pub(super) struct Program {
@@ -197,6 +197,13 @@ impl Compute {
         }
         let cached = self.programs.contains_key(symbol);
         let program = self.load_program(device, cubin, symbol)?;
+        if d3os_nvidia::cubin::validate_ada_registers(program.registers, threads).is_err() {
+            warn!(
+                "NVIDIA launch exceeds Ada register budget symbol={symbol} registers={} threads={threads}",
+                program.registers
+            );
+            return Err(Error::Alignment);
+        }
         // Previous launches have completed before any scratch allocation or
         // engine-state change. A larger module stack needs a larger QMD limit.
         self.ensure_local_memory(device, program.local_bytes)?;

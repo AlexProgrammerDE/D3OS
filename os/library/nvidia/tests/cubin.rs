@@ -29,3 +29,14 @@ fn shared_allocation_accounts_for_reserved_space_and_partition_limit() {
     assert!(shared_bytes(32 * 1024 - 1024 + 1).is_err());
     assert!(shared_bytes(u64::MAX).is_err());
 }
+
+#[test]
+fn ada_launch_rejects_register_exhaustion_and_counts_partial_warps() {
+    use d3os_nvidia::cubin::validate_ada_registers;
+    for (registers, threads) in [(0, 1024), (64, 1024), (80, 512), (128, 512), (255, 256)] {
+        assert!(validate_ada_registers(registers, threads).is_ok());
+    }
+    for (registers, threads) in [(65, 1024), (80, 1024), (255, 257), (256, 1), (u64::MAX, 1), (1, 0), (1, 1025)] {
+        assert!(validate_ada_registers(registers, threads).is_err());
+    }
+}
