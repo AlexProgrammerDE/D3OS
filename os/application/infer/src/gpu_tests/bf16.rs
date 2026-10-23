@@ -23,6 +23,11 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     for (m, k, n) in [
         (1, 1, 1),
         (1, 33, 17),
+        (1, 63, 17),
+        (1, 64, 17),
+        (1, 65, 17),
+        (1, 128, 2051),
+        (1, 64, 8193),
         (3, 11, 5),
         (17, 33, 9),
         (1, 1024, 1024),
@@ -90,6 +95,10 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     for (m, k, n, packed) in [
         (1, 1, 1, [true, true]),
         (1, 33, 17, [true, true]),
+        (1, 63, 17, [true, true]),
+        (1, 64, 17, [true, true]),
+        (1, 65, 17, [true, true]),
+        (1, 128, 2051, [true, true]),
         (1, 129, 65, [true, true]),
         (1, 33, 2051, [true, true]),
         (1, 1024, 3584, [true, true]),
@@ -103,7 +112,7 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
         super::compare(&gpu, &cpu, "gated projection")?;
     }
     super::super::report(format_args!(
-        "NVIDIA_BF16_WEIGHTS_OK projections=7 gated_projections=9 embedding_rows=7 roundtrip=exact guards=typed backend=nvidia"
+        "NVIDIA_BF16_WEIGHTS_OK projections=12 gated_projections=13 embedding_rows=7 roundtrip=exact guards=typed backend=nvidia"
     ));
     Ok(())
 }

@@ -33,7 +33,7 @@ Measurements on 2026-10-22 and 2026-10-23:
 
 | Workload | Initial resident baseline | After native optimizations |
 | --- | ---: | ---: |
-| Qwen warm generation | 7.04 to 7.36 tokens/s | 154.59 to 162.85 tokens/s |
+| Qwen warm generation | 7.04 to 7.36 tokens/s | 146.79 to 162.85 tokens/s |
 | Qwen warm prompt processing | 7.76 to 7.81 tokens/s | 1466.67 tokens/s |
 | AlexNet forward pass | 10.0 ms | 1.45 to 1.55 ms |
 | DOOM uncapped `demo1` | 536.84 to 676.89 FPS with word storage | 1290.65 to 1439.86 FPS with resident byte textures |
@@ -55,7 +55,7 @@ The fresh per-batch baseline reports 880.19, 880.19, and 980.69 FPS.
 The resident version reports 1431.58, 1431.58, and 1439.86 FPS.
 Both render 7,116 frames across the same 7,117-tick demo, with the same WAD and host affinity.
 The GPU shader bundle is identical in these six runs.
-Later inference-kernel regression runs report 1290.65, 1407.32, and 1376.22 FPS with the resident renderer.
+Later inference-kernel regression runs report 1290.65, 1407.32, 1376.22, and 1297.37 FPS with the resident renderer.
 The final run retains the same 7,116 frames, upload counts, and five buffer-growth clears.
 These later samples remain included in the table's range; they do not establish a rendering speedup from the inference changes.
 
@@ -108,7 +108,8 @@ All 12 Linux sessions across two VMs reproduce all 64 D3OS choices, with checksu
 The launcher checks the full traces, actual FP32 cache reports, settings, offload, and evaluated token counts.
 A differing greedy choice rejects the accepted comparison instead of silently changing the workload.
 
-Current measurements use three D3OS VMs with fused attention and the two matched Linux reference VMs on the same GPU.
+The fused-attention comparison uses three D3OS VMs and the two matched Linux reference VMs on the same GPU.
+This comparison precedes the paired-load changes described below.
 Every prompt and decode token in the new D3OS runs still matches those Linux references.
 
 | Phase | D3OS | Linux, new context | Linux, reset context |
@@ -152,11 +153,40 @@ Read the [Linux comparison procedure](nvidia-vfio.howto.md#compare-against-linux
 ## Changes that reduce overhead
 
 The projection kernel selects a warp reduction for a single input row.
-Each warp reads contiguous weights. Wide matrices reuse each input across eight outputs.
+Each warp reads contiguous weights. FP32 matrices and very wide BF16 matrices reuse each input across eight outputs.
+Single-row BF16 matrices with 2,049 to 8,192 outputs use four outputs per warp.
 Narrow matrices use one output per warp to occupy more GPU multiprocessors.
 This avoids the 15 unused rows in a padded tensor-core tile.
 Larger matrix operations retain the TF32 tensor-core path.
 The FP16 and BF16 tensor-core boot checks also remain active.
+
+Aligned single-row BF16 projections now read two weights per lane through one 32-bit load.
+The input width must be divisible by 64; other widths retain scalar reads.
+The kernel checks weight alignment before selecting the paired reads, following the [PTX memory alignment requirements](https://docs.nvidia.com/cuda/parallel-thread-execution/#addresses-as-operands).
+Both weights expand exactly into FP32, and the kernel retains FP32 fused multiply-add accumulation.
+The paired lane layout changes the reduction order. Existing operator and model tolerances remain unchanged.
+
+A pinned comparison uses the same benchmark code with the previous and current driver and GPU kernel pairs.
+The four-output layout changes the driver grid; each run uses the matching pair.
+The benchmark now measures packed BF16 weights directly and uses their two-byte size in bandwidth calculations.
+It compares every output and runs a separate GPU timestamp pass across 100 launches.
+
+| Single-row BF16 projection | Previous device time | Paired reads and medium-width tiling |
+| --- | ---: | ---: |
+| 1,024 inputs, 1,024 outputs | 5.156 µs | 5.121 µs |
+| 1,024 inputs, 3,584 outputs | 9.769 µs | 6.888 µs |
+| 3,584 inputs, 1,024 outputs | 8.900 µs | 7.376 µs |
+| 1,024 inputs, 248,320 outputs | 918.465 µs | 914.735 µs |
+
+The two middle cases improve by about 29% and 17% in this resident-weight test.
+The small matrices can remain in GPU cache. These kernel results do not establish the same gain for full-model generation.
+The vocabulary projection remains near 556 GB/s, with little change from the previous bundle.
+This result points toward submission and other matrix work rather than expecting paired loads to remove the remaining Linux gap.
+
+Two subsequent Qwen VMs retain 15 ms warm prompt times and report 146.79 to 158.81 tokens/s for generation.
+Both pass all model references and reproduce every prompt and decode token from the accepted Linux comparison.
+These full-model results do not demonstrate a generation speedup; host variability remains visible.
+AlexNet still reports 1.45 ms per forward pass, and DOOM passes 600 pixel comparisons plus 6,447 forced atlas resets.
 
 The driver stores QMDs, constants, commands, and completion signals in coherent guest RAM.
 The CPU no longer writes each launch byte through the VRAM BAR or polls completion through PCIe reads.
@@ -463,8 +493,16 @@ The CPU token-selection work now combines only 32 GPU candidates.
 Each change must preserve the existing model reference or define and measure a separate precision policy.
 
 The large projection kernels now match Linux device throughput for the measured shapes.
-The current native runs generate about 155 to 163 tokens/s, compared with about 258 to 261 tokens/s in the matched Linux reference.
+Recent native runs generate about 147 to 163 tokens/s, compared with about 258 to 261 tokens/s in the matched Linux reference.
 The remaining work must reduce complete model latency, rather than optimize already comparable streaming bandwidth.
+
+NVIDIA's new cuTile Rust compiler provides a separate path for improving matrix kernels.
+Its [compile-only API](https://nvidia.github.io/cuda-rust/cutile/latest/guide/jit-compilation.html#compile-only-api) produces Tile IR without a GPU or CUDA driver at runtime.
+The external `tileiras` assembler then produces a cubin for the requested target.
+The [compatibility table](https://nvidia.github.io/cuda-rust/cutile/latest/reference/compatibility.html) includes Ada `sm_89` with Tile IR 13.2 or newer.
+This permits a host compilation experiment while D3OS retains its native Rust driver and inference API.
+Generated argument layouts, resource metadata, and numerical behavior still need validation in D3OS before adopting these kernels.
+The compiler does not replace the remaining work on submission ownership, synchronization, or presentation.
 
 DOOM still transfers packed indexed frames for CPU HUD composition and copies RGB output into the console framebuffer.
 Command and texture storage now remain resident, but command lists and bin indices still cross PCIe for each batch.

@@ -142,6 +142,19 @@ fn packed_weight_extents_cover_odd_tails_and_half_word_offsets() {
 }
 
 #[test]
+fn packed_vector_launch_covers_every_output_at_tile_boundaries() {
+    for (n, outputs_per_warp) in [(1u32, 1u32), (2048, 1), (2049, 4), (8192, 4), (8193, 8)] {
+        let work = Kernel::ProjectBf16.work(&[1, 64, n]).unwrap();
+        let covered = work.blocks * work.threads / 32 * outputs_per_warp;
+        assert!(covered >= n);
+        assert!(covered - n < 4 * outputs_per_warp);
+        assert_eq!(work.extents[..3], [64, u64::from(32 * n), u64::from(n)]);
+    }
+    let batch = Kernel::ProjectBf16.work(&[17, 64, 2049]).unwrap();
+    assert_eq!(batch.blocks * batch.threads / 32, (2u32 * 2049u32.div_ceil(8)).next_multiple_of(4));
+}
+
+#[test]
 fn gated_projection_checks_both_weight_ranges_and_covers_odd_outputs() {
     for n in [17, 2051] {
         let work = Kernel::GatedProjectBf16.work(&[33, n]).unwrap();

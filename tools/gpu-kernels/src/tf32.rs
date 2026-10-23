@@ -16,6 +16,38 @@ unsafe fn weight<const BF16: bool>(address: u64, index: u32) -> f32 {
 
 #[inline(always)]
 unsafe fn projection_vector<const BF16: bool, const GATED: bool, const OUTPUTS: usize>(a: u64, b: u64, up: u64, out: u64, inner: u32, cols: u32) {
+    if BF16 && inner.is_multiple_of(64) && b.is_multiple_of(4) && (!GATED || up.is_multiple_of(4)) {
+        unsafe { projection_vector_inner::<BF16, GATED, OUTPUTS, true>(a, b, up, out, inner, cols) };
+    } else {
+        unsafe { projection_vector_inner::<BF16, GATED, OUTPUTS, false>(a, b, up, out, inner, cols) };
+    }
+}
+
+#[inline(always)]
+unsafe fn vector_weights<const BF16: bool, const PAIR: bool>(address: u64, index: u32) -> [f32; 2] {
+    if PAIR {
+        // The caller establishes aligned rows and complete 64-element tiles.
+        // One 32-bit load expands two BF16 values without further rounding.
+        let packed = unsafe { (address as *const u32).add((index / 2) as usize).read() };
+        [f32::from_bits(packed << 16), f32::from_bits(packed & 0xffff0000)]
+    } else {
+        [unsafe { weight::<BF16>(address, index) }, 0.]
+    }
+}
+
+#[inline(always)]
+unsafe fn vector_fma(input: f32, weight: f32, mut sum: f32) -> f32 {
+    unsafe {
+        asm!("fma.rn.f32 {d}, {a}, {b}, {d};", d = inout(reg32) sum,
+            a = in(reg32) input, b = in(reg32) weight, options(pure, nomem, nostack));
+    }
+    sum
+}
+
+#[inline(always)]
+unsafe fn projection_vector_inner<const BF16: bool, const GATED: bool, const OUTPUTS: usize, const PAIR: bool>(
+    a: u64, b: u64, up: u64, out: u64, inner: u32, cols: u32,
+) {
     let index = super::index();
     let lane = index % 32;
     let column = (index / 32) * OUTPUTS as u32;
@@ -26,26 +58,32 @@ unsafe fn projection_vector<const BF16: bool, const GATED: bool, const OUTPUTS: 
     // use one output per warp to occupy more SMs. Both coalesce weight reads.
     let mut sums = [0.0f32; OUTPUTS];
     let mut up_sums = [0.0f32; OUTPUTS];
-    let mut k = lane;
+    let values = if PAIR { 2 } else { 1 };
+    let mut k = lane * values;
     while k < inner {
-        let input = unsafe { (a as *const f32).add(k as usize).read() };
+        let input = [
+            unsafe { (a as *const f32).add(k as usize).read() },
+            if PAIR {
+                unsafe { (a as *const f32).add((k + 1) as usize).read() }
+            } else {
+                0.
+            },
+        ];
         for j in 0..OUTPUTS as u32 {
             if column + j < cols {
-                let factor = unsafe { weight::<BF16>(b, (column + j) * inner + k) };
-                unsafe {
-                    asm!("fma.rn.f32 {d}, {a}, {b}, {c};", d = out(reg32) sums[j as usize],
-                        a = in(reg32) input, b = in(reg32) factor, c = in(reg32) sums[j as usize], options(pure, nomem, nostack));
+                let factor = unsafe { vector_weights::<BF16, PAIR>(b, (column + j) * inner + k) };
+                for part in 0..values as usize {
+                    sums[j as usize] = unsafe { vector_fma(input[part], factor[part], sums[j as usize]) };
                 }
                 if GATED {
-                    let weight = unsafe { weight::<BF16>(up, (column + j) * inner + k) };
-                    unsafe {
-                        asm!("fma.rn.f32 {d}, {a}, {b}, {c};", d = out(reg32) up_sums[j as usize],
-                            a = in(reg32) input, b = in(reg32) weight, c = in(reg32) up_sums[j as usize], options(pure, nomem, nostack));
+                    let weight = unsafe { vector_weights::<BF16, PAIR>(up, (column + j) * inner + k) };
+                    for part in 0..values as usize {
+                        up_sums[j as usize] = unsafe { vector_fma(input[part], weight[part], up_sums[j as usize]) };
                     }
                 }
             }
         }
-        k += 32;
+        k += 32 * values;
     }
     for sum in &mut sums {
         *sum = unsafe { super::warp::sum(*sum) };
@@ -113,6 +151,8 @@ unsafe fn multiply<const TRANSPOSE_B: bool, const BF16: bool, const SPLIT: bool>
     if TRANSPOSE_B && rows == 1 && !SPLIT {
         if cols <= 2048 {
             unsafe { projection_vector::<BF16, false, 1>(a, b, 0, out, inner, cols) };
+        } else if BF16 && cols <= 8192 {
+            unsafe { projection_vector::<BF16, false, 4>(a, b, 0, out, inner, cols) };
         } else {
             unsafe { projection_vector::<BF16, false, 8>(a, b, 0, out, inner, cols) };
         }
@@ -212,8 +252,10 @@ pub unsafe extern "ptx-kernel" fn tensor_project_tf32x3(a: u64, b: u64, out: u64
 
 /// # Safety
 /// A[M,K] and output[M,N] contain FP32 values. B[N,K] contains packed BF16.
-/// Buffers are disjoint, products fit u32, and the launch covers full warps
-/// with the same tiling as tensor_project_tf32x3. Accumulation remains FP32.
+/// Buffers are disjoint, products fit u32, and the launch uses full warps.
+/// Cover ceil(M/16)*ceil(N/8) tiles when M>1. For M=1, each warp owns one
+/// output through N=2048, four through N=8192, or eight for wider matrices.
+/// Accumulation remains FP32.
 #[unsafe(no_mangle)]
 pub unsafe extern "ptx-kernel" fn tensor_project_bf16_weights(a: u64, b: u64, out: u64, rows: u32, inner: u32, cols: u32) {
     unsafe { multiply::<true, true, false>(a, b, out, rows, inner, cols, 1) };

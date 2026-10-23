@@ -36,18 +36,30 @@ fn profile(before: &[d3os_nvidia::compute::ProfileEntry], after: &[d3os_nvidia::
 }
 
 pub(super) fn kernels(backend: &Nvidia) -> Result<(), String> {
-    for (rows, inner, cols) in [
-        (1usize, 9216usize, 4096usize),
-        (1, 1024, 3584),
-        (1, 3584, 1024),
-        (1, 1024, 248320),
-        (3025, 363, 64),
+    for (packed, rows, inner, cols) in [
+        (false, 1usize, 9216usize, 4096usize),
+        (false, 1, 1024, 3584),
+        (false, 1, 3584, 1024),
+        (false, 1, 1024, 248320),
+        (false, 3025, 363, 64),
+        (true, 1, 1024, 1024),
+        (true, 1, 1024, 3584),
+        (true, 1, 3584, 1024),
+        (true, 1, 1024, 248320),
     ] {
-        let values = |length: usize| -> Vec<u32> { (0..length).map(|i| (((i % 31) as i32 - 15) as f32 / 32.).to_bits()).collect() };
+        let value = |i: usize| (((i % 31) as i32 - 15) as f32 / 32.).to_bits();
+        let values = |length: usize| -> Vec<u32> { (0..length).map(value).collect() };
         let a = backend.upload_words(&values(rows * inner)).map_err(|error| format!("{error}"))?;
-        let b = backend.upload_words(&values(inner * cols)).map_err(|error| format!("{error}"))?;
+        let weights = if packed {
+            (0..inner * cols / 2).map(|i| (value(i * 2) >> 16) | (value(i * 2 + 1) & 0xffff0000)).collect()
+        } else {
+            values(inner * cols)
+        };
+        let b = backend.upload_words(&weights).map_err(|error| format!("{error}"))?;
         let output = backend.allocate_words(rows * cols).map_err(|error| format!("{error}"))?;
-        let dispatch = || backend.dispatch_words(Kernel::Project, &[(&a, 0), (&b, 0), (&output, 0)], &[rows, inner, cols]);
+        let kernel = if packed { Kernel::ProjectBf16 } else { Kernel::Project };
+        let bytes_per_weight = if packed { 2. } else { 4. };
+        let dispatch = || backend.dispatch_words(kernel, &[(&a, 0), (&b, 0), (&output, 0)], &[rows, inner, cols]);
         dispatch().map_err(|error| format!("{error}"))?;
         const REPEATS: usize = 100;
         let start = now();
@@ -63,11 +75,7 @@ pub(super) fn kernels(backend: &Nvidia) -> Result<(), String> {
                 dispatch()?;
             }
             let after = backend.profile()?;
-            Ok::<_, d3os_compute::Error>(
-                after[Kernel::Project as usize]
-                    .device_ns
-                    .wrapping_sub(before[Kernel::Project as usize].device_ns),
-            )
+            Ok::<_, d3os_compute::Error>(after[kernel as usize].device_ns.wrapping_sub(before[kernel as usize].device_ns))
         })();
         let timed_elapsed = (now() - timed_start).max(1);
         let stopped = backend.set_device_timing(false);
@@ -87,11 +95,11 @@ pub(super) fn kernels(backend: &Nvidia) -> Result<(), String> {
             }
         }
         report(format_args!(
-            "NATIVE_KERNEL_BENCH rows={rows} inner={inner} cols={cols} repeats={REPEATS} mean_us={:.3} effective_gb_s={:.3} device_mean_us={:.3} device_gb_s={:.3} instrumented_mean_us={:.3}",
+            "NATIVE_KERNEL_BENCH rows={rows} inner={inner} cols={cols} packed_bf16={packed} repeats={REPEATS} mean_us={:.3} effective_gb_s={:.3} device_mean_us={:.3} device_gb_s={:.3} instrumented_mean_us={:.3}",
             elapsed as f64 * 1000. / REPEATS as f64,
-            inner as f64 * cols as f64 * 4. * REPEATS as f64 / (elapsed as f64 * 1e6),
+            inner as f64 * cols as f64 * bytes_per_weight * REPEATS as f64 / (elapsed as f64 * 1e6),
             device_ns as f64 / (REPEATS as f64 * 1000.),
-            inner as f64 * cols as f64 * 4. * REPEATS as f64 / device_ns.max(1) as f64,
+            inner as f64 * cols as f64 * bytes_per_weight * REPEATS as f64 / device_ns.max(1) as f64,
             timed_elapsed as f64 * 1000. / REPEATS as f64
         ));
     }

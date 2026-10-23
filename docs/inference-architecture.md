@@ -147,6 +147,11 @@ A GPU boot diagnostic exercises a real local stack frame across partial blocks.
 
 Qwen matrix weights remain in packed BF16 storage while activations and accumulators retain FP32 values.
 Single-row projections use coalesced warp reductions.
+For aligned rows with an input width divisible by 64, each lane reads two BF16 weights through one 32-bit load.
+Bit expansion preserves both weights exactly. Activations and fused multiply-add accumulation remain FP32.
+Other widths retain scalar reads, including odd rows and tails.
+Ordinary BF16 projection warps own one output through 2,048 columns, four through 8,192 columns, and eight for wider matrices.
+This gives medium projections more active warps while retaining input reuse for the vocabulary projection.
 Multi-row projections expand BF16 weights exactly and split FP32 activations into TF32 high and residual parts.
 They need two tensor products because BF16 weights have no TF32 residual.
 FP32 weight operations retain three tensor products and compensated FP32 accumulation.

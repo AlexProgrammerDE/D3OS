@@ -314,7 +314,13 @@ impl Kernel {
             }
             (Self::ProjectBf16, &[m, k, n]) => {
                 extents[..3].copy_from_slice(&[product(&[m, k])? as u64, u64::from(product(&[k, n])?).div_ceil(2), product(&[m, n])? as u64]);
-                let tile = if m == 1 && n <= 2048 { 1 } else { 8 };
+                let tile = if m == 1 && n <= 2048 {
+                    1
+                } else if m == 1 && n <= 8192 {
+                    4
+                } else {
+                    8
+                };
                 (product(&[m.div_ceil(16), n.div_ceil(tile), 32])?, 3, 2, false)
             }
             (Self::DequantizeBf16, &[n, half]) => {
