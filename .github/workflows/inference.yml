@@ -49,7 +49,7 @@ jobs:
             target/inference-qemu-self-test/serial.log
             target/inference-qemu-self-test/qemu.log
 
-  cpu-and-ptx:
+  cpu-and-cutile:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -57,19 +57,19 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-02-01
-          components: rust-src, rustfmt, clippy, llvm-tools, llvm-bitcode-linker
-          targets: nvptx64-nvidia-cuda
+          components: rust-src, rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - name: Verify CPU operators and model loading
         run: cargo test --locked -p d3os-compute -p d3os-inference -p d3os-nvidia --features d3os-compute/nvidia
       - name: Check compute and inference code
         run: cargo clippy --locked -p d3os-compute -p d3os-inference -p d3os-nvidia --features d3os-compute/nvidia --all-targets -- -D warnings
-      - name: Check Rust tensor inference kernels
+      - name: Install cuTile host compiler dependencies
         run: |
-          CARGO_TARGET_DIR=target/gpu-kernels cargo clippy --locked --manifest-path tools/gpu-kernels/Cargo.toml \
-            --target nvptx64-nvidia-cuda --release --no-default-features --features inference -- -D warnings
-      - name: Execute compiled Rust GPU kernels on the CPU
-        run: python3 tools/inference/test-gpu-kernels.py
+          sudo apt-get update
+          sudo apt-get install -y libclang-dev
+          rustup toolchain install 1.98.1 --profile minimal --component clippy,rustfmt
+      - name: Compile and audit cuTile kernels without GPU hardware
+        run: python3 tools/inference/test-cutile-kernels.py
       - name: Install model and OS build dependencies
         if: inputs.pretrained
         run: |
@@ -99,6 +99,8 @@ jobs:
           if-no-files-found: ignore
           path: |
             target/inference/manifest.json
+            target/nvidia/kernels/manifest.json
+            target/nvidia/kernels/*.json
             target/inference-qemu-*/serial.log
             target/inference-qemu-*/qemu.log
 

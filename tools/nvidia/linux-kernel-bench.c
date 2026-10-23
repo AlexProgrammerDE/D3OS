@@ -45,7 +45,7 @@ static void *library(const char *name) {
     return result;
 }
 
-static void benchmark(Handle function, Handle blas, unsigned rows, unsigned inner, unsigned cols) {
+static void benchmark(Handle module, Handle blas, unsigned rows, unsigned inner, unsigned cols) {
     const size_t sizes[3] = {(size_t)rows * inner, (size_t)inner * cols, (size_t)rows * cols};
     DevicePointer buffers[3];
     for (unsigned b = 0; b < 3; ++b) {
@@ -57,8 +57,12 @@ static void benchmark(Handle function, Handle blas, unsigned rows, unsigned inne
         free(values);
     }
     void *arguments[] = {&buffers[0], &buffers[1], &buffers[2], &rows, &inner, &cols};
-    const unsigned tile = rows == 1 && cols <= 2048 ? 1 : 8;
-    const unsigned blocks = (((rows + 15) / 16) * ((cols + tile - 1) / tile) + 3) / 4;
+    Handle function;
+    const char *entry = rows != 1 ? "tensor_project_tf32x3" :
+        cols <= 8192 ? "vector_project_tf32x3" : "vector_project_wide_tf32x3";
+    CHECK(cuModuleGetFunction(&function, module, entry));
+    const unsigned tile = rows == 1 && cols <= 8192 ? 4 : 32;
+    const unsigned blocks = ((rows + 15) / 16) * ((cols + tile - 1) / tile);
     Handle start, stop;
     CHECK(cuEventCreate(&start, 0));
     CHECK(cuEventCreate(&stop, 0));
@@ -115,17 +119,16 @@ int main(void) {
     LOAD(cublas, cublasCreate_v2); LOAD(cublas, cublasSgemm_v2); LOAD(cublas, cublasDestroy_v2);
     CHECK(cuInit(0));
     int device;
-    Handle context, module, function, blas;
+    Handle context, module, blas;
     CHECK(cuDeviceGet(&device, 0));
     CHECK(cuCtxCreate_v2(&context, 0, device));
     CHECK(cuModuleLoad(&module, "/inference.cubin"));
-    CHECK(cuModuleGetFunction(&function, module, "tensor_project_tf32x3"));
     CHECK(cublasCreate_v2(&blas));
-    benchmark(function, blas, 1, 9216, 4096);
-    benchmark(function, blas, 1, 1024, 3584);
-    benchmark(function, blas, 1, 3584, 1024);
-    benchmark(function, blas, 1, 1024, 248320);
-    benchmark(function, blas, 55 * 55, 363, 64);
+    benchmark(module, blas, 1, 9216, 4096);
+    benchmark(module, blas, 1, 1024, 3584);
+    benchmark(module, blas, 1, 3584, 1024);
+    benchmark(module, blas, 1, 1024, 248320);
+    benchmark(module, blas, 55 * 55, 363, 64);
     CHECK(cublasDestroy_v2(blas));
     CHECK(cuCtxDestroy_v2(context));
     dlclose(cublas);

@@ -396,6 +396,12 @@ def main():
                             "native GPU local-stack verification did not succeed"
                         )
                     if (
+                        args.kernels
+                        and (args.kernels / "inference.cubin").is_file()
+                        and "NVIDIA_DEVICE_TIMER_OK" not in text
+                    ):
+                        raise RuntimeError("native GPU timestamp verification did not succeed")
+                    if (
                         args.inference == "gpu-qwen"
                         and "INFERENCE_OK qwen backend=nvidia tokens=1 stop=EndOfSequence"
                         not in text

@@ -1,0 +1,51 @@
+// Two BF16 weights per word preserve full memory transactions on Ada.
+unsafe fn paired_project_template<const GATED: bool>(a: *const f32, b: *const f32, up: *const f32, output: *mut f32, inner: u32, cols: u32) {
+    let first = block_id() * unsigned(TILE_COLUMNS);
+    let col = lanes::<TILE_COLUMNS>() + broadcast_scalar(first, shape![TILE_COLUMNS]);
+    let col: Tile<u32, { [TILE_COLUMNS, 1] }> = col.reshape(shape![TILE_COLUMNS, 1]);
+    let col: Tile<u32, { [TILE_COLUMNS, 64] }> = col.broadcast(shape![TILE_COLUMNS, 64]);
+    let lane = lanes::<64>();
+    let lane2: Tile<u32, { [1, 64] }> = lane.reshape(shape![1, 64]);
+    let lane2: Tile<u32, { [TILE_COLUMNS, 64] }> = lane2.broadcast(shape![TILE_COLUMNS, 64]);
+    let mut even: Tile<f32, { [TILE_COLUMNS, 64] }> = broadcast_scalar(0f32, shape![TILE_COLUMNS, 64]);
+    let mut odd = even;
+    let mut up_even = even;
+    let mut up_odd = even;
+    let mut start = 0u32;
+    while start < inner / 2u32 {
+        let pair = lane + broadcast_scalar(start, shape![64]);
+        let mask = lt_tile(pair, broadcast_scalar(inner / 2u32, shape![64]));
+        let xe = unsafe { read_tile(a, pair * broadcast_scalar(2u32, shape![64]), mask, 0f32) };
+        let xo = unsafe { read_tile(a, pair * broadcast_scalar(2u32, shape![64]) + broadcast_scalar(1u32, shape![64]), mask, 0f32) };
+        let xe: Tile<f32, { [1, 64] }> = xe.reshape(shape![1, 64]);
+        let xe: Tile<f32, { [TILE_COLUMNS, 64] }> = xe.broadcast(shape![TILE_COLUMNS, 64]);
+        let xo: Tile<f32, { [1, 64] }> = xo.reshape(shape![1, 64]);
+        let xo: Tile<f32, { [TILE_COLUMNS, 64] }> = xo.broadcast(shape![TILE_COLUMNS, 64]);
+        let pair = lane2 + broadcast_scalar(start, shape![TILE_COLUMNS, 64]);
+        let mask = lt_tile(pair, broadcast_scalar(inner / 2u32, shape![TILE_COLUMNS, 64])) & lt_tile(col, broadcast_scalar(cols, shape![TILE_COLUMNS, 64]));
+        let index = col * broadcast_scalar(inner / 2u32, shape![TILE_COLUMNS, 64]) + pair;
+        let words: Tile<u32, { [TILE_COLUMNS, 64] }> = unsafe { read_matrix(word_pointer(b), index, mask, 0u32, shape![PAIR_VALUES]) };
+        let lo: Tile<f32, { [TILE_COLUMNS, 64] }> = bitcast(words << broadcast_scalar(16u32, shape![TILE_COLUMNS, 64]));
+        let hi: Tile<f32, { [TILE_COLUMNS, 64] }> = bitcast(words & broadcast_scalar(unsigned(-65536i32), shape![TILE_COLUMNS, 64]));
+        even = fma(xe, lo, even, rounding::NearestEven, ftz::Disabled);
+        odd = fma(xo, hi, odd, rounding::NearestEven, ftz::Disabled);
+        if GATED {
+            let words: Tile<u32, { [TILE_COLUMNS, 64] }> = unsafe { read_matrix(word_pointer(up), index, mask, 0u32, shape![PAIR_VALUES]) };
+            let lo: Tile<f32, { [TILE_COLUMNS, 64] }> = bitcast(words << broadcast_scalar(16u32, shape![TILE_COLUMNS, 64]));
+            let hi: Tile<f32, { [TILE_COLUMNS, 64] }> = bitcast(words & broadcast_scalar(unsigned(-65536i32), shape![TILE_COLUMNS, 64]));
+            up_even = fma(xe, lo, up_even, rounding::NearestEven, ftz::Disabled);
+            up_odd = fma(xo, hi, up_odd, rounding::NearestEven, ftz::Disabled);
+        }
+        start = start + 64u32;
+    }
+    let sum: Tile<f32, { [TILE_COLUMNS] }> = reduce_sum(even + odd, 1i32);
+    let value = if GATED {
+        let up: Tile<f32, { [TILE_COLUMNS] }> = reduce_sum(up_even + up_odd, 1i32);
+        silu_tile(sum) * up
+    } else {
+        sum
+    };
+    let col = lanes::<TILE_COLUMNS>() + broadcast_scalar(first, shape![TILE_COLUMNS]);
+    let mask = lt_tile(col, broadcast_scalar(cols, shape![TILE_COLUMNS]));
+    unsafe { write_tile(output, col, value, mask) };
+}

@@ -221,6 +221,19 @@ impl Kernel {
         }
     }
 
+    /// Select the cuTile specialization without changing the public request ABI.
+    pub fn entry(self, parameters: &[u32]) -> &'static str {
+        match (self, parameters) {
+            (Self::GatedProjectBf16, [k, _]) if k.is_multiple_of(2) => "gated_project_paired_bf16_weights",
+            (Self::ProjectBf16, [1, k, n]) if !k.is_multiple_of(2) && *n > 8192 => "vector_project_unpaired_wide_bf16_weights",
+            (Self::Project, [1, _, n]) if *n <= 8192 => "vector_project_tf32x3",
+            (Self::Project, [1, _, _]) => "vector_project_wide_tf32x3",
+            (Self::ProjectBf16, [1, _, n]) if *n <= 8192 => "vector_project_bf16_weights",
+            (Self::ProjectBf16, [1, _, _]) => "vector_project_wide_bf16_weights",
+            _ => self.symbol(),
+        }
+    }
+
     pub fn work(self, p: &[u32]) -> Result<Work> {
         let mut extents = [0; 16];
         let mut mutated = 0;
@@ -242,7 +255,7 @@ impl Kernel {
                     u64::from(product(&[k, n])?).div_ceil(2),
                     u64::from(product(&[splits, m, n])?),
                 ]);
-                (product(&[splits, m.div_ceil(16), n.div_ceil(8), 32])?, 3, 2, false)
+                (product(&[splits, m.div_ceil(16), n.div_ceil(32), 128])?, 3, 2, false)
             }
             (Self::SumProjectionPartials, &[m, n, splits]) => {
                 let output = product(&[m, n])?;
@@ -258,7 +271,7 @@ impl Kernel {
                 position.checked_add(rows).ok_or(Error::InvalidField)?;
                 let n = product(&[rows, heads, dim])?;
                 extents[..3].copy_from_slice(&[u64::from(product(&[n, stride])?), u64::from(dim), u64::from(n)]);
-                (product(&[rows, heads, 32])?, 3, 2, false)
+                (product(&[rows, heads, 128])?, 3, 2, false)
             }
             (Self::Embedding, &[vocab, width, rows, packed]) => {
                 if packed > 1 {
@@ -296,32 +309,24 @@ impl Kernel {
                     u64::from(product(&[rows, heads, value])?),
                 ]);
                 mutated = (1 << 8) | (1 << 9);
-                let columns = if self == Self::DeltaFusedBatch { 8 } else { 4 };
-                threads = product(&[value.div_ceil(columns), 32])?;
+                threads = 256;
                 (product(&[heads, threads])?, 11, 10, false)
             }
             (Self::ArgMax, &[n]) => {
                 product(&[n])?;
                 extents[..2].copy_from_slice(&[u64::from(n), 64]);
-                (1024, 2, 1, false)
+                (4096, 2, 1, false)
             }
             (Self::GatedProjectBf16, &[k, n]) => {
                 product(&[k])?;
                 let weights = u64::from(product(&[k, n])?).div_ceil(2);
                 extents[..4].copy_from_slice(&[u64::from(k), weights, weights, u64::from(n)]);
-                let tile = if n <= 2048 { 1 } else { 4 };
-                (product(&[n.div_ceil(tile), 32])?, 4, 3, false)
+                (product(&[n.div_ceil(4), 128])?, 4, 3, false)
             }
             (Self::ProjectBf16, &[m, k, n]) => {
                 extents[..3].copy_from_slice(&[product(&[m, k])? as u64, u64::from(product(&[k, n])?).div_ceil(2), product(&[m, n])? as u64]);
-                let tile = if m == 1 && n <= 2048 {
-                    1
-                } else if m == 1 && n <= 8192 {
-                    4
-                } else {
-                    8
-                };
-                (product(&[m.div_ceil(16), n.div_ceil(tile), 32])?, 3, 2, false)
+                let columns = if m == 1 && n <= 8192 { 4 } else { 32 };
+                (product(&[m.div_ceil(16), n.div_ceil(columns), 128])?, 3, 2, false)
             }
             (Self::DequantizeBf16, &[n, half]) => {
                 product(&[n])?;
@@ -335,17 +340,18 @@ impl Kernel {
                 let n = product(&[width, height])? as u64;
                 let resources = product(&[words])? as u64;
                 let packed = self == Self::FuzzBytes;
+                threads = 32;
                 extents[..3].copy_from_slice(&[
                     if packed { n.div_ceil(4) } else { n },
                     product(&[commands, 12])? as u64,
                     if packed { resources.div_ceil(4) } else { resources },
                 ]);
-                (if packed { product(&[width, 32])? } else { 1 }, 3, 0, false)
+                (if packed { product(&[width, 32])? } else { 32 }, 3, 0, false)
             }
             (Self::Raster, &[width, height, commands, words]) => {
                 let n = product(&[width, height])?;
                 extents[..4].copy_from_slice(&[n as u64, product(&[commands, 12])? as u64, product(&[words])? as u64, n as u64]);
-                (n, 4, 3, false)
+                (product(&[n.div_ceil(32), 128])?, 4, 3, false)
             }
             (Self::RasterBinned | Self::RasterBinnedBytes, &[width, height, commands, words, bins]) => {
                 let n = product(&[width, height])?;
@@ -361,7 +367,7 @@ impl Kernel {
                 let textures = u64::from(product(&[words])?);
                 let textures = if self == Self::RasterBinnedBytes { textures.div_ceil(4) } else { textures };
                 extents[..5].copy_from_slice(&[pixels, product(&[commands, 12])? as u64, textures, pixels, bins as u64]);
-                (n, 5, 3, false)
+                (product(&[n.div_ceil(32), 128])?, 5, 3, false)
             }
             (Self::Palette | Self::PaletteBytes, &[width, height, scale]) => {
                 if !matches!(scale, 1..=4) {
@@ -383,8 +389,8 @@ impl Kernel {
             }
             (Self::Matmul | Self::Project, &[m, k, n]) => {
                 extents[..3].copy_from_slice(&[product(&[m, k])? as u64, product(&[k, n])? as u64, product(&[m, n])? as u64]);
-                let tile = if self == Self::Project && m == 1 && n <= 2048 { 1 } else { 8 };
-                (product(&[m.div_ceil(16), n.div_ceil(tile), 32])?, 3, 2, false)
+                let columns = if self == Self::Project && m == 1 && n <= 8192 { 4 } else { 32 };
+                (product(&[m.div_ceil(16), n.div_ceil(columns), 128])?, 3, 2, false)
             }
             (Self::Relu | Self::Copy, &[n]) => {
                 product(&[n])?;
@@ -425,7 +431,7 @@ impl Kernel {
             (Self::Softmax, &[rows, cols]) => {
                 let n = product(&[rows, cols])?;
                 extents[..2].fill(n as u64);
-                (rows, 2, 1, true)
+                (product(&[rows, 128])?, 2, 1, true)
             }
             (Self::Add | Self::SiluMul, &[n]) => {
                 product(&[n])?;
@@ -449,7 +455,7 @@ impl Kernel {
                 }
                 let n = product(&[heads, dim])?;
                 extents[..3].copy_from_slice(&[product(&[n, stride])? as u64, dim as u64, n as u64]);
-                (heads, 3, 2, false)
+                (product(&[heads, 128])?, 3, 2, false)
             }
             (Self::AttentionScores, &[heads, kv_heads, dim, positions]) => {
                 let n = product(&[heads, positions])?;
@@ -457,7 +463,7 @@ impl Kernel {
                     return Err(Error::InvalidField);
                 }
                 extents[..3].copy_from_slice(&[product(&[heads, dim])? as u64, product(&[positions, kv_heads, dim])? as u64, n as u64]);
-                (n, 3, 2, false)
+                (product(&[heads, positions.div_ceil(32), 128])?, 3, 2, false)
             }
             (Self::AttentionOutput, &[heads, kv_heads, dim, positions]) => {
                 if kv_heads == 0 || heads % kv_heads != 0 {
@@ -470,7 +476,7 @@ impl Kernel {
                     product(&[n, 2])? as u64,
                     n as u64,
                 ]);
-                (n, 4, 3, false)
+                (product(&[heads, dim.div_ceil(128), 128])?, 4, 3, false)
             }
             (Self::DeltaConvolution, &[channels, kernel]) => {
                 let history = product(&[channels, kernel])? as u64;
@@ -488,20 +494,20 @@ impl Kernel {
                     heads as u64,
                     product(&[heads, 4])? as u64,
                 ]);
-                (heads, 6, 5, false)
+                (product(&[heads, 128])?, 6, 5, false)
             }
             (Self::DeltaUpdate, &[heads, key, value]) => {
                 let channels = delta_channels(heads, key, value)?;
                 let n = product(&[heads, value])?;
                 extents[..4].copy_from_slice(&[channels as u64, product(&[heads, 4])? as u64, product(&[heads, key, value])? as u64, n as u64]);
                 mutated = 1 << 2;
-                (n, 4, 3, false)
+                (product(&[heads, value.div_ceil(128), 128])?, 4, 3, false)
             }
             (Self::DeltaOutput, &[heads, value, epsilon]) => {
                 positive_float(epsilon)?;
                 let n = product(&[heads, value])? as u64;
                 extents[..4].copy_from_slice(&[n, value as u64, n, n]);
-                (product(&[heads, 32])?, 4, 3, false)
+                (product(&[heads, 128])?, 4, 3, false)
             }
             _ => return Err(Error::InvalidField),
         };

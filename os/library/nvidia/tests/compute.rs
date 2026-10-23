@@ -32,7 +32,7 @@ fn fused_batch_checks_sequence_extents_and_state_aliases() {
     let p = [16, 128, 128, 4, 1e-6f32.to_bits(), 32];
     let work = Kernel::DeltaFusedBatch.work(&p).unwrap();
     assert_eq!(work.extents[..11], [196608, 65536, 512, 512, 24576, 16, 16, 128, 24576, 262144, 65536]);
-    assert_eq!((work.threads, work.blocks), (512, 16));
+    assert_eq!((work.threads, work.blocks), (256, 16));
     assert_eq!(work.mutated, (1 << 8) | (1 << 9));
     let pointers: Vec<_> = (1..=11).map(|i| i * 0x200000u64).collect();
     assert!(work.validate_aliases(&pointers).is_ok());
@@ -65,7 +65,7 @@ fn fused_batch_checks_sequence_extents_and_state_aliases() {
 fn split_projection_bounds_partial_tiles_and_reduction_storage() {
     let split = Kernel::ProjectBf16Split.work(&[17, 1025, 257, 16]).unwrap();
     assert_eq!(split.extents[..3], [17425, 131713, 69904]);
-    assert_eq!((split.threads, split.blocks), (128, 264));
+    assert_eq!((split.threads, split.blocks), (128, 288));
     assert!(split.validate_aliases(&[0x10000, 0x40000, 0x100000]).is_ok());
     assert!(split.validate_aliases(&[0x10000, 0x40000, 0x40004]).is_err());
     let reduction = Kernel::SumProjectionPartials.work(&[17, 257, 16]).unwrap();
@@ -80,11 +80,11 @@ fn split_projection_bounds_partial_tiles_and_reduction_storage() {
 }
 
 #[test]
-fn batched_preparation_covers_warps_and_checks_positions_and_aliases() {
+fn batched_preparation_covers_tiles_and_checks_positions_and_aliases() {
     let work = Kernel::AttentionPrepareBatch
         .work(&[3, 65, 64, 5, 1e7f32.to_bits(), 1e-6f32.to_bits(), 2, 3])
         .unwrap();
-    assert_eq!((work.threads, work.blocks), (128, 3));
+    assert_eq!((work.threads, work.blocks), (128, 9));
     assert_eq!(work.extents[..3], [1170, 65, 585]);
     assert!(work.validate_aliases(&[0x10000, 0x20000, 0x30000]).is_ok());
     assert!(work.validate_aliases(&[0x10000, 0x20000, 0x20004]).is_err());
@@ -143,15 +143,16 @@ fn packed_weight_extents_cover_odd_tails_and_half_word_offsets() {
 
 #[test]
 fn packed_vector_launch_covers_every_output_at_tile_boundaries() {
-    for (n, outputs_per_warp) in [(1u32, 1u32), (2048, 1), (2049, 4), (8192, 4), (8193, 8)] {
+    for (n, outputs_per_block) in [(1u32, 4u32), (2048, 4), (2049, 4), (8192, 4), (8193, 32)] {
         let work = Kernel::ProjectBf16.work(&[1, 64, n]).unwrap();
-        let covered = work.blocks * work.threads / 32 * outputs_per_warp;
+        let covered = work.blocks * outputs_per_block;
         assert!(covered >= n);
-        assert!(covered - n < 4 * outputs_per_warp);
+        assert!(covered - n < outputs_per_block);
+        assert_eq!(work.threads, 128);
         assert_eq!(work.extents[..3], [64, u64::from(32 * n), u64::from(n)]);
     }
     let batch = Kernel::ProjectBf16.work(&[17, 64, 2049]).unwrap();
-    assert_eq!(batch.blocks * batch.threads / 32, (2u32 * 2049u32.div_ceil(8)).next_multiple_of(4));
+    assert_eq!(batch.blocks, 2u32 * 2049u32.div_ceil(32));
 }
 
 #[test]
@@ -163,8 +164,7 @@ fn gated_projection_checks_both_weight_ranges_and_covers_odd_outputs() {
             [33, u64::from(33 * n).div_ceil(2), u64::from(33 * n).div_ceil(2), u64::from(n)]
         );
         assert_eq!((work.pointers, work.output), (4, 3));
-        let columns = if n <= 2048 { 1 } else { 4 };
-        assert_eq!(work.blocks, n.div_ceil(columns).div_ceil(4));
+        assert_eq!(work.blocks, n.div_ceil(4));
         for writer_alias in [0x1000, 0x20004, 0x40004] {
             assert!(work.validate_aliases(&[0x1000, 0x20000, 0x40000, writer_alias]).is_err());
         }
@@ -189,7 +189,7 @@ fn matrix_work_covers_partial_tiles_and_checks_products() {
     for kernel in [Kernel::Matmul, Kernel::Project] {
         let work = kernel.work(&[17, 33, 9]).unwrap();
         assert_eq!(work.extents[..3], [17 * 33, 33 * 9, 17 * 9]);
-        assert_eq!((work.threads, work.blocks, work.pointers, work.output), (128, 1, 3, 2));
+        assert_eq!((work.threads, work.blocks, work.pointers, work.output), (128, 2, 3, 2));
         assert!(!work.in_place);
         assert!(kernel.work(&[u32::MAX, 2, 1]).is_err());
         assert!(kernel.work(&[0, 1, 1]).is_err());
@@ -266,7 +266,7 @@ fn selection_covers_the_complete_input_without_wrapping_its_grid() {
     for n in [1, 33, 248320, u32::MAX] {
         let work = Kernel::ArgMax.work(&[n]).unwrap();
         assert_eq!(work.extents[..2], [u64::from(n), 64]);
-        assert_eq!((work.threads, work.blocks), (128, 8));
+        assert_eq!((work.threads, work.blocks), (128, 32));
         assert!(work.validate_aliases(&[0x1000, 0x1000]).is_err());
     }
     assert!(Kernel::ArgMax.work(&[0]).is_err());
@@ -280,7 +280,7 @@ fn packed_raster_bounds_include_partial_words_without_widening_pixels() {
     assert!(Kernel::RasterBinnedBytes.work(&[13, 17, 3, 413, 30]).is_err());
     let fuzz = Kernel::FuzzBytes.work(&[13, 17, 3, 457]).unwrap();
     assert_eq!(fuzz.extents[..3], [56, 36, 115]);
-    assert_eq!((fuzz.blocks, fuzz.threads), (4, 128));
+    assert_eq!((fuzz.blocks, fuzz.threads), (13, 32));
     let palette = Kernel::PaletteBytes.work(&[13, 17, 3]).unwrap();
     assert_eq!(palette.extents[..3], [56, 256, 13 * 17 * 9]);
     assert!(Kernel::PaletteBytes.work(&[u32::MAX, 2, 1]).is_err());
@@ -289,7 +289,7 @@ fn packed_raster_bounds_include_partial_words_without_widening_pixels() {
 #[test]
 fn fused_delta_covers_all_writers_and_checks_cta_limits() {
     let work = Kernel::DeltaFused.work(&[16, 128, 128, 4, 1e-6f32.to_bits()]).unwrap();
-    assert_eq!((work.threads, work.blocks, work.pointers, work.output), (1024, 16, 11, 10));
+    assert_eq!((work.threads, work.blocks, work.pointers, work.output), (256, 16, 11, 10));
     assert_eq!(work.extents[..11], [6144, 2048, 16, 16, 24576, 16, 16, 128, 24576, 262144, 2048]);
     assert_eq!(work.mutated, (1 << 8) | (1 << 9));
     let mut addresses: Vec<_> = (1..=11).map(|i| i * 0x1000000).collect();
@@ -300,7 +300,7 @@ fn fused_delta_covers_all_writers_and_checks_cta_limits() {
     addresses[9] = addresses[10];
     assert!(work.validate_aliases(&addresses).is_err());
     let odd = Kernel::DeltaFused.work(&[2, 5, 7, 3, 1e-6f32.to_bits()]).unwrap();
-    assert_eq!((odd.threads, odd.blocks), (64, 2));
+    assert_eq!((odd.threads, odd.blocks), (256, 2));
     for p in [
         [1, 129, 128, 4, 1],
         [1, 128, 129, 4, 1],

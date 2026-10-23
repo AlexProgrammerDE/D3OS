@@ -151,8 +151,7 @@ Build the OS image and native kernels:
 
 ```bash
 cargo make --no-workspace --profile production image
-python3 tools/nvidia/prepare-kernels.py --ptxas /path/to/ptxas \
-  --nvdisasm /path/to/nvdisasm
+python3 tools/nvidia/prepare-kernels.py
 ```
 
 Run the operator suite and full-model verification sequentially:

@@ -3,8 +3,8 @@
 This guide is for developers who write compute applications for D3OS.
 For native text generation, read [the Qwen3.5-0.8B guide](qwen.howto.md).
 The CPU backend runs inside D3OS and on a development host.
-The PTX harness executes compiled Rust GPU kernels on a CPU.
-Neither path requires an NVIDIA GPU or NVIDIA host libraries.
+The cuTile compiler checks run without an NVIDIA GPU or host driver.
+They require the pinned host compiler tools and development headers.
 
 The current model demonstration uses pretrained torchvision AlexNet in evaluation mode.
 It accepts one normalized RGB image with shape `[1, 3, 224, 224]`.
@@ -25,42 +25,30 @@ cargo run --locked -p d3os-inference --example infer-host --release -- self-test
 The tests cover convolution, matrix multiplication, pooling, activation, softmax, archive validation, and a small convolutional network.
 The host example uses the same libraries as the D3OS application.
 
-## Execute Rust GPU kernels without a GPU
+## Check cuTile kernels without a GPU
 
-Install the GPU compiler components for the repository's pinned toolchain:
-
-```bash
-rustup target add nvptx64-nvidia-cuda --toolchain nightly-2026-02-01
-rustup component add llvm-tools llvm-bitcode-linker --toolchain nightly-2026-02-01
-python3 tools/inference/test-gpu-kernels.py
-```
-
-On Linux x86-64, the script downloads a checksum-pinned [GPUOcelot interpreter](https://github.com/tinygrad/gpuocelot).
-It stores this development dependency in `target/gpu-sim`.
-The upstream binary requests an executable stack.
-The script removes that request from the local copy before loading it, so the host keeps its stack protection.
-
-On other platforms, build GPUOcelot from its source.
-Then supply the library path:
+On Linux x86-64, install libclang and the host Rust toolchain:
 
 ```bash
-python3 tools/inference/test-gpu-kernels.py --library /path/to/libgpuocelot.dylib
+sudo apt-get install libclang-dev
+rustup toolchain install 1.98.1 --profile minimal --component clippy,rustfmt
+python3 tools/inference/test-cutile-kernels.py
 ```
 
-The suite executes 22 numerical cases across vector addition, ReLU, and matrix multiplication.
-It includes partial thread blocks and guards around output buffers.
-The final output is:
+The script downloads checksum-pinned NVIDIA compiler packages into `target/nvidia/cutile-toolkit`.
+It runs linker tests, Clippy, compilation, and SASS audits.
+It does not install a host GPU driver.
+The expected final marker is:
 
 ```text
-GPU_PTX_SUITE_OK kernels=3 cases=22 hardware_validated=false
+CUTILE_VALIDATION_OK hardware_validated=false
 ```
 
-The interpreter requires PTX 3.2, so the simulated build targets `sm_35`.
-The script also compiles the same Rust source for `sm_86` and preserves both outputs.
-To compile an Ada artifact, add `--hardware-sm sm_89` to the command.
-It does not rewrite generated PTX instructions.
-The hardware artifacts in `target/gpu-sim/sm_86` or `target/gpu-sim/sm_89` still require assembly and hardware verification.
-These tests do not cover Tensor Cores, PCIe, firmware, GPU page tables, or hardware scheduling.
+The build writes Tile IR, native binaries, disassembly, and resource metadata into `target/nvidia/kernels`.
+It covers all 38 inference and rendering operators, plus boot diagnostics.
+These checks do not execute GPU instructions or establish numerical correctness.
+Run the [VFIO hardware checks](nvidia-vfio.howto.md#8-run-native-gpu-inference) for those guarantees.
+The previous GPUOcelot PTX interpreter cannot execute the cuTile binaries and is removed.
 
 ## Prepare pretrained AlexNet
 
@@ -192,13 +180,15 @@ Load weights with `AlexNet::load`, supply a normalized input tensor, and call `A
 Use `|_, _| Ok(())` as the observer when reference-layer comparisons are unnecessary.
 Apply `Backend::softmax` and `top_k` to the resulting logits.
 
-Keep device kernels in a separate crate with the `nvptx64-nvidia-cuda` target.
-The sample crate at `tools/gpu-kernels` defines its launch ABI with 64-bit device addresses and 32-bit dimensions.
+Write device kernels in the cuTile module assembled by `tools/gpu-kernels/build.rs`.
+The host compiler uses 64-bit device pointers and 32-bit dimensions for the native launch ABI.
+Keep GPU operations inside the supported cuTile DSL.
+D3OS validates the compiled thread count, register budget, shared-memory partition, and buffer extents.
 The hardware driver must validate those dimensions and keep all referenced buffers alive until execution completes.
 
 ## Run CI verification
 
-The `Native inference` workflow runs CPU tests, Clippy, and the PTX suite on pushes and pull requests.
+The `Native inference` workflow runs CPU tests, Clippy, and cuTile compiler checks on pushes and pull requests.
 For pretrained verification, start that workflow manually with its `pretrained` input enabled.
 This option also builds D3OS and runs both QEMU tests with software CPU emulation.
 The workflow uploads the manifest and guest logs.

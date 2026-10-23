@@ -1,22 +1,17 @@
 [package]
 name = "d3os-gpu-kernels"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
-
-[lib]
-crate-type = ["cdylib"]
-
-[features]
-default = ["vector-add"]
-vector-add = []
-matmul = []
-relu = []
-tensor-matmul = []
-inference = []
 
 [workspace]
 
+[dependencies]
+cutile = { git = "https://github.com/NVIDIA/cuda-rust.git", rev = "2f47ad0036a7c18ec11d460f70b297a5824f9788" }
+cutile-ir = { git = "https://github.com/NVIDIA/cuda-rust.git", rev = "2f47ad0036a7c18ec11d460f70b297a5824f9788" }
+d3os-nvidia = { path = "../../os/library/nvidia" }
+
+goblin = "0.10"
+serde_json = "1"
+
 [profile.release]
-panic = "abort"
 opt-level = 3
-debug = false

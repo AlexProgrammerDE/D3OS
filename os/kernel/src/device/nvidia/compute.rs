@@ -17,6 +17,8 @@ pub(super) struct Program {
     registers: u64,
     local_bytes: u64,
     shared_bytes: u64,
+    required_threads: Option<[u32; 3]>,
+    constants: [Option<(u64, u32)>; 8],
     source: (usize, usize),
 }
 
@@ -139,7 +141,15 @@ impl Compute {
         let mut registers = 0;
         let mut stack_bytes = 0;
         let mut shared_bytes = 0x400u64;
+        let mut required_threads = None;
+        let mut constants = [None; 8];
         for section in &elf.section_headers {
+            if elf.shdr_strtab.get_at(section.sh_name).and_then(|name| name.strip_prefix(".nv.info.")) == Some(symbol) {
+                let metadata = cubin
+                    .get(section.sh_offset as usize..section.sh_offset.checked_add(section.sh_size).ok_or(Error::Firmware)? as usize)
+                    .ok_or(Error::Firmware)?;
+                required_threads = d3os_nvidia::cubin::required_threads(metadata).map_err(|_| Error::Firmware)?;
+            }
             if elf.shdr_strtab.get_at(section.sh_name).and_then(|name| name.strip_prefix(".nv.shared.")) == Some(symbol) {
                 // CUDA reserves a 1 KiB shared-memory prefix. The static section
                 // is NOBITS and needs allocation, rather than a VRAM image copy.
@@ -164,6 +174,18 @@ impl Compute {
                 .ok_or(Error::Firmware)?;
             image.resize(offset, 0);
             image.extend_from_slice(bytes);
+            if let Some(name) = elf.shdr_strtab.get_at(section.sh_name).and_then(|name| name.strip_prefix(".nv.constant")) {
+                let (bank, scope) = name.split_once('.').map_or((name, None), |(bank, scope)| (bank, Some(scope)));
+                if let Ok(bank) = bank.parse::<usize>() {
+                    if (1..8).contains(&bank) && scope.is_none_or(|scope| scope == symbol) {
+                        let size = u32::try_from(section.sh_size).map_err(|_| Error::Firmware)?;
+                        if size > 65536 {
+                            return Err(Error::Firmware);
+                        }
+                        constants[bank] = Some((offset as u64, size));
+                    }
+                }
+            }
             if elf.shdr_strtab.get_at(section.sh_name).and_then(|name| name.strip_prefix(".text.")) == Some(symbol) {
                 entry = Some((offset as u64, section.sh_size));
                 registers = (section.sh_info >> 24) as u64;
@@ -182,6 +204,8 @@ impl Compute {
             registers,
             local_bytes: u64::from(stack_bytes).checked_add(0x240).ok_or(Error::Firmware)?,
             shared_bytes,
+            required_threads,
+            constants: constants.map(|binding| binding.map(|(offset, size)| (program.virtual_address + offset, size))),
             source: (cubin.as_ptr() as usize, cubin.len()),
         };
         self.programs.insert(symbol, program);
@@ -197,6 +221,9 @@ impl Compute {
         }
         let cached = self.programs.contains_key(symbol);
         let program = self.load_program(device, cubin, symbol)?;
+        if program.required_threads.is_some_and(|required| required != [threads, 1, 1]) {
+            return Err(Error::Alignment);
+        }
         if d3os_nvidia::cubin::validate_ada_registers(program.registers, threads).is_err() {
             warn!(
                 "NVIDIA launch exceeds Ada register budget symbol={symbol} registers={} threads={threads}",
@@ -224,8 +251,69 @@ impl Compute {
         let mut constants = constants.into_bytes();
         constants[0x160..0x160 + arguments.len()].copy_from_slice(arguments);
         submission.region.copy(256, &constants)?;
+        let shared_partition = u64::from(d3os_nvidia::cubin::shared_partition(program.shared_bytes as u32)?);
         let mut qmd = Record::<256>::default();
         use QmdFields as Q;
+        let banks = [
+            (
+                Q::CONSTANT_BUFFER_ADDR_LOWER_1,
+                Q::CONSTANT_BUFFER_ADDR_UPPER_1,
+                Q::CONSTANT_BUFFER_SIZE_SHIFTED4_1,
+                Q::CONSTANT_BUFFER_VALID_1,
+                Q::CONSTANT_BUFFER_INVALIDATE_1,
+            ),
+            (
+                Q::CONSTANT_BUFFER_ADDR_LOWER_2,
+                Q::CONSTANT_BUFFER_ADDR_UPPER_2,
+                Q::CONSTANT_BUFFER_SIZE_SHIFTED4_2,
+                Q::CONSTANT_BUFFER_VALID_2,
+                Q::CONSTANT_BUFFER_INVALIDATE_2,
+            ),
+            (
+                Q::CONSTANT_BUFFER_ADDR_LOWER_3,
+                Q::CONSTANT_BUFFER_ADDR_UPPER_3,
+                Q::CONSTANT_BUFFER_SIZE_SHIFTED4_3,
+                Q::CONSTANT_BUFFER_VALID_3,
+                Q::CONSTANT_BUFFER_INVALIDATE_3,
+            ),
+            (
+                Q::CONSTANT_BUFFER_ADDR_LOWER_4,
+                Q::CONSTANT_BUFFER_ADDR_UPPER_4,
+                Q::CONSTANT_BUFFER_SIZE_SHIFTED4_4,
+                Q::CONSTANT_BUFFER_VALID_4,
+                Q::CONSTANT_BUFFER_INVALIDATE_4,
+            ),
+            (
+                Q::CONSTANT_BUFFER_ADDR_LOWER_5,
+                Q::CONSTANT_BUFFER_ADDR_UPPER_5,
+                Q::CONSTANT_BUFFER_SIZE_SHIFTED4_5,
+                Q::CONSTANT_BUFFER_VALID_5,
+                Q::CONSTANT_BUFFER_INVALIDATE_5,
+            ),
+            (
+                Q::CONSTANT_BUFFER_ADDR_LOWER_6,
+                Q::CONSTANT_BUFFER_ADDR_UPPER_6,
+                Q::CONSTANT_BUFFER_SIZE_SHIFTED4_6,
+                Q::CONSTANT_BUFFER_VALID_6,
+                Q::CONSTANT_BUFFER_INVALIDATE_6,
+            ),
+            (
+                Q::CONSTANT_BUFFER_ADDR_LOWER_7,
+                Q::CONSTANT_BUFFER_ADDR_UPPER_7,
+                Q::CONSTANT_BUFFER_SIZE_SHIFTED4_7,
+                Q::CONSTANT_BUFFER_VALID_7,
+                Q::CONSTANT_BUFFER_INVALIDATE_7,
+            ),
+        ];
+        for (bank, (lower, upper, size, valid, invalidate)) in banks.into_iter().enumerate() {
+            if let Some((address, bytes)) = program.constants[bank + 1] {
+                qmd.set_bits(lower, address & 0xffffffff)?;
+                qmd.set_bits(upper, address >> 32)?;
+                qmd.set_bits(size, u64::from(bytes.div_ceil(16)))?;
+                qmd.set_bits(valid, 1)?;
+                qmd.set_bits(invalidate, 1)?;
+            }
+        }
         for (field, value) in [
             (Q::QMD_MAJOR_VERSION, 3),
             (Q::QMD_GROUP_ID, 0x3f),
@@ -241,8 +329,8 @@ impl Compute {
             (Q::SAMPLER_INDEX, 1),
             (Q::BARRIER_COUNT, 1),
             (Q::CWD_MEMBAR_TYPE, u64::from(NVC6C0_QMDV03_00_CWD_MEMBAR_TYPE_L1_SYSMEMBAR)),
-            (Q::MIN_SM_CONFIG_SHARED_MEM_SIZE, 9),
-            (Q::TARGET_SM_CONFIG_SHARED_MEM_SIZE, 9),
+            (Q::MIN_SM_CONFIG_SHARED_MEM_SIZE, shared_partition),
+            (Q::TARGET_SM_CONFIG_SHARED_MEM_SIZE, shared_partition),
             (Q::MAX_SM_CONFIG_SHARED_MEM_SIZE, 0x1a),
             (Q::PROGRAM_PREFETCH_SIZE, (program.bytes >> 8).min(0x1ff)),
             (Q::SASS_VERSION, self.sass_version),
@@ -364,30 +452,38 @@ impl Compute {
         Ok(())
     }
 
-    pub(super) fn clock_probe(&mut self, device: &Device, cubin: &'static [u8]) -> Result<()> {
+    pub(super) fn timestamp_test(&mut self, device: &Device, cubin: &'static [u8]) -> Result<()> {
         let output = self.memory.allocate(device, 4096, 4096)?;
         let vram = device.vram.as_ref().ok_or(Error::Firmware)?;
+        for index in 0..128 {
+            vram.write(output.physical as usize + index * 4, 1f32.to_bits())?;
+        }
         let timing = self.device_timing;
         self.device_timing = true;
-        for sample in 0..3 {
-            self.launch(device, cubin, "clock_probe", &output.virtual_address.to_le_bytes(), [1, 1])?;
-            let read64 = |offset| -> Result<u64> {
-                let low = vram.read(output.physical as usize + offset).ok_or(Error::Firmware)?;
-                let high = vram.read(output.physical as usize + offset + 4).ok_or(Error::Firmware)?;
-                Ok(u64::from(low) | (u64::from(high) << 32))
-            };
-            let (cycles, nanoseconds) = (read64(0)?, read64(8)?);
-            if nanoseconds < 10_000_000 || cycles == 0 {
-                return Err(Error::Firmware);
+        let mut iterations = 32768u32;
+        loop {
+            let mut arguments = Record::<12>::default();
+            arguments.set(Field::<u64>::new(0), output.virtual_address)?;
+            arguments.set(Field::<u32>::new(8), iterations)?;
+            let start = crate::timer().systime_ms();
+            self.launch(device, cubin, "timestamp_probe", arguments.as_bytes(), [128, 1])?;
+            let elapsed_ms = crate::timer().systime_ms().wrapping_sub(start);
+            if self.last_device_ns >= 10_000_000 {
+                if self.last_device_ns / 1_000_000 > elapsed_ms as u64 + 2 {
+                    return Err(Error::Firmware);
+                }
+                for index in 0..128 {
+                    if vram.read(output.physical as usize + index * 4) != Some(1f32.to_bits()) {
+                        return Err(Error::Firmware);
+                    }
+                }
+                info!(
+                    "NVIDIA_DEVICE_TIMER_OK elapsed_ns={} host_ms={elapsed_ms} iterations={iterations}",
+                    self.last_device_ns
+                );
+                break;
             }
-            if self.last_device_ns < 10_000_000 || self.last_device_ns > 20_000_000 {
-                return Err(Error::Firmware);
-            }
-            info!("NVIDIA_DEVICE_TIMER sample={sample} elapsed_ns={}", self.last_device_ns);
-            info!(
-                "NVIDIA_CLOCK_PROBE sample={sample} sm_mhz={} cycles={cycles} nanoseconds={nanoseconds}",
-                cycles * 1000 / nanoseconds
-            );
+            iterations = iterations.checked_mul(4).filter(|n| *n <= 33_554_432).ok_or(Error::Firmware)?;
         }
         self.device_timing = timing;
         Ok(())
@@ -399,11 +495,17 @@ impl Compute {
         let mut arguments = Record::<12>::default();
         arguments.set(Field::<u64>::new(0), output.virtual_address)?;
         arguments.set(Field::<u32>::new(8), COUNT)?;
-        self.launch(device, cubin, "local_stack_probe", arguments.as_bytes(), [128, COUNT.div_ceil(128)])?;
+        self.launch(device, cubin, "local_stack_probe", arguments.as_bytes(), [128, COUNT])?;
         let vram = device.vram.as_ref().ok_or(Error::Firmware)?;
         for index in 0..COUNT {
             let seed = index.wrapping_mul(0x9e3779b9);
-            let expected = (0u32..16).fold(0u32, |sum, i| sum.wrapping_add(seed ^ i.wrapping_mul(0x51a6d305)));
+            let expected = (0u32..65536).fold(0u32, |sum, i| {
+                let mut value = i ^ seed;
+                for _ in 0..COUNT % 3 + 1 {
+                    value = (value ^ value.wrapping_shl(13)).wrapping_mul(0x51a6d305);
+                }
+                sum.wrapping_add(value)
+            });
             if vram.read(output.physical as usize + index as usize * 4) != Some(expected) {
                 return Err(Error::Firmware);
             }
@@ -470,8 +572,8 @@ impl Compute {
                 arguments.set(Field::<u32>::new(24), rows)?;
                 arguments.set(Field::<u32>::new(28), inner)?;
                 arguments.set(Field::<u32>::new(32), cols)?;
-                let tiles = rows.div_ceil(16) * cols.div_ceil(8);
-                self.launch(device, cubin, symbol, arguments.as_bytes(), [128, tiles.div_ceil(4)])?;
+                let tiles = rows.div_ceil(16) * cols.div_ceil(32);
+                self.launch(device, cubin, symbol, arguments.as_bytes(), [128, tiles])?;
                 if vram.read(output.physical as usize) != Some(GUARD) || vram.read((output.physical + u64::from(rows * cols + 1) * 4) as usize) != Some(GUARD) {
                     return Err(Error::Firmware);
                 }

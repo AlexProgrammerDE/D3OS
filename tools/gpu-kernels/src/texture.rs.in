@@ -1,0 +1,15 @@
+unsafe fn texture_tile_template<const BYTES: bool>(
+    p: *const u32, offset: Tile<u32, { [B] }>, relative: Tile<u32, { [B] }>, words: u32, mask: Tile<bool, { [B] }>,
+) -> (Tile<u32, { [B] }>, Tile<bool, { [B] }>) {
+    let a: Tile<u64, { [B] }> = exti(offset);
+    let b: Tile<u64, { [B] }> = exti(relative);
+    let index = a + b;
+    let words64: Tile<u32, { [B] }> = broadcast_scalar(words, shape![B]);
+    let words64: Tile<u64, { [B] }> = exti(words64);
+    let valid = mask & lt_tile(index, words64);
+    let zero: Tile<u64, { [B] }> = broadcast_scalar(0u64, shape![B]);
+    let bounded = select(valid, index, zero);
+    let index: Tile<u32, { [B] }> = trunci(bounded, overflow::NoUnsignedWrap);
+    let value = unsafe { read_indexed::<BYTES, B>(p, index, valid) };
+    (value, valid)
+}

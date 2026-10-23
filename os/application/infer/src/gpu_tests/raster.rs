@@ -103,6 +103,14 @@ fn check(backend: &Nvidia) -> d3os_compute::Result<()> {
     let mut actual = vec![0; width * height + 2];
     backend.read_words_into(&output, 0, &mut actual)?;
     if actual[0] != guard || actual[width * height + 1] != guard || actual[1..actual.len() - 1] != expected {
+        let mismatch = actual[1..actual.len() - 1].iter().zip(&expected).position(|(a, b)| a != b);
+        if let Some(i) = mismatch {
+            super::super::report(format_args!(
+                "NVIDIA_RASTER_MISMATCH stage=commands index={i} actual={} expected={}",
+                actual[i + 1],
+                expected[i]
+            ));
+        }
         return Err(d3os_compute::Error::DeviceFault);
     }
     backend.dispatch_words(
@@ -112,6 +120,14 @@ fn check(backend: &Nvidia) -> d3os_compute::Result<()> {
     )?;
     backend.read_words_into(&output, 0, &mut actual)?;
     if actual[0] != guard || actual[width * height + 1] != guard || actual[1..actual.len() - 1] != expected {
+        let mismatch = actual[1..actual.len() - 1].iter().zip(&expected).position(|(a, b)| a != b);
+        if let Some(i) = mismatch {
+            super::super::report(format_args!(
+                "NVIDIA_RASTER_MISMATCH stage=binned index={i} actual={} expected={}",
+                actual[i + 1],
+                expected[i]
+            ));
+        }
         return Err(d3os_compute::Error::DeviceFault);
     }
     let palette: Vec<_> = (0..256).map(|i| 0xff000000 | (i << 16) | ((255 - i) << 8) | i).collect();

@@ -1,0 +1,18 @@
+unsafe fn ordered_read_template(p: *const E, index: Tile<u32, { [B] }>, mask: Tile<bool, { [B] }>, padding: E, token: Token) -> (Tile<E, { [B] }>, Token) {
+    let p: PointerTile<*const E, { [] }> = pointer_to_tile(p);
+    let p: PointerTile<*const E, { [1] }> = p.reshape(shape![1]);
+    let p: PointerTile<*const E, { [B] }> = p.broadcast(shape![B]);
+    let p = p.offset_tile(index);
+    let result: (Tile<E, { [B] }>, Token) = unsafe {
+        load_ptr_tko(
+            p,
+            ordering::Weak,
+            None::<scope::TileBlock>,
+            Some(mask),
+            Some(padding),
+            Some(token),
+            Latency::<0>,
+        )
+    };
+    result
+}

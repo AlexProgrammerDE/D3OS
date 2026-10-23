@@ -22,12 +22,54 @@ D3OS timers have millisecond resolution. The kernel benchmark amortizes this res
 Its times include CPU submission and synchronization.
 The Linux kernel benchmark uses CUDA events across 30 queued launches, which excludes most CPU submission overhead.
 D3OS also runs a separate instrumented pass with GPU timestamps before scheduling and at QMD completion.
-The boot check compares these timestamps with a kernel that runs for 10 ms on the GPU.
+The boot check calibrates a cuTile kernel to run for at least 10 ms and compares GPU timestamps with host elapsed time.
 `device_mean_us` includes device scheduling and completion work, while `instrumented_mean_us` also includes CPU submission and waiting.
 The first `mean_us` pass runs without timestamp instrumentation.
 These measurements separate end-to-end overhead from device throughput. They are not interchangeable timers.
 
-## Measured progress
+## Maintained cuTile base
+
+All 38 native inference and rendering operators now use NVIDIA cuTile Rust.
+The former NVPTX crate and GPUOcelot test harness are removed.
+The host compiler produces Tile IR 13.4 and assembles native Ada binaries with CUDA 13.4.92.
+D3OS retains its Rust driver, inference API, buffer ownership, and synchronous submission path.
+
+Fresh measurements on 2026-10-23 use host CPUs 8, 10, 12, and 14:
+
+| Workload | Before migration | cuTile observations |
+| --- | ---: | ---: |
+| Qwen warm generation | 160.80 to 164.52 tokens/s | 152.75 to 153.85 tokens/s |
+| Qwen 22-token prompt | 15 ms | 20 to 21 ms |
+| AlexNet warm forward pass | 1.45 ms | 1.30 ms |
+| DOOM uncapped `demo1` | 1423.40 FPS | 1127.13 to 1339.22 FPS |
+
+These are samples from a shared development host, not fixed performance guarantees.
+The fresh DOOM baseline has one run; its earlier native measurements also show substantial variation.
+The cuTile results retain the existing precision policy and independent numerical checks.
+Qwen produces identical 64-token benchmark output and passes all 24 layers across 29 reference positions.
+AlexNet passes all eight layer references.
+DOOM passes 600 frames of pixel comparisons, exits cleanly, and then passes the GPU operator suite.
+
+The first complete cuTile port generated only 106.85 to 109.59 tokens/s.
+Its combined vector and matrix entry reserved matrix resources during decoding.
+Separate matrix, small-vector, and wide-vector entries recovered much of that loss.
+Wide BF16 projections use paired 32-bit weight loads.
+Their measured bandwidth increased from 272 to 556 GB/s.
+Smaller projections retain separate cuTile implementations where paired loads measured slower.
+All variants use the same native request ABI.
+
+D3OS now reads fixed thread counts from the binaries and rejects mismatched launches.
+It binds compiler constant banks and selects an Ada shared-memory partition from each kernel's requirements.
+The native timer check compares QMD timestamps against host elapsed time.
+The scratch check runs a cuTile kernel with real local-memory spills and verifies every checksum.
+
+cuTile remains the maintained base despite the remaining regressions.
+The Linux throughput target is still open.
+Projection latency, matrix scheduling, recurrent tile layout, submission overhead, and presentation remain optimization work.
+The following sections preserve the earlier NVPTX measurements and implementation history.
+They do not describe the current compiler-generated register layouts.
+
+## Previous NVPTX measurements
 
 Measurements on 2026-10-22 and 2026-10-23:
 
@@ -150,7 +192,7 @@ The profile continues to identify native projection work and synchronous submiss
 Prompt attention now uses one fused launch per attention layer; projection work still dominates the remaining interval.
 Read the [Linux comparison procedure](nvidia-vfio.howto.md#compare-against-linux) to reproduce the audit and both guests.
 
-## Changes that reduce overhead
+## Previous kernel implementation
 
 The projection kernel selects a warp reduction for a single input row.
 Each warp reads contiguous weights. FP32 matrices and very wide BF16 matrices reuse each input across eight outputs.
@@ -211,9 +253,9 @@ The fused path removes 126 launches per generated token, including redundant int
 Across 64 decode steps, zero kernels fell from 5,824 to 1,216.
 The hardware suite compares output, convolution history, and recurrent state across 42 steps, including both paths.
 
-The loader now allocates each entrypoint's static shared memory plus the reserved 1 KiB CUDA prefix.
-It rounds the allocation to 128 bytes and rejects requests above the configured 32 KiB partition.
-The kernel build checks shared loads, shared stores, and barriers in the assembled normalization and recurrent kernels.
+Before cuTile, the loader rounded static shared storage plus the 1 KiB reserved prefix to 128 bytes.
+It rejected requests above its fixed 32 KiB partition.
+The cuTile migration replaces that limit with metadata-driven partition selection.
 
 The fused delta step first raised warm generation from about 103 to 125–127 tokens/s.
 The block-wide RMSNorm change then reached 138.83 tokens/s in both warm sessions of the next run.
@@ -492,16 +534,16 @@ Longer contexts and prompts still need matched measurements.
 The CPU token-selection work now combines only 32 GPU candidates.
 Each change must preserve the existing model reference or define and measure a separate precision policy.
 
-The large projection kernels now match Linux device throughput for the measured shapes.
+The previous large projection kernels matched Linux device throughput for the measured shapes.
 Recent native runs generate about 147 to 163 tokens/s, compared with about 258 to 261 tokens/s in the matched Linux reference.
 The remaining work must reduce complete model latency, rather than optimize already comparable streaming bandwidth.
 
-NVIDIA's new cuTile Rust compiler provides a separate path for improving matrix kernels.
+NVIDIA's cuTile Rust compiler is now the maintained base for every native GPU kernel.
 Its [compile-only API](https://nvidia.github.io/cuda-rust/cutile/latest/guide/jit-compilation.html#compile-only-api) produces Tile IR without a GPU or CUDA driver at runtime.
 The external `tileiras` assembler then produces a cubin for the requested target.
 The [compatibility table](https://nvidia.github.io/cuda-rust/cutile/latest/reference/compatibility.html) includes Ada `sm_89` with Tile IR 13.2 or newer.
-This permits a host compilation experiment while D3OS retains its native Rust driver and inference API.
-Generated argument layouts, resource metadata, and numerical behavior still need validation in D3OS before adopting these kernels.
+D3OS retains its native Rust driver and inference API.
+The migration checks argument layouts, resource metadata, GPU execution, and independent numerical references.
 The compiler does not replace the remaining work on submission ownership, synchronization, or presentation.
 
 DOOM still transfers packed indexed frames for CPU HUD composition and copies RGB output into the console framebuffer.
@@ -537,7 +579,7 @@ Its warp groups split independent value columns across key lanes. D3OS retains i
 The collective annotations follow the [Rust assembly options](https://doc.rust-lang.org/reference/inline-assembly.html#asm-options-supported-options-pure) and NVIDIA's [shuffle participation rules](https://docs.nvidia.com/cuda/parallel-thread-execution/#data-movement-and-conversion-instructions-shfl-sync).
 
 The BF16 precision argument follows NVIDIA's [alternate floating-point format definitions](https://docs.nvidia.com/cuda/parallel-thread-execution/#alternate-floating-point-data-formats).
-TF32 register encoding is implementation-defined, so the Rust kernels retain explicit PTX conversion instructions.
+The cuTile compiler emits TF32 conversions and selects register layouts for the maintained implementation.
 The independent Rust split-reduction design follows the parallel reduction approach described in NVIDIA's [CUTLASS GEMM guide](https://docs.nvidia.com/cutlass/latest/media/docs/cpp/efficient_gemm.html).
 
 The matched reference uses the pinned [llama.cpp C API](https://github.com/ggml-org/llama.cpp/blob/b11827/include/llama.h).

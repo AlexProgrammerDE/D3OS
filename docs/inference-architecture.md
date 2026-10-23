@@ -5,7 +5,7 @@ The CPU backend is a real userspace implementation with `no_std` and `alloc`.
 Host verification builds the same libraries for Linux.
 
 The hardware-free phase delivers pretrained AlexNet and Qwen3.5-0.8B text inference inside D3OS.
-It also provides CPU execution of compiled Rust PTX kernels.
+The host compiler builds Rust cuTile kernels without GPU hardware.
 The native NVIDIA hardware phase now runs AlexNet on the passed-through RTX 4090 Laptop GPU.
 Firmware boot, GPU page tables, native kernel loading, and tensor execution are operational.
 Qwen also passes all 24 layer checks and vocabulary-logit comparisons on the physical GPU.
@@ -19,8 +19,8 @@ The [renderer explanation](nvidia-rendering-design.md) describes command orderin
 - `os/library/inference`: checked tensor archives, AlexNet evaluation, Qwen text generation, tokenization, and numerical verification.
 - `os/application/infer`: D3OS file access, shell commands, and serial reports.
 - `os/library/inference/examples/infer-host.rs`: host execution of the same model implementation.
-- `tools/gpu-kernels`: Rust device kernels compiled to PTX.
-- `tools/inference`: asset preparation, CPU PTX tests, and QEMU integration tests.
+- `tools/gpu-kernels`: the host cuTile compiler and Rust tile programs.
+- `tools/inference`: asset preparation, cuTile compiler checks, and QEMU integration tests.
 - `os/kernel/src/device/nvidia.rs`: native firmware startup, compute submission, and process-owned GPU storage for the RTX 4090 Laptop GPU.
 - `tools/nvidia/run-qemu.py`: verified VFIO launch and passthrough boot checks.
 
@@ -80,29 +80,29 @@ AlexNet separately validates every parameter name and shape before allocating it
 The exporter writes a SHA-256 manifest alongside generated archives.
 The archive itself does not authenticate its contents.
 
-## What the PTX tests establish
+## What the cuTile checks establish
 
-The Rust compiler generates the device code used by the numerical tests.
-GPUOcelot executes that PTX on the host CPU.
-The harness compares vector addition, ReLU, and matrix multiplication with independent scalar calculations.
-Guard values detect writes immediately before or after the output allocation.
+NVIDIA's pinned cuTile Rust compiler produces Tile IR 13.4.
+The pinned CUDA 13.4 assembler produces native Ada `sm_89` binaries.
+D3OS loads these binaries with its native Rust driver.
+The guest uses no NVIDIA host runtime or Linux compatibility layer.
 
-The interpreter accepts an older PTX instruction set.
-The test build targets `sm_35`, while a separate compile targets Ampere `sm_86`.
-Both builds use the same Rust kernel source and launch ABI.
-Compilation of the Ampere output does not establish that it executes correctly on hardware.
+Host tests check SSA remapping when linking independently compiled entries.
+The compiler verifies each binary's required thread count.
+SASS audits require Tensor Core instructions and real local-memory spills in the scratch diagnostic.
+CPU CI compiles all inference and rendering operators, but does not execute GPU instructions.
 
-The tests cover scalar floating-point kernels and launch bounds.
-They do not establish Tensor Core support or inference performance on an NVIDIA GPU.
-They also do not model a PCIe NVIDIA device that D3OS can discover.
+Hardware tests cover partial tiles, output guards, state feedback, and independent numerical references.
+The VFIO launcher requires vector, Tensor Core, transfer, and local-memory checks before accepting a workload.
+Model and rendering checks remain separate from compiler validation.
 
 ## Verified software results
 
 Local verification on October 22, 2026 established these results:
 
 - CPU operator and archive tests passed on the development host.
-- The PTX suite passed 22 cases across three compiled Rust kernels.
-- The same kernels compiled for Ampere and Ada.
+- The former PTX interpreter passed 22 cases before the cuTile migration.
+- The maintained GPU compiler now targets Ada through cuTile.
 - Pretrained AlexNet matched all eight independent NumPy layer references on the host.
 - The small-network test passed inside D3OS under QEMU/KVM.
 - Pretrained AlexNet passed all eight layer comparisons inside D3OS under QEMU/KVM.

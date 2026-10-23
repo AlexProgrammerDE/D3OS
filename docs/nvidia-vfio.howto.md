@@ -227,20 +227,23 @@ Host tests reject malformed image headers and verify that relocation preserves u
 The native userspace backend runs AlexNet on this GPU.
 Qwen also passes its complete numerical fixture through the native GPU backend.
 
-The Rust kernels compile to PTX and then native `sm_89` SASS.
-The standalone `ptxas` assembler runs on the host.
-D3OS uses its own Rust loader, GPU page tables, QMD descriptors, and GPFIFO submissions.
-It does not use a host CUDA driver or runtime library.
-The current assembler validation uses version 12.8.93.
-NVIDIA lists compiler packages in its [CUDA installation guide](https://docs.nvidia.com/cuda/cuda-quick-start-guide/index.html).
+Rust cuTile kernels compile to Tile IR, then native `sm_89` SASS.
+The pinned host toolchain uses cuTile Rust and CUDA 13.4.92 `tileiras`.
+D3OS retains its Rust loader, GPU page tables, QMD descriptors, and GPFIFO submissions.
+The guest requires no NVIDIA runtime library.
 
-With a standalone assembler available, run:
+Build the kernels and run the boot checks:
 
 ```bash
-python3 tools/nvidia/prepare-kernels.py --ptxas /path/to/ptxas
+rustup toolchain install 1.98.1 --profile minimal --component clippy,rustfmt
+python3 tools/nvidia/prepare-kernels.py
 python3 tools/nvidia/run-qemu.py --firmware target/nvidia/firmware \
-    --kernels target/nvidia/kernels --memory-mib 2048 --boot-check
+    --kernels target/nvidia/kernels --memory-mib 4096 --boot-check
 ```
+
+The build downloads checksum-pinned host tools and headers without installing a GPU driver.
+Install libclang before the first build.
+Use `--toolkit /path/to/cuda-13.4` to supply an existing matching toolkit.
 
 The launcher requires `NVIDIA_KERNEL_OK` for this test to pass.
 A CPU self-test cannot satisfy that requirement.
@@ -253,27 +256,28 @@ The shader test records GPU semaphore checkpoints, RAMIN fields, notifier conten
 Tensor-core execution is a requirement for the AlexNet and Qwen GPU backends.
 AlexNet uses the TF32 inference kernels described in section 8.
 The [Qwen guide](qwen.howto.md#run-on-the-nvidia-gpu) gives its GPU commands and verification requirements.
-The current Rust kernels implement dense matrix multiplication through `mma.sync.aligned.m16n8k16`.
-They round FP32 inputs to FP16 or BF16, accumulate in FP32, and return FP32 output.
-One warp owns each 16-by-8 output tile.
-Masked loads and stores support matrix dimensions that do not match the tile size.
-The fragment layout follows [NVIDIA's PTX specification](https://docs.nvidia.com/cuda/parallel-thread-execution/#warp-level-matrix-fragment-mma-16816-float).
+The cuTile matrix programs use explicit `mmaf` operations.
+The compiler chooses register layouts and emits Tensor Core instructions.
+The FP16 and BF16 checks accumulate into FP32 and use masked 16-by-32 output tiles.
+Inference uses compensated TF32 decomposition to preserve the existing FP32 accuracy policy.
 
-With the standalone assembler and disassembler available, run:
+Run the host checks:
 
 ```bash
-python3 tools/nvidia/prepare-kernels.py --ptxas /path/to/ptxas \
-    --nvdisasm /path/to/nvdisasm
-cargo test --locked --manifest-path tools/gpu-kernels/Cargo.toml --test tensor-layout
+python3 tools/inference/test-cutile-kernels.py
 ```
 
-The build produces `tensor-matmul.cubin` with two entry points: `tensor_matmul_f16` and `tensor_matmul_bf16`.
-The disassembly check requires `HMMA.16816.F32` in the FP16 kernel and `HMMA.16816.F32.BF16` in the BF16 kernel.
-The manifest records this check as `sass_verified`.
-Without a disassembler, the build leaves that field false.
-The host tests verify fragment ownership and matrix results with partial tiles and multiple inner tiles.
-These checks do not confirm hardware execution.
-The build manifest always records `hardware_validated: false`.
+The build produces `tensor-matmul.cubin` with `tensor_matmul_f16` and `tensor_matmul_bf16` entry points.
+SASS audits require `HMMA.16816.F32` and `HMMA.16816.F32.BF16` instructions.
+The inference audit also requires TF32 Tensor Core instructions.
+Every entry records its required thread count and register usage.
+The manifest always records `hardware_validated: false` until separate hardware evidence exists.
+
+D3OS binds compiler constant banks and selects a 32, 64, or 100 KiB Ada shared-memory partition.
+It allocates scratch from the binary's stack metadata.
+The scratch diagnostic must produce real local-memory loads and stores.
+The timestamp diagnostic compares QMD GPU timestamps with host elapsed time.
+It does not measure SM clock cycles.
 
 The VM shader command in section 6 also stages the tensor kernels.
 After vector addition succeeds, D3OS runs five matrix shapes through each tensor kernel.
