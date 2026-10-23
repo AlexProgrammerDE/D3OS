@@ -4,7 +4,9 @@
 import argparse
 import fcntl
 import hashlib
+import importlib.util
 import json
+import math
 import os
 import platform
 import re
@@ -105,6 +107,199 @@ export LD_LIBRARY_PATH=/bin:/lib64
 echo LINUX_LLAMA_BENCH_OK
 """)
     benchmark.chmod(0o755)
+
+
+def large_qwen_benchmark(root, directory, source, model, target):
+    spec = importlib.util.spec_from_file_location(
+        "large_qwen", ROOT / "tools/nvidia/prepare-large-qwen.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    expected = module.MODELS[target]
+    if (
+        model.stat().st_size != expected["bytes"]
+        or module.digest(model) != expected["sha256"]
+    ):
+        raise ValueError("large Qwen model checksum mismatch")
+    llama_libraries(root, directory)
+    binary = root / "bin/linux-large-qwen-bench"
+    source_file = ROOT / "tools/nvidia/linux-large-qwen-bench.c"
+    subprocess.run(
+        [
+            "gcc",
+            "-std=c11",
+            "-O2",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-I",
+            str(source / "include"),
+            "-I",
+            str(source / "ggml/include"),
+            str(source_file),
+            "-L",
+            str(directory),
+            f"-Wl,-rpath-link,{directory}",
+            "-lllama",
+            "-lggml",
+            "-lggml-base",
+            "-o",
+            str(binary),
+        ],
+        check=True,
+    )
+    for library in re.findall(
+        r"/[^\s()]+",
+        subprocess.check_output(
+            ["ldd", str(binary)],
+            text=True,
+            env=dict(os.environ, LD_LIBRARY_PATH=str(directory)),
+        ),
+    ):
+        copy_file(root, library)
+    copy_file(root, model, "/model.gguf")
+    benchmark = root / "benchmark"
+    benchmark.write_text(
+        "#!/bin/bash\nset -eux\nexport LD_LIBRARY_PATH=/bin:/lib64\n"
+        f"/bin/linux-large-qwen-bench /model.gguf {expected['layers']} {expected['hidden']}\n"
+    )
+    benchmark.chmod(0o755)
+    evidence = dict(expected)
+    evidence.update(
+        source_sha256=module.digest(source_file),
+        executable_sha256=module.digest(binary),
+        libraries={
+            path.name: module.digest(path) for path in sorted(directory.glob("*.so*"))
+        },
+        headers={
+            str(path.relative_to(source)): module.digest(path)
+            for folder in (source / "include", source / "ggml/include")
+            for path in sorted(folder.glob("*.h"))
+        },
+        cache="f32",
+        context_capacity=2048,
+        decode_tokens=128,
+        batch=32,
+        weights="all_cuda",
+        comparison="Linux baseline; native comparison pending",
+    )
+    (root.parent / "large-qwen-manifest.json").write_text(
+        json.dumps(evidence, indent=2) + "\n"
+    )
+
+
+def validate_large_qwen(text, layers):
+    if (
+        "LINUX_LARGE_QWEN_OK" not in text
+        or f"offloaded {layers + 1}/{layers + 1} layers to GPU" not in text
+    ):
+        raise ValueError("large Qwen benchmark requires success and full GPU offload")
+    if "CPU_Mapped model buffer" in text or "CPU model buffer" in text:
+        raise ValueError("large Qwen weights must all reside on the GPU")
+    if any(marker not in text for marker in ("K (f32):", "V (f32):", "S (f32):")):
+        raise ValueError("large Qwen requires FP32 attention and recurrent caches")
+    contexts = re.findall(r"LINUX_LARGE_QWEN_CONTEXT ([^\r\n]*)", text)
+    if len(contexts) != 1:
+        raise ValueError("require one large Qwen context")
+    context = dict(re.findall(r"(\w+)=([^\s]+)", contexts[0]))
+    if any(
+        context.get(key) != value
+        for key, value in {"cache": "f32", "batch": "32", "n_ctx": "2048"}.items()
+    ):
+        raise ValueError("large Qwen context configuration mismatch")
+    models = re.findall(
+        r"LINUX_LARGE_QWEN_MODEL layers=(\d+) hidden=(\d+) parameters=(\d+) load_ms=([\d.]+)",
+        text,
+    )
+    if (
+        len(models) != 1
+        or int(models[0][0]) != layers
+        or int(models[0][1]) != (4096 if layers == 32 else 5120)
+    ):
+        raise ValueError("large Qwen model configuration mismatch")
+    load_ms, state_ms = float(models[0][3]), float(context["state_ms"])
+    if any(not math.isfinite(value) or value <= 0 for value in (load_ms, state_ms)):
+        raise ValueError("invalid large Qwen setup timing")
+    prompts = re.findall(r"LINUX_LARGE_QWEN_PROMPT ids=(\[.*?\])", text)
+    if len(prompts) != 1:
+        raise ValueError("require one large Qwen prompt trace")
+    prompt = json.loads(prompts[0])
+    if not 0 < len(prompt) <= 256 or any(
+        type(token) is not int or not 0 <= token < 248320 for token in prompt
+    ):
+        raise ValueError("invalid large Qwen prompt")
+    rows = re.findall(r"LINUX_LARGE_QWEN_BENCH ([^\r\n]*)", text)
+    traces = re.findall(r"LINUX_LARGE_QWEN_TOKENS run=(\d+) ids=(\[.*?\])", text)
+    if len(rows) != 3 or [int(run) for run, _ in traces] != [0, 1, 2]:
+        raise ValueError("require three large Qwen runs and token traces")
+    token_traces, samples = [], []
+    for run, (row, (_, trace)) in enumerate(zip(rows, traces)):
+        fields = dict(re.findall(r"(\w+)=([^\s]+)", row))
+        tokens = json.loads(trace)
+        if len(tokens) != 128 or any(
+            type(token) is not int or not 0 <= token < 248320 for token in tokens
+        ):
+            raise ValueError("invalid large Qwen token trace")
+        checksum = 0
+        for token in tokens:
+            checksum = (checksum * 31 + token) % (1 << 64)
+        expected = {
+            "run": run,
+            "warm": "true" if run else "false",
+            "decode_tokens": 128,
+            "prompt_tokens": len(prompt),
+            "checksum": checksum,
+            "cache": "f32",
+            "n_ctx": 2048,
+            "sampler": "backend_greedy",
+            "eos": "continue_for_benchmark",
+        }
+        if any(fields.get(key) != str(value) for key, value in expected.items()):
+            raise ValueError("large Qwen settings or checksum mismatch")
+        for key in ("prefill_ms", "decode_ms", "decode_tps"):
+            if not math.isfinite(float(fields[key])) or float(fields[key]) <= 0:
+                raise ValueError("invalid large Qwen timing")
+        if not math.isclose(
+            float(fields["decode_tps"]),
+            128000 / float(fields["decode_ms"]),
+            rel_tol=0.001,
+        ):
+            raise ValueError("large Qwen rate differs from evaluated work")
+        token_traces.append(tokens)
+        samples.append(
+            {
+                key: float(fields[key])
+                for key in ("prefill_ms", "decode_ms", "decode_tps")
+            }
+        )
+    if any(tokens != token_traces[0] for tokens in token_traces[1:]):
+        raise ValueError("large Qwen independent sessions disagree")
+    memory_rows = re.findall(
+        r"LINUX_LARGE_QWEN_MEMORY phase=(\w+) free_bytes=(\d+) total_bytes=(\d+) used_bytes=(\d+)",
+        text,
+    )
+    if [phase for phase, *_ in memory_rows] != [
+        "before_load",
+        "after_load",
+        "after_context",
+        "after_decode",
+    ]:
+        raise ValueError("require all four GPU memory measurements")
+    memory = {}
+    for phase, free, total, used in memory_rows:
+        free, total, used = int(free), int(total), int(used)
+        if not 0 < free < total <= 16 * 1024**3 or used != total - free:
+            raise ValueError("invalid 16 GiB GPU memory measurement")
+        memory[phase] = {"free_bytes": free, "total_bytes": total, "used_bytes": used}
+    return {
+        "model_load_ms": load_ms,
+        "context_ms": state_ms,
+        "samples": samples,
+        "memory": memory,
+        "prompt_ids": prompt,
+        "decode_ids": token_traces[0],
+        "warm_decode_tps_mean": sum(sample["decode_tps"] for sample in samples[1:]) / 2,
+    }
 
 
 def matched_qwen_benchmark(root, directory, source, model, inputs, flash_attention):
@@ -601,6 +796,7 @@ def main():
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--kernel-benchmark", action="store_true")
     parser.add_argument("--llama-directory", type=Path)
+    parser.add_argument("--large-qwen", choices=("9b", "27b"))
     parser.add_argument("--matched-qwen-input", type=Path)
     parser.add_argument(
         "--matched-qwen-report-selection",
@@ -617,6 +813,7 @@ def main():
     )
     parser.add_argument("--model", type=Path)
     parser.add_argument("--memory-mib", type=int, default=4096)
+    parser.add_argument("--timeout", type=int, default=300)
     parser.add_argument("--doom-benchmark", action="store_true")
     parser.add_argument("--alexnet-benchmark", action="store_true")
     args = parser.parse_args()
@@ -638,10 +835,16 @@ def main():
         parser.error("--llama-directory and --model must be supplied together")
     if args.matched_qwen_input and not args.llama_directory:
         parser.error("--matched-qwen-input requires --llama-directory and --model")
+    if args.large_qwen and (not args.llama_directory or args.matched_qwen_input):
+        parser.error(
+            "--large-qwen requires --llama-directory and --model without --matched-qwen-input"
+        )
     if args.matched_qwen_report_selection and not args.matched_qwen_input:
         parser.error("--matched-qwen-report-selection requires --matched-qwen-input")
     if args.memory_mib <= 0:
         parser.error("--memory-mib must be positive")
+    if args.timeout <= 0:
+        parser.error("--timeout must be positive")
     args.directory = args.directory.resolve()
     args.directory.mkdir(parents=True, exist_ok=True)
     lock = (args.directory / "guest.lock").open("w")
@@ -653,7 +856,15 @@ def main():
     if args.kernel_benchmark:
         kernel_benchmark(args.directory / "root")
     elif args.llama_directory:
-        if args.matched_qwen_input:
+        if args.large_qwen:
+            large_qwen_benchmark(
+                args.directory / "root",
+                args.llama_directory.resolve(),
+                args.llama_source.resolve(),
+                args.model.resolve(),
+                args.large_qwen,
+            )
+        elif args.matched_qwen_input:
             matched_qwen_benchmark(
                 args.directory / "root",
                 args.llama_directory.resolve(),
@@ -677,8 +888,6 @@ def main():
     if args.prepare_only:
         return
     # Reuse the same VFIO validation as D3OS. This guest never rebinds the host.
-    import importlib.util
-
     spec = importlib.util.spec_from_file_location(
         "nvidia_qemu", ROOT / "tools/nvidia/run-qemu.py"
     )
@@ -729,7 +938,7 @@ def main():
     with (args.directory / "qemu.log").open("w") as log:
         process = subprocess.Popen(command, stdout=log, stderr=log)
         try:
-            if process.wait(timeout=300):
+            if process.wait(timeout=args.timeout):
                 raise RuntimeError(f"Linux reference failed: {args.directory}")
         finally:
             if process.poll() is None:
@@ -745,6 +954,13 @@ def main():
     if args.alexnet_benchmark:
         validate_alexnet(text)
     if args.llama_directory:
+        if args.large_qwen:
+            result = validate_large_qwen(text, 32 if args.large_qwen == "9b" else 64)
+            (args.directory / "large-qwen-results.json").write_text(
+                json.dumps(result, indent=2) + "\n"
+            )
+            print("LINUX_LARGE_QWEN_VALIDATED", flush=True)
+            return
         marker = (
             "LINUX_MATCHED_QWEN_OK"
             if args.matched_qwen_input

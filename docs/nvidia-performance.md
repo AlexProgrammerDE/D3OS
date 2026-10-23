@@ -3,6 +3,13 @@
 The native driver runs AlexNet, Qwen3.5-0.8B, and DOOM correctly on the RTX 4090 Laptop GPU.
 The Linux performance target remains open. Correct output does not imply comparable throughput.
 
+The optimization goal also includes Qwen3.5-9B at Q8_0 and Qwen3.6-27B at Q3_K_M.
+Both targets must fit entirely in the GPU's 16 GiB of VRAM, including context and working storage.
+The work includes pinned Linux measurements, native Rust/cuTile quantized kernels, numerical references, and matched performance comparisons.
+The native loader also needs separate output weights and grouped key/value heads for recurrent attention.
+Large model assets also need a storage path that avoids the current FAT32 boot file limit and duplicate archive copies.
+These models are pending native validation. The existing 0.8B, AlexNet, and DOOM checks remain required.
+
 ## Measurement method
 
 These measurements use the same physical GPU through VFIO, with four KVM virtual CPUs.
@@ -30,6 +37,47 @@ The first `mean_us` pass runs without timestamp instrumentation.
 These measurements separate end-to-end overhead from device throughput. They are not interchangeable timers.
 
 ## Latest retained measurements
+
+### Larger Qwen targets
+
+The Linux reference now runs [Qwen3.5-9B](https://huggingface.co/Qwen/Qwen3.5-9B) and [Qwen3.6-27B](https://huggingface.co/Qwen/Qwen3.6-27B).
+The pinned quantized files come from Unsloth's [9B](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF) and [27B](https://huggingface.co/unsloth/Qwen3.6-27B-GGUF) repositories.
+The preparation script verifies each file's size and SHA-256 before staging it.
+The reference also records the executable, headers, libraries, GPU memory, and complete prompt and output token sequences.
+
+Each model uses FP32 attention and recurrent caches, a 2,048-token context, and a batch size of 32.
+Every weight, including embeddings, resides in GPU memory. The reference rejects CPU weight buffers and incomplete layer offload.
+The prompt asks for the largest country by land area and a detailed essay about its geography, climate, population, and history.
+Each of three sessions generates 128 tokens. Fixed-length timing continues after EOS if the model emits it.
+
+Qwen3.5-9B Q8_0 reaches 57.843, 58.117, and 58.073 tokens/s.
+Its two warm samples average 58.095 tokens/s, with prompt times of 43.644 and 43.670 ms for 37 tokens.
+Its measured GPU usage after decoding is 10,015,997,952 bytes, or 9.33 GiB.
+
+Qwen3.6-27B Q3_K_M reaches 33.631, 33.990, and 33.979 tokens/s.
+Its two warm samples average 33.985 tokens/s, with prompt times of 95.563 and 95.952 ms for the same 37 tokens.
+Its measured GPU usage after decoding is 14,338,228,224 bytes, or 13.35 GiB.
+This leaves about 2.30 GiB free in the memory pool reported by the NVIDIA driver.
+Longer contexts require separate measurements.
+
+Both outputs identify Russia. Each model preserves its exact output token sequence across all three sessions.
+These results establish GPU fit and a Linux throughput reference. Native large-model validation and broader quality evaluation remain open.
+The first Linux model loads take about 63 seconds and 87 seconds through the shared 9p filesystem.
+Those load times include file access and GPU upload, so they do not match the native resident-archive upload timer.
+
+Run the complete Linux suite with the existing pinned reference tools:
+
+```bash
+taskset -c 8,10,12,14 python3 tools/nvidia/test-large-qwen.py 9b 27b
+```
+
+The suite downloads about 23.1 GB of model files and launches one GPU guest at a time.
+It uses 15 GiB of guest RAM by default, within the session's existing 16 GiB memlock limit.
+The logs, provenance manifests, and JSON results are under `target/nvidia/large-qwen`.
+Use a new `--directory` to preserve an earlier suite's evidence.
+The native API still requires quantized weight storage and kernels, separate output weights, and grouped recurrent heads before either model can run.
+The 9B file contains Q8_0 matrices and FP32 tensors.
+The 27B file mixes Q3_K, Q4_K, Q5_K, Q6_K, and FP32 tensors. Native support must preserve every tensor's actual format.
 
 ### Matched Linux AlexNet reference
 
