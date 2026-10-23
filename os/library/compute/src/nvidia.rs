@@ -173,6 +173,7 @@ impl Nvidia {
                     | (Kernel::ProjectResidualBf16, 2)
                     | (Kernel::DequantizeBf16, 0)
                     | (Kernel::GatedProjectBf16, 1 | 2)
+                    | (Kernel::GroupedProjectBf16, 1..=4)
             ) || (kernel == Kernel::Embedding && i == 0 && call.parameters[3] == 1);
             if buffer.storage != Storage::Words && (buffer.storage == Storage::Bf16) != packed {
                 return Err(Error::InvalidParameter);

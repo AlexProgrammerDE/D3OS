@@ -127,7 +127,7 @@ The CI workflow provides repeatable numerical tests and an optional pretrained Q
 The current target is the RTX 4090 Laptop GPU (`10de:2757`, AD103) with one serialized compute queue.
 The driver boots pinned signed firmware and allocates a private, virtually bound compute context.
 The process-owned syscall interface accepts built-in kernels and opaque buffer handles.
-Native compute protocol version 4 includes command scopes, queue profiles, and 40 built-in kernels.
+Native compute protocol version 5 includes command scopes, queue profiles, and 41 built-in kernels.
 Its expanded profile array requires the matching SDK.
 Rebuild compute applications with the matching SDK. The kernel rejects incompatible request versions.
 The D3OS kernel verifies handle arithmetic and launch dimensions before dispatch.
@@ -176,6 +176,14 @@ The native path supports widths up to 1,024 and writes both outputs in one launc
 The native single-row BF16 path supports even input widths and up to 8,192 outputs.
 Other configurations use the separate operations through the same API.
 These operations remove 48 launches per generated Qwen token without changing storage precision or reference tolerances.
+
+`TransformerBackend::project_delta()` projects the hidden batch and applies its recurrent mixer.
+`DeltaWeights` supplies the four projection matrices and the recurrent parameters.
+The single-row native BF16 path groups QKV, gate, beta, and alpha projections into one dispatch.
+It writes their results into one owned buffer, then binds its disjoint ranges to the recurrent kernel.
+Temporary storage remains owned until all queued readers complete.
+This removes another 54 launches per generated token without changing weight archives or accumulation precision.
+Other shapes and storage types retain the separate projections through the same API.
 
 Prompt processing uses chunks of up to 32 consecutive tokens and completes each layer across the whole chunk.
 `embedding_batch()` gathers token rows, and batched attention and recurrent operations advance a single sequence in token order.

@@ -3,9 +3,8 @@ unsafe fn read_quad<E: ElementType>(p: *const E, index: Tile<u32, { [2, 4, 32] }
     let base: PointerTile<*const E, { [1, 1, 1] }> = base.reshape(shape![1, 1, 1]);
     let base: PointerTile<*const E, { [2, 4, 32] }> = base.broadcast(shape![2, 4, 32]);
     let pointer = base.offset_tile(index);
-    let (value, _): (Tile<E, { [2, 4, 32] }>, Token) = unsafe {
-        load_ptr_tko(pointer, ordering::Weak, None::<scope::TileBlock>, Some(mask), None, None, Latency::<0>)
-    };
+    let (value, _): (Tile<E, { [2, 4, 32] }>, Token) =
+        unsafe { load_ptr_tko(pointer, ordering::Weak, None::<scope::TileBlock>, Some(mask), None, None, Latency::<0>) };
     select(mask, value, broadcast_scalar(padding, shape![2, 4, 32]))
 }
 
@@ -13,6 +12,12 @@ unsafe fn quad_project_4<const GATED: bool, const RESIDUAL: bool>(
     a: *const f32, b: *const f32, up: *const f32, residual: *const f32, output: *mut f32, inner: u32, cols: u32,
 ) {
     let first = block_id() * 4u32;
+    unsafe { quad_project_4_at::<GATED, RESIDUAL>(a, b, up, residual, output, inner, cols, first, first) }
+}
+
+unsafe fn quad_project_4_at<const GATED: bool, const RESIDUAL: bool>(
+    a: *const f32, b: *const f32, up: *const f32, residual: *const f32, output: *mut f32, inner: u32, cols: u32, first: u32, dest_first: u32,
+) {
     let col = lanes::<4>() + broadcast_scalar(first, shape![4]);
     let col: Tile<u32, { [1, 4, 1] }> = col.reshape(shape![1, 4, 1]);
     let col: Tile<u32, { [2, 4, 32] }> = col.broadcast(shape![2, 4, 32]);
@@ -31,7 +36,14 @@ unsafe fn quad_project_4<const GATED: bool, const RESIDUAL: bool>(
         let pair = lane * broadcast_scalar(2u32, shape![2, 4, 32]) + component + broadcast_scalar(start, shape![2, 4, 32]);
         let mask = lt_tile(pair, broadcast_scalar(inner / 2u32, shape![2, 4, 32])) & lt_tile(col, broadcast_scalar(cols, shape![2, 4, 32]));
         let xe = unsafe { read_quad(a, pair * broadcast_scalar(2u32, shape![2, 4, 32]), mask, 0f32) };
-        let xo = unsafe { read_quad(a, pair * broadcast_scalar(2u32, shape![2, 4, 32]) + broadcast_scalar(1u32, shape![2, 4, 32]), mask, 0f32) };
+        let xo = unsafe {
+            read_quad(
+                a,
+                pair * broadcast_scalar(2u32, shape![2, 4, 32]) + broadcast_scalar(1u32, shape![2, 4, 32]),
+                mask,
+                0f32,
+            )
+        };
         let index = col * broadcast_scalar(inner / 2u32, shape![2, 4, 32]) + pair;
         let words = unsafe { read_quad(word_pointer(b), index, mask, 0u32) };
         let lo: Tile<f32, { [2, 4, 32] }> = bitcast(words << broadcast_scalar(16u32, shape![2, 4, 32]));
@@ -64,5 +76,6 @@ unsafe fn quad_project_4<const GATED: bool, const RESIDUAL: bool>(
     } else {
         value
     };
-    unsafe { write_tile(output, col, value, mask) };
+    let destination = lanes::<4>() + broadcast_scalar(dest_first, shape![4]);
+    unsafe { write_tile(output, destination, value, mask) };
 }

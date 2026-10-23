@@ -1,6 +1,7 @@
 use super::{Nvidia, Storage, request};
 use crate::transformer::{
-    AttentionConfig, AttentionInputs, AttentionState, DeltaConfig, DeltaInputs, DeltaState, TransformerBackend, attention_shape, delta_shape,
+    AttentionConfig, AttentionInputs, AttentionState, DeltaConfig, DeltaInputs, DeltaState, DeltaWeights, TransformerBackend, attention_shape, delta_shape,
+    project_delta, project_delta_shape,
 };
 use crate::{Error, Result, Tensor};
 use alloc::vec::Vec;
@@ -11,6 +12,69 @@ fn positive(value: f32) -> bool {
 }
 
 impl TransformerBackend for Nvidia {
+    fn project_delta(&self, input: &Tensor<Self>, weights: DeltaWeights<'_, Self>, state: &mut DeltaState<Self>, config: DeltaConfig) -> Result<Tensor<Self>> {
+        let (rows, width, channels, values) = project_delta_shape(input, &weights, state, config)?;
+        if rows != 1
+            || !width.is_multiple_of(2)
+            || !channels.is_multiple_of(4)
+            || !values.is_multiple_of(4)
+            || !config.heads.is_multiple_of(4)
+            || config.key_dim > 128
+            || config.value_dim > 128
+            || config.kernel > 8
+            || [weights.qkv, weights.gate, weights.beta, weights.alpha]
+                .iter()
+                .any(|tensor| tensor.buffer.storage != Storage::Bf16)
+        {
+            return project_delta(self, input, weights, state, config);
+        }
+        if [
+            weights.convolution,
+            weights.log_decay,
+            weights.time_bias,
+            weights.norm,
+            &state.convolution,
+            &state.recurrent,
+        ]
+        .iter()
+        .any(|tensor| tensor.buffer.storage != Storage::F32)
+        {
+            return Err(Error::InvalidParameter);
+        }
+        let total = channels
+            .checked_add(values)
+            .and_then(|n| config.heads.checked_mul(2).and_then(|h| n.checked_add(h)))
+            .ok_or(Error::SizeOverflow)?;
+        let projected = self.produce(
+            &[1, total],
+            Kernel::GroupedProjectBf16,
+            &[
+                (&input.buffer, 0),
+                (&weights.qkv.buffer, 0),
+                (&weights.gate.buffer, 0),
+                (&weights.beta.buffer, 0),
+                (&weights.alpha.buffer, 0),
+            ],
+            &[width, channels, values, config.heads],
+        )?;
+        self.produce(
+            &[1, values],
+            Kernel::DeltaFused,
+            &[
+                (&projected.buffer, 0),
+                (&projected.buffer, channels),
+                (&projected.buffer, channels + values),
+                (&projected.buffer, channels + values + config.heads),
+                (&weights.convolution.buffer, 0),
+                (&weights.log_decay.buffer, 0),
+                (&weights.time_bias.buffer, 0),
+                (&weights.norm.buffer, 0),
+                (&state.convolution.buffer, 0),
+                (&state.recurrent.buffer, 0),
+            ],
+            &[config.heads, config.key_dim, config.value_dim, config.kernel, config.epsilon.to_bits() as usize],
+        )
+    }
     fn project_add(&self, input: &Tensor<Self>, weights: &Tensor<Self>, residual: Tensor<Self>) -> Result<Tensor<Self>> {
         if let ([1, width], [outputs, inner]) = (input.shape(), weights.shape())
             && width == inner

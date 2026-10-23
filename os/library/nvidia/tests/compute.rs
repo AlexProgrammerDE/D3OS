@@ -1,6 +1,34 @@
 use d3os_nvidia::compute::Kernel;
 
 #[test]
+fn grouped_projection_checks_every_matrix_and_the_complete_packed_output() {
+    let work = Kernel::GroupedProjectBf16.work(&[6, 4, 8, 4]).unwrap();
+    assert_eq!(work.extents[..6], [6, 12, 24, 12, 12, 20]);
+    assert_eq!((work.threads, work.blocks, work.pointers, work.output), (128, 5, 6, 5));
+    let addresses = [0x1000, 0x2000, 0x3000, 0x4000, 0x5000, 0x6000];
+    assert!(work.validate_aliases(&addresses).is_ok());
+    for index in 0..5 {
+        let mut invalid = addresses;
+        invalid[5] = invalid[index] + 4;
+        assert!(work.validate_aliases(&invalid).is_err());
+    }
+    for p in [
+        [0, 4, 8, 4],
+        [5, 4, 8, 4],
+        [6, 0, 8, 4],
+        [6, 4, 0, 4],
+        [6, 4, 8, 0],
+        [6, 5, 8, 4],
+        [6, 4, 9, 4],
+        [6, 4, 8, 5],
+        [u32::MAX - 1, 4, 8, 4],
+        [2, 1_500_000_000, 1_500_000_000, 1_000_000_000],
+    ] {
+        assert!(Kernel::GroupedProjectBf16.work(&p).is_err());
+    }
+}
+
+#[test]
 fn split_recurrence_checks_partial_columns_history_and_every_writer() {
     let convolution = Kernel::DeltaConvolution.work(&[33, 8, 3]).unwrap();
     assert_eq!(convolution.extents[..4], [99, 264, 264, 99]);

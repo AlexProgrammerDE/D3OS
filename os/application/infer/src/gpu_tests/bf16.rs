@@ -20,6 +20,7 @@ fn gated_projection<B: TransformerBackend>(backend: &B, m: usize, k: usize, n: u
 
 pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     split_guards(backend).map_err(|e| format!("split projection guards: {e}"))?;
+    grouped_guards(backend).map_err(|e| format!("grouped projection guards: {e}"))?;
     for (m, k, n) in [
         (1, 1, 1),
         (1, 2, 1),
@@ -124,6 +125,49 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     super::super::report(format_args!(
         "NVIDIA_BF16_WEIGHTS_OK projections=14 residual_projections=14 gated_projections=13 embedding_rows=7 roundtrip=exact guards=typed backend=nvidia"
     ));
+    Ok(())
+}
+
+fn grouped_guards(backend: &Nvidia) -> d3os_compute::Result<()> {
+    use d3os_nvidia::compute::Kernel;
+    const GUARD: u32 = 0xd305abcd;
+    for inner in [6usize, 130] {
+        let input: Vec<_> = (0..inner).map(|i| ((i % 3) as i32 - 1) as f32).collect();
+        let a = backend.upload_words(&input.iter().map(|x| x.to_bits()).collect::<Vec<_>>())?;
+        let weight = |group: usize, col: usize, k: usize| ((group * 13 + col * 3 + k) % 17) as i32 - 8;
+        let mut matrices = Vec::new();
+        let mut expected = Vec::new();
+        for (group, cols) in [4usize, 8, 4, 4].into_iter().enumerate() {
+            let bits: Vec<_> = (0..cols)
+                .flat_map(|col| (0..inner).map(move |k| (weight(group, col, k) as f32).to_bits() >> 16))
+                .collect();
+            let mut words = vec![GUARD];
+            words.extend(bits.chunks_exact(2).map(|pair| pair[0] | (pair[1] << 16)));
+            words.push(GUARD);
+            matrices.push(backend.upload_words(&words)?);
+            for col in 0..cols {
+                expected.push((0..inner).map(|k| input[k] * weight(group, col, k) as f32).sum::<f32>().to_bits());
+            }
+        }
+        let output = backend.upload_words(&vec![GUARD; expected.len() + 2])?;
+        backend.dispatch_words(
+            Kernel::GroupedProjectBf16,
+            &[
+                (&a, 0),
+                (&matrices[0], 1),
+                (&matrices[1], 1),
+                (&matrices[2], 1),
+                (&matrices[3], 1),
+                (&output, 1),
+            ],
+            &[inner, 4, 8, 4],
+        )?;
+        let mut actual = vec![0; expected.len() + 2];
+        backend.read_words_into(&output, 0, &mut actual)?;
+        if actual[0] != GUARD || actual[actual.len() - 1] != GUARD || actual[1..actual.len() - 1] != expected {
+            return Err(Error::DeviceFault);
+        }
+    }
     Ok(())
 }
 

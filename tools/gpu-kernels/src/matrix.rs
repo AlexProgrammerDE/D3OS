@@ -72,3 +72,39 @@ unsafe fn gated_project_paired_bf16_weights(a: *const f32, gate: *const f32, up:
 unsafe fn project_residual_bf16_weights(residual: *const f32, input: *const f32, weights: *const f32, output: *mut f32, inner: u32, cols: u32) {
     unsafe { quad_project_4::<false, true>(input, weights, weights, residual, output, inner, cols) }
 }
+
+#[cutile::entry()]
+unsafe fn group_project_bf16_weights(
+    input: *const f32, qkv: *const f32, gate: *const f32, beta: *const f32, alpha: *const f32, output: *mut f32, inner: u32, qkv_cols: u32, gate_cols: u32,
+    heads: u32,
+) {
+    let first = block_id() * 4u32;
+    let gate_end = qkv_cols + gate_cols;
+    let beta_end = gate_end + heads;
+    let weights = if first < qkv_cols {
+        qkv
+    } else if first < gate_end {
+        gate
+    } else if first < beta_end {
+        beta
+    } else {
+        alpha
+    };
+    let base = if first < qkv_cols {
+        0u32
+    } else if first < gate_end {
+        qkv_cols
+    } else if first < beta_end {
+        gate_end
+    } else {
+        beta_end
+    };
+    let cols = if first < qkv_cols {
+        qkv_cols
+    } else if first < gate_end {
+        gate_cols
+    } else {
+        heads
+    };
+    unsafe { quad_project_4_at::<false, false>(input, weights, weights, input, output, inner, cols, first - base, first) }
+}

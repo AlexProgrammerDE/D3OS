@@ -1,7 +1,7 @@
 //! Qwen3.5 text decoder, with per-session convolution, recurrent, and KV caches.
 //! The backend performs every numerical operation; the model only schedules them.
 use alloc::{format, vec::Vec};
-use d3os_compute::transformer::{AttentionConfig, AttentionInputs, AttentionState, DeltaConfig, DeltaInputs, DeltaState, TransformerBackend};
+use d3os_compute::transformer::{AttentionConfig, AttentionInputs, AttentionState, DeltaConfig, DeltaState, DeltaWeights, TransformerBackend};
 use d3os_compute::{Backend, Tensor, element_count};
 
 use crate::{Error, Result, archive::Archive};
@@ -434,16 +434,13 @@ impl<'a, B: TransformerBackend> Session<'a, B> {
                         backend.project(&attention, &weights.out)?
                     }
                     (Mixer::Linear(weights), Cache::Linear(state)) => {
-                        let qkv = backend.project(&normalized, &weights.qkv)?;
-                        let z = backend.project(&normalized, &weights.z)?;
-                        let beta = backend.project(&normalized, &weights.beta)?;
-                        let alpha = backend.project(&normalized, &weights.alpha)?;
-                        let attention = backend.delta_batch(
-                            DeltaInputs {
-                                qkv: &qkv,
-                                gate: &z,
-                                beta: &beta,
-                                alpha: &alpha,
+                        let attention = backend.project_delta(
+                            &normalized,
+                            DeltaWeights {
+                                qkv: &weights.qkv,
+                                gate: &weights.z,
+                                beta: &weights.beta,
+                                alpha: &weights.alpha,
                                 convolution: &weights.conv,
                                 log_decay: &weights.log_decay,
                                 time_bias: &weights.time_bias,

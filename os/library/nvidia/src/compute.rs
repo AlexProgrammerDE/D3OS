@@ -2,7 +2,7 @@
 
 use crate::{Error, Result};
 
-pub const VERSION: u32 = 4;
+pub const VERSION: u32 = 5;
 pub const INFO: u32 = 0;
 pub const ALLOCATE: u32 = 1;
 pub const FREE: u32 = 2;
@@ -22,7 +22,7 @@ pub const END_COMMANDS: u32 = 10;
 pub const QUEUE_PROFILE: u32 = 11;
 pub const SERVICE_PROFILE: u32 = 12;
 pub const SERVICE_OPERATIONS: usize = 13;
-pub const KERNEL_COUNT: usize = 40;
+pub const KERNEL_COUNT: usize = 41;
 
 /// CPU service costs by request operation, including queue work within it.
 #[derive(Clone, Copy, Debug, Default)]
@@ -117,9 +117,10 @@ pub enum Kernel {
     AttentionFusedBatch = 37,
     ResidualNorm = 38,
     ProjectResidualBf16 = 39,
+    GroupedProjectBf16 = 40,
 }
 
-const _: () = assert!(Kernel::ProjectResidualBf16 as usize + 1 == KERNEL_COUNT);
+const _: () = assert!(Kernel::GroupedProjectBf16 as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -167,6 +168,7 @@ impl Kernel {
                 | Self::DeltaConvolution
                 | Self::DeltaUpdate
                 | Self::DeltaOutput
+                | Self::GroupedProjectBf16
         )
     }
 
@@ -212,6 +214,7 @@ impl Kernel {
             37 => Self::AttentionFusedBatch,
             38 => Self::ResidualNorm,
             39 => Self::ProjectResidualBf16,
+            40 => Self::GroupedProjectBf16,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -258,6 +261,7 @@ impl Kernel {
             Self::SumProjectionPartials => "sum_projection_partials",
             Self::ResidualNorm => "residual_norm",
             Self::ProjectResidualBf16 => "project_residual_bf16_weights",
+            Self::GroupedProjectBf16 => "group_project_bf16_weights",
         }
     }
 
@@ -282,6 +286,24 @@ impl Kernel {
         let mut mutated = 0;
         let mut threads = 128;
         let (count, pointers, output, in_place) = match (self, p) {
+            (Self::GroupedProjectBf16, &[k, q, z, h]) => {
+                if !k.is_multiple_of(2) || !q.is_multiple_of(4) || !z.is_multiple_of(4) || !h.is_multiple_of(4) {
+                    return Err(Error::InvalidField);
+                }
+                let total = q
+                    .checked_add(z)
+                    .and_then(|n| h.checked_mul(2).and_then(|h| n.checked_add(h)))
+                    .ok_or(Error::InvalidField)?;
+                extents[..6].copy_from_slice(&[
+                    product(&[k])? as u64,
+                    (product(&[k, q])? / 2) as u64,
+                    (product(&[k, z])? / 2) as u64,
+                    (product(&[k, h])? / 2) as u64,
+                    (product(&[k, h])? / 2) as u64,
+                    product(&[total])? as u64,
+                ]);
+                (product(&[total.div_ceil(4), 128])?, 6, 5, false)
+            }
             (Self::AttentionFusedBatch, &[rows, heads, kv_heads, dim, position]) => {
                 let positions = position.checked_add(rows).ok_or(Error::InvalidField)?;
                 if kv_heads == 0 || heads % kv_heads != 0 || !(1..=256).contains(&dim) {

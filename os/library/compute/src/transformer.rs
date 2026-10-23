@@ -59,6 +59,21 @@ pub struct DeltaInputs<'a, B: Backend> {
     pub norm: &'a Tensor<B>,
 }
 
+pub struct DeltaWeights<'a, B: Backend> {
+    /// [heads * (2 * key_dim + value_dim), hidden_width].
+    pub qkv: &'a Tensor<B>,
+    /// [heads * value_dim, hidden_width].
+    pub gate: &'a Tensor<B>,
+    /// [heads, hidden_width].
+    pub beta: &'a Tensor<B>,
+    /// [heads, hidden_width].
+    pub alpha: &'a Tensor<B>,
+    pub convolution: &'a Tensor<B>,
+    pub log_decay: &'a Tensor<B>,
+    pub time_bias: &'a Tensor<B>,
+    pub norm: &'a Tensor<B>,
+}
+
 /// No operation downloads model activations to the host. Implementations own all arithmetic.
 /// Attention methods validate shapes and capacity before changing their cache.
 pub trait TransformerBackend: Backend {
@@ -97,6 +112,10 @@ pub trait TransformerBackend: Backend {
             return Err(Error::ShapeMismatch);
         }
         self.delta_batch(input, state, config)
+    }
+    /// Project one hidden batch and apply its recurrent mixer without host transfers.
+    fn project_delta(&self, input: &Tensor<Self>, weights: DeltaWeights<'_, Self>, state: &mut DeltaState<Self>, config: DeltaConfig) -> Result<Tensor<Self>> {
+        project_delta(self, input, weights, state, config)
     }
     /// Consecutive token rows from one sequence; cache updates remain ordered.
     fn attention_batch(&self, input: AttentionInputs<'_, Self>, state: &mut AttentionState<Self>, config: AttentionConfig) -> Result<Tensor<Self>>;
@@ -150,6 +169,23 @@ pub(crate) fn attention_shape<B: Backend>(input: &AttentionInputs<'_, B>, state:
 }
 
 pub(crate) fn delta_shape<B: Backend>(input: &DeltaInputs<'_, B>, state: &DeltaState<B>, config: DeltaConfig) -> Result<(usize, usize, usize)> {
+    let (channels, value_width) = delta_parameters_shape(input.convolution, input.log_decay, input.time_bias, input.norm, state, config)?;
+    let [rows, width] = *input.qkv.shape() else {
+        return Err(Error::ShapeMismatch);
+    };
+    if width != channels
+        || input.gate.shape() != [rows, value_width]
+        || input.beta.shape() != [rows, config.heads]
+        || input.alpha.shape() != [rows, config.heads]
+    {
+        return Err(Error::ShapeMismatch);
+    }
+    Ok((rows, channels, value_width))
+}
+
+fn delta_parameters_shape<B: Backend>(
+    convolution: &Tensor<B>, log_decay: &Tensor<B>, time_bias: &Tensor<B>, norm: &Tensor<B>, state: &DeltaState<B>, config: DeltaConfig,
+) -> Result<(usize, usize)> {
     let DeltaConfig {
         heads,
         key_dim,
@@ -162,24 +198,59 @@ pub(crate) fn delta_shape<B: Backend>(input: &DeltaInputs<'_, B>, state: &DeltaS
     let channels = key_width.checked_mul(2).and_then(|n| n.checked_add(value_width)).ok_or(Error::SizeOverflow)?;
     element_count(&[channels, kernel])?;
     element_count(&[heads, key_dim, value_dim])?;
-    let [rows, width] = *input.qkv.shape() else {
-        return Err(Error::ShapeMismatch);
-    };
     if !epsilon.is_finite() || epsilon <= 0. {
         return Err(Error::InvalidParameter);
     }
-    if width != channels
-        || input.gate.shape() != [rows, value_width]
-        || input.beta.shape() != [rows, heads]
-        || input.alpha.shape() != [rows, heads]
-        || input.convolution.shape() != [channels, 1, kernel]
-        || input.log_decay.shape() != [heads]
-        || input.time_bias.shape() != [heads]
-        || input.norm.shape() != [value_dim]
+    if convolution.shape() != [channels, 1, kernel]
+        || log_decay.shape() != [heads]
+        || time_bias.shape() != [heads]
+        || norm.shape() != [value_dim]
         || state.convolution.shape() != [channels, kernel]
         || state.recurrent.shape() != [heads, key_dim, value_dim]
     {
         return Err(Error::ShapeMismatch);
     }
-    Ok((rows, channels, value_width))
+    Ok((channels, value_width))
+}
+
+pub(crate) fn project_delta_shape<B: Backend>(
+    input: &Tensor<B>, weights: &DeltaWeights<'_, B>, state: &DeltaState<B>, config: DeltaConfig,
+) -> Result<(usize, usize, usize, usize)> {
+    let (channels, values) = delta_parameters_shape(weights.convolution, weights.log_decay, weights.time_bias, weights.norm, state, config)?;
+    let [rows, width] = *input.shape() else {
+        return Err(Error::ShapeMismatch);
+    };
+    if weights.qkv.shape() != [channels, width]
+        || weights.gate.shape() != [values, width]
+        || weights.beta.shape() != [config.heads, width]
+        || weights.alpha.shape() != [config.heads, width]
+    {
+        return Err(Error::ShapeMismatch);
+    }
+    Ok((rows, width, channels, values))
+}
+
+/// Composition used by backends without a grouped projection implementation.
+pub(crate) fn project_delta<B: TransformerBackend>(
+    backend: &B, input: &Tensor<B>, weights: DeltaWeights<'_, B>, state: &mut DeltaState<B>, config: DeltaConfig,
+) -> Result<Tensor<B>> {
+    project_delta_shape(input, &weights, state, config)?;
+    let qkv = backend.project(input, weights.qkv)?;
+    let gate = backend.project(input, weights.gate)?;
+    let beta = backend.project(input, weights.beta)?;
+    let alpha = backend.project(input, weights.alpha)?;
+    backend.delta_batch(
+        DeltaInputs {
+            qkv: &qkv,
+            gate: &gate,
+            beta: &beta,
+            alpha: &alpha,
+            convolution: weights.convolution,
+            log_decay: weights.log_decay,
+            time_bias: weights.time_bias,
+            norm: weights.norm,
+        },
+        state,
+        config,
+    )
 }

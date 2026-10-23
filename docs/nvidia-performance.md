@@ -29,7 +29,7 @@ These measurements separate end-to-end overhead from device throughput. They are
 
 ## Latest retained measurements
 
-The 2026-10-23 follow-up uses native copy-engine transfers, two QMD waves, fused Qwen residual operations, and a versioned DOOM texture cache.
+The first 2026-10-23 follow-up uses native copy-engine transfers, two QMD waves, fused Qwen residual operations, and a versioned DOOM texture cache.
 An A-B-B-A comparison uses the same cuTile binary and host CPUs 8, 10, 12, and 14.
 The control disables only the residual fusions and texture validation shortcut.
 Host load averages range from approximately 0.2 to 2.2.
@@ -76,6 +76,31 @@ A 16-column variant increases that portion to 1.46 ms and is removed.
 Single-token decoding retains the combined kernel.
 The separated stages reduce its device work but add launches, allocations, and request handling, reducing observed throughput.
 
+### Grouped recurrent projections
+
+The single-token recurrent path now groups its four independent input projections into one cuTile dispatch and one output allocation.
+The recurrent kernel reads four disjoint ranges from that buffer.
+The grouped entry uses the existing FP32 reduction arithmetic and 56 registers per thread.
+Every earlier kernel instruction section matches the control byte for byte.
+The model weights and archive format remain unchanged.
+
+An A-B-B-A comparison uses the same compiled module, CPU affinity, and token work in all four guests.
+The grouped guests each produce two warm samples of 250.98 tokens/s.
+The controls measure 207.79 to 240.60 tokens/s, with noticeable variation between sessions.
+The grouped mean is about 4.4% below the fresh Linux mean of 262.57 tokens/s.
+These samples establish progress toward parity without removing the remaining prompt-latency or long-context work.
+Warm prompts measure 8 to 9 ms in the grouped guests.
+Every session retains the exact checksum and passes all layer, batch, and final-cache references.
+
+Each generated token now requires 203 native kernel launches, compared with 257 before grouping.
+The 64-token decode count falls from 16,448 to 12,992 launches, with queue batches falling from 768 to 704.
+Protocol version 5 expands the per-kernel profile array to 41 entries, so applications require the matching kernel and SDK.
+The operator suite covers all four output ranges, partial reduction tiles, unaligned word offsets, and neighboring output guards.
+
+A separate 64-bit weight-load experiment preserves correctness but increases register pressure and reduces warm throughput to approximately 220 tokens/s.
+Its immediate control measures 238.81 tokens/s in both warm sessions. The experiment is removed.
+A single-token Tensor Core output-head variant also shows no complete-workload benefit and is removed.
+
 ## Earlier retained measurements
 
 The final retained sample on 2026-10-23 uses the cached QMD templates and two submission waves described below.
@@ -107,7 +132,7 @@ Those experiments are removed from the maintained implementation.
 
 ## Maintained cuTile base
 
-All 40 native inference and rendering operators now use NVIDIA cuTile Rust.
+All 41 native inference and rendering operators now use NVIDIA cuTile Rust.
 The former NVPTX crate and GPUOcelot test harness are removed.
 The host compiler produces Tile IR 13.4 and assembles native Ada binaries with CUDA 13.4.92.
 D3OS retains its Rust driver, inference API, and buffer ownership.
