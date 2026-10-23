@@ -129,8 +129,9 @@ impl Compute {
     }
 
     fn load_program(&mut self, device: &Device, cubin: &'static [u8], symbol: &'static str) -> Result<Program> {
+        let source = (cubin.as_ptr() as usize, cubin.len());
         if let Some(program) = self.programs.get(symbol) {
-            if program.source != (cubin.as_ptr() as usize, cubin.len()) {
+            if program.source != source {
                 return Err(Error::Firmware);
             }
             return Ok(*program);
@@ -192,12 +193,20 @@ impl Compute {
             }
         }
         let (entry, code_bytes) = entry.ok_or(Error::Firmware)?;
-        let program = self.memory.allocate(device, image.len() as u64 + 4096, 4096)?;
-        while image.len() & 3 != 0 {
-            image.push(0);
-        }
-        let vram = device.vram.as_ref().ok_or(Error::Firmware)?;
-        vram.copy_from(program.physical as usize, &image)?;
+        // Every entry uses the same section layout. Upload the immutable image
+        // once, while retaining entry-specific register and constant metadata.
+        let program = if let Some(&allocation) = self.program_images.get(&source) {
+            allocation
+        } else {
+            let allocation = self.memory.allocate(device, image.len() as u64 + 4096, 4096)?;
+            while image.len() & 3 != 0 {
+                image.push(0);
+            }
+            device.vram.as_ref().ok_or(Error::Firmware)?.copy_from(allocation.physical as usize, &image)?;
+            self.program_images.insert(source, allocation);
+            info!("NVIDIA_PROGRAM_IMAGE_READY bytes={} images={}", image.len(), self.program_images.len());
+            allocation
+        };
         let program = Program {
             address: program.virtual_address + entry,
             bytes: code_bytes,
@@ -206,7 +215,7 @@ impl Compute {
             shared_bytes,
             required_threads,
             constants: constants.map(|binding| binding.map(|(offset, size)| (program.virtual_address + offset, size))),
-            source: (cubin.as_ptr() as usize, cubin.len()),
+            source,
         };
         self.programs.insert(symbol, program);
         Ok(program)

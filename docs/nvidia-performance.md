@@ -126,6 +126,20 @@ Overall DOOM rates are 1324.97 to 1339.22 FPS before and 1332.06 to 1361.17 FPS 
 The overlapping ranges do not establish a reliable overall FPS improvement.
 The final runs retain all model references and 600 frames of independent pixel verification.
 
+### Immutable module images
+
+The driver now uploads each CUBIN image once and shares it across its entry points.
+Each entry retains its own register, stack, shared-memory, and constant-bank metadata.
+The image remains private and immutable for the device lifetime.
+This removes repeated PCIe writes of an entire module during first use of individual operators.
+
+With the same cuTile bundle, first-use Qwen prompt processing falls from 479 ms to 18 to 19 ms across three fresh guests.
+The first 64-step decode falls from 632 ms to 416 to 447 ms.
+Model file access, model upload, and session allocation remain separate timings.
+Warm generation still falls within the observed host variation and remains below the Linux target.
+All three Qwen guests pass the complete token, layer, and cache comparisons.
+AlexNet, the operator suite, and 600-frame DOOM verification also pass with shared images.
+
 The following sections preserve the earlier NVPTX measurements and implementation history.
 They do not describe the current compiler-generated register layouts.
 
