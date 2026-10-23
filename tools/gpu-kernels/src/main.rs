@@ -96,6 +96,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "delta_fused_four_taps",
             "attention_split_batch",
             "attention_merge_splits",
+            "tensor_matmul_tf32x3_k16",
             "timestamp_probe",
             "local_stack_probe",
         ]);

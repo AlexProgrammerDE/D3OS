@@ -13,7 +13,7 @@ Those libraries remain inside the reference guest. D3OS does not link or load th
 
 The resident-model benchmarks separate file access, model upload, session allocation, prompt processing, and generation.
 Reference comparisons run after the timed work.
-AlexNet reports 20 forward passes after one warmup pass.
+AlexNet reports 100 forward passes after one warmup pass. Earlier measurements use 20 passes.
 Qwen reports three independent sessions with a 22-token prompt, 64 decode steps, and capacity for 256 tokens.
 The optional `long` benchmark generates 4,096 tokens per session with capacity for 4,352 tokens.
 It writes complete token traces to the serial log without filling the interactive terminal output queue.
@@ -30,6 +30,52 @@ The first `mean_us` pass runs without timestamp instrumentation.
 These measurements separate end-to-end overhead from device throughput. They are not interchangeable timers.
 
 ## Latest retained measurements
+
+### Matched Linux AlexNet reference
+
+The Linux reference uses the same FP32 AlexNet archive, image, and eight layer fixtures as D3OS.
+It runs cuDNN convolutions and pooling, with cuBLAS dense layers.
+Convolutions use FMA math; dense layers use the default FP32 math mode.
+All eight outputs must meet the original absolute and relative tolerances of `2e-4`.
+The full cuDNN 9.21.0.82 package is checksum-pinned and stays inside the reference guest.
+The preparation manifest records the model, fixture, executable, headers, source, and library hashes.
+
+```bash
+taskset -c 8,10,12,14 python3 tools/nvidia/linux-reference.py \
+  --alexnet-benchmark --memory-mib 12288
+```
+
+The first three Linux samples average 0.7368, 0.7320, and 0.7308 ms over 20 forward passes each.
+They pass every layer reference and produce class 258.
+The preceding native control averages 1.25 ms over 20 passes.
+The command-scope pilot reaches 1.05 ms, while the first full-writer sample reaches 1.15 ms.
+The following alternating comparison uses longer runs to check those initial samples.
+
+The following A-B-C-C-B-A comparison uses 100 passes per guest and one unchanged cuTile binary.
+
+| Native variant | Samples, ms | Mean, ms | Launches per forward | Queue submissions |
+| --- | ---: | ---: | ---: | ---: |
+| Control | 1.33, 1.30 | 1.315 | 44 | 44 |
+| Command scope | 1.11, 1.16 | 1.135 | 44 | 2 |
+| Scope and full writers | 1.04, 1.17 | 1.105 | 31 | 2 |
+
+The combined change reduces the mean by 16.0%, with all layer references passing in every guest.
+The full-writer change alone has overlapping wall-time samples; its separate percentage benefit is not established.
+The last-forward queue counters confirm that it removes 13 clear kernels while preserving the two-submission command scope.
+The benchmark also provides matrix-device timings in a separate instrumented forward pass, outside the normal timing loop.
+
+A separate A-B-B-A comparison keeps the scoped full-writer path fixed and changes only the FP32 matrix reduction tile.
+Eight-wide samples reach 1.05 and 1.01 ms; 16-wide samples reach 0.97 and 0.91 ms.
+The means are 1.03 and 0.94 ms, an 8.7% improvement.
+The five convolution matrix kernels fall from 442.75 to 326.64 microseconds in the separate instrumented pass.
+Every sample passes the original eight layer tolerances.
+The 16-wide kernel uses 80 registers per thread and has no local spill instructions.
+A 64-wide experiment reaches 1.14 ms, while a rank-preserving load variant reaches 1.09 ms. Both are removed.
+All retained older kernel instruction sections remain byte-identical.
+The final Linux comparison uses 100 passes per sample and reaches 0.7330, 0.7317, and 0.7311 ms.
+It still passes all eight layer references. Native AlexNet's 0.94 ms mean remains about 28% slower.
+Final regression checks pass GPU operators, Qwen model references, and all 600 DOOM reference views.
+The accompanying uncapped DOOM sample reaches 1,607.06 FPS, with regular gameplay still capped around 70 FPS.
 
 The sustained benchmark uses these commands, with one GPU guest at a time:
 

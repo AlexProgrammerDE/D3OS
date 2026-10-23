@@ -142,6 +142,14 @@ AlexNet passes every layer comparison on the physical GPU with the original refe
 Its matrix operations use three TF32 tensor products and compensated FP32 accumulation.
 An earlier running accumulation missed one third-layer value by about `2.24e-4`.
 Compensated accumulation corrects that mismatch without changing the reference tolerance.
+Large FP32 matrix products use 16-wide reduction tiles when all three dispatch dimensions meet the specialization's bounds.
+The remaining products retain the eight-wide kernel. Both use the same three TF32 products and compensated FP32 accumulation.
+The larger tile amortizes compensation work without introducing register spills.
+The compiler audit checks its Tensor Core instructions and rejects local spills.
+AlexNet groups each forward pass in a command scope. Intermediate downloads and the end of the scope complete pending GPU work.
+Convolution lowering and pooling allocate their outputs through full writers, so they do not need separate clear kernels.
+Single-image convolutions also allocate their matrix result through its writer.
+Batched convolutions retain a cleared combined output while reusing the complete column buffer for each image.
 The hardware operator suite also covers partial tiles, long reductions, batched convolution, and buffer reuse.
 The loader reads module stack metadata and sizes local scratch storage before submission.
 It also reads each entrypoint’s static shared-memory section and includes the reserved CUDA prefix in its QMD allocation.

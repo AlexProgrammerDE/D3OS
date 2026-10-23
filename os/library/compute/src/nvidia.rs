@@ -539,32 +539,41 @@ impl Backend for Nvidia {
         let spatial = element_count(&[oh, ow])?;
         let image = element_count(&[*channels, *height, *width])?;
         let output_image = element_count(&[*outputs, spatial])?;
-        let output = self.allocate(&[*batch, *outputs, oh, ow])?;
-        let columns = self.allocate(&[inner, spatial])?;
-        for n in 0..*batch {
-            self.launch(
-                Kernel::Im2col,
-                &[(&input.buffer, n * image), (&columns.buffer, 0)],
-                &[
-                    *channels,
-                    *height,
-                    *width,
-                    *kh,
-                    *kw,
-                    oh,
-                    ow,
-                    config.stride[0],
-                    config.stride[1],
-                    config.padding[0],
-                    config.padding[1],
-                ],
-            )?;
-            self.launch(
+        let parameters = [
+            *channels,
+            *height,
+            *width,
+            *kh,
+            *kw,
+            oh,
+            ow,
+            config.stride[0],
+            config.stride[1],
+            config.padding[0],
+            config.padding[1],
+        ];
+        let columns = self.produce(&[inner, spatial], Kernel::Im2col, &[(&input.buffer, 0)], &parameters)?;
+        let output = if *batch == 1 {
+            self.produce(
+                &[*batch, *outputs, oh, ow],
                 Kernel::Matmul,
-                &[(&weights.buffer, 0), (&columns.buffer, 0), (&output.buffer, n * output_image)],
+                &[(&weights.buffer, 0), (&columns.buffer, 0)],
                 &[*outputs, inner, spatial],
-            )?;
-        }
+            )?
+        } else {
+            let output = self.allocate(&[*batch, *outputs, oh, ow])?;
+            for n in 0..*batch {
+                if n != 0 {
+                    self.launch(Kernel::Im2col, &[(&input.buffer, n * image), (&columns.buffer, 0)], &parameters)?;
+                }
+                self.launch(
+                    Kernel::Matmul,
+                    &[(&weights.buffer, 0), (&columns.buffer, 0), (&output.buffer, n * output_image)],
+                    &[*outputs, inner, spatial],
+                )?;
+            }
+            output
+        };
         self.launch(
             Kernel::BiasChannel,
             &[(&output.buffer, 0), (&bias.buffer, 0), (&output.buffer, 0)],
@@ -584,11 +593,11 @@ impl Backend for Nvidia {
         };
         let oh = output_extent(*height, config.kernel[0], config.stride[0], 0)?;
         let ow = output_extent(*width, config.kernel[1], config.stride[1], 0)?;
-        let output = self.allocate(&[*batch, *channels, oh, ow])?;
         let planes = element_count(&[*batch, *channels])?;
-        self.launch(
+        self.produce(
+            &[*batch, *channels, oh, ow],
             Kernel::MaxPool,
-            &[(&input.buffer, 0), (&output.buffer, 0)],
+            &[(&input.buffer, 0)],
             &[
                 planes,
                 *height,
@@ -600,8 +609,7 @@ impl Backend for Nvidia {
                 oh,
                 ow,
             ],
-        )?;
-        Ok(output)
+        )
     }
 
     fn softmax(&self, input: &Tensor<Self>) -> Result<Tensor<Self>> {

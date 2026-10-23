@@ -82,7 +82,7 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     verify_buffer_reuse(backend).map_err(|error| format!("{error}"))?;
     bf16::run(backend)?;
     selection::run(backend)?;
-    for (m, k, n) in [(17, 33, 9), (37, 65, 257), (1, 9216, 17)] {
+    for (m, k, n) in [(17, 33, 9), (37, 65, 257), (65, 259, 97), (1, 9216, 17)] {
         let a: Vec<f32> = (0..m * k).map(|i| ((i * 73 % 251) as f32 - 125.) / 127.).collect();
         let b: Vec<f32> = (0..k * n).map(|i| ((i * 37 % 127) as f32 - 63.) / 71.).collect();
         let mut expected = vec![0.; m * n];
@@ -132,7 +132,7 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     raster::run(backend)?;
     raster_bytes::run(backend)?;
     super::report(format_args!(
-        "NVIDIA_INFERENCE_OPERATORS_OK matrix_cases=6 convolution_cases=1 softmax_cases=1 backend=nvidia"
+        "NVIDIA_INFERENCE_OPERATORS_OK matrix_cases=8 convolution_cases=1 softmax_cases=1 backend=nvidia"
     ));
     Ok(())
 }

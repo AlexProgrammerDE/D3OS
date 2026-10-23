@@ -228,14 +228,26 @@ pub(super) fn alexnet(backend: &Nvidia) -> Result<(), String> {
     let values = input.to_vec().map_err(|error| format!("{error}"))?;
     let mut elapsed = 0;
     let mut final_logits = Vec::new();
-    const REPEATS: usize = 20;
+    const REPEATS: usize = 100;
     for run in 0..=REPEATS {
         let input = Tensor::from_vec(backend, input.shape(), values.clone()).map_err(|error| format!("{error}"))?;
+        let before = if run == REPEATS {
+            Some((
+                backend.profile().map_err(|error| format!("{error}"))?,
+                backend.queue_profile().map_err(|error| format!("{error}"))?,
+            ))
+        } else {
+            None
+        };
         let start = now();
         let logits = model.forward(backend, input, |_, _| Ok(())).map_err(|error| format!("{error}"))?;
         let duration = now() - start;
         if run != 0 {
             elapsed += duration;
+        }
+        if let Some((before, queue_before)) = before {
+            profile(&before, &backend.profile().map_err(|error| format!("{error}"))?, "alexnet_forward");
+            queue_profile(queue_before, backend.queue_profile().map_err(|error| format!("{error}"))?, "alexnet_forward");
         }
         final_logits = backend.download(&logits).map_err(|error| format!("{error}"))?;
     }
@@ -249,6 +261,33 @@ pub(super) fn alexnet(backend: &Nvidia) -> Result<(), String> {
         "INFERENCE_BENCH alexnet backend=nvidia file_ms={file_ms} load_ms={load_ms} repeats={REPEATS} forward_total_ms={elapsed} forward_mean_ms={:.3} class={top}",
         elapsed as f64 / REPEATS as f64
     ));
+    // Keep GPU timestamps in a separate pass: instrumentation serializes each
+    // launch and must not contribute to the normal forward-pass measurement.
+    backend.set_device_timing(true).map_err(|error| format!("{error}"))?;
+    let timing = DeviceTiming(Some(backend));
+    let input = Tensor::from_vec(backend, input.shape(), values).map_err(|error| format!("{error}"))?;
+    let mut before = backend.profile().map_err(|error| format!("{error}"))?;
+    drop(
+        model
+            .forward(backend, input, |name, _| {
+                let after = backend.profile()?;
+                for kernel in [Kernel::Matmul, Kernel::Project] {
+                    let previous = before[kernel as usize];
+                    let current = after[kernel as usize];
+                    if current.calls != previous.calls {
+                        report(format_args!(
+                            "NATIVE_ALEXNET_MATRIX_DEVICE layer={name} calls={} device_ns={}",
+                            current.calls.wrapping_sub(previous.calls),
+                            current.device_ns.wrapping_sub(previous.device_ns)
+                        ));
+                    }
+                }
+                before = after;
+                Ok(())
+            })
+            .map_err(|error| format!("{error}"))?,
+    );
+    timing.finish().map_err(|error| format!("{error}"))?;
     drop(model);
     d3os_inference::verify_alexnet(backend, &weights, &fixture).map_err(|error| format!("{error}"))?;
     report(format_args!("INFERENCE_BENCH_OK alexnet backend=nvidia reference_layers=8"));

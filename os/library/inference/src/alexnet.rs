@@ -66,46 +66,48 @@ impl<B: Backend> AlexNet<B> {
 
     /// The observer receives intermediate tensors for layer-by-layer verification.
     pub fn forward(&self, backend: &B, mut input: Tensor<B>, mut observe: impl FnMut(&'static str, &Tensor<B>) -> Result<()>) -> Result<Tensor<B>> {
-        if input.shape() != [1, 3, 224, 224] {
-            return Err(Error::InvalidModelShape);
-        }
-        const NAMES: [&str; 5] = ["features.0", "features.3", "features.6", "features.8", "features.10"];
-        for (index, layer) in self.convolutions.iter().enumerate() {
-            let config = match index {
-                0 => Conv2d {
-                    stride: [4, 4],
-                    padding: [2, 2],
-                },
-                1 => Conv2d {
-                    padding: [2, 2],
-                    ..Conv2d::default()
-                },
-                _ => Conv2d {
-                    padding: [1, 1],
-                    ..Conv2d::default()
-                },
-            };
-            input = backend.relu(backend.conv2d(&input, &layer.weights, &layer.bias, config)?)?;
-            observe(NAMES[index], &input)?;
-            if matches!(index, 0 | 1 | 4) {
-                input = backend.max_pool2d(
-                    &input,
-                    Pool2d {
-                        kernel: [3, 3],
-                        stride: [2, 2],
+        backend.with_commands(|| {
+            if input.shape() != [1, 3, 224, 224] {
+                return Err(Error::InvalidModelShape);
+            }
+            const NAMES: [&str; 5] = ["features.0", "features.3", "features.6", "features.8", "features.10"];
+            for (index, layer) in self.convolutions.iter().enumerate() {
+                let config = match index {
+                    0 => Conv2d {
+                        stride: [4, 4],
+                        padding: [2, 2],
                     },
-                )?;
+                    1 => Conv2d {
+                        padding: [2, 2],
+                        ..Conv2d::default()
+                    },
+                    _ => Conv2d {
+                        padding: [1, 1],
+                        ..Conv2d::default()
+                    },
+                };
+                input = backend.relu(backend.conv2d(&input, &layer.weights, &layer.bias, config)?)?;
+                observe(NAMES[index], &input)?;
+                if matches!(index, 0 | 1 | 4) {
+                    input = backend.max_pool2d(
+                        &input,
+                        Pool2d {
+                            kernel: [3, 3],
+                            stride: [2, 2],
+                        },
+                    )?;
+                }
             }
-        }
-        // At 224x224, the last pool already produces 6x6, so adaptive pooling is an identity.
-        input = input.reshape(&[1, 9216])?;
-        for (index, layer) in self.classifier.iter().enumerate() {
-            input = backend.linear(&input, &layer.weights, &layer.bias)?;
-            if index < 2 {
-                input = backend.relu(input)?;
+            // At 224x224, the last pool already produces 6x6, so adaptive pooling is an identity.
+            input = input.reshape(&[1, 9216])?;
+            for (index, layer) in self.classifier.iter().enumerate() {
+                input = backend.linear(&input, &layer.weights, &layer.bias)?;
+                if index < 2 {
+                    input = backend.relu(input)?;
+                }
+                observe(["classifier.1", "classifier.4", "logits"][index], &input)?;
             }
-            observe(["classifier.1", "classifier.4", "logits"][index], &input)?;
-        }
-        Ok(input)
+            Ok(input)
+        })
     }
 }

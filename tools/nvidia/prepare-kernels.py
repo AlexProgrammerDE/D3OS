@@ -23,6 +23,7 @@ TENSOR_INSTRUCTIONS = {
     },
     "inference": {
         "tensor_matmul_tf32x3": r"\bHMMA\.1688\.F32\.TF32\s",
+        "tensor_matmul_tf32x3_k16": r"\bHMMA\.1688\.F32\.TF32\s",
         "tensor_project_tf32x3": r"\bHMMA\.1688\.F32\.TF32\s",
         "tensor_project_bf16_weights": r"\bHMMA\.16816\.F32\.BF16\s",
         "project_bf16_split": r"\bHMMA\.16816\.F32\.BF16\s",
@@ -43,11 +44,10 @@ def audit(family, sass):
         if name not in bodies or not re.search(instruction, bodies[name]):
             raise RuntimeError(f"{name}: missing Tensor Core instruction")
     if family == "inference":
-        recurrent = bodies.get("delta_fused_four_taps", "")
-        if not recurrent or re.search(r"\b(?:LDL|STL)\b", recurrent):
-            raise RuntimeError(
-                "four-tap recurrent specialization must remain spill-free"
-            )
+        for name in ("delta_fused_four_taps", "tensor_matmul_tf32x3_k16"):
+            body = bodies.get(name, "")
+            if not body or re.search(r"\b(?:LDL|STL)\b", body):
+                raise RuntimeError(f"{name}: specialization must remain spill-free")
         for pattern in (r"\bLDL\b", r"\bSTL\b"):
             if not re.search(pattern, bodies.get("local_stack_probe", "")):
                 raise RuntimeError("scratch diagnostic did not generate local spills")

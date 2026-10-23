@@ -150,6 +150,8 @@ impl Kernel {
         matches!(
             self,
             Self::Matmul
+                | Self::Im2col
+                | Self::MaxPool
                 | Self::Project
                 | Self::Copy
                 | Self::RmsNorm
@@ -269,6 +271,7 @@ impl Kernel {
     /// Select the cuTile specialization without changing the public request ABI.
     pub fn entry(self, parameters: &[u32]) -> &'static str {
         match (self, parameters) {
+            (Self::Matmul, [m, k, n]) if *m >= 64 && *k >= 256 && *n >= 64 => "tensor_matmul_tf32x3_k16",
             (Self::AttentionFusedBatch, [_, _, _, _, _, _]) => "attention_split_batch",
             (Self::AttentionOutput, [_, _, _]) => "attention_merge_splits",
             (Self::DeltaFused, [_, _, _, kernel, _]) if *kernel <= 4 => "delta_fused_four_taps",
