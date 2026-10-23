@@ -57,7 +57,9 @@ The recurrent batch path instead keeps history and state in tiles until the sequ
 BF16 matrix projections preserve two-dimensional pointer tiles through memory lowering.
 Their masked loads select padding explicitly because the pinned frontend expands scalar padding with rank one.
 FP32 matrix products and wide vector projections retain flattened loads, which measured faster for those paths.
-The matrix template uses 16-element reductions for regular BF16 projections and 8-element reductions for split and FP32 products.
+BF16 matrix projections split FP32 activations into a BF16 high part and a BF16 residual, with compensated FP32 accumulation.
+The binary audit requires native BF16 Tensor Core instructions for both regular and split projections.
+Regular BF16 projections use 64-element reductions. Split BF16 projections use 16 elements, and FP32 products retain 8 elements.
 Small even-width BF16 projections use `[2, 4, 32]` tiles to reduce shared storage for partial sums.
 Their gated specialization combines two projections and SiLU multiplication without a separate activation buffer.
 Odd-width inputs retain scalar BF16 loads, and vocabulary projections retain their wider tile.

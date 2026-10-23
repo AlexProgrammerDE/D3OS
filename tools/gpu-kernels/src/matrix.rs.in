@@ -1,4 +1,5 @@
-// Tensor Core matrix products retain FP32 operands through TF32 decomposition.
+// Split FP32 activations into high and residual Tensor Core operands.
+// Packed weights use BF16 products; FP32 weights retain TF32 decomposition.
 unsafe fn compensated_matrix_template<const TRANSPOSE: bool, const BF16: bool, const MATRIX_LOAD: bool>(
     a: *const f32, b: *const f32, output: *mut f32, rows: u32, inner: u32, cols: u32, splits: u32,
 ) {
@@ -42,21 +43,29 @@ unsafe fn compensated_matrix_template<const TRANSPOSE: bool, const BF16: bool, c
         } else {
             bk * broadcast_scalar(cols, shape![TILE_INNER, 32]) + c
         };
-        let bv: Tile<f32, { [TILE_INNER, 32] }> = unsafe { read_weights::<BF16, MATRIX_LOAD, TILE_INNER, 32, TILE_B_VALUES>(b, bi, bm, shape![TILE_B_VALUES]) };
-        let ah: Tile<tf32, { [16, TILE_INNER] }> = ftof(av, rounding::NearestAway);
-        let bh: Tile<tf32, { [TILE_INNER, 32] }> = ftof(bv, rounding::NearestAway);
-        let ar: Tile<f32, { [16, TILE_INNER] }> = ftof(ah, rounding::NearestEven);
-        let av: Tile<f32, { [16, TILE_INNER] }> = av.reshape(shape![16, TILE_INNER]);
-        let al: Tile<tf32, { [16, TILE_INNER] }> = ftof(av - ar, rounding::NearestAway);
         let zero: Tile<f32, { [16, 32] }> = broadcast_scalar(0f32, shape![16, 32]);
-        let high: Tile<f32, { [16, 32] }> = mmaf(ah, bh, zero);
-        let mut low: Tile<f32, { [16, 32] }> = mmaf(al, bh, zero);
-        if BF16 == false {
+        let (high, low) = if BF16 {
+            let words = unsafe { read_matrix_tile(bf16_pointer(b), bi, bm, 0u16) };
+            let weight: Tile<bf16, { [TILE_INNER, 32] }> = bitcast(words);
+            let ah: Tile<bf16, { [16, TILE_INNER] }> = ftof(av, rounding::NearestEven);
+            let ar: Tile<f32, { [16, TILE_INNER] }> = ftof(ah, rounding::NearestEven);
+            let al: Tile<bf16, { [16, TILE_INNER] }> = ftof(av - ar, rounding::NearestEven);
+            (mmaf(ah, weight, zero), mmaf(al, weight, zero))
+        } else {
+            let bv: Tile<f32, { [TILE_INNER, 32] }> = unsafe { read_weights::<false, MATRIX_LOAD, TILE_INNER, 32, TILE_B_VALUES>(b, bi, bm, shape![TILE_B_VALUES]) };
+            let ah: Tile<tf32, { [16, TILE_INNER] }> = ftof(av, rounding::NearestAway);
+            let bh: Tile<tf32, { [TILE_INNER, 32] }> = ftof(bv, rounding::NearestAway);
+            let ar: Tile<f32, { [16, TILE_INNER] }> = ftof(ah, rounding::NearestEven);
+            let av: Tile<f32, { [16, TILE_INNER] }> = av.reshape(shape![16, TILE_INNER]);
+            let al: Tile<tf32, { [16, TILE_INNER] }> = ftof(av - ar, rounding::NearestAway);
+            let high = mmaf(ah, bh, zero);
+            let low = mmaf(al, bh, zero);
             let br: Tile<f32, { [TILE_INNER, 32] }> = ftof(bh, rounding::NearestEven);
             let bv: Tile<f32, { [TILE_INNER, 32] }> = bv.reshape(shape![TILE_INNER, 32]);
             let bl: Tile<tf32, { [TILE_INNER, 32] }> = ftof(bv - br, rounding::NearestAway);
-            low = mmaf(ah, bl, low);
-        }
+            let low = mmaf(ah, bl, low);
+            (high, low)
+        };
         let adjusted = high - correction;
         let next = sum + adjusted;
         correction = (next - sum) - adjusted;

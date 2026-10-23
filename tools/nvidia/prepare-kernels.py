@@ -22,13 +22,10 @@ TENSOR_INSTRUCTIONS = {
         "tensor_matmul_bf16": r"\bHMMA\.16816\.F32\.BF16\s",
     },
     "inference": {
-        name: r"\bHMMA\.1688\.F32\.TF32\s"
-        for name in (
-            "tensor_matmul_tf32x3",
-            "tensor_project_tf32x3",
-            "tensor_project_bf16_weights",
-            "project_bf16_split",
-        )
+        "tensor_matmul_tf32x3": r"\bHMMA\.1688\.F32\.TF32\s",
+        "tensor_project_tf32x3": r"\bHMMA\.1688\.F32\.TF32\s",
+        "tensor_project_bf16_weights": r"\bHMMA\.16816\.F32\.BF16\s",
+        "project_bf16_split": r"\bHMMA\.16816\.F32\.BF16\s",
     },
 }
 

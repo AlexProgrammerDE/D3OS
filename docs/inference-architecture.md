@@ -153,8 +153,11 @@ Other widths retain scalar reads, including odd rows and tails.
 Small BF16 projections use tiles with shape `[2, 4, 32]`, with two groups of 32 weight pairs per output.
 This layout reduces the shared storage for partial sums. cuTile selects the physical register and lane layout.
 Wider projections retain eight outputs per warp and reuse inputs across the vocabulary matrix.
-Multi-row projections expand BF16 weights exactly and split FP32 activations into TF32 high and residual parts.
-They need two tensor products because BF16 weights have no TF32 residual.
+Multi-row projections load native BF16 weights and split FP32 activations into BF16 high and residual parts.
+Two BF16 Tensor Core products use compensated FP32 accumulation.
+Regular projections reduce 64 inputs per iteration. Split projections reduce 16 inputs per iteration.
+This decomposition retains more activation precision than a single BF16 cast, but differs from the previous TF32 decomposition.
+The existing operator and model tolerances remain unchanged.
 FP32 weight operations retain three tensor products and compensated FP32 accumulation.
 For two to 32 rows, 256 to 2,048 outputs, and at least 512 inputs, BF16 projections split the input reduction into 16 partitions.
 A second kernel combines their FP32 partial results with compensated accumulation.

@@ -83,7 +83,7 @@ The binary audit found changes in only two entries: `tensor_project_bf16_weights
 All other kernel instruction sections match the baseline byte for byte.
 
 A further BF16 sweep compared 8-, 16-, and 32-element reduction tiles with the retained matrix layout.
-Regular projections use 16 elements; split projections retain 8 elements.
+At this stage, regular projections use 16 elements and split projections retain 8 elements.
 The regular-projection phase decreased from 17.13 to 15.07 million dispatch cycles, including waiting.
 The combined layout measured 14 to 15 ms for the prompt, with the same exact tokens and reference checks.
 The 32-element variant measured 18 to 19 ms and was rejected.
@@ -171,7 +171,7 @@ After 128 MiB of cache eviction, the gated operation remains near 43 microsecond
 The warm microbenchmark gain therefore does not establish the same improvement for model weights streamed from VRAM.
 A reordered pair layout increases register use and reduces full-model throughput, so it is rejected.
 
-### Final measurements with command scopes
+### Measurements with command scopes
 
 Three fresh native guests use the retained cuTile bundle and host CPUs 8, 10, 12, and 14.
 The matched Linux guest runs afterward with the same GPU, token contract, FP32 caches, and 256-token capacity.
@@ -196,6 +196,33 @@ The duplicate corner overlay is removed. FPS remains above the game image, besid
 The 600-frame pixel comparison and GPU operator checks after game exit still pass.
 All three Qwen guests retain the exact 64-token checksum and pass every layer, logit, batch, and cache comparison.
 AlexNet retains class 258 and passes all eight reference layers.
+
+### Native BF16 Tensor Core products
+
+Multi-token projections now load BF16 weights directly and split FP32 activations into a BF16 high part and residual.
+Both products accumulate in FP32, with compensated summation across reduction tiles.
+This changes intermediate rounding from the previous TF32 decomposition.
+It retains more precision than a single BF16 activation cast, but does not promise an exact FP32 dot product.
+All operator and model tolerances remain unchanged.
+
+Regular projections use 64-element reduction tiles, while split projections use 16 elements.
+The larger tile amortizes the compensation work across more inputs.
+The binary audit now requires BF16 Tensor Core instructions in both entries.
+Only these two instruction sections change. Single-token projections, AlexNet kernels, and rendering kernels remain byte-for-byte identical.
+
+Three fresh guests measure 10 to 11 ms for the warm 22-token prompt, compared with 12 to 13 ms before this change.
+The first measured prompt drops from 17 ms to 15 to 16 ms.
+Prompt queue-wait cycles decrease from about 28.7 million to 23.8 million in the first comparison.
+The full reference trace, final caches, and exact 64-token checksum pass in all three guests.
+The unchanged decode kernels generate 193.94 to 204.47 tokens/s, within host variation.
+Fresh AlexNet verification measures 1.25 ms per forward pass across 20 repeats.
+Three fresh DOOM runs measure 1376.22, 1376.22, and 1311.03 FPS with the corner overlay removed.
+These rendering samples overlap the wider observed variation and do not establish an effect from the matrix change.
+The 600-frame pixel comparison and GPU checks after game exit pass again.
+The complete compiler validation also passes, with the same CUBIN bytes as the hardware-tested bundle.
+
+An independent recurrent experiment also reduced queue-wait cycles by about 4%, but showed no clear full-model throughput gain.
+Its extra preparation kernels and allocations consumed the benefit, so the maintained path retains the simpler fused recurrent operation.
 
 The following sections preserve the earlier NVPTX measurements and implementation history.
 They do not describe the current compiler-generated register layouts.

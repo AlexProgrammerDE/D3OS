@@ -18,7 +18,7 @@ fn main() {
     }
     println!("cargo:rerun-if-changed=src/matrix.rs.in");
     let matrix = fs::read_to_string("src/matrix.rs.in").expect("read matrix tile template");
-    for inner in [8, 16] {
+    for inner in [8, 16, 64] {
         source.push_str(
             &matrix
                 .replace("compensated_matrix_template", &format!("compensated_matrix_{inner}"))

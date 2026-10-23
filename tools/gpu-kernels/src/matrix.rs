@@ -9,7 +9,7 @@ unsafe fn tensor_project_tf32x3(a: *const f32, b: *const f32, out: *mut f32, m: 
 #[cutile::entry()]
 unsafe fn tensor_project_bf16_weights(a: *const f32, b: *const f32, out: *mut f32, m: u32, k: u32, n: u32) {
     // Longer reductions amortize the compensated sum in regular projections.
-    unsafe { compensated_matrix_16::<true, true, true>(a, b, out, m, k, n, 1u32) }
+    unsafe { compensated_matrix_64::<true, true, true>(a, b, out, m, k, n, 1u32) }
 }
 // Separate entries keep the matrix tile's shared-memory reservation out of
 // every single-token vector launch.
@@ -28,7 +28,7 @@ unsafe fn vector_project_paired_bf16_weights(a: *const f32, b: *const f32, out: 
 #[cutile::entry()]
 unsafe fn project_bf16_split(a: *const f32, b: *const f32, out: *mut f32, m: u32, k: u32, n: u32, splits: u32) {
     // Short split reductions measured faster with the smaller tile.
-    unsafe { compensated_matrix_8::<true, true, true>(a, b, out, m, k, n, splits) }
+    unsafe { compensated_matrix_16::<true, true, true>(a, b, out, m, k, n, splits) }
 }
 #[cutile::entry()]
 unsafe fn sum_projection_partials(input: *const f32, output: *mut f32, rows: u32, cols: u32, splits: u32) {
