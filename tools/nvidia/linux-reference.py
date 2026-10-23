@@ -12,6 +12,7 @@ import resource
 import shutil
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
 import tomllib
@@ -243,6 +244,162 @@ def validate_matched_qwen(text, manifest, flash_attention, *, strict_selection=T
     return differences
 
 
+def alexnet_benchmark(root):
+    cudnn = ROOT / "target/nvidia/linux-cudnn"
+    headers = cudnn / "include"
+    subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "tools/nvidia/prepare-linux-cudnn.py"),
+            "--output",
+            str(cudnn),
+        ],
+        check=True,
+    )
+    cuda_headers = ROOT / "target/nvidia/cutile-toolkit/packages/nvidia/cu13/include"
+    binary = root / "benchmark"
+    subprocess.run(
+        [
+            "gcc",
+            "-D_POSIX_C_SOURCE=200809L",
+            "-std=c11",
+            "-O2",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-Wno-deprecated-declarations",
+            "-I",
+            str(headers),
+            "-I",
+            str(cuda_headers),
+            str(ROOT / "tools/nvidia/linux-alexnet-bench.c"),
+            "-ldl",
+            "-lm",
+            "-o",
+            str(binary),
+        ],
+        check=True,
+    )
+    manifest = {
+        "cudnn": json.loads((cudnn / "manifest.json").read_text()),
+        "artifacts": {},
+    }
+
+    def remember(source, destination):
+        source = Path(source)
+        copy_file(root, source, destination)
+        with source.open("rb") as file:
+            manifest["artifacts"][destination] = hashlib.file_digest(
+                file, "sha256"
+            ).hexdigest()
+
+    # Use the complete pinned cuDNN distribution in this reference guest.
+    libraries = [
+        *cudnn.joinpath("lib").glob("*.so*"),
+        *(
+            p
+            for p in Path("/usr/local/lib/ollama/mlx_cuda_v13").glob("*.so*")
+            if not p.name.startswith("libcudnn")
+        ),
+        *Path("/usr/local/lib/ollama/cuda_v13").glob("libcublas*.so*"),
+    ]
+    seen = {}
+    for library in libraries:
+        actual = library.resolve()
+        if actual not in seen:
+            dynamic = subprocess.check_output(["readelf", "-d", str(actual)], text=True)
+            soname = re.search(r"\(SONAME\).*\[(.*?)\]", dynamic)
+            name = soname[1] if soname else actual.name
+            seen[actual] = name
+            remember(actual, f"/lib64/{name}")
+        else:
+            name = seen[actual]
+        alias = root / "lib64" / library.name
+        if library.name != name:
+            alias.unlink(missing_ok=True)
+            alias.symlink_to(name)
+    assets = ROOT / "target/inference"
+    provenance = json.loads((assets / "manifest.json").read_text())
+    if (
+        provenance["weights_sha256"]
+        != "7be5be791159472b1fbf3c69796f7cb30dca7ad8466c2df70058c37116cdee02"
+    ):
+        raise ValueError("unexpected AlexNet checkpoint provenance")
+    for name, key in [("alexnet.d3t", "model_sha256"), ("dog.d3t", "fixture_sha256")]:
+        remember(assets / name, f"/{name}")
+        if manifest["artifacts"][f"/{name}"] != provenance[key]:
+            raise ValueError(f"AlexNet asset checksum mismatch: {name}")
+    for library in re.findall(
+        r"/[^\s()]+", subprocess.check_output(["ldd", str(binary)], text=True)
+    ):
+        copy_file(root, library)
+    search = f"{cudnn / 'lib'}:/usr/local/lib/ollama/mlx_cuda_v13:/usr/local/lib/ollama/cuda_v13"
+    for library in seen:
+        dependencies = subprocess.check_output(
+            ["ldd", str(library)],
+            text=True,
+            env=dict(os.environ, LD_LIBRARY_PATH=search),
+            stderr=subprocess.PIPE,
+        )
+        if "not found" in dependencies:
+            raise ValueError(
+                f"missing AlexNet library dependency: {library}\n{dependencies}"
+            )
+        for dependency in re.findall(r"/[^\s()]+", dependencies):
+            if Path(dependency).resolve() not in seen:
+                remember(dependency, dependency)
+    remember(ROOT / "tools/nvidia/linux-alexnet-bench.c", "/alexnet-reference.c")
+    with binary.open("rb") as file:
+        manifest["artifacts"]["/bin/linux-alexnet-bench"] = hashlib.file_digest(
+            file, "sha256"
+        ).hexdigest()
+    # prepare() launches /benchmark without arguments. Keep the executable separate.
+    binary.rename(root / "bin/linux-alexnet-bench")
+    binary.write_text(
+        "#!/bin/bash\nset -eux\nexport LD_LIBRARY_PATH=/lib64:/bin\n/bin/linux-alexnet-bench /alexnet.d3t /dog.d3t\n"
+    )
+    binary.chmod(0o755)
+    manifest["artifacts"]["/benchmark"] = hashlib.sha256(
+        binary.read_bytes()
+    ).hexdigest()
+    (root.parent / "alexnet-manifest.json").write_text(
+        json.dumps(manifest, indent=2) + "\n"
+    )
+
+
+def validate_alexnet(text):
+    rows = re.findall(r"LINUX_ALEXNET_BENCH ([^\r\n]*)", text)
+    if len(rows) != 3 or "LINUX_ALEXNET_OK reference_layers=8 class=258" not in text:
+        raise ValueError("AlexNet requires three runs and all layer references")
+    names = re.findall(r"LINUX_ALEXNET_LAYER_OK name=([^\s]+)", text)
+    if names != [
+        "features.0",
+        "features.3",
+        "features.6",
+        "features.8",
+        "features.10",
+        "classifier.1",
+        "classifier.4",
+        "logits",
+    ]:
+        raise ValueError("AlexNet reference did not compare every layer")
+    for run, row in enumerate(rows):
+        fields = dict(re.findall(r"(\w+)=([^\s]+)", row))
+        for key, value in {
+            "run": str(run),
+            "repeats": "100",
+            "weights": "f32",
+            "arithmetic": "f32",
+            "cudnn_math": "fma",
+            "cublas_math": "default",
+        }.items():
+            if fields.get(key) != value:
+                raise ValueError(f"unexpected AlexNet setting: {key}")
+        for key in ["forward_mean_ms", "forward_total_ms"]:
+            if not 0 < float(fields[key]) < 10000:
+                raise ValueError("invalid AlexNet timing")
+
+
 def doom_benchmark(root):
     directory = ROOT / "os/application/doom"
     config = tomllib.loads((directory / "Makefile.toml").read_text())
@@ -461,11 +618,19 @@ def main():
     parser.add_argument("--model", type=Path)
     parser.add_argument("--memory-mib", type=int, default=4096)
     parser.add_argument("--doom-benchmark", action="store_true")
+    parser.add_argument("--alexnet-benchmark", action="store_true")
     args = parser.parse_args()
     affinity = ",".join(str(cpu) for cpu in sorted(os.sched_getaffinity(0)))
     print(f"NVIDIA_HOST_CPU_AFFINITY cpus={affinity}", flush=True)
     if (
-        sum((args.kernel_benchmark, bool(args.llama_directory), args.doom_benchmark))
+        sum(
+            (
+                args.kernel_benchmark,
+                bool(args.llama_directory),
+                args.doom_benchmark,
+                args.alexnet_benchmark,
+            )
+        )
         > 1
     ):
         parser.error("select only one Linux reference workload")
@@ -505,6 +670,8 @@ def main():
             )
     elif args.doom_benchmark:
         doom_benchmark(args.directory / "root")
+    elif args.alexnet_benchmark:
+        alexnet_benchmark(args.directory / "root")
     elif (args.directory / "root/benchmark").exists():
         (args.directory / "root/benchmark").unlink()
     if args.prepare_only:
@@ -575,6 +742,8 @@ def main():
         )
     if args.kernel_benchmark and "LINUX_KERNEL_BENCH_OK" not in text:
         raise RuntimeError("Linux kernel benchmark did not pass")
+    if args.alexnet_benchmark:
+        validate_alexnet(text)
     if args.llama_directory:
         marker = (
             "LINUX_MATCHED_QWEN_OK"
