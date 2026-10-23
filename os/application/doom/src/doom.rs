@@ -225,10 +225,6 @@ unsafe extern "C" fn DG_DrawFrame() {
         let mut lfb = LFB::new(fb_info.addr as *mut u8, fb_info.pitch, fb_info.width, fb_info.height, fb_info.bpp);
         lfb.draw_string(title_x, title_y, color::RED, color::BLACK, title);
         lfb.draw_string(pos_x, title_y, color::YELLOW, color::BLACK, fps_string.as_str());
-        let backend = if gpu::enabled() { "NVIDIA / native Rust" } else { "CPU / native Rust" };
-        lfb.draw_string(pos_x + 8, pos_y + 8, color::WHITE, color::BLACK, &format!("Backend: {backend}"));
-        lfb.draw_string(pos_x + 8, pos_y + 24, color::YELLOW, color::BLACK, &fps_string);
-
         fps_info.add_frame();
         gpu::displayed(gpu::cycles().wrapping_sub(start));
     }
