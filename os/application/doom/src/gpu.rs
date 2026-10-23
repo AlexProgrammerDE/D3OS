@@ -1,6 +1,10 @@
 //! Native indexed GPU rasterizer for the pinned doomgeneric draw interface.
 use alloc::{vec, vec::Vec};
-use core::{ffi::c_void, ptr, slice};
+use core::{
+    ffi::c_void,
+    ptr, slice,
+    sync::atomic::{AtomicU64, Ordering},
+};
 use d3os_compute::{
     Buffer, Error, Result,
     nvidia::{GpuBuffer, Nvidia},
@@ -55,9 +59,18 @@ unsafe extern "C" {
     fn __real_I_SetPalette(palette: *mut u8);
     fn __real_I_FinishUpdate();
     fn __real_I_Quit();
+    fn __real_Z_Malloc(bytes: i32, tag: i32, owner: *mut c_void) -> *mut c_void;
+    fn __real_Z_Free(pointer: *mut c_void);
+    fn __real_Z_FreeTags(low: i32, high: i32);
+    fn __real_Z_ClearZone(zone: *mut c_void);
+    fn doom_purge_texture_cache();
 }
 
 static RENDERER: Once<Mutex<Renderer>> = Once::new();
+// The pinned renderer's texture columns, flats, color maps, translations, and
+// fuzz offsets are immutable between zone lifetime events. Invalidate before
+// allocation too: Z_Malloc can purge caches through internal Z_Free calls.
+static TEXTURE_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 pub(super) fn enabled() -> bool {
     RENDERER.get().is_some()
@@ -100,12 +113,13 @@ pub(super) fn report_profile() {
             }
         }
         log::info!(
-            "NVIDIA_DOOM_UPLOAD_PROFILE texture_bytes={} cache_hits={} cache_misses={} atlas_resets={} buffer_growths={}",
+            "NVIDIA_DOOM_UPLOAD_PROFILE texture_bytes={} cache_hits={} cache_misses={} atlas_resets={} buffer_growths={} texture_generation={}",
             renderer.texture_uploaded_bytes,
             renderer.texture_hits,
             renderer.texture_misses,
             renderer.texture_resets,
-            renderer.buffer_growths
+            renderer.buffer_growths,
+            TEXTURE_GENERATION.load(Ordering::Relaxed)
         );
         log::info!("NVIDIA_DOOM_PROFILE_DONE");
     }
@@ -201,6 +215,12 @@ impl Renderer {
     }
 
     fn begin(&mut self) -> Result<()> {
+        if self.verify && self.frames != 0 && self.frames.is_multiple_of(60) {
+            // Exercise reloaded/purged engine data while old atlas snapshots
+            // still exist. The following draws retain their CPU comparison.
+            unsafe { doom_purge_texture_cache() };
+            log::info!("NVIDIA_DOOM_CACHE_PURGE frame={}", self.frames);
+        }
         self.frame_start_cycles = cycles();
         self.active = true;
         self.primitives = 0;
@@ -296,9 +316,11 @@ impl Renderer {
         }
         let bytes = unsafe { slice::from_raw_parts(pointer, length) };
         let previous = self.textures.bytes().len();
-        // Content comparison detects a purged zone allocation reused at the
-        // same address, including reuse inside the current batch.
-        let offset = self.textures.snapshot(pointer as usize, bytes)?;
+        // Generation changes force content validation. Immutable atlas copies
+        // still preserve earlier draws if a source address gets reused.
+        let offset = self
+            .textures
+            .snapshot_versioned(pointer as usize, TEXTURE_GENERATION.load(Ordering::Relaxed), bytes)?;
         if self.textures.bytes().len() == previous {
             self.texture_hits += 1;
         } else {
@@ -499,6 +521,30 @@ impl Renderer {
         self.palette_cycles = self.palette_cycles.wrapping_add(cycles().wrapping_sub(start));
         Ok(())
     }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn __wrap_Z_Malloc(bytes: i32, tag: i32, owner: *mut c_void) -> *mut c_void {
+    TEXTURE_GENERATION.fetch_add(1, Ordering::Relaxed);
+    unsafe { __real_Z_Malloc(bytes, tag, owner) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn __wrap_Z_Free(pointer: *mut c_void) {
+    TEXTURE_GENERATION.fetch_add(1, Ordering::Relaxed);
+    unsafe { __real_Z_Free(pointer) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn __wrap_Z_FreeTags(low: i32, high: i32) {
+    TEXTURE_GENERATION.fetch_add(1, Ordering::Relaxed);
+    unsafe { __real_Z_FreeTags(low, high) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn __wrap_Z_ClearZone(zone: *mut c_void) {
+    TEXTURE_GENERATION.fetch_add(1, Ordering::Relaxed);
+    unsafe { __real_Z_ClearZone(zone) }
 }
 
 fn upload(device: &Nvidia, buffer: &mut GpuBuffer<u32>, words: &[u32]) -> Result<bool> {

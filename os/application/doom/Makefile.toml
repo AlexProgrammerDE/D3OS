@@ -58,7 +58,8 @@ args = [ "-n", "-T", "${LINKER_FILE}", "-o", "${APPLICATION}", "${RUST_OBJECT}",
     "--wrap=R_RenderPlayerView", "--wrap=R_DrawColumn", "--wrap=R_DrawColumnLow",
     "--wrap=R_DrawTranslatedColumn", "--wrap=R_DrawTranslatedColumnLow",
     "--wrap=R_DrawFuzzColumn", "--wrap=R_DrawFuzzColumnLow", "--wrap=R_DrawSpan", "--wrap=R_DrawSpanLow",
-    "--wrap=I_SetPalette", "--wrap=I_FinishUpdate", "--wrap=I_Quit", "--wrap=I_Error" ]
+    "--wrap=I_SetPalette", "--wrap=I_FinishUpdate", "--wrap=I_Quit", "--wrap=I_Error",
+    "--wrap=Z_Malloc", "--wrap=Z_Free", "--wrap=Z_FreeTags", "--wrap=Z_ClearZone" ]
 dependencies = [ "compile", "archive-doom" ]
 condition = { files_modified = { input = [ "${BUILD_DIRECTORY}/lib${CARGO_MAKE_PROJECT_NAME}*", "${LINKER_FILE}", "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/os/application/doom/Makefile.toml" ], output = [ "${APPLICATION}" ] } }
 

@@ -46,7 +46,12 @@ One GPU thread preserves the engine's sequential feedback, including overlapping
 The adapter resolves each batch before the draw type changes between ordinary primitives and fuzz.
 
 Snapshots include source lengths for sprite posts and translation tables for translated sprites.
-The snapshot cache compares bytes on reuse because the zone allocator can recycle an engine pointer within a frame.
+The zone allocator can recycle an engine pointer within a frame.
+The adapter advances a texture generation before zone allocation, release, cache purges, or zone reset.
+The first reuse in a new generation compares source bytes with the immutable snapshot.
+Later requests reuse the validated prefix directly until the generation changes.
+A matching short prefix does not validate an unseen suffix.
+Changed bytes append a new snapshot, preserving the resources of pending draws.
 GPU results return to the indexed engine buffer before the view renderer returns.
 The CPU then draws HUD patches, menus, automap, and screen wipes against that synchronized image.
 The GPU converts the completed indexed image to RGB and scales it to 640 by 400.
@@ -55,7 +60,7 @@ The application copies those pixels into the console framebuffer.
 ## Frame transfer
 
 The inference service now transfers data through a bounded 1 MiB staging allocation in coherent guest RAM.
-Native GPU copy kernels handle uploads and readback, while completion fences separate CPU access from GPU access.
+The native copy engine handles uploads and readback, while completion fences separate CPU access from GPU access.
 The device retains the staging allocation for its complete lifetime, including dispatch errors.
 The GPU also clears application buffers before the driver returns their handles.
 
@@ -76,6 +81,7 @@ The game check uses checksum-pinned Freedoom 0.13.0 assets.
 It compares every indexed pixel after each GPU batch in reference mode.
 The input sequence exercises movement, turning, firing, low detail, automap, menus, and invisibility.
 The check requires 600 rendered views and both press and release events for the main controls.
+It also purges the engine texture cache every 60 views to exercise source lifetime changes.
 It then quits the game and runs the native GPU operator suite in the same VM.
 The GPU-only check uses the same sequence without CPU scene drawing.
 

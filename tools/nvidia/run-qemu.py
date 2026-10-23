@@ -343,6 +343,17 @@ def main():
                             raise RuntimeError(
                                 "DOOM verification did not exercise texture atlas rollover"
                             )
+                        if args.inference == "gpu-doom-verify":
+                            purges = {
+                                int(frame)
+                                for frame in re.findall(
+                                    r"NVIDIA_DOOM_CACHE_PURGE frame=(\d+)", text
+                                )
+                            }
+                            if not set(range(60, 600, 60)).issubset(purges):
+                                raise RuntimeError(
+                                    "DOOM verification did not exercise all engine cache purges"
+                                )
                         rates = [
                             int(n)
                             for n in re.findall(r"NVIDIA_DOOM_FPS fps=(\d+)", text)
