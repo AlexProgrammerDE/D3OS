@@ -22,6 +22,7 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     split_guards(backend).map_err(|e| format!("split projection guards: {e}"))?;
     for (m, k, n) in [
         (1, 1, 1),
+        (1, 2, 1),
         (1, 33, 17),
         (1, 63, 17),
         (1, 64, 17),
@@ -52,6 +53,14 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
             .and_then(|t| backend.download(&t))
             .map_err(|e| format!("{e}"))?;
         super::compare(&output, &expected, "BF16-weight projection")?;
+        let residual: Vec<f32> = (0..m * n).map(|i| ((i * 13 % 29) as f32 - 14.) / 17.).collect();
+        let expected: Vec<_> = expected.iter().zip(&residual).map(|(a, b)| a + b).collect();
+        let residual = Tensor::from_vec(backend, &[m, n], residual).map_err(|e| format!("{e}"))?;
+        let output = backend
+            .project_add(&input, &weights, residual)
+            .and_then(|v| backend.download(&v))
+            .map_err(|e| format!("{e}"))?;
+        super::compare(&output, &expected, "BF16 residual projection")?;
     }
     let bits: Vec<u16> = (0..77).map(|i| [0, 0x8000, 1, 0x807f, 0x3f80, 0xbf80, 0x7f7f][i % 7]).collect();
     let expected: Vec<_> = bits.iter().map(|&bits| f32::from_bits(u32::from(bits) << 16)).collect();
@@ -113,7 +122,7 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
         super::compare(&gpu, &cpu, "gated projection")?;
     }
     super::super::report(format_args!(
-        "NVIDIA_BF16_WEIGHTS_OK projections=13 gated_projections=13 embedding_rows=7 roundtrip=exact guards=typed backend=nvidia"
+        "NVIDIA_BF16_WEIGHTS_OK projections=14 residual_projections=14 gated_projections=13 embedding_rows=7 roundtrip=exact guards=typed backend=nvidia"
     ));
     Ok(())
 }

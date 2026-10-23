@@ -2,7 +2,7 @@
 
 use crate::{Error, Result};
 
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 pub const INFO: u32 = 0;
 pub const ALLOCATE: u32 = 1;
 pub const FREE: u32 = 2;
@@ -22,7 +22,7 @@ pub const END_COMMANDS: u32 = 10;
 pub const QUEUE_PROFILE: u32 = 11;
 pub const SERVICE_PROFILE: u32 = 12;
 pub const SERVICE_OPERATIONS: usize = 13;
-pub const KERNEL_COUNT: usize = 38;
+pub const KERNEL_COUNT: usize = 40;
 
 /// CPU service costs by request operation, including queue work within it.
 #[derive(Clone, Copy, Debug, Default)]
@@ -115,9 +115,11 @@ pub enum Kernel {
     SumProjectionPartials = 35,
     DeltaFusedBatch = 36,
     AttentionFusedBatch = 37,
+    ResidualNorm = 38,
+    ProjectResidualBf16 = 39,
 }
 
-const _: () = assert!(Kernel::AttentionFusedBatch as usize + 1 == KERNEL_COUNT);
+const _: () = assert!(Kernel::ProjectResidualBf16 as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -160,6 +162,8 @@ impl Kernel {
                 | Self::AttentionFusedBatch
                 | Self::ProjectBf16Split
                 | Self::SumProjectionPartials
+                | Self::ResidualNorm
+                | Self::ProjectResidualBf16
         )
     }
 
@@ -203,6 +207,8 @@ impl Kernel {
             35 => Self::SumProjectionPartials,
             36 => Self::DeltaFusedBatch,
             37 => Self::AttentionFusedBatch,
+            38 => Self::ResidualNorm,
+            39 => Self::ProjectResidualBf16,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -247,6 +253,8 @@ impl Kernel {
             Self::AttentionFusedBatch => "attention_fused_batch",
             Self::ProjectBf16Split => "project_bf16_split",
             Self::SumProjectionPartials => "sum_projection_partials",
+            Self::ResidualNorm => "residual_norm",
+            Self::ProjectResidualBf16 => "project_residual_bf16_weights",
         }
     }
 
@@ -346,6 +354,14 @@ impl Kernel {
                 product(&[n])?;
                 extents[..2].copy_from_slice(&[u64::from(n), 64]);
                 (4096, 2, 1, false)
+            }
+            (Self::ProjectResidualBf16, &[k, n]) => {
+                if !k.is_multiple_of(2) || !(1..=8192).contains(&n) {
+                    return Err(Error::InvalidField);
+                }
+                let weights = u64::from(product(&[k, n])?).div_ceil(2);
+                extents[..4].copy_from_slice(&[u64::from(n), u64::from(k), weights, u64::from(n)]);
+                (product(&[n.div_ceil(4), 128])?, 4, 3, true)
             }
             (Self::GatedProjectBf16, &[k, n]) => {
                 product(&[k])?;
@@ -467,6 +483,16 @@ impl Kernel {
                 product(&[n])?;
                 extents[..3].fill(n as u64);
                 (n, 3, 2, true)
+            }
+            (Self::ResidualNorm, &[rows, width, epsilon]) => {
+                positive_float(epsilon)?;
+                if !(1..=1024).contains(&width) {
+                    return Err(Error::InvalidField);
+                }
+                let n = product(&[rows, width])?;
+                extents[..4].copy_from_slice(&[u64::from(n), u64::from(n), u64::from(width), u64::from(n)]);
+                mutated = 1;
+                (product(&[rows, 128])?, 4, 3, false)
             }
             (Self::RmsNorm, &[rows, width, epsilon, offset]) => {
                 positive_float(epsilon)?;

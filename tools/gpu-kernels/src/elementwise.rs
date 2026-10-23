@@ -138,6 +138,27 @@ unsafe fn max_pool(input: *const f32, output: *mut f32, planes: u32, height: u32
 }
 
 #[cutile::entry()]
+unsafe fn residual_norm(input: *mut f32, residual: *const f32, weights: *const f32, output: *mut f32, _rows: u32, width: u32, epsilon: u32) {
+    let col = lanes::<1024>();
+    let mask = lt_tile(col, broadcast_scalar(width, shape![1024]));
+    let index = col + broadcast_scalar(block_id() * width, shape![1024]);
+    let pointer: PointerTile<*mut f32, { [] }> = pointer_to_tile(input);
+    let pointer: PointerTile<*const f32, { [] }> = cast_tile_const(pointer);
+    let source: *const f32 = tile_to_pointer(pointer);
+    let a = unsafe { read_tile(source, index, mask, 0f32) };
+    let b = unsafe { read_tile(residual, index, mask, 0f32) };
+    let sum = a + b;
+    let square: Tile<f32, { [] }> = reduce_sum(sum * sum, 0i32);
+    let square: f32 = tile_to_scalar(square);
+    let factor = 1f32 / root(square / float_u32(width) + bits_f32(epsilon));
+    let w = unsafe { read_tile(weights, col, mask, 0f32) };
+    let normalized = sum * broadcast_scalar(factor, shape![1024]) * (w + broadcast_scalar(1f32, shape![1024]));
+    unsafe {
+        write_tile(input, index, sum, mask);
+        write_tile(output, index, normalized, mask);
+    }
+}
+#[cutile::entry()]
 unsafe fn rms_norm(input: *const f32, weights: *const f32, output: *mut f32, _rows: u32, width: u32, epsilon: u32, offset: u32) {
     let row: u32 = block_id();
     let lane = lanes::<128>();

@@ -127,7 +127,8 @@ The CI workflow provides repeatable numerical tests and an optional pretrained Q
 The current target is the RTX 4090 Laptop GPU (`10de:2757`, AD103) with one serialized compute queue.
 The driver boots pinned signed firmware and allocates a private, virtually bound compute context.
 The process-owned syscall interface accepts built-in kernels and opaque buffer handles.
-Native compute protocol version 3 adds command scopes and queue profiles.
+Native compute protocol version 4 includes command scopes, queue profiles, and 40 built-in kernels.
+Its expanded profile array requires the matching SDK.
 Rebuild compute applications with the matching SDK. The kernel rejects incompatible request versions.
 The D3OS kernel verifies handle arithmetic and launch dimensions before dispatch.
 GPU tensor kernels use native Ada SASS compiled from Rust device code.
@@ -168,6 +169,14 @@ The native single-row BF16 path writes one complete output without intermediate 
 FP32, mixed-storage, and multi-row calls retain the separate projection path.
 The CPU backend provides the same operation through its existing primitives.
 
+`TransformerBackend::residual_norm()` combines residual addition and zero-centered RMSNorm.
+It returns the updated residual stream and an independent normalized tensor.
+The native path supports widths up to 1,024 and writes both outputs in one launch.
+`project_add()` adds a projection directly to an owned residual tensor.
+The native single-row BF16 path supports even input widths and up to 8,192 outputs.
+Other configurations use the separate operations through the same API.
+These operations remove 48 launches per generated Qwen token without changing storage precision or reference tolerances.
+
 Prompt processing uses chunks of up to 32 consecutive tokens and completes each layer across the whole chunk.
 `embedding_batch()` gathers token rows, and batched attention and recurrent operations advance a single sequence in token order.
 The NVIDIA backend prepares all attention queries and keys cooperatively, with one warp per token and head.
@@ -175,7 +184,7 @@ Each warp combines its normalization sum and rotates independent pairs without g
 The backend copies the value batch once, then scores each token against only its causal cache prefix.
 It checks the complete attention request list before the first cache write.
 For head dimensions up to 256, one block per token and head fuses scoring, softmax, value accumulation, and output gating.
-The block streams the causal prefix in tiles of 128 positions, with a running maximum and normalization mass.
+The block streams the causal prefix in tiles of 32 positions, with a running maximum and normalization mass.
 It normalizes each tile's weights before multiplying values and rescales the previous normalized output when the maximum changes.
 This keeps the intermediate storage bounded and avoids overflow from an unnormalized sum of large finite values.
 All attention arithmetic remains FP32. Larger head dimensions retain the separate operator path.

@@ -212,6 +212,7 @@ fn compare_traces(actual: &[Vec<f32>], expected: &[Vec<f32>], name: &str) -> cor
 }
 
 pub(super) fn run(backend: &Nvidia) -> core::result::Result<(), String> {
+    residual_norm(backend).map_err(|e| format!("residual normalization: {e}"))?;
     preparation(backend)?;
     fused_attention(backend)?;
     recurrent_guards(backend).map_err(|e| format!("recurrent batch guards: {e}"))?;
@@ -291,6 +292,53 @@ pub(super) fn run(backend: &Nvidia) -> core::result::Result<(), String> {
     super::super::report(format_args!(
         "NVIDIA_TRANSFORMER_OPERATORS_OK attention_cases=21 delta_cases=42 batch_attention_rows=21 batch_delta_rows=42 backend=nvidia"
     ));
+    Ok(())
+}
+
+fn residual_norm(backend: &Nvidia) -> Result<()> {
+    use d3os_nvidia::compute::Kernel;
+    const GUARD: u32 = 0xd305abcd;
+    for (rows, width) in [(1, 1), (3, 33), (2, 129), (1, 1024), (17, 1024)] {
+        let count = rows * width;
+        let input: Vec<f32> = (0..count).map(|i| ((i * 37 % 127) as f32 - 63.) / 71.).collect();
+        let residual: Vec<f32> = (0..count).map(|i| ((i * 19 % 127) as f32 - 63.) / 53.).collect();
+        let weights: Vec<f32> = (0..width).map(|i| ((i * 13 % 127) as f32 - 63.) / 97.).collect();
+        let guarded = |values: &[f32]| {
+            core::iter::once(GUARD)
+                .chain(values.iter().map(|x| x.to_bits()))
+                .chain(core::iter::once(GUARD))
+                .collect::<Vec<_>>()
+        };
+        let a = backend.upload_words(&guarded(&input))?;
+        let b = backend.upload_words(&guarded(&residual))?;
+        let w = backend.upload_words(&weights.iter().map(|x| x.to_bits()).collect::<Vec<_>>())?;
+        let output = backend.upload_words(&vec![GUARD; count + 2])?;
+        backend.dispatch_words(
+            Kernel::ResidualNorm,
+            &[(&a, 1), (&b, 1), (&w, 0), (&output, 1)],
+            &[rows, width, 1e-6f32.to_bits() as usize],
+        )?;
+        let mut updated = vec![0; count + 2];
+        let mut normalized = vec![0; count + 2];
+        let mut untouched = vec![0; count + 2];
+        backend.read_words_into(&a, 0, &mut updated)?;
+        backend.read_words_into(&b, 0, &mut untouched)?;
+        backend.read_words_into(&output, 0, &mut normalized)?;
+        if [updated[0], updated[count + 1], normalized[0], normalized[count + 1]] != [GUARD; 4] || untouched != guarded(&residual) {
+            return Err(d3os_compute::Error::DeviceFault);
+        }
+        let sums: Vec<f32> = input.iter().zip(&residual).map(|(a, b)| a + b).collect();
+        if updated[1..count + 1].iter().copied().ne(sums.iter().map(|x| x.to_bits())) {
+            return Err(d3os_compute::Error::DeviceFault);
+        }
+        let expected = Cpu.rms_norm(
+            &Tensor::from_vec(&Cpu, &[rows, width], sums)?,
+            &Tensor::from_vec(&Cpu, &[width], weights)?,
+            1e-6,
+        )?;
+        let actual: Vec<_> = normalized[1..count + 1].iter().map(|&v| f32::from_bits(v)).collect();
+        super::compare(&actual, &Cpu.download(&expected)?, "residual normalization").map_err(|_| d3os_compute::Error::DeviceFault)?;
+    }
     Ok(())
 }
 

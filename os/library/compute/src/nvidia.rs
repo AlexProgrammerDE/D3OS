@@ -169,7 +169,10 @@ impl Nvidia {
         for (i, (&(buffer, offset), &extent)) in buffers.iter().zip(extents).enumerate() {
             let packed = matches!(
                 (kernel, i),
-                (Kernel::ProjectBf16 | Kernel::ProjectBf16Split, 1) | (Kernel::DequantizeBf16, 0) | (Kernel::GatedProjectBf16, 1 | 2)
+                (Kernel::ProjectBf16 | Kernel::ProjectBf16Split, 1)
+                    | (Kernel::ProjectResidualBf16, 2)
+                    | (Kernel::DequantizeBf16, 0)
+                    | (Kernel::GatedProjectBf16, 1 | 2)
             ) || (kernel == Kernel::Embedding && i == 0 && call.parameters[3] == 1);
             if buffer.storage != Storage::Words && (buffer.storage == Storage::Bf16) != packed {
                 return Err(Error::InvalidParameter);

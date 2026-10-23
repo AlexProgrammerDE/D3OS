@@ -456,10 +456,10 @@ impl<'a, B: TransformerBackend> Session<'a, B> {
                     }
                     _ => return Err(Error::InvalidConfig),
                 };
-                hidden = backend.add(hidden, &mixed)?;
-                let normalized = backend.rms_norm(&hidden, &layer.post_norm, config.epsilon)?;
+                let (updated, normalized) = backend.residual_norm(hidden, &mixed, &layer.post_norm, config.epsilon)?;
+                hidden = updated;
                 let activation = backend.gated_project(&normalized, &layer.gate, &layer.up)?;
-                hidden = backend.add(hidden, &backend.project(&activation, &layer.down)?)?;
+                hidden = backend.project_add(&activation, &layer.down, hidden)?;
                 observe(index, &hidden)?;
             }
             Ok(hidden)

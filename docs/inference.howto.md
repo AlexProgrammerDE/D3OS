@@ -45,7 +45,7 @@ CUTILE_VALIDATION_OK hardware_validated=false
 ```
 
 The build writes Tile IR, native binaries, disassembly, and resource metadata into `target/nvidia/kernels`.
-It covers all 38 inference and rendering operators, plus boot diagnostics.
+It covers all 40 inference and rendering operators, plus boot diagnostics.
 These checks do not execute GPU instructions or establish numerical correctness.
 Run the [VFIO hardware checks](nvidia-vfio.howto.md#8-run-native-gpu-inference) for those guarantees.
 The previous GPUOcelot PTX interpreter cannot execute the cuTile binaries and is removed.
@@ -191,7 +191,8 @@ Nested scopes wait before returning, and closure errors still close their scopes
 NVIDIA scopes apply to the process, including calls from its other threads.
 Qwen uses scopes automatically for transformer execution.
 
-Protocol version 3 adds command scopes and changes profile semantics.
+Protocol version 4 adds fused residual operations and expands the kernel profile array to 40 entries.
+It retains the command scopes and queue profiles from version 3.
 Rebuild the kernel and compute applications together. Incompatible versions return an error.
 
 For model execution, add `os/library/inference`.

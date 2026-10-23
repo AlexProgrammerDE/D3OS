@@ -1,6 +1,51 @@
 use d3os_nvidia::compute::Kernel;
 
 #[test]
+fn residual_projection_allows_only_exact_residual_aliasing() {
+    let work = Kernel::ProjectResidualBf16.work(&[64, 17]).unwrap();
+    assert_eq!(work.extents[..4], [17, 64, 544, 17]);
+    assert_eq!((work.blocks, work.threads), (5, 128));
+    assert!(Kernel::ProjectResidualBf16.allocates_output());
+    assert!(work.validate_aliases(&[0x1000, 0x2000, 0x3000, 0x1000]).is_ok());
+    assert!(work.validate_aliases(&[0x1000, 0x2000, 0x3000, 0x4000]).is_ok());
+    for output in [0x1004, 0x2000, 0x2004, 0x3000, 0x3004] {
+        assert!(work.validate_aliases(&[0x1000, 0x2000, 0x3000, output]).is_err());
+    }
+    for p in [[0, 17], [63, 17], [64, 0], [64, 8193], [u32::MAX - 1, 8192]] {
+        assert!(Kernel::ProjectResidualBf16.work(&p).is_err());
+    }
+}
+
+#[test]
+fn residual_norm_checks_both_writers_and_all_read_ranges() {
+    let work = Kernel::ResidualNorm.work(&[3, 129, 1e-6f32.to_bits()]).unwrap();
+    assert_eq!(work.extents[..4], [387, 387, 129, 387]);
+    assert_eq!((work.blocks, work.threads, work.mutated), (3, 128, 1));
+    assert!(Kernel::ResidualNorm.allocates_output());
+    let pointers = [0x10000, 0x20000, 0x30000, 0x40000];
+    assert!(work.validate_aliases(&pointers).is_ok());
+    for writer in [0, 3] {
+        for other in 0..4 {
+            if writer != other {
+                let mut aliased = pointers;
+                aliased[writer] = aliased[other] + 4;
+                assert!(work.validate_aliases(&aliased).is_err());
+            }
+        }
+    }
+    for p in [
+        [0, 129, 1],
+        [1, 0, 1],
+        [1, 1025, 1],
+        [1, 129, 0],
+        [1, 129, f32::NAN.to_bits()],
+        [u32::MAX, 1024, 1],
+    ] {
+        assert!(Kernel::ResidualNorm.work(&p).is_err());
+    }
+}
+
+#[test]
 fn fused_attention_checks_all_rows_cache_prefixes_and_complete_output() {
     let work = Kernel::AttentionFusedBatch.work(&[3, 4, 2, 129, 127]).unwrap();
     assert_eq!((work.threads, work.blocks), (128, 12));

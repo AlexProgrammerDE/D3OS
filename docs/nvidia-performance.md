@@ -29,6 +29,42 @@ These measurements separate end-to-end overhead from device throughput. They are
 
 ## Latest retained measurements
 
+The 2026-10-23 follow-up uses native copy-engine transfers, two QMD waves, fused Qwen residual operations, and a versioned DOOM texture cache.
+An A-B-B-A comparison uses the same cuTile binary and host CPUs 8, 10, 12, and 14.
+The control disables only the residual fusions and texture validation shortcut.
+Host load averages range from approximately 0.2 to 2.2.
+
+| Workload | Control | Follow-up |
+| --- | ---: | ---: |
+| Warm Qwen decode, four sessions | 220.69 to 230.22 tokens/s | 222.22 to 240.60 tokens/s |
+| Mean warm Qwen decode | 227.42 tokens/s | 231.02 tokens/s |
+| Warm 22-token prompt, median | 11 ms | 10.5 ms |
+| Uncapped DOOM `demo1`, two guests | 1518.87 and 1509.67 FPS | 1628.07 and 1617.50 FPS |
+| DOOM scene preparation, mean cycles/frame | 651,930 | 543,820 |
+
+DOOM improves by about 7.2%, with almost unchanged palette conversion and display costs.
+Qwen removes 48 launches per token, reducing 64-token decode work from 19,520 to 16,448 launches.
+Its mean throughput improves by 1.6%, but individual sessions overlap substantially.
+These samples do not establish a stable Qwen throughput gain from the fusions alone.
+Every Qwen session preserves the exact token checksum and passes all layer, batch, and cache references.
+
+A fresh matched Linux guest measures 262.31 and 262.82 tokens/s for independent warm sessions.
+Its prompt times are 6.74 and 7.14 ms, with the same weights, token work, and FP32 caches.
+All six Linux sessions reproduce every greedy token choice.
+The native sample mean remains about 12% below Linux throughput, so the parity goal stays open.
+The DOOM Linux reference still uses a headless software renderer and does not establish matched GPU rendering parity.
+
+An optional serialized GPU-timestamp pass separates device work from CPU preparation.
+It measures approximately 9.90 ms of prefill device work, including 4.12 ms in regular projections and 2.64 ms in recurrent blocks.
+Split projections and their reduction use another 2.54 ms.
+Timestamp instrumentation changes scheduling, so these values identify costs rather than replace normal throughput measurements.
+
+The streaming essay demonstration generates 4,096 tokens in 24.393 seconds after the first token, averaging 167.88 tokens/s.
+Its longer context, terminal output, and recording costs differ from the 64-token benchmark.
+This result is not a regression measurement against the short benchmark.
+
+## Earlier retained measurements
+
 The final retained sample on 2026-10-23 uses the cached QMD templates and two submission waves described below.
 All GPU programs still use cuTile Rust. The corner overlay is removed, and FPS remains beside the window title.
 Both guests use host CPUs 8, 10, 12, and 14, with the same audited weights and token work.
@@ -58,7 +94,7 @@ Those experiments are removed from the maintained implementation.
 
 ## Maintained cuTile base
 
-All 38 native inference and rendering operators now use NVIDIA cuTile Rust.
+All 40 native inference and rendering operators now use NVIDIA cuTile Rust.
 The former NVPTX crate and GPUOcelot test harness are removed.
 The host compiler produces Tile IR 13.4 and assembles native Ada binaries with CUDA 13.4.92.
 D3OS retains its Rust driver, inference API, and buffer ownership.

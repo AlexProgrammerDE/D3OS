@@ -23,7 +23,7 @@ unsafe fn vector_project_bf16_weights(a: *const f32, b: *const f32, out: *mut f3
 }
 #[cutile::entry()]
 unsafe fn vector_project_paired_bf16_weights(a: *const f32, b: *const f32, out: *mut f32, _m: u32, k: u32, n: u32) {
-    unsafe { quad_project_4::<false>(a, b, b, out, k, n) }
+    unsafe { quad_project_4::<false, false>(a, b, b, a, out, k, n) }
 }
 #[cutile::entry()]
 unsafe fn project_bf16_split(a: *const f32, b: *const f32, out: *mut f32, m: u32, k: u32, n: u32, splits: u32) {
@@ -65,5 +65,10 @@ unsafe fn vector_project_unpaired_wide_bf16_weights(a: *const f32, b: *const f32
 }
 #[cutile::entry()]
 unsafe fn gated_project_paired_bf16_weights(a: *const f32, gate: *const f32, up: *const f32, output: *mut f32, inner: u32, cols: u32) {
-    unsafe { quad_project_4::<true>(a, gate, up, output, inner, cols) }
+    unsafe { quad_project_4::<true, false>(a, gate, up, a, output, inner, cols) }
+}
+
+#[cutile::entry()]
+unsafe fn project_residual_bf16_weights(residual: *const f32, input: *const f32, weights: *const f32, output: *mut f32, inner: u32, cols: u32) {
+    unsafe { quad_project_4::<false, true>(input, weights, weights, residual, output, inner, cols) }
 }

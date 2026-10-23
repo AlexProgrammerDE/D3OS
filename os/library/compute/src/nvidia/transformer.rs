@@ -11,6 +11,25 @@ fn positive(value: f32) -> bool {
 }
 
 impl TransformerBackend for Nvidia {
+    fn project_add(&self, input: &Tensor<Self>, weights: &Tensor<Self>, residual: Tensor<Self>) -> Result<Tensor<Self>> {
+        if let ([1, width], [outputs, inner]) = (input.shape(), weights.shape())
+            && width == inner
+            && width.is_multiple_of(2)
+            && *outputs <= 8192
+            && residual.shape() == [1, *outputs]
+            && weights.buffer.storage == Storage::Bf16
+        {
+            self.launch(
+                Kernel::ProjectResidualBf16,
+                &[(&residual.buffer, 0), (&input.buffer, 0), (&weights.buffer, 0), (&residual.buffer, 0)],
+                &[*width, *outputs],
+            )?;
+            return Ok(residual);
+        }
+        let projected = self.project(input, weights)?;
+        self.add(residual, &projected)
+    }
+
     fn embedding_batch(&self, table: &Tensor<Self>, tokens: &[u32]) -> Result<Tensor<Self>> {
         let [vocab, width] = *table.shape() else {
             return Err(Error::ShapeMismatch);
@@ -134,6 +153,27 @@ impl TransformerBackend for Nvidia {
         }
         self.launch(Kernel::Add, &[(&input.buffer, 0), (&residual.buffer, 0), (&input.buffer, 0)], &[input.len()])?;
         Ok(input)
+    }
+
+    fn residual_norm(&self, input: Tensor<Self>, residual: &Tensor<Self>, weights: &Tensor<Self>, epsilon: f32) -> Result<(Tensor<Self>, Tensor<Self>)> {
+        let Some(&width) = input.shape().last() else {
+            return Err(Error::ShapeMismatch);
+        };
+        if input.shape() != residual.shape() || weights.shape() != [width] || !positive(epsilon) {
+            return Err(Error::InvalidParameter);
+        }
+        if width > 1024 {
+            let input = self.add(input, residual)?;
+            let normalized = self.rms_norm(&input, weights, epsilon)?;
+            return Ok((input, normalized));
+        }
+        let normalized = self.produce(
+            input.shape(),
+            Kernel::ResidualNorm,
+            &[(&input.buffer, 0), (&residual.buffer, 0), (&weights.buffer, 0)],
+            &[input.len() / width, width, epsilon.to_bits() as usize],
+        )?;
+        Ok((input, normalized))
     }
 
     fn silu_mul(&self, input: Tensor<Self>, other: &Tensor<Self>) -> Result<Tensor<Self>> {

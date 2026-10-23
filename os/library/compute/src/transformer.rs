@@ -67,6 +67,10 @@ pub trait TransformerBackend: Backend {
     /// Return an independently owned row, with shape [1, width].
     fn row(&self, input: &Tensor<Self>, row: usize) -> Result<Tensor<Self>>;
     fn project(&self, input: &Tensor<Self>, weights: &Tensor<Self>) -> Result<Tensor<Self>>;
+    fn project_add(&self, input: &Tensor<Self>, weights: &Tensor<Self>, residual: Tensor<Self>) -> Result<Tensor<Self>> {
+        let projected = self.project(input, weights)?;
+        self.add(residual, &projected)
+    }
     /// SiLU(input * gateᵀ) * (input * upᵀ), with no host activation transfer.
     fn gated_project(&self, input: &Tensor<Self>, gate: &Tensor<Self>, up: &Tensor<Self>) -> Result<Tensor<Self>> {
         let gate = self.project(input, gate)?;
@@ -75,6 +79,12 @@ pub trait TransformerBackend: Backend {
     }
     fn rms_norm(&self, input: &Tensor<Self>, weights: &Tensor<Self>, epsilon: f32) -> Result<Tensor<Self>>;
     fn add(&self, input: Tensor<Self>, residual: &Tensor<Self>) -> Result<Tensor<Self>>;
+    /// Return the updated residual stream and its zero-centered RMSNorm.
+    fn residual_norm(&self, input: Tensor<Self>, residual: &Tensor<Self>, weights: &Tensor<Self>, epsilon: f32) -> Result<(Tensor<Self>, Tensor<Self>)> {
+        let input = self.add(input, residual)?;
+        let normalized = self.rms_norm(&input, weights, epsilon)?;
+        Ok((input, normalized))
+    }
     fn silu_mul(&self, input: Tensor<Self>, other: &Tensor<Self>) -> Result<Tensor<Self>>;
     fn attention_step(&self, input: AttentionInputs<'_, Self>, state: &mut AttentionState<Self>, config: AttentionConfig) -> Result<Tensor<Self>> {
         if input.query_gate.shape().first() != Some(&1) {

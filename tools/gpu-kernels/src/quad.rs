@@ -9,7 +9,9 @@ unsafe fn read_quad<E: ElementType>(p: *const E, index: Tile<u32, { [2, 4, 32] }
     select(mask, value, broadcast_scalar(padding, shape![2, 4, 32]))
 }
 
-unsafe fn quad_project_4<const GATED: bool>(a: *const f32, b: *const f32, up: *const f32, output: *mut f32, inner: u32, cols: u32) {
+unsafe fn quad_project_4<const GATED: bool, const RESIDUAL: bool>(
+    a: *const f32, b: *const f32, up: *const f32, residual: *const f32, output: *mut f32, inner: u32, cols: u32,
+) {
     let first = block_id() * 4u32;
     let col = lanes::<4>() + broadcast_scalar(first, shape![4]);
     let col: Tile<u32, { [1, 4, 1] }> = col.reshape(shape![1, 4, 1]);
@@ -56,5 +58,11 @@ unsafe fn quad_project_4<const GATED: bool>(a: *const f32, b: *const f32, up: *c
     };
     let col = lanes::<4>() + broadcast_scalar(first, shape![4]);
     let mask = lt_tile(col, broadcast_scalar(cols, shape![4]));
+    let value = if RESIDUAL {
+        let previous = unsafe { read_tile(residual, col, mask, 0f32) };
+        previous + value
+    } else {
+        value
+    };
     unsafe { write_tile(output, col, value, mask) };
 }
