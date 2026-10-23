@@ -83,6 +83,7 @@ def main():
                     ("tensor_matmul_tf32x3", r"\bHMMA\.1688\.F32\.TF32\s"),
                     ("tensor_project_tf32x3", r"\bHMMA\.1688\.F32\.TF32\s"),
                     ("tensor_project_bf16_weights", r"\bHMMA\.1688\.F32\.TF32\s"),
+                    ("project_bf16_split", r"\bHMMA\.1688\.F32\.TF32\s"),
                 )
             )
             tensor["entrypoints"] = [entry for entry, _ in instructions]

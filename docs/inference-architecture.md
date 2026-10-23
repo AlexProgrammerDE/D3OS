@@ -144,7 +144,12 @@ A GPU boot diagnostic exercises a real local stack frame across partial blocks.
 
 Qwen matrix weights remain in packed BF16 storage while activations and accumulators retain FP32 values.
 Single-row projections use coalesced warp reductions.
-Multi-row projections use the tensor path with exact BF16 weight expansion and the existing TF32 decomposition.
+Multi-row projections expand BF16 weights exactly and split FP32 activations into TF32 high and residual parts.
+They need two tensor products because BF16 weights have no TF32 residual.
+FP32 weight operations retain three tensor products and compensated FP32 accumulation.
+For two to 32 rows, 256 to 2,048 outputs, and at least 512 inputs, BF16 projections split the input reduction into 16 partitions.
+A second kernel combines their FP32 partial results with compensated accumulation.
+Other shapes retain their existing projection path.
 The SDK checks storage types before dispatch and rejects packed weights in unsupported FP32 operations.
 `TransformerBackend::gated_project()` combines the feed-forward gate projection, up projection, and SiLU multiplication.
 The native single-row BF16 path writes one complete output without intermediate activation buffers.
@@ -153,7 +158,11 @@ The CPU backend provides the same operation through its existing primitives.
 
 Prompt processing uses chunks of up to 32 consecutive tokens and completes each layer across the whole chunk.
 `embedding_batch()` gathers token rows, and batched attention and recurrent operations advance a single sequence in token order.
-The NVIDIA backend binds row ranges directly and retains scratch storage across those updates.
+The NVIDIA backend prepares all attention queries and keys cooperatively, with one warp per token and head.
+Each warp combines its normalization sum and rotates independent pairs without global scratch reads.
+The backend copies the value batch once, then scores each token against only its causal cache prefix.
+It checks the complete attention request list before the first cache write.
+The NVIDIA backend binds row ranges directly and retains scratch storage across recurrent updates.
 It validates the complete batch shape and cache capacity before the first state update.
 `row()` returns independent storage, so consuming an operation's result cannot mutate its parent batch.
 Normal prefill projects vocabulary logits only for the final row, without host activation transfers.

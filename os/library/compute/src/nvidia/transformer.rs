@@ -3,6 +3,7 @@ use crate::transformer::{
     AttentionConfig, AttentionInputs, AttentionState, DeltaConfig, DeltaInputs, DeltaState, TransformerBackend, attention_shape, delta_shape,
 };
 use crate::{Error, Result, Tensor};
+use alloc::vec::Vec;
 use d3os_nvidia::compute::Kernel;
 
 fn positive(value: f32) -> bool {
@@ -65,6 +66,20 @@ impl TransformerBackend for Nvidia {
         };
         if width != inner {
             return Err(Error::ShapeMismatch);
+        }
+        if weights.buffer.storage == Storage::Bf16 && (2..=32).contains(batch) && (256..=2048).contains(outputs) && *width >= 512 {
+            let partials = self.produce(
+                &[16, *batch, *outputs],
+                Kernel::ProjectBf16Split,
+                &[(&input.buffer, 0), (&weights.buffer, 0)],
+                &[*batch, *width, *outputs, 16],
+            )?;
+            return self.produce(
+                &[*batch, *outputs],
+                Kernel::SumProjectionPartials,
+                &[(&partials.buffer, 0)],
+                &[*batch, *outputs, 16],
+            );
         }
         self.produce(
             &[*batch, *outputs],
@@ -139,59 +154,70 @@ impl TransformerBackend for Nvidia {
             epsilon,
         } = config;
         let (rows, q_width, kv_width) = attention_shape(&input, state, config)?;
-        // Allocate maximum scratch before the first cache write. Each row's
-        // complete dispatch sequence is checked before that row changes state.
         let positions = state.position + rows;
-        let query = self.allocate(&[heads, dim])?;
+        let parameters = |heads, stride| {
+            [
+                heads,
+                dim,
+                rotary_dim,
+                state.position,
+                rope_theta.to_bits() as usize,
+                epsilon.to_bits() as usize,
+                stride,
+                rows,
+            ]
+        };
+        let query = self.produce(
+            &[rows, q_width],
+            Kernel::AttentionPrepareBatch,
+            &[(&input.query_gate.buffer, 0), (&input.query_norm.buffer, 0)],
+            &parameters(heads, 2),
+        )?;
         let scores = self.allocate(&[heads, positions])?;
         let output = self.allocate(&[rows, q_width])?;
-        let theta = rope_theta.to_bits() as usize;
-        let epsilon = epsilon.to_bits() as usize;
+        // Validate the entire request list before the first cache write. Future
+        // keys may be prepared early; scoring reads only each row's valid prefix.
+        let mut calls = Vec::new();
+        calls
+            .try_reserve(rows.checked_mul(3).and_then(|n| n.checked_add(2)).ok_or(Error::SizeOverflow)?)
+            .map_err(|_| Error::AllocationFailed)?;
+        calls.push(self.prepare(
+            Kernel::AttentionPrepareBatch,
+            &[
+                (&input.key.buffer, 0),
+                (&input.key_norm.buffer, 0),
+                (&state.keys.buffer, state.position * kv_width),
+            ],
+            &parameters(kv_heads, 1),
+        )?);
+        calls.push(self.prepare(
+            Kernel::Copy,
+            &[(&input.value.buffer, 0), (&state.values.buffer, state.position * kv_width)],
+            &[rows * kv_width],
+        )?);
         for row in 0..rows {
-            let positions = state.position + 1;
-            let cache_offset = state.position * kv_width;
-            let calls = [
-                self.prepare(
-                    Kernel::AttentionPrepare,
-                    &[(&input.query_gate.buffer, row * 2 * q_width), (&input.query_norm.buffer, 0), (&query.buffer, 0)],
-                    &[heads, dim, rotary_dim, state.position, theta, epsilon, 2],
-                )?,
-                self.prepare(
-                    Kernel::AttentionPrepare,
-                    &[
-                        (&input.key.buffer, row * kv_width),
-                        (&input.key_norm.buffer, 0),
-                        (&state.keys.buffer, cache_offset),
-                    ],
-                    &[kv_heads, dim, rotary_dim, state.position, theta, epsilon, 1],
-                )?,
-                self.prepare(
-                    Kernel::Copy,
-                    &[(&input.value.buffer, row * kv_width), (&state.values.buffer, cache_offset)],
-                    &[kv_width],
-                )?,
-                self.prepare(
-                    Kernel::AttentionScores,
-                    &[(&query.buffer, 0), (&state.keys.buffer, 0), (&scores.buffer, 0)],
-                    &[heads, kv_heads, dim, positions],
-                )?,
-                self.prepare(Kernel::Softmax, &[(&scores.buffer, 0), (&scores.buffer, 0)], &[heads, positions])?,
-                self.prepare(
-                    Kernel::AttentionOutput,
-                    &[
-                        (&scores.buffer, 0),
-                        (&state.values.buffer, 0),
-                        (&input.query_gate.buffer, row * 2 * q_width),
-                        (&output.buffer, row * q_width),
-                    ],
-                    &[heads, kv_heads, dim, positions],
-                )?,
-            ];
-            for call in calls {
-                request(call)?;
-            }
-            state.position += 1;
+            let visible = state.position + row + 1;
+            calls.push(self.prepare(
+                Kernel::AttentionScores,
+                &[(&query.buffer, row * q_width), (&state.keys.buffer, 0), (&scores.buffer, 0)],
+                &[heads, kv_heads, dim, visible],
+            )?);
+            calls.push(self.prepare(Kernel::Softmax, &[(&scores.buffer, 0), (&scores.buffer, 0)], &[heads, visible])?);
+            calls.push(self.prepare(
+                Kernel::AttentionOutput,
+                &[
+                    (&scores.buffer, 0),
+                    (&state.values.buffer, 0),
+                    (&input.query_gate.buffer, row * 2 * q_width),
+                    (&output.buffer, row * q_width),
+                ],
+                &[heads, kv_heads, dim, visible],
+            )?);
         }
+        for call in calls {
+            request(call)?;
+        }
+        state.position = positions;
         Ok(output)
     }
 

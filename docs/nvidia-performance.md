@@ -33,10 +33,10 @@ Measurements on 2026-10-22 and 2026-10-23:
 
 | Workload | Initial resident baseline | After native optimizations |
 | --- | ---: | ---: |
-| Qwen warm generation | 7.04 to 7.36 tokens/s | 125.00 to 149.18 tokens/s |
-| Qwen warm prompt processing | 7.76 to 7.81 tokens/s | 536.59 to 594.59 tokens/s |
+| Qwen warm generation | 7.04 to 7.36 tokens/s | 140.04 to 157.25 tokens/s |
+| Qwen warm prompt processing | 7.76 to 7.81 tokens/s | 628.57 to 956.52 tokens/s |
 | AlexNet forward pass | 10.0 ms | 1.45 to 1.55 ms |
-| DOOM uncapped `demo1` | 536.84 to 676.89 FPS with word storage | 1431.58 to 1439.86 FPS with resident byte textures |
+| DOOM uncapped `demo1` | 536.84 to 676.89 FPS with word storage | 1290.65 to 1439.86 FPS with resident byte textures |
 
 The AlexNet result excludes input upload and final download.
 The DOOM result includes native GPU drawing, palette conversion, scaling, and framebuffer copies.
@@ -55,6 +55,9 @@ The fresh per-batch baseline reports 880.19, 880.19, and 980.69 FPS.
 The resident version reports 1431.58, 1431.58, and 1439.86 FPS.
 Both render 7,116 frames across the same 7,117-tick demo, with the same WAD and host affinity.
 The GPU shader bundle is identical in these six runs.
+Later inference-kernel regression runs report 1290.65 and 1407.32 FPS with the resident renderer.
+The final run retains the same 7,116 frames, upload counts, and five buffer-growth clears.
+These later samples remain included in the table's range; they do not establish a rendering speedup from the inference changes.
 
 Both launchers record `NVIDIA_HOST_CPU_AFFINITY` before starting a guest.
 The pinned DOOM runs use the following commands, one guest at a time:
@@ -174,6 +177,40 @@ Warm generation spans 125.00–149.18 tokens/s across those runs, with the same 
 The final VM also reports slower file and weight loading. These ranges retain that run and do not establish a fixed gain percentage.
 This change targets prompt latency and does not establish a generation speedup.
 
+Cooperative attention preparation assigns one warp to each token and head.
+The warp combines its normalization sum, then rotates independent element pairs.
+Queries and keys are prepared across the whole chunk. Values enter the cache through one batch copy.
+Scoring still reads only the causal prefix for each token.
+In the 22-token profile, preparation calls fall from 264 to 12, and cache-copy calls fall from 132 to six.
+Preparation dispatch cycles fall from 17.97 million to about 0.30 million in the paired profiles.
+The assembled kernel uses 27 registers, without local stack storage, spills, or block barriers.
+
+BF16 weights have seven fraction bits and fit exactly within TF32's precision.
+The BF16 matrix path therefore removes the zero weight-residual product while retaining explicit TF32 conversion.
+It uses two tensor products per tile, with FP32 activations and compensated FP32 accumulation.
+FP32 weight operations retain their three-product path.
+The build audit checks Tensor Core instructions in the new split projection entrypoint as well as the original kernels.
+
+Narrow prompt matrices provide too few output tiles to occupy the GPU well.
+The backend now divides their input reduction into 16 independent partitions, then combines the partial results in a second kernel.
+This path applies to BF16 projections with two to 32 rows, 256 to 2,048 outputs, and at least 512 input elements.
+Other shapes retain their existing projection path.
+The split kernel uses 37 registers, without local stack storage, spills, or block barriers.
+Long, odd-sized operator checks compare against independent FP64 dot products.
+Additional guard checks cover a single row, partial output tiles, and empty partitions that must write zeros.
+
+The paired prompt profile reduces projection dispatch cycles from 33.30 million to 24.12 million, including the extra reduction launches.
+Recurrent updates then account for about 30% of dispatch cycles; attention preparation accounts for less than 1%.
+These cycle measurements include submission and waiting, rather than isolated device execution.
+
+With these kernel changes, four VMs report warm prompt times of 23 to 35 ms, or 628.57 to 956.52 tokens/s.
+Seven of the eight warm sessions take 23 to 26 ms; the 35 ms sample remains included in the range.
+The final two VMs report 24, 24, 26, and 23 ms, with generation at 140.04 to 156.10 tokens/s.
+Across all four VMs, generation spans 140.04 to 157.25 tokens/s.
+The first prompt takes 142 to 152 ms, excluding file access and weight upload.
+All runs preserve the decode checksum and complete sequential, batched, and cache reference checks.
+These changes primarily improve prompt processing; the generation gap remains open.
+
 The independent fixture now checks sequential and batched execution across all 24 layers and all vocabulary logits at 29 positions.
 Its batches use 17 and 12 tokens to exercise cache continuation at a nonzero position.
 It compares greedy selections and final attention, convolution, and recurrent cache contents.
@@ -257,7 +294,8 @@ It records 24,975,852 cache hits and 44,594 new snapshots, without atlas rollove
 `NVIDIA_DOOM_UPLOAD_PROFILE` reports uploaded bytes, hits, new snapshots, rollover count, and buffer growth count.
 
 Verification uses a 16 KiB atlas to force rollover within live draw batches.
-The final 600-frame test reports 6,474 resets while matching C-rendered pixels, including low detail and fuzz feedback.
+The earlier 600-frame test reports 6,474 resets; the latest regression reports 6,477.
+Both match C-rendered pixels, including low detail and fuzz feedback.
 The launcher requires rollover coverage and checks that GPU inference still works after game exit.
 The byte operator suite also checks incremental updates, shrinking odd-length writes, padding, untouched guards, and rejected ranges.
 
@@ -293,16 +331,16 @@ CPU cycles are useful within a run and are not a portable time unit across machi
 ## Remaining work
 
 Qwen now batches prompt matrices but still submits synchronous operations separately.
-Attention preparation and recurrent updates still launch once per token row.
-In the 22-token prefill profile, packed projections account for about 41% of dispatch cycles.
-Attention preparation accounts for about 21%, and recurrent updates about 19%.
-The next improvements must address these kernels and submission costs.
+Recurrent updates still launch once per token row.
+In the latest 22-token prefill profile, projections and their partial reductions account for about 42% of dispatch cycles.
+Recurrent updates account for about 30%, while cooperative attention preparation accounts for less than 1%.
+The next improvements must address recurrent work, the remaining matrix kernels, and submission costs.
 The Linux prompt result still uses different tokens, archive provenance, and cache precision; a fully matched model benchmark remains necessary.
 The CPU token-selection work now combines only 32 GPU candidates.
 Each change must preserve the existing model reference or define and measure a separate precision policy.
 
 The large projection kernels now match Linux device throughput for the measured shapes.
-This does not establish model parity: Qwen still generates about 125 to 149 tokens/s, compared with about 265 tokens/s in the pinned Linux BF16 reference.
+This does not establish model parity: Qwen still generates about 140 to 157 tokens/s, compared with about 265 tokens/s in the pinned Linux BF16 reference.
 The remaining work must reduce complete model latency, rather than optimize already comparable streaming bandwidth.
 
 DOOM still transfers packed indexed frames for CPU HUD composition and copies RGB output into the console framebuffer.
@@ -336,3 +374,7 @@ The fused recurrent mapping also uses [llama.cpp’s gated delta implementation]
 Its warp groups split independent value columns across key lanes. D3OS retains its existing row-major state layout.
 
 The collective annotations follow the [Rust assembly options](https://doc.rust-lang.org/reference/inline-assembly.html#asm-options-supported-options-pure) and NVIDIA's [shuffle participation rules](https://docs.nvidia.com/cuda/parallel-thread-execution/#data-movement-and-conversion-instructions-shfl-sync).
+
+The BF16 precision argument follows NVIDIA's [alternate floating-point format definitions](https://docs.nvidia.com/cuda/parallel-thread-execution/#alternate-floating-point-data-formats).
+TF32 register encoding is implementation-defined, so the Rust kernels retain explicit PTX conversion instructions.
+The independent Rust split-reduction design follows the parallel reduction approach described in NVIDIA's [CUTLASS GEMM guide](https://docs.nvidia.com/cutlass/latest/media/docs/cpp/efficient_gemm.html).

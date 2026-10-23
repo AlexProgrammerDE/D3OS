@@ -2,6 +2,7 @@
 use core::arch::asm;
 use core::arch::nvptx::{_block_idx_x, _thread_idx_x};
 
+mod attention;
 mod delta;
 
 /// # Safety

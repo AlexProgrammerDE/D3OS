@@ -14,7 +14,7 @@ pub const PROFILE: u32 = 6;
 pub const LAUNCH_ALLOCATE: u32 = 7;
 /// Enable GPU timestamp instrumentation for subsequent launches (elements 0 or 1).
 pub const DEVICE_TIMING: u32 = 8;
-pub const KERNEL_COUNT: usize = 33;
+pub const KERNEL_COUNT: usize = 36;
 
 /// Device-wide CPU cycle counters. Read snapshots around an exclusive workload
 /// and subtract them. Wait cycles include GPU execution and completion polling.
@@ -81,9 +81,12 @@ pub enum Kernel {
     DeltaFused = 30,
     GatedProjectBf16 = 31,
     Embedding = 32,
+    AttentionPrepareBatch = 33,
+    ProjectBf16Split = 34,
+    SumProjectionPartials = 35,
 }
 
-const _: () = assert!(Kernel::Embedding as usize + 1 == KERNEL_COUNT);
+const _: () = assert!(Kernel::SumProjectionPartials as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -121,6 +124,9 @@ impl Kernel {
                 | Self::DeltaFused
                 | Self::GatedProjectBf16
                 | Self::Embedding
+                | Self::AttentionPrepareBatch
+                | Self::ProjectBf16Split
+                | Self::SumProjectionPartials
         )
     }
 
@@ -159,6 +165,9 @@ impl Kernel {
             30 => Self::DeltaFused,
             31 => Self::GatedProjectBf16,
             32 => Self::Embedding,
+            33 => Self::AttentionPrepareBatch,
+            34 => Self::ProjectBf16Split,
+            35 => Self::SumProjectionPartials,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -198,6 +207,9 @@ impl Kernel {
             Self::DeltaFused => "delta_fused",
             Self::GatedProjectBf16 => "gated_project_bf16_weights",
             Self::Embedding => "embedding_gather",
+            Self::AttentionPrepareBatch => "attention_prepare_batch",
+            Self::ProjectBf16Split => "project_bf16_split",
+            Self::SumProjectionPartials => "sum_projection_partials",
         }
     }
 
@@ -206,6 +218,30 @@ impl Kernel {
         let mut mutated = 0;
         let mut threads = 128;
         let (count, pointers, output, in_place) = match (self, p) {
+            (Self::ProjectBf16Split, &[m, k, n, splits]) => {
+                extents[..3].copy_from_slice(&[
+                    u64::from(product(&[m, k])?),
+                    u64::from(product(&[k, n])?).div_ceil(2),
+                    u64::from(product(&[splits, m, n])?),
+                ]);
+                (product(&[splits, m.div_ceil(16), n.div_ceil(8), 32])?, 3, 2, false)
+            }
+            (Self::SumProjectionPartials, &[m, n, splits]) => {
+                let output = product(&[m, n])?;
+                extents[..2].copy_from_slice(&[u64::from(product(&[splits, output])?), u64::from(output)]);
+                (output, 2, 1, false)
+            }
+            (Self::AttentionPrepareBatch, &[heads, dim, rotary, position, theta, epsilon, stride, rows]) => {
+                positive_float(theta)?;
+                positive_float(epsilon)?;
+                if rotary == 0 || rotary % 2 != 0 || rotary > dim || !matches!(stride, 1 | 2) {
+                    return Err(Error::InvalidField);
+                }
+                position.checked_add(rows).ok_or(Error::InvalidField)?;
+                let n = product(&[rows, heads, dim])?;
+                extents[..3].copy_from_slice(&[u64::from(product(&[n, stride])?), u64::from(dim), u64::from(n)]);
+                (product(&[rows, heads, 32])?, 3, 2, false)
+            }
             (Self::Embedding, &[vocab, width, rows, packed]) => {
                 if packed > 1 {
                     return Err(Error::InvalidField);

@@ -1,6 +1,7 @@
 //! FP32-range GEMM with three TF32 tensor products per K tile.
 //! Splitting each operand into a rounded high part and a residual reduces
 //! truncation error without changing the inference API's FP32 buffer format.
+//! BF16 weights have no TF32 residual and therefore need only two products.
 use core::arch::asm;
 
 #[inline(always)]
@@ -72,14 +73,22 @@ unsafe fn projection_vector<const BF16: bool, const GATED: bool, const OUTPUTS: 
 
 #[inline(always)]
 unsafe fn split(value: f32) -> (u32, u32) {
-    let high: u32;
+    let high = unsafe { rounded(value) };
     let low: u32;
     unsafe {
-        asm!("cvt.rna.tf32.f32 {d}, {s};", d = out(reg32) high, s = in(reg32) value, options(pure, nomem, nostack));
         let residual = value - f32::from_bits(high);
         asm!("cvt.rna.tf32.f32 {d}, {s};", d = out(reg32) low, s = in(reg32) residual, options(pure, nomem, nostack));
     }
     (high, low)
+}
+
+#[inline(always)]
+unsafe fn rounded(value: f32) -> u32 {
+    let result;
+    unsafe {
+        asm!("cvt.rna.tf32.f32 {d}, {s};", d = out(reg32) result, s = in(reg32) value, options(pure, nomem, nostack));
+    }
+    result
 }
 
 #[inline(always)]
@@ -100,8 +109,8 @@ unsafe fn mma(a: [u32; 4], b: [u32; 2], mut c: [f32; 4]) -> [f32; 4] {
 }
 
 #[inline(always)]
-unsafe fn multiply<const TRANSPOSE_B: bool, const BF16: bool>(a: u64, b: u64, out: u64, rows: u32, inner: u32, cols: u32) {
-    if TRANSPOSE_B && rows == 1 {
+unsafe fn multiply<const TRANSPOSE_B: bool, const BF16: bool, const SPLIT: bool>(a: u64, b: u64, out: u64, rows: u32, inner: u32, cols: u32, splits: u32) {
+    if TRANSPOSE_B && rows == 1 && !SPLIT {
         if cols <= 2048 {
             unsafe { projection_vector::<BF16, false, 1>(a, b, 0, out, inner, cols) };
         } else {
@@ -111,7 +120,15 @@ unsafe fn multiply<const TRANSPOSE_B: bool, const BF16: bool>(a: u64, b: u64, ou
     }
     let index = super::index();
     let lane = index % 32;
-    let tile = index / 32;
+    let mut tile = index / 32;
+    let tiles = rows.div_ceil(16) * cols.div_ceil(8);
+    let part = if SPLIT { tile / tiles } else { 0 };
+    if SPLIT && part >= splits {
+        return;
+    }
+    if SPLIT {
+        tile %= tiles;
+    }
     let row_base = tile / cols.div_ceil(8) * 16;
     let col_base = tile % cols.div_ceil(8) * 8;
     if row_base >= rows {
@@ -119,7 +136,10 @@ unsafe fn multiply<const TRANSPOSE_B: bool, const BF16: bool>(a: u64, b: u64, ou
     }
     let mut c = [0.0f32; 4];
     let mut correction = [0.0f32; 4];
-    for step in 0..inner.div_ceil(8) {
+    let k_tiles = inner.div_ceil(8);
+    let chunk = k_tiles.div_ceil(splits);
+    let first = part * chunk;
+    for step in first..(first + chunk).min(k_tiles) {
         let mut ah = [0u32; 4];
         let mut al = [0u32; 4];
         let mut bh = [0u32; 2];
@@ -139,12 +159,22 @@ unsafe fn multiply<const TRANSPOSE_B: bool, const BF16: bool>(a: u64, b: u64, ou
             let col = col_base + lane / 4;
             let offset = if TRANSPOSE_B { col * inner + k } else { k * cols + col };
             let value = if k < inner && col < cols { unsafe { weight::<BF16>(b, offset) } } else { 0.0 };
-            (bh[element as usize], bl[element as usize]) = unsafe { split(value) };
+            if BF16 {
+                // Seven BF16 fraction bits fit exactly in TF32. Keep the PTX
+                // conversion because TF32's register encoding is target-defined.
+                bh[element as usize] = unsafe { rounded(value) };
+            } else {
+                (bh[element as usize], bl[element as usize]) = unsafe { split(value) };
+            }
         }
         // Keep the MMA's short reductions separate from the long K reduction.
         // Compensated FP32 accumulation preserves residual products that would
         // disappear when repeatedly added to a large running accumulator.
-        let low = unsafe { mma(ah, bl, mma(al, bh, [0.; 4])) };
+        let low = if BF16 {
+            unsafe { mma(al, bh, [0.; 4]) }
+        } else {
+            unsafe { mma(ah, bl, mma(al, bh, [0.; 4])) }
+        };
         let high = unsafe { mma(ah, bh, [0.; 4]) };
         for term in [high, low] {
             for i in 0..4 {
@@ -159,7 +189,7 @@ unsafe fn multiply<const TRANSPOSE_B: bool, const BF16: bool>(a: u64, b: u64, ou
         let row = row_base + lane / 4 + (element / 2) * 8;
         let col = col_base + (lane % 4) * 2 + element % 2;
         if row < rows && col < cols {
-            unsafe { (out as *mut f32).add((row * cols + col) as usize).write(c[element as usize]) };
+            unsafe { (out as *mut f32).add(((part * rows + row) * cols + col) as usize).write(c[element as usize]) };
         }
     }
 }
@@ -169,7 +199,7 @@ unsafe fn multiply<const TRANSPOSE_B: bool, const BF16: bool>(a: u64, b: u64, ou
 /// products fit u32. Launch full warps, at least ceil(M/16)*ceil(N/8) warps.
 #[unsafe(no_mangle)]
 pub unsafe extern "ptx-kernel" fn tensor_matmul_tf32x3(a: u64, b: u64, out: u64, rows: u32, inner: u32, cols: u32) {
-    unsafe { multiply::<false, false>(a, b, out, rows, inner, cols) };
+    unsafe { multiply::<false, false, false>(a, b, out, rows, inner, cols, 1) };
 }
 
 /// # Safety
@@ -177,7 +207,7 @@ pub unsafe extern "ptx-kernel" fn tensor_matmul_tf32x3(a: u64, b: u64, out: u64,
 /// ceil(M/16)*ceil(N/8) warps, or N warps when M=1 and N<=2048.
 #[unsafe(no_mangle)]
 pub unsafe extern "ptx-kernel" fn tensor_project_tf32x3(a: u64, b: u64, out: u64, rows: u32, inner: u32, cols: u32) {
-    unsafe { multiply::<true, false>(a, b, out, rows, inner, cols) };
+    unsafe { multiply::<true, false, false>(a, b, out, rows, inner, cols, 1) };
 }
 
 /// # Safety
@@ -186,7 +216,38 @@ pub unsafe extern "ptx-kernel" fn tensor_project_tf32x3(a: u64, b: u64, out: u64
 /// with the same tiling as tensor_project_tf32x3. Accumulation remains FP32.
 #[unsafe(no_mangle)]
 pub unsafe extern "ptx-kernel" fn tensor_project_bf16_weights(a: u64, b: u64, out: u64, rows: u32, inner: u32, cols: u32) {
-    unsafe { multiply::<true, true>(a, b, out, rows, inner, cols) };
+    unsafe { multiply::<true, true, false>(a, b, out, rows, inner, cols, 1) };
+}
+
+/// # Safety
+/// A[rows,inner] is FP32, B[cols,inner] packed BF16, and output[splits,rows,cols]
+/// FP32. Buffers are disjoint; products fit u32. Launch full warps covering
+/// splits*ceil(rows/16)*ceil(cols/8) tiles. Empty K partitions write zeros.
+#[unsafe(no_mangle)]
+pub unsafe extern "ptx-kernel" fn project_bf16_split(a: u64, b: u64, out: u64, rows: u32, inner: u32, cols: u32, splits: u32) {
+    unsafe { multiply::<true, true, true>(a, b, out, rows, inner, cols, splits) };
+}
+
+/// # Safety
+/// Input[splits,rows,cols] and output[rows,cols] are disjoint FP32 buffers.
+/// Products fit u32. Launch at least rows*cols threads.
+#[unsafe(no_mangle)]
+pub unsafe extern "ptx-kernel" fn sum_projection_partials(input: u64, output: u64, rows: u32, cols: u32, splits: u32) {
+    let i = super::index();
+    let count = rows * cols;
+    if i >= count {
+        return;
+    }
+    let mut sum = 0.;
+    let mut correction = 0.;
+    for part in 0..splits {
+        let value = unsafe { (input as *const f32).add((part * count + i) as usize).read() };
+        let adjusted = value - correction;
+        let next = sum + adjusted;
+        correction = (next - sum) - adjusted;
+        sum = next;
+    }
+    unsafe { (output as *mut f32).add(i as usize).write(sum) };
 }
 
 /// # Safety

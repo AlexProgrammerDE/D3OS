@@ -1,6 +1,49 @@
 use d3os_nvidia::compute::Kernel;
 
 #[test]
+fn split_projection_bounds_partial_tiles_and_reduction_storage() {
+    let split = Kernel::ProjectBf16Split.work(&[17, 1025, 257, 16]).unwrap();
+    assert_eq!(split.extents[..3], [17425, 131713, 69904]);
+    assert_eq!((split.threads, split.blocks), (128, 264));
+    assert!(split.validate_aliases(&[0x10000, 0x40000, 0x100000]).is_ok());
+    assert!(split.validate_aliases(&[0x10000, 0x40000, 0x40004]).is_err());
+    let reduction = Kernel::SumProjectionPartials.work(&[17, 257, 16]).unwrap();
+    assert_eq!(reduction.extents[..2], [69904, 4369]);
+    assert!(reduction.validate_aliases(&[0x10000, 0x10004]).is_err());
+    for dimensions in [[17, 1025, 257, 0], [1, 1, 1, u32::MAX], [u32::MAX, 2, 1, 2]] {
+        assert!(Kernel::ProjectBf16Split.work(&dimensions).is_err());
+    }
+    assert!(Kernel::SumProjectionPartials.work(&[u32::MAX, 1, 2]).is_err());
+    assert!(Kernel::ProjectBf16Split.allocates_output());
+    assert!(Kernel::SumProjectionPartials.allocates_output());
+}
+
+#[test]
+fn batched_preparation_covers_warps_and_checks_positions_and_aliases() {
+    let work = Kernel::AttentionPrepareBatch
+        .work(&[3, 65, 64, 5, 1e7f32.to_bits(), 1e-6f32.to_bits(), 2, 3])
+        .unwrap();
+    assert_eq!((work.threads, work.blocks), (128, 3));
+    assert_eq!(work.extents[..3], [1170, 65, 585]);
+    assert!(work.validate_aliases(&[0x10000, 0x20000, 0x30000]).is_ok());
+    assert!(work.validate_aliases(&[0x10000, 0x20000, 0x20004]).is_err());
+    for (dim, rotary, position, stride, rows) in [
+        (65, 63, 0, 1, 1),
+        (65, 66, 0, 1, 1),
+        (65, 64, u32::MAX - 1, 1, 2),
+        (65, 64, 0, 3, 1),
+        (65, 64, 0, 1, 0),
+    ] {
+        assert!(
+            Kernel::AttentionPrepareBatch
+                .work(&[3, dim, rotary, position, 1e7f32.to_bits(), 1e-6f32.to_bits(), stride, rows])
+                .is_err()
+        );
+    }
+    assert!(Kernel::AttentionPrepareBatch.allocates_output());
+}
+
+#[test]
 fn gather_bounds_packed_tables_tokens_and_the_complete_output() {
     for packed in [0, 1] {
         let work = Kernel::Embedding.work(&[7, 11, 5, packed]).unwrap();

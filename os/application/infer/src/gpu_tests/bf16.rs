@@ -19,7 +19,16 @@ fn gated_projection<B: TransformerBackend>(backend: &B, m: usize, k: usize, n: u
 }
 
 pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
-    for (m, k, n) in [(1, 1, 1), (1, 33, 17), (3, 11, 5), (17, 33, 9), (1, 1024, 1024)] {
+    split_guards(backend).map_err(|e| format!("split projection guards: {e}"))?;
+    for (m, k, n) in [
+        (1, 1, 1),
+        (1, 33, 17),
+        (3, 11, 5),
+        (17, 33, 9),
+        (1, 1024, 1024),
+        (17, 1025, 33),
+        (17, 1025, 257),
+    ] {
         let input: Vec<f32> = (0..m * k).map(|i| ((i * 73 % 251) as f32 - 125.) / 127.).collect();
         let weights: Vec<u16> = (0..n * k).map(|i| ((((i * 37 % 127) as f32 - 63.) / 71.).to_bits() >> 16) as u16).collect();
         let mut expected = vec![0.; m * n];
@@ -94,7 +103,42 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
         super::compare(&gpu, &cpu, "gated projection")?;
     }
     super::super::report(format_args!(
-        "NVIDIA_BF16_WEIGHTS_OK projections=5 gated_projections=9 embedding_rows=7 roundtrip=exact guards=typed backend=nvidia"
+        "NVIDIA_BF16_WEIGHTS_OK projections=7 gated_projections=9 embedding_rows=7 roundtrip=exact guards=typed backend=nvidia"
     ));
+    Ok(())
+}
+
+fn split_guards(backend: &Nvidia) -> d3os_compute::Result<()> {
+    use d3os_nvidia::compute::Kernel;
+    const GUARD: u32 = 0xd305abcd;
+    let input = backend.upload_words(&[1f32.to_bits()])?;
+    let bits: Vec<_> = (1..=9).map(|i| ((i as f32).to_bits() >> 16) as u16).collect();
+    let weights = backend.upload_words(
+        &bits
+            .chunks(2)
+            .map(|pair| u32::from(pair[0]) | (u32::from(*pair.get(1).unwrap_or(&0)) << 16))
+            .collect::<Vec<_>>(),
+    )?;
+    for splits in [1, 4] {
+        let partials = backend.upload_words(&vec![GUARD; splits * 9 + 2])?;
+        let output = backend.upload_words(&[GUARD; 11])?;
+        backend.dispatch_words(Kernel::ProjectBf16Split, &[(&input, 0), (&weights, 0), (&partials, 1)], &[1, 1, 9, splits])?;
+        backend.dispatch_words(Kernel::SumProjectionPartials, &[(&partials, 1), (&output, 1)], &[1, 9, splits])?;
+        let mut parts = vec![0; splits * 9 + 2];
+        let mut actual = [0; 11];
+        backend.read_words_into(&partials, 0, &mut parts)?;
+        backend.read_words_into(&output, 0, &mut actual)?;
+        if parts[0] != GUARD || parts[parts.len() - 1] != GUARD || actual[0] != GUARD || actual[10] != GUARD {
+            return Err(Error::DeviceFault);
+        }
+        for i in 0..9 {
+            if parts[i + 1] != ((i + 1) as f32).to_bits() || actual[i + 1] != parts[i + 1] {
+                return Err(Error::DeviceFault);
+            }
+        }
+        if parts[10..parts.len() - 1].iter().any(|&v| v != 0) {
+            return Err(Error::DeviceFault);
+        }
+    }
     Ok(())
 }

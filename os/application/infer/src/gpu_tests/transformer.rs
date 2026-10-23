@@ -212,6 +212,7 @@ fn compare_traces(actual: &[Vec<f32>], expected: &[Vec<f32>], name: &str) -> cor
 }
 
 pub(super) fn run(backend: &Nvidia) -> core::result::Result<(), String> {
+    preparation(backend)?;
     let table = backend
         .upload_words(&[1f32.to_bits(), 2f32.to_bits(), 3f32.to_bits(), 4f32.to_bits(), 5f32.to_bits(), 6f32.to_bits()])
         .map_err(|e| format!("{e}"))?;
@@ -288,5 +289,73 @@ pub(super) fn run(backend: &Nvidia) -> core::result::Result<(), String> {
     super::super::report(format_args!(
         "NVIDIA_TRANSFORMER_OPERATORS_OK attention_cases=14 delta_cases=42 batch_attention_rows=14 batch_delta_rows=42 backend=nvidia"
     ));
+    Ok(())
+}
+
+fn preparation(backend: &Nvidia) -> core::result::Result<(), String> {
+    use d3os_nvidia::compute::Kernel;
+    for (rows, heads, dim, rotary, position, stride) in [
+        (3, 5, 11, 8, 5, 1),
+        (3, 5, 11, 8, 5, 2),
+        (2, 8, 256, 64, 127, 2),
+        (1, 1, 2, 2, 0, 1),
+        (2, 3, 65, 64, 11, 1),
+        (2, 3, 130, 130, 7, 2),
+    ] {
+        let run = || -> Result<_> {
+            const GUARD: u32 = 0xd305abcd;
+            let values: Vec<_> = (0..rows * heads * dim * stride)
+                .map(|i| (((i * 37 % 127) as f32 - 63.) / 71.).to_bits())
+                .collect();
+            let weights: Vec<_> = (0..dim).map(|i| (((i * 17 % 127) as f32 - 63.) / 71.).to_bits()).collect();
+            let input = backend.upload_words(&values)?;
+            let weights = backend.upload_words(&weights)?;
+            let length = rows * heads * dim;
+            let expected = backend.upload_words(&vec![GUARD; length + 2])?;
+            let actual = backend.upload_words(&vec![GUARD; length + 2])?;
+            for row in 0..rows {
+                backend.dispatch_words(
+                    Kernel::AttentionPrepare,
+                    &[(&input, row * heads * dim * stride), (&weights, 0), (&expected, 1 + row * heads * dim)],
+                    &[
+                        heads,
+                        dim,
+                        rotary,
+                        position + row,
+                        1e7f32.to_bits() as usize,
+                        1e-6f32.to_bits() as usize,
+                        stride,
+                    ],
+                )?;
+            }
+            backend.dispatch_words(
+                Kernel::AttentionPrepareBatch,
+                &[(&input, 0), (&weights, 0), (&actual, 1)],
+                &[
+                    heads,
+                    dim,
+                    rotary,
+                    position,
+                    1e7f32.to_bits() as usize,
+                    1e-6f32.to_bits() as usize,
+                    stride,
+                    rows,
+                ],
+            )?;
+            let mut old = vec![0; length + 2];
+            let mut new = vec![0; length + 2];
+            backend.read_words_into(&expected, 0, &mut old)?;
+            backend.read_words_into(&actual, 0, &mut new)?;
+            if old[0] != GUARD || new[0] != GUARD || old[length + 1] != GUARD || new[length + 1] != GUARD {
+                return Err(d3os_compute::Error::DeviceFault);
+            }
+            Ok((
+                old[1..length + 1].iter().map(|&v| f32::from_bits(v)).collect::<Vec<_>>(),
+                new[1..length + 1].iter().map(|&v| f32::from_bits(v)).collect::<Vec<_>>(),
+            ))
+        };
+        let (expected, actual) = run().map_err(|e| format!("attention preparation {rows}x{heads}x{dim} rotary={rotary}: {e}"))?;
+        super::compare(&actual, &expected, "cooperative attention preparation")?;
+    }
     Ok(())
 }
