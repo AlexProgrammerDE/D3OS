@@ -3,6 +3,10 @@
 The native driver runs AlexNet, Qwen3.5-0.8B, and DOOM correctly on the RTX 4090 Laptop GPU.
 The Linux performance target remains open. Correct output does not imply comparable throughput.
 
+The goal now includes [Burn-based AI APIs and native training](burn-migration.md).
+AlexNet and all Qwen targets will use Burn with a native D3OS/cuTile backend.
+DOOM keeps its native renderer. Its correctness and Linux performance requirements remain unchanged.
+
 The optimization goal also includes Qwen3.5-9B at Q8_0 and Qwen3.6-27B at Q3_K_M.
 Both targets must fit entirely in the GPU's 16 GiB of VRAM, including context and working storage.
 The work includes pinned Linux measurements, native Rust/cuTile quantized kernels, numerical references, and matched performance comparisons.
