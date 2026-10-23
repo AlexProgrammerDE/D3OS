@@ -20,13 +20,16 @@ pub(super) struct Program {
     qmd: Record<256>,
 }
 
-// Each slot owns its QMD, constants, and completion cache line. A dependency
-// chain completes before any slot or retired buffer can be reused.
+// Two owned waves overlap CPU recording with GPU execution. Each wave keeps
+// its QMDs, constants, commands, and monotonic completion report until retirement.
 const SLOTS: usize = 32;
 const SLOT_BYTES: usize = 2048;
 const CONSTANT_BYTES: usize = 1024;
-const SIGNAL: usize = 1536;
 const COMMANDS: usize = SLOTS * SLOT_BYTES;
+const REPORT: usize = COMMANDS - 64;
+const WAVE_BYTES: usize = COMMANDS + 4096;
+const WAVES: usize = 2;
+const _: () = assert!(REPORT % SLOT_BYTES >= 256 + CONSTANT_BYTES);
 
 struct Pending {
     qmd: Record<256>,
@@ -34,11 +37,25 @@ struct Pending {
     dimensions: [u32; 2],
 }
 
+#[derive(Clone, Copy)]
+struct Flight {
+    sequence: u64,
+    symbol: &'static str,
+    dimensions: [u32; 2],
+    kernels: usize,
+    timed: bool,
+}
+
 pub(super) struct Submission {
     region: DmaRegion,
     address: u64,
     pending: Vec<Pending>,
     invalidate_code: bool,
+    current: usize,
+    flights: [Option<Flight>; WAVES],
+    next_sequence: u64,
+    completed: u64,
+    tail: Option<(u64, u64)>,
 }
 
 impl Compute {
@@ -73,7 +90,7 @@ impl Compute {
     }
 
     pub(super) fn prepare_submission(&mut self, device: &Device) -> Result<()> {
-        let bytes = COMMANDS + 4096;
+        let bytes = WAVES * WAVE_BYTES;
         let region = DmaRegion::new(bytes)?;
         let physical = region.address as u64;
         // Retain DMA ownership even if installing the mapping later fails.
@@ -82,10 +99,15 @@ impl Compute {
             address: 0,
             pending: Vec::with_capacity(SLOTS),
             invalidate_code: false,
+            current: 0,
+            flights: [None; WAVES],
+            next_sequence: 1,
+            completed: 0,
+            tail: None,
         });
         let address = self.memory.map_system(device, physical, bytes as u64)?;
         self.submission.as_mut().ok_or(Error::Firmware)?.address = address;
-        info!("NVIDIA_SUBMISSION_READY physical={physical:#x} virtual={address:#x} bytes={bytes} slots={SLOTS}");
+        info!("NVIDIA_SUBMISSION_READY physical={physical:#x} virtual={address:#x} bytes={bytes} slots={SLOTS} waves={WAVES}");
         Ok(())
     }
 
@@ -100,11 +122,12 @@ impl Compute {
         }
         let submission = self.submission.as_ref().ok_or(Error::Firmware)?;
         let vram = device.vram.as_ref().ok_or(Error::Firmware)?;
+        let offset = submission.current * WAVE_BYTES + COMMANDS;
         for (i, word) in commands.iter().copied().enumerate() {
-            submission.region.write32(COMMANDS + i * 4, word)?;
+            submission.region.write32(offset + i * 4, word)?;
         }
         fence(Ordering::SeqCst);
-        let entry = (submission.address + COMMANDS as u64) | (1 << 41) | ((commands.len() as u64) << 42);
+        let entry = (submission.address + offset as u64) | (1 << 41) | ((commands.len() as u64) << 42);
         let slot = self.put % self.entries;
         vram.write(self.fifo.physical as usize + slot * 8, entry as u32)?;
         vram.write(self.fifo.physical as usize + slot * 8 + 4, (entry >> 32) as u32)?;
@@ -212,6 +235,7 @@ impl Compute {
         let program = if let Some(&allocation) = self.program_images.get(&source) {
             allocation
         } else {
+            self.flush_pending(device)?;
             let allocation = self.memory.allocate(device, image.len() as u64 + 4096, 4096)?;
             while image.len() & 3 != 0 {
                 image.push(0);
@@ -348,7 +372,7 @@ impl Compute {
             return Err(Error::Alignment);
         }
         if self.submission.as_ref().ok_or(Error::Firmware)?.pending.len() == SLOTS {
-            self.flush_pending(device)?;
+            self.submit_pending(device)?;
         }
         let cached = self.programs.contains_key(symbol);
         let program = self.load_program(device, cubin, symbol)?;
@@ -368,13 +392,13 @@ impl Compute {
             self.flush_pending(device)?;
             self.ensure_local_memory(device, program.local_bytes)?;
         }
+        let current = self.submission.as_ref().ok_or(Error::Firmware)?.current;
+        self.wait_wave(device, current)?;
         let submission = self.submission.as_ref().ok_or(Error::Firmware)?;
-        let slot_offset = submission.pending.len() * SLOT_BYTES;
+        let base = submission.current * WAVE_BYTES;
+        let slot_offset = base + submission.pending.len() * SLOT_BYTES;
         let launch = submission.address + slot_offset as u64;
-        let signal = launch + SIGNAL as u64;
-        for offset in (0..64).step_by(4) {
-            submission.region.write32(slot_offset + SIGNAL + offset, 0)?;
-        }
+        let signal = submission.address + (base + REPORT) as u64;
         let mut constants = Record::<CONSTANT_BYTES>::default();
         for (i, value) in [threads, 1, 1, blocks, 1, 1].into_iter().enumerate() {
             constants.set(Field::<u32>::new(i * 4), value)?;
@@ -412,15 +436,21 @@ impl Compute {
     }
 
     pub(super) fn pending_commands(&self) -> bool {
-        self.submission.as_ref().is_some_and(|s| !s.pending.is_empty())
+        self.submission
+            .as_ref()
+            .is_some_and(|s| !s.pending.is_empty() || s.flights.iter().any(Option::is_some))
     }
 
-    pub(super) fn flush_pending(&mut self, device: &Device) -> Result<()> {
-        if !self.pending_commands() {
-            return Ok(());
+    pub(super) fn retirement_fence(&self) -> Option<u64> {
+        let submission = self.submission.as_ref()?;
+        if !submission.pending.is_empty() {
+            Some(submission.next_sequence)
+        } else {
+            submission.tail.map(|(_, sequence)| sequence)
         }
-        let start = unsafe { core::arch::x86_64::_rdtsc() };
-        let result = self.flush_pending_inner(device);
+    }
+
+    fn account_queue(&mut self, start: u64, result: Result<()>) -> Result<()> {
         let cycles = unsafe { core::arch::x86_64::_rdtsc() }.wrapping_sub(start);
         self.last_flush_cycles = self.last_flush_cycles.wrapping_add(cycles);
         self.queue_profile.cycles = self.queue_profile.cycles.wrapping_add(cycles);
@@ -430,35 +460,69 @@ impl Compute {
         result
     }
 
-    fn flush_pending_inner(&mut self, device: &Device) -> Result<()> {
-        let submission = self.submission.as_ref().ok_or(Error::Firmware)?;
+    pub(super) fn flush_pending(&mut self, device: &Device) -> Result<()> {
+        self.submit_pending(device)?;
+        for wave in 0..WAVES {
+            self.wait_wave(device, wave)?;
+        }
+        Ok(())
+    }
+
+    fn submit_pending(&mut self, device: &Device) -> Result<()> {
+        if self.submission.as_ref().is_none_or(|s| s.pending.is_empty()) {
+            return Ok(());
+        }
+        let start = unsafe { core::arch::x86_64::_rdtsc() };
+        let result = self.submit_pending_inner(device);
+        self.account_queue(start, result)
+    }
+
+    fn submit_pending_inner(&mut self, device: &Device) -> Result<()> {
+        let submission = self.submission.as_mut().ok_or(Error::Firmware)?;
+        let current = submission.current;
+        let base = current * WAVE_BYTES;
         let count = submission.pending.len();
-        if self.device_timing && count != 1 {
+        if submission.flights[current].is_some() || (self.device_timing && count != 1) {
             return Err(Error::Firmware);
         }
+        let sequence = submission.next_sequence;
+        let last = submission.pending.last_mut().ok_or(Error::Firmware)?;
+        last.qmd.set_bits(QmdFields::RELEASE0_PAYLOAD_LOWER, sequence & 0xffff_ffff)?;
+        last.qmd.set_bits(QmdFields::RELEASE0_PAYLOAD_UPPER, sequence >> 32)?;
+        let flight = Flight {
+            sequence,
+            symbol: last.symbol,
+            dimensions: last.dimensions,
+            kernels: count,
+            timed: self.device_timing,
+        };
         for (index, pending) in submission.pending.iter().enumerate() {
-            submission.region.copy(index * SLOT_BYTES, pending.qmd.as_bytes())?;
+            submission.region.copy(base + index * SLOT_BYTES, pending.qmd.as_bytes())?;
         }
-        let last = submission.pending.last().ok_or(Error::Firmware)?;
-        let symbol = last.symbol;
-        let [threads, blocks] = last.dimensions;
-        let launch = submission.address;
-        let signal_offset = (count - 1) * SLOT_BYTES + SIGNAL;
-        let signal = submission.address + signal_offset as u64;
+        let launch = submission.address + base as u64;
+        let signal = submission.address + (base + REPORT) as u64;
         let invalidate_code = submission.invalidate_code;
-        let vram = device.vram.as_ref().ok_or(Error::Firmware)?;
-
+        let previous = submission.tail;
+        let completed = submission.completed;
         let mut commands = Vec::new();
-        let semaphore = |commands: &mut Vec<u32>, address: u64, value: u32, wait: bool| {
+        let semaphore = |commands: &mut Vec<u32>, address: u64, value: u64, flags: u32| {
             commands.extend_from_slice(&[
                 (2 << 28) | (5 << 16) | (0x5c >> 2),
                 address as u32,
                 (address >> 32) as u32,
-                value,
-                0,
-                1 | (1 << 24) | (u32::from(wait) << 20),
+                value as u32,
+                (value >> 32) as u32,
+                flags,
             ]);
         };
+        if let Some((address, value)) = previous
+            && !d3os_nvidia::fence::reached(completed, value)
+        {
+            // Circular 64-bit acquire preserves stream order across waves.
+            // Reports are never cleared: a newer value also satisfies an old
+            // consumer while the other wave reuses its QMD and command slots.
+            semaphore(&mut commands, address, value, 3 | (1 << 24));
+        }
         if !self.engine_configured {
             Self::method(&mut commands, NVC6C0_SET_OBJECT, &[ADA_COMPUTE_A]);
             Self::method(&mut commands, NVC6C0_SET_SHADER_LOCAL_MEMORY_WINDOW_A, &[0x7293, 0]);
@@ -479,15 +543,7 @@ impl Compute {
             Self::method(&mut commands, NVC6C0_INVALIDATE_SHADER_CACHES_NO_WFI, &[0x1011]);
         }
         if self.device_timing {
-            // FIFO four-word release writes payload followed by a GPU timestamp.
-            commands.extend_from_slice(&[
-                (2 << 28) | (5 << 16) | (0x5c >> 2),
-                (signal + 16) as u32,
-                ((signal + 16) >> 32) as u32,
-                1,
-                0,
-                1 | (1 << 24) | (1 << 20) | (1 << 25),
-            ]);
+            semaphore(&mut commands, signal + 16, 1, 1 | (1 << 24) | (1 << 20) | (1 << 25));
         }
         Self::method(&mut commands, NVC6C0_SEND_PCAS_A, &[(launch >> 8) as u32]);
         Self::method(
@@ -495,25 +551,57 @@ impl Compute {
             NVC6C0_SEND_SIGNALING_PCAS2_B,
             &[NVC6C0_SEND_SIGNALING_PCAS2_B_PCAS_ACTION_PREFETCH_SCHEDULE],
         );
-        semaphore(&mut commands, signal + 56, 0x2222, true);
+        semaphore(&mut commands, signal + 56, sequence, 1 | (1 << 24) | (1 << 20));
+        // Retain ownership even if a partially accepted submission later faults.
+        self.submission.as_mut().ok_or(Error::Firmware)?.flights[current] = Some(flight);
         self.submit(device, &commands)?;
+        self.engine_configured = true;
+        let submission = self.submission.as_mut().ok_or(Error::Firmware)?;
+        submission.tail = Some((signal, sequence));
+        submission.next_sequence = sequence.wrapping_add(1);
+        submission.pending.clear();
+        submission.invalidate_code = false;
+        submission.current = (current + 1) % WAVES;
+        self.queue_profile.batches = self.queue_profile.batches.wrapping_add(1);
+        self.queue_profile.launches = self.queue_profile.launches.wrapping_add(count as u64);
+        log::debug!("NVIDIA_BATCH_SUBMITTED sequence={sequence} kernels={count} wave={current} qmd={launch:#x}");
+        Ok(())
+    }
+
+    fn wait_wave(&mut self, device: &Device, wave: usize) -> Result<()> {
+        let Some(flight) = self.submission.as_ref().and_then(|s| s.flights[wave]) else {
+            return Ok(());
+        };
+        let start = unsafe { core::arch::x86_64::_rdtsc() };
+        let result = self.wait_wave_inner(device, wave, flight);
+        self.account_queue(start, result)
+    }
+
+    fn wait_wave_inner(&mut self, device: &Device, wave: usize, flight: Flight) -> Result<()> {
         let submission = self.submission.as_ref().ok_or(Error::Firmware)?;
-        log::debug!("NVIDIA_BATCH_SUBMITTED last={symbol} kernels={count} qmd={launch:#x}");
+        let offset = wave * WAVE_BYTES + REPORT;
         let start = crate::timer().systime_ms();
-        // Also wait for the FIFO tail before reusing the command buffer.
         let wait_start = unsafe { core::arch::x86_64::_rdtsc() };
-        while submission.region.read32(signal_offset)? != 1 || submission.region.read32(signal_offset + 56)? != 0x2222 {
+        while !d3os_nvidia::fence::reached(submission.region.read64(offset)?, flight.sequence)
+            || !d3os_nvidia::fence::reached(submission.region.read64(offset + 56)?, flight.sequence)
+        {
             if crate::timer().systime_ms().wrapping_sub(start) >= 5000 {
                 self.dump_instance(device)?;
-                log::warn!(
-                    "NVIDIA batch timeout last={symbol} kernels={count} threads={threads} blocks={blocks} GPGet={:?} GPPut={:?}",
+                let vram = device.vram.as_ref().ok_or(Error::Firmware)?;
+                warn!(
+                    "NVIDIA batch timeout last={} kernels={} threads={} blocks={} sequence={} wave={wave} GPGet={:?} GPPut={:?}",
+                    flight.symbol,
+                    flight.kernels,
+                    flight.dimensions[0],
+                    flight.dimensions[1],
+                    flight.sequence,
                     vram.read(self.fifo.physical as usize + self.entries * 8 + 0x88),
                     vram.read(self.fifo.physical as usize + self.entries * 8 + 0x8c)
                 );
                 info!(
                     "NVIDIA completion compute={:?} fifo={:?}",
-                    submission.region.read32(signal_offset),
-                    submission.region.read32(signal_offset + 56)
+                    submission.region.read64(offset),
+                    submission.region.read64(offset + 56)
                 );
                 info!("NVIDIA notifier {:02x?}", vram.read_bytes(self.notifier as usize, 0x100)?);
                 for offset in [
@@ -529,21 +617,21 @@ impl Compute {
         let wait_cycles = unsafe { core::arch::x86_64::_rdtsc() }.wrapping_sub(wait_start);
         self.last_wait_cycles = self.last_wait_cycles.wrapping_add(wait_cycles);
         self.queue_profile.wait_cycles = self.queue_profile.wait_cycles.wrapping_add(wait_cycles);
-        if self.device_timing {
-            let start = submission.region.read64(signal_offset + 24)?;
-            let end = submission.region.read64(signal_offset + 8)?;
+        if flight.timed {
+            let start = submission.region.read64(offset + 24)?;
+            let end = submission.region.read64(offset + 8)?;
             if start == 0 || end < start {
                 return Err(Error::Firmware);
             }
             self.last_device_ns = end - start;
         }
-        self.engine_configured = true;
         let submission = self.submission.as_mut().ok_or(Error::Firmware)?;
-        submission.pending.clear();
-        submission.invalidate_code = false;
-        self.queue_profile.batches = self.queue_profile.batches.wrapping_add(1);
-        self.queue_profile.launches = self.queue_profile.launches.wrapping_add(count as u64);
-        self.buffers.reclaim_retired();
+        submission.flights[wave] = None;
+        if d3os_nvidia::fence::reached(flight.sequence, submission.completed) {
+            submission.completed = flight.sequence;
+        }
+        let completed = submission.completed;
+        self.buffers.reclaim_retired(completed);
         Ok(())
     }
 

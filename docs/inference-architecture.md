@@ -233,10 +233,14 @@ Qwen uses one scope for the embedding and all transformer layers in each prompt 
 Readback, transfer, profile snapshots, and scope completion drain the queue.
 Nested scope completion also drains the queue. A returned closure error still closes the scope.
 
-The submission region owns 32 slots, each with a QMD, launch constants, and completion storage.
+The submission region owns two waves of 32 slots, with separate QMDs, launch constants, command pages, and completion reports.
 QMD dependencies use GPU virtual addresses and preserve launch order.
-Only the final QMD signals compute completion. The CPU also waits for the FIFO tail before slot reuse.
-Dropped buffers remain retired until queued work completes, including during process cleanup.
+Only the final QMD in each wave signals compute completion.
+The CPU records the other wave while the GPU runs, then waits for compute and FIFO completion before slot reuse.
+Circular 64-bit semaphore acquires order consecutive waves. An already completed dependency needs no additional GPU acquire.
+The reports retain their monotonic values, so reusing slots cannot erase a signal that another wave still needs.
+Dropped buffers retain their retirement sequence until that sequence completes, including during process cleanup.
+CPU transfers and scope completion drain both waves. Page-table growth also drains the queue before it changes mappings.
 GPU errors retain mapped storage and mark the device unhealthy.
 The loader shares each immutable CUBIN image across entry points, with separate resource metadata for each entry.
 Each program also caches its fixed QMD fields, including code addresses, resource limits, and compiler constant banks.

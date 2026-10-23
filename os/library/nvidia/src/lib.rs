@@ -8,6 +8,7 @@ pub mod compute;
 pub mod context;
 pub mod cubin;
 pub mod dma;
+pub mod fence;
 pub mod firmware;
 pub mod qmd;
 pub mod rpc;

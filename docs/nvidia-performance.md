@@ -241,6 +241,35 @@ Warm prompt processing remains 10 to 11 ms, and AlexNet measures 1.25 ms per for
 Fresh DOOM runs measure 1423.40, 1383.86, and 1407.32 FPS with the title-bar FPS display.
 The separate 600-frame pixel comparison and GPU operator checks after game exit also pass.
 
+### CPU recording overlaps GPU execution
+
+The queue now owns two waves of 32 slots, with separate command pages and completion reports.
+The CPU records the next wave while the GPU executes the previous wave.
+GPU semaphore acquires preserve stream order, and the CPU waits before it reuses a wave's storage.
+Each allocation retains a retirement sequence until both compute and FIFO completion make reuse safe.
+Transfers, profile snapshots, nested scope completion, process cleanup, and page-table growth still drain pending work.
+GPU timestamp instrumentation retains individual synchronous submissions.
+
+The completion reports use circular 64-bit sequence numbers and are never cleared during reuse.
+A newer report also satisfies an older GPU consumer, so reuse cannot erase a pending acquire's signal.
+Host tests cover counter wraparound and stale reports.
+The command-scopes hardware test covers repeated wave reuse, temporary allocation reuse, readback, nesting, and returned errors.
+The encoding follows NVIDIA's [Ampere FIFO semaphore fields](https://github.com/NVIDIA/open-gpu-kernel-modules/blob/570.144/src/common/sdk/nvidia/inc/class/clc56f.h).
+
+Three initial guests generate 214.77 to 231.88 tokens/s across six warm sessions, with the same exact token checksum.
+Their complete layer, logit, batch, and final-cache comparisons pass.
+Warm prompt processing remains 10 to 12 ms. AlexNet measures 1.15 ms across 20 forward passes.
+The separate 600-frame DOOM pixel comparison and GPU checks after exit also pass.
+
+A later A-B-B-A comparison runs the previous synchronous-wave driver and the new driver on the same kernel bundle.
+The development host has concurrent Java builds, so the harness also records host load and CPU frequency samples.
+The previous driver generates 185.51 to 209.15 tokens/s. The new driver generates 213.33 to 221.45 tokens/s.
+The old DOOM samples measure 1283.99 and 1290.65 FPS. The new samples measure 1258.06 and 1169.46 FPS.
+CPU display-copy cycles vary substantially as host frequencies change, so these game samples do not isolate a driver-only throughput difference.
+All guests use host CPUs 8, 10, 12, and 14, with the same WAD and uncapped demo.
+The synchronous path skips GPU acquires for dependencies that the CPU already observed as complete.
+The corner overlay remains removed, and FPS remains beside the title.
+
 The following sections preserve the earlier NVPTX measurements and implementation history.
 They do not describe the current compiler-generated register layouts.
 

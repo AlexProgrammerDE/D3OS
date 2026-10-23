@@ -17,14 +17,34 @@ pub(super) struct Buffers {
     next: u64,
     live: BTreeMap<u64, Buffer>,
     free: Vec<Allocation>,
-    retired: Vec<Allocation>,
+    retired: Vec<(Allocation, u64)>,
 }
 
 impl Buffers {
-    pub(super) fn reclaim_retired(&mut self) {
-        while let Some(allocation) = self.retired.pop() {
-            self.recycle(allocation);
+    pub(super) fn reclaim_retired(&mut self, completed: u64) {
+        let mut index = 0;
+        while index < self.retired.len() {
+            if d3os_nvidia::fence::reached(completed, self.retired[index].1) {
+                let (allocation, _) = self.retired.swap_remove(index);
+                self.recycle(allocation);
+            } else {
+                index += 1;
+            }
         }
+    }
+
+    fn take_free(&mut self, bytes: u64) -> Option<Allocation> {
+        let (index, _) = self.free.iter().enumerate().filter(|(_, b)| b.bytes >= bytes).min_by_key(|(_, b)| b.bytes)?;
+        let mut allocation = self.free.swap_remove(index);
+        if allocation.bytes > bytes {
+            self.free.push(Allocation {
+                physical: allocation.physical + bytes,
+                virtual_address: allocation.virtual_address + bytes,
+                bytes: allocation.bytes - bytes,
+            });
+            allocation.bytes = bytes;
+        }
+        Some(allocation)
     }
 
     fn get(&self, handle: u64, owner: Uuid) -> Result<Buffer, Errno> {
@@ -188,7 +208,8 @@ fn serve(device: &Device, compute: &mut super::rm::Compute, owner: Uuid, request
             }
             compute.buffers.live.remove(&request.handle);
             if retire {
-                compute.buffers.retired.push(buffer.allocation);
+                let sequence = compute.retirement_fence().ok_or(Errno::EUNKN)?;
+                compute.buffers.retired.push((buffer.allocation, sequence));
             } else {
                 compute.buffers.recycle(buffer.allocation);
             }
@@ -284,28 +305,16 @@ fn serve(device: &Device, compute: &mut super::rm::Compute, owner: Uuid, request
 }
 
 fn allocate(device: &Device, compute: &mut super::rm::Compute, bytes: u64) -> Result<Allocation, Errno> {
-    let allocation = if let Some((index, _)) = compute
-        .buffers
-        .free
-        .iter()
-        .enumerate()
-        .filter(|(_, b)| b.bytes >= bytes)
-        .min_by_key(|(_, b)| b.bytes)
-    {
-        let mut allocation = compute.buffers.free.swap_remove(index);
-        if allocation.bytes > bytes {
-            compute.buffers.free.push(Allocation {
-                physical: allocation.physical + bytes,
-                virtual_address: allocation.virtual_address + bytes,
-                bytes: allocation.bytes - bytes,
-            });
-            allocation.bytes = bytes;
-        }
-        allocation
-    } else {
-        compute.memory.allocate_buffer(device, bytes).map_err(|_| Errno::ENOMEM)?
-    };
-    Ok(allocation)
+    if let Some(allocation) = compute.buffers.take_free(bytes) {
+        return Ok(allocation);
+    }
+    // Keep page-table changes outside live GPU work. Completion can also make
+    // a retired allocation reusable without expanding the address space.
+    gpu_result(compute.flush_pending(device))?;
+    if let Some(allocation) = compute.buffers.take_free(bytes) {
+        return Ok(allocation);
+    }
+    compute.memory.allocate_buffer(device, bytes).map_err(|_| Errno::ENOMEM)
 }
 
 fn gpu_result(result: super::Result<()>) -> Result<(), Errno> {
