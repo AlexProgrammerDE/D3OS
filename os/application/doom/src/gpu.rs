@@ -1,9 +1,10 @@
 //! Native indexed GPU rasterizer for the pinned doomgeneric draw interface.
-use alloc::{collections::BTreeMap, vec, vec::Vec};
+use alloc::{vec, vec::Vec};
 use core::{ffi::c_void, ptr, slice};
 use d3os_compute::{
-    Error, Result,
+    Buffer, Error, Result,
     nvidia::{GpuBuffer, Nvidia},
+    raster::TextureAtlas,
 };
 use d3os_nvidia::compute::{KERNEL_COUNT, Kernel, ProfileEntry};
 use spin::{Mutex, Once};
@@ -11,6 +12,7 @@ use spin::{Mutex, Once};
 const WIDTH: usize = 320;
 const HEIGHT: usize = 200;
 const PIXELS: usize = WIDTH * HEIGHT;
+const TEXTURE_BYTES: usize = 8 * 1024 * 1024;
 
 unsafe extern "C" {
     static mut I_VideoBuffer: *mut u8;
@@ -97,6 +99,14 @@ pub(super) fn report_profile() {
                 }
             }
         }
+        log::info!(
+            "NVIDIA_DOOM_UPLOAD_PROFILE texture_bytes={} cache_hits={} cache_misses={} atlas_resets={} buffer_growths={}",
+            renderer.texture_uploaded_bytes,
+            renderer.texture_hits,
+            renderer.texture_misses,
+            renderer.texture_resets,
+            renderer.buffer_growths
+        );
         log::info!("NVIDIA_DOOM_PROFILE_DONE");
     }
 }
@@ -107,8 +117,11 @@ struct Renderer {
     active: bool,
     fuzz: bool,
     commands: Vec<u32>,
-    textures: Vec<u8>,
-    snapshots: BTreeMap<(usize, usize), u32>,
+    textures: TextureAtlas,
+    uploaded_bytes: usize,
+    command_buffer: GpuBuffer<u32>,
+    bin_buffer: GpuBuffer<u32>,
+    texture_buffer: GpuBuffer<u32>,
     base: GpuBuffer<u32>,
     output: GpuBuffer<u32>,
     rgba: GpuBuffer<u32>,
@@ -124,18 +137,28 @@ struct Renderer {
     palette_cycles: u64,
     display_cycles: u64,
     profile_start: [ProfileEntry; KERNEL_COUNT],
+    texture_uploaded_bytes: u64,
+    texture_hits: u64,
+    texture_misses: u64,
+    texture_resets: u64,
+    buffer_growths: u64,
 }
 
 pub(super) fn init(verify: bool) -> Result<()> {
     let device = Nvidia::new()?;
+    // Verification deliberately exercises atlas rollover during live draws.
+    let texture_bytes = if verify { 16 * 1024 } else { TEXTURE_BYTES };
     let renderer = Renderer {
         device,
         verify,
         active: false,
         fuzz: false,
         commands: Vec::new(),
-        textures: Vec::new(),
-        snapshots: BTreeMap::new(),
+        textures: TextureAtlas::new(texture_bytes)?,
+        uploaded_bytes: 0,
+        command_buffer: device.allocate_words(1024)?,
+        bin_buffer: device.allocate_words(1024)?,
+        texture_buffer: device.allocate_words(texture_bytes / 4)?,
         base: device.allocate_words(PIXELS / 4)?,
         output: device.allocate_words(PIXELS / 4)?,
         rgba: device.allocate_words(PIXELS * 4)?,
@@ -151,6 +174,11 @@ pub(super) fn init(verify: bool) -> Result<()> {
         palette_cycles: 0,
         display_cycles: 0,
         profile_start: device.profile()?,
+        texture_uploaded_bytes: 0,
+        texture_hits: 0,
+        texture_misses: 0,
+        texture_resets: 0,
+        buffer_growths: 0,
     };
     RENDERER.call_once(|| Mutex::new(renderer));
     log::info!("NVIDIA_DOOM_READY backend=nvidia verify={verify} width={WIDTH} height={HEIGHT}");
@@ -178,8 +206,6 @@ impl Renderer {
         self.primitives = 0;
         self.frame_start = time::systime().num_milliseconds();
         self.commands.clear();
-        self.textures.clear();
-        self.snapshots.clear();
         self.device.write_words(&self.base, 0, unsafe { Self::screen_words()? })
     }
 
@@ -187,19 +213,34 @@ impl Renderer {
         if self.commands.is_empty() {
             return Ok(());
         }
-        let commands = self.device.upload_words(&self.commands)?;
-        let textures = self.device.upload_bytes(&self.textures)?;
-        let parameters = [WIDTH, HEIGHT, self.commands.len() / 12, self.textures.len()];
+        self.buffer_growths += u64::from(upload(&self.device, &mut self.command_buffer, &self.commands)?);
+        let texture_bytes = self.textures.bytes();
+        if self.uploaded_bytes < texture_bytes.len() {
+            let pending = &texture_bytes[self.uploaded_bytes..];
+            self.device.write_bytes(&self.texture_buffer, self.uploaded_bytes / 4, pending)?;
+            self.texture_uploaded_bytes += pending.len() as u64;
+            self.uploaded_bytes = texture_bytes.len();
+        }
+        let parameters = [WIDTH, HEIGHT, self.commands.len() / 12, texture_bytes.len()];
         if self.fuzz {
-            self.device
-                .dispatch_words(Kernel::FuzzBytes, &[(&self.base, 0), (&commands, 0), (&textures, 0)], &parameters)?;
+            self.device.dispatch_words(
+                Kernel::FuzzBytes,
+                &[(&self.base, 0), (&self.command_buffer, 0), (&self.texture_buffer, 0)],
+                &parameters,
+            )?;
         } else {
             let bins = d3os_compute::raster::command_bins(&self.commands, WIDTH, HEIGHT)?;
             let bin_count = bins.len();
-            let bins = self.device.upload_words(&bins)?;
+            self.buffer_growths += u64::from(upload(&self.device, &mut self.bin_buffer, &bins)?);
             self.device.dispatch_words(
                 Kernel::RasterBinnedBytes,
-                &[(&self.base, 0), (&commands, 0), (&textures, 0), (&self.output, 0), (&bins, 0)],
+                &[
+                    (&self.base, 0),
+                    (&self.command_buffer, 0),
+                    (&self.texture_buffer, 0),
+                    (&self.output, 0),
+                    (&self.bin_buffer, 0),
+                ],
                 &[parameters[0], parameters[1], parameters[2], parameters[3], bin_count],
             )?;
             core::mem::swap(&mut self.base, &mut self.output);
@@ -225,8 +266,6 @@ impl Renderer {
             }
         }
         self.commands.clear();
-        self.textures.clear();
-        self.snapshots.clear();
         Ok(())
     }
 
@@ -238,13 +277,14 @@ impl Renderer {
         self.render_cycles = self.render_cycles.wrapping_add(cycles().wrapping_sub(self.frame_start_cycles));
         if self.frames == 1 || self.frames.is_multiple_of(60) {
             log::info!(
-                "NVIDIA_DOOM_FRAME_OK frame={} primitives={} verify={} render_ms={} low_primitives={} fuzz_columns={} backend=nvidia",
+                "NVIDIA_DOOM_FRAME_OK frame={} primitives={} verify={} render_ms={} low_primitives={} fuzz_columns={} atlas_resets={} backend=nvidia",
                 self.frames,
                 self.primitives,
                 self.verify,
                 time::systime().num_milliseconds() - self.frame_start,
                 self.low_primitives,
-                self.fuzz_columns
+                self.fuzz_columns,
+                self.texture_resets
             );
         }
         Ok(())
@@ -254,18 +294,29 @@ impl Renderer {
         if pointer.is_null() || length == 0 || length > 4096 {
             return Err(Error::InvalidParameter);
         }
-        let key = (pointer as usize, length);
         let bytes = unsafe { slice::from_raw_parts(pointer, length) };
-        if let Some(&offset) = self.snapshots.get(&key) {
-            // A zone allocation can be purged and reused even within a frame.
-            if &self.textures[offset as usize..offset as usize + length] == bytes {
-                return Ok(offset);
-            }
+        let previous = self.textures.bytes().len();
+        // Content comparison detects a purged zone allocation reused at the
+        // same address, including reuse inside the current batch.
+        let offset = self.textures.snapshot(pointer as usize, bytes)?;
+        if self.textures.bytes().len() == previous {
+            self.texture_hits += 1;
+        } else {
+            self.texture_misses += 1;
         }
-        let offset = u32::try_from(self.textures.len()).map_err(|_| Error::SizeOverflow)?;
-        self.textures.extend_from_slice(bytes);
-        self.snapshots.insert(key, offset);
         Ok(offset)
+    }
+
+    fn texture_space(&mut self, bytes: usize) -> Result<()> {
+        if self.textures.remaining() < bytes {
+            // Called before taking any offsets for the next command. Every
+            // previous draw completes before offsets or VRAM bytes are reused.
+            self.flush()?;
+            self.textures.clear();
+            self.uploaded_bytes = 0;
+            self.texture_resets += 1;
+        }
+        Ok(())
     }
 
     fn phase(&mut self, fuzz: bool) -> Result<()> {
@@ -297,6 +348,10 @@ impl Renderer {
             ((i64::from(start) >> 16) & 127).max((last >> 16) & 127)
         };
         let length = usize::try_from(max_index + 1).map_err(|_| Error::InvalidParameter)?;
+        if length == 0 || length > 4096 {
+            return Err(Error::InvalidParameter);
+        }
+        self.texture_space(length.next_multiple_of(4) + if translated { 512 } else { 256 })?;
         let source = unsafe { self.snapshot(dc_source, length)? };
         let palette = unsafe { self.snapshot(dc_colormap, 256)? };
         let translation = if translated { unsafe { self.snapshot(dc_translation, 256)? } } else { 0 };
@@ -342,6 +397,7 @@ impl Renderer {
             .ok_or(Error::InvalidParameter)?;
         let offset = unsafe { ptr::addr_of!(columnofs).cast::<i32>().add(x as usize).read() };
         let end = offset + (x2 - x1 + 1) * if low { 2 } else { 1 } - 1;
+        self.texture_space(4096 + 256)?;
         let source = unsafe { self.snapshot(ds_source, 4096)? };
         let palette = unsafe { self.snapshot(ds_colormap, 256)? };
         self.commands.extend_from_slice(&[
@@ -387,11 +443,11 @@ impl Renderer {
                 .filter(|&x| (0..WIDTH as i32).contains(&x))
                 .ok_or(Error::InvalidParameter)?;
             let x = ptr::addr_of!(columnofs).cast::<i32>().add(x as usize).read();
-            let source = u32::try_from(self.textures.len()).map_err(|_| Error::SizeOverflow)?;
             if fuzzoffset.iter().any(|&offset| offset % WIDTH as i32 != 0) {
                 return Err(Error::InvalidParameter);
             }
-            self.textures.extend(fuzzoffset.iter().flat_map(|offset| offset.to_le_bytes()));
+            self.texture_space(200 + 256)?;
+            let source = self.snapshot(ptr::addr_of!(fuzzoffset).cast::<u8>(), 200)?;
             let palette = self.snapshot(colormaps.add(6 * 256), 256)?;
             self.commands.extend_from_slice(&[
                 2,
@@ -443,6 +499,16 @@ impl Renderer {
         self.palette_cycles = self.palette_cycles.wrapping_add(cycles().wrapping_sub(start));
         Ok(())
     }
+}
+
+fn upload(device: &Nvidia, buffer: &mut GpuBuffer<u32>, words: &[u32]) -> Result<bool> {
+    let grow = words.len() > buffer.len();
+    if grow {
+        let capacity = words.len().checked_next_power_of_two().ok_or(Error::SizeOverflow)?;
+        *buffer = device.allocate_words(capacity)?;
+    }
+    device.write_words(buffer, 0, words)?;
+    Ok(grow)
 }
 
 fn checked(result: Result<()>) {

@@ -205,6 +205,22 @@ impl Nvidia {
     /// Pack little-endian bytes into owned words. The final word is zero padded;
     /// kernels must receive the logical byte length separately for bounds checks.
     pub fn upload_bytes(&self, values: &[u8]) -> Result<GpuBuffer<u32>> {
+        self.upload_words(&Self::pack_bytes(values)?)
+    }
+
+    /// Write packed bytes at a word offset and zero-pad the final partial word.
+    /// Existing words outside the written range retain their contents.
+    pub fn write_bytes(&self, buffer: &GpuBuffer<u32>, offset: usize, values: &[u8]) -> Result<()> {
+        if offset.checked_add(values.len().div_ceil(4)).is_none_or(|end| end > buffer.elements) {
+            return Err(Error::ShapeMismatch);
+        }
+        if values.is_empty() {
+            return self.write_words(buffer, offset, &[]);
+        }
+        self.write_words(buffer, offset, &Self::pack_bytes(values)?)
+    }
+
+    fn pack_bytes(values: &[u8]) -> Result<Vec<u32>> {
         let count = values.len().div_ceil(4);
         element_count(&[count])?;
         dimension(count)?;
@@ -220,7 +236,7 @@ impl Nvidia {
         for word in &mut words {
             *word = u32::from_le(*word);
         }
-        self.upload_words(&words)
+        Ok(words)
     }
 
     pub fn upload_words(&self, values: &[u32]) -> Result<GpuBuffer<u32>> {

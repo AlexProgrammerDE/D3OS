@@ -10,3 +10,4 @@ nvidia = ["dep:d3os-nvidia", "dep:syscall"]
 libm = "0.2"
 d3os-nvidia = { path = "../nvidia", optional = true }
 syscall = { path = "../syscall", optional = true }
+hashbrown = { version = "0.17.1", default-features = false, features = ["default-hasher", "inline-more"] }

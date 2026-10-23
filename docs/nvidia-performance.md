@@ -36,21 +36,25 @@ Measurements on 2026-10-22 and 2026-10-23:
 | Qwen warm generation | 7.04 to 7.36 tokens/s | 140.97 to 148.49 tokens/s |
 | Qwen warm prompt processing | 7.76 to 7.81 tokens/s | 162.96 to 174.60 tokens/s |
 | AlexNet forward pass | 10.0 ms | 1.45 to 1.55 ms |
-| DOOM uncapped `demo1` | 536.84 to 676.89 FPS with word storage | 800.95 to 943.54 FPS with byte storage |
+| DOOM uncapped `demo1` | 536.84 to 676.89 FPS with word storage | 1431.58 to 1439.86 FPS with resident byte textures |
 
 The AlexNet result excludes input upload and final download.
 The DOOM result includes native GPU drawing, palette conversion, scaling, and framebuffer copies.
-The latest inference regression run also passes the 600-frame pixel check and reports 996.38 FPS in the uncapped demo.
-The DOOM source did not change during that run; host variability remains relevant.
 Its scene size is 320 by 200, with presentation at 640 by 400.
 The regular game loop has separate timing behavior. Its HUD rate does not measure uncapped throughput.
-The DOOM comparison uses three runs per renderer on host CPUs 8, 10, 12, and 14.
+The DOOM comparisons use three runs per renderer on host CPUs 8, 10, 12, and 14.
 These CPU IDs belong to four distinct performance cores on this machine.
-The word renderer reports 676.89, 548.67, and 536.84 FPS.
+The earlier word renderer reports 676.89, 548.67, and 536.84 FPS.
 The byte renderer reports 800.95, 943.54, and 892.81 FPS.
 Both renderers use the same driver, kernel bundle, engine, WAD, and 7117-tick demo.
 The baseline renderer also includes the same profiling counters.
 Host CPU performance varies between runs, so these ranges do not establish a fixed percentage gain.
+
+A new comparison keeps the byte shaders and driver fixed while changing upload and cache ownership.
+The fresh per-batch baseline reports 880.19, 880.19, and 980.69 FPS.
+The resident version reports 1431.58, 1431.58, and 1439.86 FPS.
+Both render 7,116 frames across the same 7,117-tick demo, with the same WAD and host affinity.
+The GPU shader bundle is identical in these six runs.
 
 Both launchers record `NVIDIA_HOST_CPU_AFFINITY` before starting a guest.
 The pinned DOOM runs use the following commands, one guest at a time:
@@ -162,7 +166,16 @@ The production raster path stores indexed surfaces and texture data as bytes ins
 Each indexed-frame transfer now moves 64,000 bytes instead of 256,000 bytes.
 The CPU no longer expands or contracts every indexed pixel between the C engine and the GPU.
 Texture snapshots retain their content comparison, including reused zone allocations.
-The upload helper performs one bulk copy into aligned words and initializes the final padding bytes.
+The renderer now retains an 8 MiB texture atlas across frames and uploads only appended snapshots.
+A matching prefix can reuse a longer snapshot without extending the caller's readable memory range.
+Changed contents append a new snapshot, preserving offsets already referenced by pending commands.
+A hash table indexes texture identities and retains its storage across atlas generations.
+Before atlas rollover, the renderer completes pending commands and then resets the CPU and GPU upload offsets.
+
+Command and bin buffers grow as needed and remain allocated between batches.
+They receive complete new prefixes before dispatch, while shader lengths bound access to those prefixes.
+`Nvidia::write_bytes()` writes packed data into an existing word buffer and zero-pads its final partial word.
+The byte upload and update paths use the same bulk packing helper.
 
 The byte fuzz kernel assigns one active lane per warp to each framebuffer column.
 It preserves pixel order and command order within each column, including overlapping and double-width commands.
@@ -215,6 +228,18 @@ Fuzz dispatch cycles decreased from about 168,000 to 20,000 per frame.
 The number of draw, fuzz, palette, copy, and clear operations stayed the same.
 The full 600-frame C pixel comparison and the GPU self-test after game exit still pass.
 
+The resident-upload comparison reduces zero kernels from 27,036 to five over the same demo.
+Those five clears occur when command or bin buffers grow.
+Copy kernels decrease from 55,793 to 49,640, while draw, fuzz, and palette kernel counts remain unchanged.
+The resident atlas uploads 2,006,236 padded texture bytes over the entire demo.
+It records 24,975,852 cache hits and 44,594 new snapshots, without atlas rollover in that run.
+`NVIDIA_DOOM_UPLOAD_PROFILE` reports uploaded bytes, hits, new snapshots, rollover count, and buffer growth count.
+
+Verification uses a 16 KiB atlas to force rollover within live draw batches.
+The final 600-frame test reports 6,474 resets while matching C-rendered pixels, including low detail and fuzz feedback.
+The launcher requires rollover coverage and checks that GPU inference still works after game exit.
+The byte operator suite also checks incremental updates, shrinking odd-length writes, padding, untouched guards, and rejected ranges.
+
 ## Compiler and local-stack correctness
 
 Warp shuffle instructions depend on execution in other lanes.
@@ -255,7 +280,8 @@ This does not establish model parity: Qwen still generates about 141 to 148 toke
 The remaining work must reduce complete model latency, rather than optimize already comparable streaming bandwidth.
 
 DOOM still transfers packed indexed frames for CPU HUD composition and copies RGB output into the console framebuffer.
-Its texture cache still uses per-batch CPU snapshots, and each upload still performs a separate allocation and clear.
+Command and texture storage now remain resident, but command lists and bin indices still cross PCIe for each batch.
+Each texture use still checks CPU contents to detect mutable or reused source memory.
 Direct GPU presentation remains separate work.
 Repeated VM starts also exposed an intermittent GSP timeout while allocating the golden compute engine.
 The failed boot never reached a workload and is excluded from throughput results.
@@ -275,6 +301,8 @@ The MMU encoding follows NVIDIA's published [MMU-v2 fields](https://github.com/N
 The mapping policy also follows the native [tinygrad NVIDIA page-table implementation](https://github.com/tinygrad/tinygrad/blob/master/tinygrad/runtime/support/nv/nvdev.py).
 The Linux comparison uses [llama.cpp CUDA kernels](https://github.com/ggml-org/llama.cpp/tree/master/ggml/src/ggml-cuda).
 NVIDIA's [matrix performance guide](https://docs.nvidia.com/deeplearning/performance/dl-performance-matrix-multiplication/index.html) explains the distinction between matrix tiling and memory-bound vector work.
+
+The texture lookup table uses [hashbrown](https://docs.rs/hashbrown/0.17.1/hashbrown/) without its standard-library dependencies.
 
 The shared-memory allocation follows [tinygrad’s native NVIDIA runtime](https://github.com/tinygrad/tinygrad/blob/master/tinygrad/runtime/ops_nv.py).
 

@@ -154,6 +154,15 @@ The CPU backend provides the same operation through its existing primitives.
 DOOM uses byte-addressed indexed surfaces and textures with word-addressed command buffers.
 The byte raster kernels receive logical byte lengths, while the syscall validates the enclosing word ranges.
 `Nvidia::upload_bytes()` packs data into aligned words and initializes trailing padding.
+`Nvidia::write_bytes()` updates an existing word buffer at a word offset, with the same padding rule.
+It checks the complete range before packing or transfer.
+
+The renderer retains command and bin buffers and a bounded 8 MiB texture atlas across frames.
+`raster::TextureAtlas` stores immutable snapshots with aligned offsets and detects changed bytes at reused identities.
+Shorter requests can reuse matching prefixes of longer snapshots without reading beyond the supplied slice.
+Only appended texture bytes cross PCIe. Previous snapshots remain valid until all pending draws complete.
+Atlas rollover completes pending draws before reusing offsets, and retains CPU table and byte-storage capacity.
+The verification mode uses a 16 KiB atlas and requires rollover during its pixel comparison.
 The fuzz kernel preserves ordering within each column and permits only vertical neighbor offsets.
 This permits concurrent columns without changing the original pixel feedback.
 

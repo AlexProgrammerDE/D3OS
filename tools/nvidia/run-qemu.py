@@ -328,6 +328,13 @@ def main():
                             raise RuntimeError(
                                 "DOOM did not exercise low detail and invisibility rendering"
                             )
+                        if args.inference == "gpu-doom-verify" and not re.search(
+                            r"NVIDIA_DOOM_FRAME_OK frame=600 .*atlas_resets=[1-9]\d*",
+                            text,
+                        ):
+                            raise RuntimeError(
+                                "DOOM verification did not exercise texture atlas rollover"
+                            )
                         rates = [
                             int(n)
                             for n in re.findall(r"NVIDIA_DOOM_FPS fps=(\d+)", text)

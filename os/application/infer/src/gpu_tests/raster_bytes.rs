@@ -9,11 +9,43 @@ const PIXELS: usize = WIDTH * HEIGHT;
 const GUARD: u32 = 0xd305abcd;
 
 pub(super) fn run(backend: &Nvidia) -> core::result::Result<(), String> {
+    incremental_upload(backend).map_err(|error| format!("byte upload: {error}"))?;
     drawing(backend).map_err(|error| format!("byte raster: {error}"))?;
     fuzz(backend).map_err(|error| format!("byte fuzz: {error}"))?;
     super::super::report(format_args!(
         "NVIDIA_BYTE_RASTER_OK pixels=221 guards=words_and_bytes fuzz=ordered_columns palette_scales=4 backend=nvidia"
     ));
+    Ok(())
+}
+
+fn incremental_upload(backend: &Nvidia) -> Result<()> {
+    let buffer = backend.upload_words(&[GUARD; 6])?;
+    for length in [1usize, 3, 4, 5, 9, 2] {
+        backend.write_words(&buffer, 0, &[GUARD; 6])?;
+        let values: Vec<_> = (0..length).map(|i| (i * 71 + 17) as u8).collect();
+        backend.write_bytes(&buffer, 1, &values)?;
+        let mut actual = [0; 6];
+        backend.read_words_into(&buffer, 0, &mut actual)?;
+        let mut expected: Vec<_> = [GUARD; 6].into_iter().flat_map(u32::to_le_bytes).collect();
+        expected[4..4 + length.div_ceil(4) * 4].fill(0);
+        expected[4..4 + length].copy_from_slice(&values);
+        if actual.into_iter().flat_map(u32::to_le_bytes).ne(expected) {
+            return Err(Error::DeviceFault);
+        }
+    }
+    let mut before = [0; 6];
+    backend.read_words_into(&buffer, 0, &mut before)?;
+    backend.write_bytes(&buffer, buffer.len(), &[])?;
+    for (offset, values) in [(buffer.len(), &[1][..]), (usize::MAX, &[][..]), (5, &[1; 5][..])] {
+        if !matches!(backend.write_bytes(&buffer, offset, values), Err(Error::ShapeMismatch)) {
+            return Err(Error::DeviceFault);
+        }
+    }
+    let mut after = [0; 6];
+    backend.read_words_into(&buffer, 0, &mut after)?;
+    if after != before {
+        return Err(Error::DeviceFault);
+    }
     Ok(())
 }
 

@@ -1,6 +1,9 @@
-//! Ordered column/row command bins for indexed GPU rendering.
+//! Ordered draw bins and immutable texture snapshots for indexed GPU rendering.
 use crate::{Error, Result};
 use alloc::vec::Vec;
+
+mod atlas;
+pub use atlas::TextureAtlas;
 
 /// Build absolute CSR offsets followed by command IDs. The first `width` lists
 /// contain columns; the next `height` contain rows. Each list preserves draw
