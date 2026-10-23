@@ -30,7 +30,7 @@ brew install rustup dosfstools nasm x86_64-elf-gcc filosottile/musl-cross/musl-c
 brew link --force rustup
 ```
 
-This has been tested on macOS 14.
+CI uses macOS 15, which has a prebuilt musl cross-compiler package.
 DOOM uses the musl cross-compiler's C/POSIX headers during compilation and links D3OS libc in the final application.
 
 [rustup](https://rustup.rs/) will download a _rust nightly_ toolchain on the first compile.
