@@ -14,7 +14,8 @@ fn positive(value: f32) -> bool {
 impl TransformerBackend for Nvidia {
     fn project_delta(&self, input: &Tensor<Self>, weights: DeltaWeights<'_, Self>, state: &mut DeltaState<Self>, config: DeltaConfig) -> Result<Tensor<Self>> {
         let (rows, width, channels, values) = project_delta_shape(input, &weights, state, config)?;
-        if rows != 1
+        if config.key_heads != config.heads
+            || rows != 1
             || !width.is_multiple_of(2)
             || !channels.is_multiple_of(4)
             || !values.is_multiple_of(4)
@@ -406,6 +407,7 @@ impl TransformerBackend for Nvidia {
 
     fn delta_batch(&self, input: DeltaInputs<'_, Self>, state: &mut DeltaState<Self>, config: DeltaConfig) -> Result<Tensor<Self>> {
         let DeltaConfig {
+            key_heads,
             heads,
             key_dim,
             value_dim,
@@ -413,7 +415,7 @@ impl TransformerBackend for Nvidia {
             epsilon,
         } = config;
         let (rows, channels, value_width) = delta_shape(&input, state, config)?;
-        if rows > 1 && key_dim <= 128 && value_dim <= 128 && kernel <= 8 {
+        if (rows > 1 || key_heads != heads) && key_dim <= 128 && value_dim <= 128 && kernel <= 8 {
             // Reject every unsupported storage type before the convolution
             // changes history, including inputs consumed only by later stages.
             if [
@@ -439,6 +441,8 @@ impl TransformerBackend for Nvidia {
                 &[(&input.qkv.buffer, 0), (&input.convolution.buffer, 0), (&state.convolution.buffer, 0)],
                 &[channels, kernel, rows],
             )?;
+            let update = [heads, key_dim, value_dim, rows, key_heads];
+            let parameters = if key_heads == heads { &update[..4] } else { &update[..] };
             let raw = self.produce(
                 &[rows, value_width],
                 Kernel::DeltaUpdate,
@@ -450,7 +454,7 @@ impl TransformerBackend for Nvidia {
                     (&input.time_bias.buffer, 0),
                     (&state.recurrent.buffer, 0),
                 ],
-                &[heads, key_dim, value_dim, rows],
+                parameters,
             )?;
             return self.produce(
                 &[rows, value_width],
@@ -458,6 +462,9 @@ impl TransformerBackend for Nvidia {
                 &[(&raw.buffer, 0), (&input.norm.buffer, 0), (&input.gate.buffer, 0)],
                 &[rows * heads, value_dim, epsilon.to_bits() as usize],
             );
+        }
+        if key_heads != heads {
+            return Err(Error::DeviceUnavailable);
         }
         if key_dim <= 128 && value_dim <= 128 && kernel <= 8 {
             let inputs = [

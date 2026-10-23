@@ -23,6 +23,27 @@ fn main() {
     for width in [128, 512] {
         source.push_str(&quantized.replace("QUANT_WIDTH", &width.to_string()));
     }
+    println!("cargo:rerun-if-changed=src/delta-recurrent.rs.in");
+    let recurrent = fs::read_to_string("src/delta-recurrent.rs.in").expect("read recurrent head template");
+    for (entry, extra, channels, query_head, key_heads) in [
+        ("delta_recurrent_batch", "", "heads * (2u32 * key_dim + value_dim)", "head", "heads"),
+        (
+            "delta_grouped_recurrent_batch",
+            ", key_heads: u32",
+            "(2u32 * key_heads * key_dim + heads * value_dim)",
+            "(head / (heads / key_heads))",
+            "key_heads",
+        ),
+    ] {
+        source.push_str(
+            &recurrent
+                .replace("RECURRENT_ENTRY", entry)
+                .replace("RECURRENT_EXTRA", extra)
+                .replace("RECURRENT_CHANNELS", channels)
+                .replace("RECURRENT_QUERY_HEAD", query_head)
+                .replace("RECURRENT_KEY_HEADS", key_heads),
+        );
+    }
     println!("cargo:rerun-if-changed=src/delta-sequence.rs.in");
     let delta = fs::read_to_string("src/delta-sequence.rs.in").expect("read recurrent template");
     for (history, name) in [(4, "delta_sequence_four_taps"), (8, "delta_sequence")] {

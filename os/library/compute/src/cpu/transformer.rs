@@ -271,18 +271,19 @@ impl TransformerBackend for Cpu {
 
     fn delta_step(&self, input: DeltaInputs<'_, Self>, state: &mut DeltaState<Self>, config: DeltaConfig) -> Result<Tensor<Self>> {
         let DeltaConfig {
+            key_heads,
             heads,
             key_dim,
             value_dim,
             kernel,
             epsilon,
         } = config;
-        let key_width = element_count(&[heads, key_dim])?;
+        let key_width = element_count(&[key_heads, key_dim])?;
         let value_width = element_count(&[heads, value_dim])?;
         let channels = key_width.checked_mul(2).and_then(|x| x.checked_add(value_width)).ok_or(Error::SizeOverflow)?;
         element_count(&[channels, kernel])?;
         element_count(&[heads, key_dim, value_dim])?;
-        if !epsilon_valid(epsilon) {
+        if !heads.is_multiple_of(key_heads) || !epsilon_valid(epsilon) {
             return Err(Error::InvalidParameter);
         }
         if input.qkv.shape() != [1, channels]
@@ -317,15 +318,18 @@ impl TransformerBackend for Cpu {
         }
         let (query, rest) = mixed.split_at_mut(key_width);
         let (key, value) = rest.split_at(key_width);
-        for head in 0..heads {
-            let q = &mut query[head * key_dim..(head + 1) * key_dim];
-            let k = &key[head * key_dim..(head + 1) * key_dim];
-            let v = &value[head * value_dim..(head + 1) * value_dim];
-            let q_scale = 1. / libm::sqrtf(dot(q, q) + 1e-6) / libm::sqrtf(key_dim as f32);
-            let k_scale = 1. / libm::sqrtf(dot(k, k) + 1e-6);
-            for x in q.iter_mut() {
-                *x *= q_scale;
+        for q in query.chunks_exact_mut(key_dim) {
+            let scale = 1. / libm::sqrtf(dot(q, q) + 1e-6) / libm::sqrtf(key_dim as f32);
+            for x in q {
+                *x *= scale;
             }
+        }
+        for head in 0..heads {
+            let key_head = head / (heads / key_heads);
+            let q = &query[key_head * key_dim..(key_head + 1) * key_dim];
+            let k = &key[key_head * key_dim..(key_head + 1) * key_dim];
+            let v = &value[head * value_dim..(head + 1) * value_dim];
+            let k_scale = 1. / libm::sqrtf(dot(k, k) + 1e-6);
             let beta = sigmoid(self.values(input.beta)[head]);
             let alpha = self.values(input.alpha)[head] + self.values(input.time_bias)[head];
             let softplus = alpha.max(0.) + libm::log1pf(libm::expf(-alpha.abs()));

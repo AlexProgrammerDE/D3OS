@@ -65,7 +65,7 @@ fn attention<B: TransformerBackend>(backend: &B, config: AttentionConfig) -> Res
 
 fn delta<B: TransformerBackend>(backend: &B, config: DeltaConfig) -> Result<Vec<Vec<f32>>> {
     let (heads, key, value, kernel) = (config.heads, config.key_dim, config.value_dim, config.kernel);
-    let channels = heads * (2 * key + value);
+    let channels = 2 * config.key_heads * key + heads * value;
     let mut state = DeltaState {
         convolution: Tensor::from_vec(backend, &[channels, kernel], vec![0.; channels * kernel])?,
         recurrent: Tensor::from_vec(backend, &[heads, key, value], vec![0.; heads * key * value])?,
@@ -201,7 +201,7 @@ fn attention_prefix<B: TransformerBackend>(backend: &B, position: usize) -> Resu
 
 fn delta_batches<B: TransformerBackend>(backend: &B, config: DeltaConfig) -> Result<Vec<Vec<f32>>> {
     let (heads, key, value, kernel) = (config.heads, config.key_dim, config.value_dim, config.kernel);
-    let channels = heads * (2 * key + value);
+    let channels = 2 * config.key_heads * key + heads * value;
     let mut state = DeltaState {
         convolution: Tensor::from_vec(backend, &[channels, kernel], vec![0.; channels * kernel])?,
         recurrent: Tensor::from_vec(backend, &[heads, key, value], vec![0.; heads * key * value])?,
@@ -239,6 +239,7 @@ fn delta_batches<B: TransformerBackend>(backend: &B, config: DeltaConfig) -> Res
 
 fn rejected_delta_storage(backend: &Nvidia) -> Result<()> {
     let config = DeltaConfig {
+        key_heads: 2,
         heads: 2,
         key_dim: 5,
         value_dim: 7,
@@ -377,6 +378,7 @@ pub(super) fn run(backend: &Nvidia) -> core::result::Result<(), String> {
     rejected_delta_storage(backend).map_err(|error| format!("delta storage rejection: {error}"))?;
     for (heads, key_dim, value_dim, kernel) in [(1, 1, 1, 1), (2, 5, 7, 3), (3, 33, 17, 8), (16, 128, 128, 4), (2, 129, 9, 4), (2, 7, 129, 9)] {
         let config = DeltaConfig {
+            key_heads: heads,
             heads,
             key_dim,
             value_dim,
@@ -389,6 +391,30 @@ pub(super) fn run(backend: &Nvidia) -> core::result::Result<(), String> {
         let batch = delta_batches(backend, config).map_err(|e| format!("{e}"))?;
         compare_traces(&batch, &batched_trace(&cpu), "batched delta")?;
     }
+    for (key_heads, heads, key_dim, value_dim, kernel) in [
+        (1, 2, 5, 7, 3),
+        (1, 3, 33, 17, 8),
+        (2, 6, 5, 7, 4),
+        (16, 32, 128, 128, 4),
+        (16, 48, 128, 128, 4),
+    ] {
+        let config = DeltaConfig {
+            key_heads,
+            heads,
+            key_dim,
+            value_dim,
+            kernel,
+            epsilon: 1e-6,
+        };
+        let gpu = delta(backend, config).map_err(|e| format!("grouped delta {key_heads}/{heads}: {e}"))?;
+        let cpu = delta(&Cpu, config).map_err(|e| format!("grouped delta reference: {e}"))?;
+        compare_traces(&gpu, &cpu, "grouped gated delta")?;
+        let batch = delta_batches(backend, config).map_err(|e| format!("grouped batch delta: {e}"))?;
+        compare_traces(&batch, &batched_trace(&cpu), "grouped batched delta")?;
+    }
+    super::super::report(format_args!(
+        "NVIDIA_GROUPED_DELTA_OK ratios=2,3 cases=5 sequential_rows=35 batched_rows=35 backend=nvidia"
+    ));
     super::super::report(format_args!(
         "NVIDIA_TRANSFORMER_OPERATORS_OK attention_cases=21 delta_cases=42 batch_attention_rows=21 batch_delta_rows=42 backend=nvidia"
     ));

@@ -93,6 +93,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "gated_project_paired_bf16_weights",
             "delta_convolution_batch",
             "delta_recurrent_batch",
+            "delta_grouped_recurrent_batch",
             "delta_fused_four_taps",
             "attention_split_batch",
             "attention_merge_splits",

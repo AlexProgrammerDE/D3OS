@@ -320,6 +320,7 @@ impl Kernel {
             (Self::AttentionOutput, [_, _, _]) => "attention_merge_splits",
             (Self::DeltaFused, [_, _, _, kernel, _]) if *kernel <= 4 => "delta_fused_four_taps",
             (Self::DeltaConvolution, [_, _, _]) => "delta_convolution_batch",
+            (Self::DeltaUpdate, [_, _, _, _, _]) => "delta_grouped_recurrent_batch",
             (Self::DeltaUpdate, [_, _, _, _]) => "delta_recurrent_batch",
             (Self::GatedProjectBf16, [k, _]) if k.is_multiple_of(2) => "gated_project_paired_bf16_weights",
             (Self::ProjectBf16, [1, k, n]) if !k.is_multiple_of(2) && *n > 8192 => "vector_project_unpaired_wide_bf16_weights",
@@ -689,6 +690,30 @@ impl Kernel {
                 extents[..4].copy_from_slice(&[channels as u64, product(&[heads, 4])? as u64, product(&[heads, key, value])? as u64, n as u64]);
                 mutated = 1 << 2;
                 (product(&[heads, value.div_ceil(128), 128])?, 4, 3, false)
+            }
+            (Self::DeltaUpdate, &[heads, key, value, rows, key_heads]) => {
+                if !(1..=128).contains(&key) || !(1..=128).contains(&value) {
+                    return Err(Error::InvalidField);
+                }
+                product(&[key_heads])?;
+                if !heads.is_multiple_of(key_heads) {
+                    return Err(Error::InvalidField);
+                }
+                let channels = product(&[2, key_heads, key])?
+                    .checked_add(product(&[heads, value])?)
+                    .ok_or(Error::InvalidField)?;
+                let scalars = product(&[rows, heads])? as u64;
+                extents[..7].copy_from_slice(&[
+                    product(&[rows, channels])? as u64,
+                    scalars,
+                    scalars,
+                    heads as u64,
+                    heads as u64,
+                    product(&[heads, key, value])? as u64,
+                    product(&[rows, heads, value])? as u64,
+                ]);
+                mutated = 1 << 5;
+                (product(&[heads, value.div_ceil(32), 128])?, 7, 6, false)
             }
             (Self::DeltaUpdate, &[heads, key, value, rows]) => {
                 if !(1..=128).contains(&key) || !(1..=128).contains(&value) {

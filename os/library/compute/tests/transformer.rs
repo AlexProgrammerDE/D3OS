@@ -176,6 +176,7 @@ fn grouped_attention_cache_matches_independent_full_causal_attention() {
 #[test]
 fn delta_recurrence_matches_scalar_state_updates_across_convolution_history() {
     let config = DeltaConfig {
+        key_heads: 2,
         heads: 2,
         key_dim: 2,
         value_dim: 3,
@@ -257,5 +258,118 @@ fn delta_recurrence_matches_scalar_state_updates_across_convolution_history() {
             .unwrap();
         close(Cpu.values(&actual), &expected);
         close(Cpu.values(&cache.recurrent), &recurrent.iter().flatten().flatten().copied().collect::<Vec<_>>());
+    }
+}
+#[test]
+fn grouped_delta_heads_match_explicitly_repeated_query_and_key_channels() {
+    for (key_heads, heads) in [(1, 2), (1, 3), (2, 6)] {
+        let config = DeltaConfig {
+            key_heads,
+            heads,
+            key_dim: 5,
+            value_dim: 7,
+            kernel: 3,
+            epsilon: 1e-6,
+        };
+        let channels = key_heads * 10 + heads * 7;
+        let expanded_channels = heads * 17;
+        let expand = |values: &[f32], lane: usize| {
+            let mut result = Vec::new();
+            for plane in 0..2 {
+                for head in 0..heads {
+                    let start = (plane * key_heads + head / (heads / key_heads)) * 5 * lane;
+                    result.extend_from_slice(&values[start..start + 5 * lane]);
+                }
+            }
+            result.extend_from_slice(&values[key_heads * 10 * lane..]);
+            result
+        };
+        let values = |len, salt| (0..len).map(|i| ((i * 17 + salt) % 43) as f32 / 53. - 0.4).collect::<Vec<_>>();
+        let weights = values(channels * 3, 7);
+        let convolution = tensor(&[channels, 1, 3], &weights);
+        let repeated = tensor(&[expanded_channels, 1, 3], &expand(&weights, 3));
+        let history = values(channels * 3, 11);
+        let recurrent = values(heads * 5 * 7, 13);
+        let mut grouped = DeltaState {
+            convolution: tensor(&[channels, 3], &history),
+            recurrent: tensor(&[heads, 5, 7], &recurrent),
+        };
+        let mut reference = DeltaState {
+            convolution: tensor(&[expanded_channels, 3], &expand(&history, 3)),
+            recurrent: tensor(&[heads, 5, 7], &recurrent),
+        };
+        let decay = tensor(&[heads], &values(heads, 17));
+        let time = tensor(&[heads], &values(heads, 19));
+        let norm = tensor(&[7], &values(7, 23));
+        for step in 0..7 {
+            let inputs = values(channels, step);
+            let qkv = tensor(&[1, channels], &inputs);
+            let expanded_qkv = tensor(&[1, expanded_channels], &expand(&inputs, 1));
+            let gate = tensor(&[1, heads * 7], &values(heads * 7, step + 29));
+            let beta = tensor(&[1, heads], &values(heads, step + 31));
+            let alpha = tensor(&[1, heads], &values(heads, step + 37));
+            let input = |qkv, convolution| DeltaInputs {
+                qkv,
+                gate: &gate,
+                beta: &beta,
+                alpha: &alpha,
+                convolution,
+                log_decay: &decay,
+                time_bias: &time,
+                norm: &norm,
+            };
+            let actual = Cpu.delta_step(input(&qkv, &convolution), &mut grouped, config).unwrap();
+            let expected = Cpu
+                .delta_step(input(&expanded_qkv, &repeated), &mut reference, DeltaConfig { key_heads: heads, ..config })
+                .unwrap();
+            assert_eq!(Cpu.values(&actual), Cpu.values(&expected));
+            assert_eq!(Cpu.values(&grouped.recurrent), Cpu.values(&reference.recurrent));
+            assert_eq!(expand(Cpu.values(&grouped.convolution), 3), Cpu.values(&reference.convolution));
+        }
+    }
+}
+#[test]
+fn invalid_delta_head_groups_leave_both_caches_unchanged() {
+    for key_heads in [0, 2, 4] {
+        let config = DeltaConfig {
+            key_heads,
+            heads: 3,
+            key_dim: 5,
+            value_dim: 7,
+            kernel: 3,
+            epsilon: 1e-6,
+        };
+        let channels = 2 * key_heads * 5 + 3 * 7;
+        let history = vec![0.25; channels * 3];
+        let recurrent = vec![0.5; 3 * 5 * 7];
+        let mut state = DeltaState {
+            convolution: tensor(&[channels, 3], &history),
+            recurrent: tensor(&[3, 5, 7], &recurrent),
+        };
+        let qkv = tensor(&[2, channels], &vec![0.2; channels * 2]);
+        let gate = tensor(&[2, 21], &[0.3; 42]);
+        let scalar = tensor(&[2, 3], &[0.4; 6]);
+        let convolution = tensor(&[channels, 1, 3], &history);
+        let decay = tensor(&[3], &[0.1; 3]);
+        let norm = tensor(&[7], &[0.8; 7]);
+        assert!(
+            Cpu.delta_batch(
+                DeltaInputs {
+                    qkv: &qkv,
+                    gate: &gate,
+                    beta: &scalar,
+                    alpha: &scalar,
+                    convolution: &convolution,
+                    log_decay: &decay,
+                    time_bias: &decay,
+                    norm: &norm
+                },
+                &mut state,
+                config
+            )
+            .is_err()
+        );
+        assert_eq!(Cpu.values(&state.convolution), history);
+        assert_eq!(Cpu.values(&state.recurrent), recurrent);
     }
 }

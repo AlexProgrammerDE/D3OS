@@ -120,6 +120,7 @@ impl Config {
     }
     fn delta(self) -> DeltaConfig {
         DeltaConfig {
+            key_heads: self.linear_heads,
             heads: self.linear_heads,
             key_dim: self.linear_key_dim,
             value_dim: self.linear_value_dim,

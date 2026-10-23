@@ -29,6 +29,7 @@ pub struct AttentionInputs<'a, B: Backend> {
 
 #[derive(Clone, Copy, Debug)]
 pub struct DeltaConfig {
+    pub key_heads: usize,
     pub heads: usize,
     pub key_dim: usize,
     pub value_dim: usize,
@@ -37,14 +38,14 @@ pub struct DeltaConfig {
 }
 
 pub struct DeltaState<B: Backend> {
-    /// [2 * heads * key_dim + heads * value_dim, kernel], oldest to newest.
+    /// [2 * key_heads * key_dim + heads * value_dim, kernel], oldest to newest.
     pub convolution: Tensor<B>,
     /// [heads, key_dim, value_dim].
     pub recurrent: Tensor<B>,
 }
 
 pub struct DeltaInputs<'a, B: Backend> {
-    /// [rows, heads * (2 * key_dim + value_dim)].
+    /// [rows, 2 * key_heads * key_dim + heads * value_dim].
     pub qkv: &'a Tensor<B>,
     /// [rows, heads * value_dim].
     pub gate: &'a Tensor<B>,
@@ -60,7 +61,7 @@ pub struct DeltaInputs<'a, B: Backend> {
 }
 
 pub struct DeltaWeights<'a, B: Backend> {
-    /// [heads * (2 * key_dim + value_dim), hidden_width].
+    /// [2 * key_heads * key_dim + heads * value_dim, hidden_width].
     pub qkv: &'a Tensor<B>,
     /// [heads * value_dim, hidden_width].
     pub gate: &'a Tensor<B>,
@@ -187,18 +188,19 @@ fn delta_parameters_shape<B: Backend>(
     convolution: &Tensor<B>, log_decay: &Tensor<B>, time_bias: &Tensor<B>, norm: &Tensor<B>, state: &DeltaState<B>, config: DeltaConfig,
 ) -> Result<(usize, usize)> {
     let DeltaConfig {
+        key_heads,
         heads,
         key_dim,
         value_dim,
         kernel,
         epsilon,
     } = config;
-    let key_width = element_count(&[heads, key_dim])?;
+    let key_width = element_count(&[key_heads, key_dim])?;
     let value_width = element_count(&[heads, value_dim])?;
     let channels = key_width.checked_mul(2).and_then(|n| n.checked_add(value_width)).ok_or(Error::SizeOverflow)?;
     element_count(&[channels, kernel])?;
     element_count(&[heads, key_dim, value_dim])?;
-    if !epsilon.is_finite() || epsilon <= 0. {
+    if !heads.is_multiple_of(key_heads) || !epsilon.is_finite() || epsilon <= 0. {
         return Err(Error::InvalidParameter);
     }
     if convolution.shape() != [channels, 1, kernel]

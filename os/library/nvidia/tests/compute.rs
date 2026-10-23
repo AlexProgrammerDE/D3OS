@@ -476,3 +476,18 @@ fn quantized_weights_validate_block_rows_and_exact_word_extents() {
         assert!(Kernel::EmbeddingQuantized.work(&[1, 256, 1, format]).is_err());
     }
 }
+#[test]
+fn grouped_recurrence_uses_shared_key_channels_and_separate_value_states() {
+    for heads in [32u32, 48] {
+        let work = Kernel::DeltaUpdate.work(&[heads, 128, 128, 3, 16]).unwrap();
+        let channels = 2 * 16 * 128 + heads * 128;
+        assert_eq!(work.extents[..7], [u64::from(3 * channels), u64::from(3 * heads), u64::from(3 * heads), u64::from(heads), u64::from(heads), u64::from(heads * 128 * 128), u64::from(3 * heads * 128)]);
+        assert_eq!(work.mutated, 1 << 5);
+        assert_eq!(work.output, 6);
+        assert_eq!(work.blocks, heads * 4);
+    }
+    for key_heads in [0, 7, 64] {
+        assert!(Kernel::DeltaUpdate.work(&[32, 128, 128, 3, key_heads]).is_err());
+    }
+    assert!(Kernel::DeltaUpdate.work(&[32, 128, 128, u32::MAX, 16]).is_err());
+}

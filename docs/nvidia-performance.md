@@ -38,6 +38,22 @@ These measurements separate end-to-end overhead from device throughput. They are
 
 ## Latest retained measurements
 
+### Grouped recurrent attention
+
+The recurrent operator now accepts separate query/key and value head counts.
+Its GPU checks cover the 16/32 heads of Qwen3.5-9B and the 16/48 heads of Qwen3.6-27B.
+They also cover three smaller shapes with partial tiles and convolution histories.
+Each shape compares seven sequential positions and the same positions in batches against the CPU reference.
+The host test independently compares grouped channels against explicitly repeated query/key channels, including both final caches.
+Invalid head groups leave both caches unchanged.
+
+Grouped execution updates convolution history before the recurrent kernel runs.
+Value heads share read-only query/key channels, while each head owns its recurrent matrix.
+This avoids concurrent writes to shared convolution history.
+All 76 existing device instruction sections remain byte-identical.
+The Qwen-0.8B regression preserves its 64-token trace and passes all layer, batch, and cache references.
+Full 9B and 27B execution still requires model configuration, output-weight, and asset-loading integration.
+
 ### Native quantized operators
 
 The native Rust/cuTile backend now accepts all five packed weight formats used by the larger Qwen files.
