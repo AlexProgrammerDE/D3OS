@@ -8,11 +8,37 @@ import os
 import shutil
 import socket
 import subprocess
+import sys
 import tarfile
 import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def capture_failure(directory, port):
+    if port is None:
+        return
+    commands = [
+        "set pagination off",
+        "set confirm off",
+        "set remotetimeout 5",
+        f"target remote 127.0.0.1:{port}",
+        "thread apply all bt 24",
+        "thread apply all info registers rip rsp rbp eflags gs_base fs_base cr3",
+        "thread apply all x/12i $pc",
+        "detach",
+    ]
+    command = ["gdb", "-q", "-batch", str(ROOT / "loader/kernel.elf")]
+    for instruction in commands:
+        command.extend(["-ex", instruction])
+    try:
+        with (directory / "failure.gdb.log").open("w") as log:
+            subprocess.run(
+                command, stdout=log, stderr=subprocess.STDOUT, timeout=20, check=False
+            )
+    except (OSError, subprocess.SubprocessError) as error:
+        print(f"Failed to capture guest state: {error}", file=sys.stderr)
 
 
 def firmware_options(image, directory):
@@ -351,6 +377,7 @@ def main():
             time.sleep(1)
             qmp.type_command(f"infer {mode}" if mode != "self-test" else "infer")
             completed = 0
+            count = 0
             while time.monotonic() < deadline:
                 text = serial.read_text(errors="replace")
                 if "INFERENCE_FAIL" in text or "panicked at" in text:
@@ -380,7 +407,12 @@ def main():
                 if process.poll() is not None:
                     raise RuntimeError(f"QEMU exited during inference. Read {serial}")
                 time.sleep(0.1)
-            raise TimeoutError(f"D3OS did not complete inference. Read {serial}")
+            raise TimeoutError(
+                f"D3OS completed {count} of {args.repeat} inference runs. Read {serial}"
+            )
+        except (RuntimeError, TimeoutError):
+            capture_failure(directory, args.gdb_port)
+            raise
         finally:
             if qmp is not None:
                 qmp.close()

@@ -166,7 +166,9 @@ def main():
                     check=True,
                     timeout=args.timeout,
                 )
-            harness.wait(timeout=args.timeout)
+            # The guest deadline is unchanged. Allow its failure-only GDB
+            # snapshot to finish before terminating the harness process group.
+            harness.wait(timeout=args.timeout + 30)
             if harness.returncode != 0:
                 raise RuntimeError(
                     f"guest verification failed; read {directory / 'guest.log'}"

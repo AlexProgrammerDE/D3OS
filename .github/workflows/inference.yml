@@ -50,6 +50,7 @@ jobs:
             target/context-switch/check.gdb
             target/inference-qemu-self-test/serial.log
             target/inference-qemu-self-test/qemu.log
+            target/inference-qemu-self-test/failure.gdb.log
 
   cpu-and-cutile:
     runs-on: ubuntu-24.04
