@@ -35,6 +35,9 @@ args = [ "build", "-Z", "build-std=core,alloc", "-Z", "build-std-features=compil
 condition = { files_modified = { input = [
     "${CARGO_MAKE_WORKING_DIRECTORY}/Cargo.toml", "${SOURCE_DIRECTORY}/**/*.rs",
     "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/Cargo.lock",
+    "${LIBRARY_DIRECTORY}/ai/Cargo.toml", "${LIBRARY_DIRECTORY}/ai/src/**/*.rs",
+    "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/third_party/burn-optim/Cargo.toml",
+    "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/third_party/burn-optim/src/**/*.rs",
     "${LIBRARY_DIRECTORY}/compute/Cargo.toml", "${LIBRARY_DIRECTORY}/compute/src/**/*.rs",
     "${LIBRARY_DIRECTORY}/nvidia/Cargo.toml", "${LIBRARY_DIRECTORY}/nvidia/src/**/*.rs",
     "${LIBRARY_DIRECTORY}/inference/Cargo.toml", "${LIBRARY_DIRECTORY}/inference/src/**/*.rs",

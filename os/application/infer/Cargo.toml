@@ -11,6 +11,7 @@ doctest = false
 bench = false
 
 [dependencies]
+d3os-ai = { path = "../../library/ai", features = ["cpu", "training"] }
 runtime = { path = "../../library/runtime" }
 terminal = { path = "../../library/terminal" }
 naming = { path = "../../library/naming" }

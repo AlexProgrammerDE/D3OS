@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-exclude = ["tools/gpu-kernels"]
+exclude = ["tools/gpu-kernels", "third_party/burn-optim"]
 
 members = [
     "os/application/doom",
@@ -33,6 +33,9 @@ members = [
     "os/application/cat",
     "os/application/avxtest",
 ]
+
+[patch.crates-io]
+burn-optim = { path = "third_party/burn-optim" }
 
 # [profile.release]
 # debug = true

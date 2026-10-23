@@ -57,6 +57,7 @@ def main():
         "--inference",
         choices=(
             "cpu-self-test",
+            "burn-self-test",
             "gpu-self-test",
             "gpu-kernel-bench",
             "gpu-alexnet",
@@ -110,7 +111,7 @@ def main():
     devices = vfio_devices(args.gpu)
     if args.kernels and not args.firmware:
         parser.error("--kernels requires --firmware")
-    if args.inference != "cpu-self-test" and (
+    if args.inference not in ("cpu-self-test", "burn-self-test") and (
         not args.kernels or not (args.kernels / "inference.cubin").is_file()
     ):
         parser.error("GPU inference requires --kernels with inference.cubin")
@@ -301,6 +302,7 @@ def main():
                     controls = True
                 expected = {
                     "cpu-self-test": "INFERENCE_OK self-test backend=cpu",
+                    "burn-self-test": "INFERENCE_OK burn-self-test backend=cpu gradients=ok aliasing=ok checkpoint=ok resume=ok",
                     "gpu-self-test": "INFERENCE_OK self-test backend=nvidia",
                     "gpu-kernel-bench": "INFERENCE_BENCH_OK kernels backend=nvidia",
                     "gpu-alexnet": "INFERENCE_OK alexnet backend=nvidia layers=8",

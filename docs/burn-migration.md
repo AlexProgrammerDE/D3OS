@@ -96,5 +96,40 @@ Burn is not a dependency of the renderer.
 The native stack runs AlexNet, Qwen3.5-0.8B, and DOOM before the Burn migration.
 Packed quantized GPU operations and grouped recurrent heads are validated independently.
 Native 9B and 27B model integration remains in progress.
-Burn dependency validation, the native Burn backend, and guest training are not complete.
+Burn 0.22.1 now compiles and links on the D3OS target with `no_std` and `alloc`.
+Its module optimizer needs a [local portability patch](../third_party/README.md).
+The D3OS AI library supplies native clock and timer wakeups for the portable runtime.
+The first VM validation uses Burn's explicit Flex CPU device.
+It passes analytic gradients, SGD updates, shared-tensor preservation, Adam checkpoint resume, and native timer wakeups.
+The MNIST model definition uses Burn convolutions, pooling, and linear layers.
+The native Burn GPU backend, full dataset training, and workload migration remain incomplete.
 The retained Linux and D3OS measurements are in [Native NVIDIA performance](nvidia-performance.md).
+
+## Portable runtime validation
+
+Run the host checks:
+
+```bash
+cargo test --locked -p d3os-ai --features cpu,training
+cargo clippy --locked -p d3os-ai --features cpu,training --all-targets -- -D warnings
+```
+
+Run the D3OS target check:
+
+```bash
+RUSTFLAGS='--cfg getrandom_backend="rdrand"' cargo clippy --locked \
+  -p d3os-ai --features cpu,training \
+  -Zbuild-std=core,alloc -Zbuild-std-features=compiler-builtins-mem \
+  -Zjson-target-spec --target "$PWD/d3os_application.json" --no-deps -- -D warnings
+```
+
+After the production image build, run the VM validation:
+
+```bash
+taskset -c 8,10,12,14 python3 tools/nvidia/run-qemu.py \
+  --firmware target/nvidia/firmware --kernels target/nvidia/kernels \
+  --memory-mib 4096 --boot-check --inference burn-self-test --timeout 120
+```
+
+The success marker starts with `INFERENCE_OK burn-self-test backend=cpu`.
+This check establishes portable runtime behavior. It does not measure native Burn GPU training or inference performance.

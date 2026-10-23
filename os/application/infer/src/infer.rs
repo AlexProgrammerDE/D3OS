@@ -52,6 +52,12 @@ fn read_file(path: &str) -> Result<Vec<u8>, String> {
 fn run() -> Result<(), String> {
     let args: Vec<_> = env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        Some("burn-self-test") if args.len() == 1 => {
+            let device = d3os_ai::burn::tensor::Device::flex().autodiff();
+            device.seed(42);
+            d3os_ai::validation::training(&device)?;
+            report(format_args!("INFERENCE_OK burn-self-test backend=cpu gradients=ok aliasing=ok checkpoint=ok resume=ok"));
+        }
         None | Some("self-test") if args.len() <= 1 => {
             d3os_inference::self_test(&Cpu).map_err(|error| format!("{error}"))?;
             report(format_args!("INFERENCE_OK self-test backend=cpu"));
@@ -94,7 +100,7 @@ fn run() -> Result<(), String> {
         }
         _ => {
             return Err(String::from(
-                "usage: infer self-test | gpu-self-test | gpu-kernel-bench | alexnet [MODEL FIXTURE] | gpu-alexnet [MODEL FIXTURE] | gpu-alexnet-bench | qwen [MAX_TOKENS PROMPT...] | qwen-verify | gpu-qwen [MAX_TOKENS PROMPT...] | gpu-qwen-verify | gpu-qwen-bench [long] [device-timing]",
+                "usage: infer self-test | burn-self-test | gpu-self-test | gpu-kernel-bench | alexnet [MODEL FIXTURE] | gpu-alexnet [MODEL FIXTURE] | gpu-alexnet-bench | qwen [MAX_TOKENS PROMPT...] | qwen-verify | gpu-qwen [MAX_TOKENS PROMPT...] | gpu-qwen-verify | gpu-qwen-bench [long] [device-timing]",
             ));
         }
     }
