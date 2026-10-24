@@ -1,0 +1,29 @@
+#[cutile::entry()]
+unsafe fn burn_gather(source: *const u32, index_words: *const u32, errors: *mut u32, output: *mut u32, GATHER_PARAMETERS) {
+    let i = indices();
+    let mask = lt_tile(i, broadcast_scalar(count, shape![128]));
+    let mut linear = i;
+    let mut address_a = broadcast_scalar(signed(offset_a), shape![128]);
+    let mut address_b = broadcast_scalar(signed(offset_b), shape![128]);
+    GATHER_ADDRESSES
+    let address_b: Tile<u32, { [128] }> = bitcast(address_b);
+    let selected = unsafe { read_tile(index_words, address_b, mask & lt_tile(address_b, broadcast_scalar(extent_b, shape![128])), 0u32) };
+    let selected: Tile<i32, { [128] }> = bitcast(selected);
+    let valid = ge_tile(selected, broadcast_scalar(0i32, shape![128])) & lt_tile(selected, broadcast_scalar(signed(axis_length), shape![128]));
+    let stride = GATHER_STRIDE;
+    let address_a = address_a + selected * broadcast_scalar(signed(stride), shape![128]);
+    let address_a: Tile<u32, { [128] }> = bitcast(address_a);
+    let value = unsafe { read_tile(source, address_a, mask & valid & lt_tile(address_a, broadcast_scalar(extent_a, shape![128])), 0u32) };
+    unsafe { write_tile(output, i, value, mask) };
+    let bad = mask & eq_tile(valid, broadcast_scalar(false, shape![128]));
+    let bad = select(bad, broadcast_scalar(1u32, shape![128]), broadcast_scalar(0u32, shape![128]));
+    let bad: Tile<u32, { [] }> = reduce_sum(bad, 0i32);
+    let bad: u32 = tile_to_scalar(bad);
+    if bad != 0u32 {
+        let pointer: PointerTile<*mut u32, { [] }> = pointer_to_tile(errors);
+        let pointer: PointerTile<*mut u32, { [1] }> = pointer.reshape(shape![1]);
+        let (_old, _token): (Tile<u32, { [1] }>, Token) = unsafe {
+            atomic_rmw_tko(pointer, broadcast_scalar(1u32, shape![1]), atomic::Or, ordering::Relaxed, scope::Device, None, None)
+        };
+    }
+}

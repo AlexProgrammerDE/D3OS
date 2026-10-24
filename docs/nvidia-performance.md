@@ -60,7 +60,7 @@ Both operations keep tensors resident. All 88 earlier instruction sections remai
 The latest primitive checks add 21 unary math operations, broadcast power, and exact tensor fill.
 Independent libm references cover 2,816 FP32 edge values, including rounding boundaries, zeros, infinities, and NaNs.
 Fill performs no host upload and requires no separate clear. All 95 earlier GPU instruction sections remain byte-identical.
-The matching SDK and driver use native compute protocol version 10.
+The matching SDK and driver use native compute protocol version 11.
 
 The accompanying regression passes AlexNet's eight layer references, Qwen's layer and cache references, and all 600 DOOM views.
 D3OS AlexNet averages 0.960 ms across 100 passes.
@@ -78,6 +78,14 @@ The D3OS self-test validates wrapping, conversion boundaries, shared ownership, 
 This step uses functional workload checks. It adds no new D3OS or Linux throughput measurement.
 The performance samples in this subsection remain from the preceding math regression, under `target/nvidia/burn/math/`.
 The typed-word validation logs are under `target/nvidia/burn/words/`.
+
+The subsequent indexing step adds resident gather and vector select for FP32, I32, and boolean tensors.
+Each nonempty operation reads one four-byte bounds flag and synchronizes; tensor values do not cross to the host.
+Physical D3OS GPU checks cover signed strides, offset views, duplicate indices, empty axes, partial tiles, and neighboring guards.
+Invalid indices return an error without changing inputs or preventing later GPU operations, including inside command scopes.
+All 147 previous GPU instruction sections remain byte-identical.
+This step adds functional validation, with no new D3OS or Linux throughput measurement.
+Its logs are under `target/nvidia/burn/indexing/`.
 
 ### Grouped recurrent attention
 

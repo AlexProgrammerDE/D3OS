@@ -145,7 +145,7 @@ The CI workflow provides repeatable numerical tests and an optional pretrained Q
 The current target is the RTX 4090 Laptop GPU (`10de:2757`, AD103) with one serialized compute queue.
 The driver boots pinned signed firmware and allocates a private, virtually bound compute context.
 The process-owned syscall interface accepts built-in kernels and opaque buffer handles.
-Native compute protocol version 10 includes command scopes, queue profiles, and 48 built-in kernels.
+Native compute protocol version 11 includes command scopes, queue profiles, and 49 built-in kernels.
 Its expanded profile array requires the matching SDK.
 Rebuild compute applications with the matching SDK. The kernel rejects incompatible request versions.
 
@@ -156,6 +156,14 @@ The driver validates every reachable input address before dispatch and rejects o
 Every entry writes the complete output, so native allocation avoids a separate clear kernel.
 Empty logical results reuse resident storage without a GPU launch.
 Hardware checks cover partial tiles, neighboring guards, rejected addresses, exact floating-point copies, and chained resident operations.
+
+The gather entry supports FP32, I32, and boolean values with I32 indices.
+Its 32 parameters describe both views, the selected axis, and the output shape.
+The driver validates reachable storage ranges and isolates the output and bounds flag from all input buffers.
+The kernel masks invalid source reads and atomically records a bounds error.
+The tensor API reads one four-byte flag and returns an error before exposing an invalid result.
+This control read synchronizes queued work. Tensor values stay on the GPU until an explicit data read.
+Vector select expands a checked index view and uses the same kernel without an index upload or materialization.
 
 The reduction family provides sum, mean, product, minimum, maximum, and their two index operations for FP32 views.
 Each output retains the reduced dimension with size one. Input strides can be negative or zero.

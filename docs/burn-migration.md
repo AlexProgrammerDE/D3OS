@@ -111,7 +111,7 @@ The GPU operations include FP32 arithmetic and math, reductions, exact tensor fi
 Another 29 entries implement I32 arithmetic, signed comparisons, bitwise operations, boolean logic, masks, and conversions.
 These operations support strided views and broadcasting. Input tensors remain shared and immutable.
 Full writers avoid a separate output clear. Empty logical outputs require no element work.
-The matching SDK and driver use native compute protocol version 10.
+The matching SDK and driver use native compute protocol version 11.
 
 The D3OS GPU self-test passes reversed and transposed views, overlapping windows, broadcast batches, subviews, empty dimensions, and neighboring guards.
 Matrix references use independent FP64 accumulation. Math references use independent libm functions and include 2,816 FP32 edge values.
@@ -123,8 +123,15 @@ Typed-word GPU checks pass wrapping arithmetic, shift boundaries, signed compari
 Boolean-to-I32 casts share resident storage. Ownership and service-counter checks confirm that they require no GPU allocation, transfer, or launch.
 All 118 earlier GPU instruction sections remain byte-identical after the typed-word entries are added.
 
+Native gather and vector select now support FP32, I32, and boolean tensors with checked, signed strides.
+Indices remain on the GPU. A four-byte bounds result returns to the host after each nonempty operation.
+This result requires synchronization. It prevents invalid device indices from escaping as successful tensors.
+Invalid indices return an error, release private output storage, and leave the GPU usable for subsequent operations.
+The checks cover reversed views, subviews, repeated indices, empty axes, command scopes, partial tiles, and neighboring guards.
+All 147 earlier GPU instruction sections remain byte-identical after the gather entry is added.
+
 These checks validate native primitives. Burn device dispatch and autodiff integration still need implementation.
-Integer division, remainder, indexed operations, and additional training primitives also remain incomplete.
+Integer division, remainder, scatter operations, and additional training primitives also remain incomplete.
 Full native Burn training, dataset handling, checkpoint export, and workload migration remain incomplete.
 The retained Linux and D3OS measurements are in [Native NVIDIA performance](nvidia-performance.md).
 

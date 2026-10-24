@@ -3,10 +3,11 @@
 use crate::{Error, Result};
 
 pub mod elementwise;
+pub mod indexing;
 pub mod reduction;
 pub mod words;
 
-pub const VERSION: u32 = 10;
+pub const VERSION: u32 = 11;
 pub const INFO: u32 = 0;
 pub const ALLOCATE: u32 = 1;
 pub const FREE: u32 = 2;
@@ -26,7 +27,7 @@ pub const END_COMMANDS: u32 = 10;
 pub const QUEUE_PROFILE: u32 = 11;
 pub const SERVICE_PROFILE: u32 = 12;
 pub const SERVICE_OPERATIONS: usize = 13;
-pub const KERNEL_COUNT: usize = 48;
+pub const KERNEL_COUNT: usize = 49;
 
 /// CPU service costs by request operation, including queue work within it.
 #[derive(Clone, Copy, Debug, Default)]
@@ -129,9 +130,10 @@ pub enum Kernel {
     TensorReduction = 45,
     Fill = 46,
     TensorWords = 47,
+    Gather = 48,
 }
 
-const _: () = assert!(Kernel::TensorWords as usize + 1 == KERNEL_COUNT);
+const _: () = assert!(Kernel::Gather as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -179,6 +181,7 @@ impl Kernel {
                 | Self::TensorReduction
                 | Self::Fill
                 | Self::TensorWords
+                | Self::Gather
                 | Self::Matmul
                 | Self::Im2col
                 | Self::MaxPool
@@ -258,6 +261,7 @@ impl Kernel {
             45 => Self::TensorReduction,
             46 => Self::Fill,
             47 => Self::TensorWords,
+            48 => Self::Gather,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -312,6 +316,7 @@ impl Kernel {
             Self::TensorReduction => "burn_sum",
             Self::Fill => "burn_fill",
             Self::TensorWords => "burn_i32_add",
+            Self::Gather => "burn_gather",
         }
     }
 
@@ -363,6 +368,11 @@ impl Kernel {
         let mut mutated = 0;
         let mut threads = 128;
         let (count, pointers, output, in_place) = match (self, p) {
+            (Self::Gather, p) => {
+                extents[..4].copy_from_slice(&indexing::validate(p)?);
+                mutated = 1 << 2;
+                (p[2], 4, 3, false)
+            }
             (Self::TensorWords, p) => {
                 extents[..3].copy_from_slice(&words::validate(p)?);
                 (p[0], 3, 2, false)

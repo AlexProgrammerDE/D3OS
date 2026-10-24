@@ -170,3 +170,27 @@ fn typed_words_use_the_same_view_addresses_with_distinct_operand_rules() {
     assert!(view.word_parameters(&rhs, WordOp::BoolAnd, 2, true).is_err());
     assert!(view.word_parameters(&rhs, WordOp::FloatToInt, 1, false).is_err());
 }
+
+#[test]
+fn gather_metadata_uses_the_source_axis_extent_and_both_view_strides() {
+    let source = Layout::contiguous(Shape::new([3, 5, 7]))
+        .unwrap()
+        .permute(&[2, 0, 1])
+        .unwrap()
+        .flip(&[0, 2])
+        .unwrap();
+    let indices = Layout::contiguous(Shape::new([7, 3, 131])).unwrap().flip(&[2]).unwrap();
+    let p = source.gather_parameters(&indices, 2).unwrap();
+    assert_eq!(p[..8], [3, 2, 7 * 3 * 131, 105, 34, 7 * 3 * 131, 130, 5]);
+    assert_eq!(p[8..11], [7, 3, 131]);
+    assert_eq!(p[16..19], [(-1i32) as u32 as usize, 35, (-7i32) as u32 as usize]);
+    assert_eq!(p[24..27], [393, 131, (-1i32) as u32 as usize]);
+    assert!(source.gather_shape(&indices, 1).is_err());
+    assert!(source.gather_shape(&indices, 3).is_err());
+    let empty_axis = Layout::contiguous(Shape::new([3, 0])).unwrap();
+    let indices = Layout::contiguous(Shape::new([3, 2])).unwrap();
+    assert!(empty_axis.gather_parameters(&indices, 1).is_ok());
+    let empty_indices = Layout::contiguous(Shape::new([3, 0])).unwrap();
+    assert!(empty_axis.gather_shape(&empty_indices, 1).unwrap().num_elements() == 0);
+    assert!(empty_axis.gather_parameters(&empty_indices, 1).is_err());
+}

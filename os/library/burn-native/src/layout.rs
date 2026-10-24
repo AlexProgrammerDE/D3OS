@@ -3,6 +3,7 @@ use alloc::{vec, vec::Vec};
 use burn_backend::{Shape, Slice};
 use d3os_compute::{Error, Result};
 use d3os_nvidia::compute::elementwise::{self, Elementwise};
+use d3os_nvidia::compute::indexing;
 use d3os_nvidia::compute::reduction::{self, Reduction};
 use d3os_nvidia::compute::words::{self, WordOp};
 
@@ -286,6 +287,39 @@ impl Layout {
         *shape.get_mut(axis).ok_or(Error::InvalidParameter)? = 1;
         count(&shape)?;
         Ok(Shape::from(shape))
+    }
+
+    pub fn gather_shape(&self, indices: &Self, axis: usize) -> Result<Shape> {
+        if axis >= self.shape.num_dims()
+            || indices.shape.num_dims() != self.shape.num_dims()
+            || self.shape.iter().zip(indices.shape.iter()).enumerate().any(|(a, (&s, &i))| a != axis && s != i)
+        {
+            return Err(Error::ShapeMismatch);
+        }
+        Ok(indices.shape.clone())
+    }
+
+    pub fn gather_parameters(&self, indices: &Self, axis: usize) -> Result<[usize; 32]> {
+        let shape = self.gather_shape(indices, axis)?;
+        let mut p = [0u32; 32];
+        p[..8].copy_from_slice(&[
+            shape.num_dims() as u32,
+            axis as u32,
+            indices.len() as u32,
+            self.storage_elements.max(1) as u32,
+            self.offset as u32,
+            indices.storage_elements.max(1) as u32,
+            indices.offset as u32,
+            self.shape[axis] as u32,
+        ]);
+        p[8..16].fill(1);
+        for (a, &dim) in shape.iter().enumerate() {
+            p[8 + a] = dim as u32;
+            p[16 + a] = self.strides[a] as i32 as u32;
+            p[24 + a] = indices.strides[a] as i32 as u32;
+        }
+        indexing::validate(&p).map_err(|_| Error::InvalidParameter)?;
+        Ok(p.map(|v| v as usize))
     }
 
     /// Encode one-axis reductions without materializing strided input views.

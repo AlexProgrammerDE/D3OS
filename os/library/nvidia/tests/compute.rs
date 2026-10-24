@@ -1,6 +1,55 @@
 use d3os_nvidia::compute::Kernel;
 
 #[test]
+fn gather_checks_both_strided_ranges_and_isolates_its_error_word() {
+    let mut p = [0u32; 32];
+    p[..8].copy_from_slice(&[2, 1, 6, 12, 3, 6, 5, 4]);
+    p[8..16].fill(1);
+    p[8..10].copy_from_slice(&[2, 3]);
+    p[16..18].copy_from_slice(&[4, (-1i32) as u32]);
+    p[24..26].copy_from_slice(&[(-3i32) as u32, (-1i32) as u32]);
+    let work = Kernel::Gather.work(&p).unwrap();
+    assert_eq!(work.extents[..4], [12, 6, 1, 6]);
+    assert_eq!((work.blocks, work.pointers, work.output, work.mutated), (1, 4, 3, 4));
+    assert!(Kernel::Gather.allocates_output());
+    let addresses = [0x1000, 0x2000, 0x3000, 0x4000];
+    assert!(work.validate_aliases(&addresses).is_ok());
+    for (writer, other) in [(2, 0), (2, 1), (2, 3), (3, 0), (3, 1), (3, 2)] {
+        let mut invalid = addresses;
+        invalid[writer] = invalid[other];
+        assert!(work.validate_aliases(&invalid).is_err());
+    }
+    for (index, value) in [
+        (0, 0),
+        (0, 9),
+        (1, 2),
+        (2, 0),
+        (2, 5),
+        (3, 0),
+        (3, 7),
+        (4, 2),
+        (5, 0),
+        (5, 5),
+        (6, 4),
+        (7, 5),
+        (8, 0),
+        (10, 2),
+        (18, 1),
+        (26, 1),
+    ] {
+        let mut invalid = p;
+        invalid[index] = value;
+        assert!(Kernel::Gather.work(&invalid).is_err());
+    }
+    assert!(Kernel::Gather.work(&p[..31]).is_err());
+    p[3] = 1;
+    p[4] = 0;
+    p[7] = 0;
+    p[16..24].fill(0);
+    assert!(Kernel::Gather.work(&p).is_ok());
+}
+
+#[test]
 fn typed_words_check_flags_scalar_domains_and_original_storage_bounds() {
     use d3os_nvidia::compute::{
         elementwise::SCALAR_RHS,

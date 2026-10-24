@@ -263,6 +263,52 @@ impl NativeTensor {
         self.word_unary(op)
     }
 
+    /// Read arbitrary elements on the GPU. Only the four-byte bounds result
+    /// crosses to the host; invalid device indices leave inputs unchanged.
+    pub fn gather(&self, axis: usize, indices: &Self) -> Result<Self> {
+        if indices.dtype != DType::I32 {
+            return Err(Error::InvalidParameter);
+        }
+        let layout = Layout::contiguous(self.layout.gather_shape(&indices.layout, axis)?)?;
+        if layout.is_empty() {
+            return Ok(Self {
+                buffer: self.buffer.clone(),
+                layout,
+                dtype: self.dtype,
+            });
+        }
+        let parameters = self.layout.gather_parameters(&indices.layout, axis)?;
+        let status = Nvidia.produce_words(1, Kernel::Fill, &[], &[1, 0])?;
+        let buffer = Nvidia.produce_words(
+            layout.len(),
+            Kernel::Gather,
+            &[(&self.buffer, 0), (&indices.buffer, 0), (&status, 0)],
+            &parameters,
+        )?;
+        let mut invalid = [0];
+        Nvidia.read_words_into(&status, 0, &mut invalid)?;
+        if invalid[0] != 0 {
+            return Err(Error::InvalidParameter);
+        }
+        Ok(Self {
+            buffer: Arc::new(buffer),
+            layout,
+            dtype: self.dtype,
+        })
+    }
+
+    pub fn select(&self, axis: usize, indices: &Self) -> Result<Self> {
+        if indices.dtype != DType::I32 || indices.layout.shape().num_dims() != 1 || axis >= self.layout.shape().num_dims() {
+            return Err(Error::InvalidParameter);
+        }
+        let mut shape = self.layout.shape().to_vec();
+        shape[axis] = indices.layout.len();
+        let mut strides = alloc::vec![0;shape.len()];
+        strides[axis] = indices.layout.strides()[0];
+        let layout = Layout::from_parts(Shape::from(shape), strides, indices.layout.offset() as i64, indices.layout.storage_elements())?;
+        self.gather(axis, &indices.with_layout(layout)?)
+    }
+
     /// FP32 matrix multiplication with Tensor Core accumulation and broadcast batches.
     pub fn matmul(&self, rhs: &Self) -> Result<Self> {
         if self.dtype != DType::F32 || rhs.dtype != DType::F32 {

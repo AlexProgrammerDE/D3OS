@@ -65,6 +65,41 @@ fn main() {
                 .replace("BURN_OP", &format!("{}u32", op as u32)),
         );
     }
+    println!("cargo:rerun-if-changed=src/burn-gather.rs.in");
+    let gather = fs::read_to_string("src/burn-gather.rs.in").expect("read gather template");
+    let mut parameters: Vec<String> = ["_rank", "axis", "count", "extent_a", "offset_a", "extent_b", "offset_b", "axis_length"]
+        .map(str::to_owned)
+        .into();
+    parameters.extend((0..8).map(|axis| format!("dim{axis}")));
+    parameters.extend((0..8).map(|axis| format!("stride_a{axis}")));
+    parameters.extend((0..8).map(|axis| format!("stride_b{axis}")));
+    let parameters = parameters.into_iter().map(|name| format!("{name}: u32")).collect::<Vec<_>>().join(", ");
+    let addresses = (0..8)
+        .rev()
+        .map(|axis| {
+            let advance = if axis == 0 {
+                String::new()
+            } else {
+                format!("linear = linear / broadcast_scalar(dim{axis}, shape![128]);\n")
+            };
+            format!(
+                "let coordinate = linear % broadcast_scalar(dim{axis}, shape![128]);\n{advance}\
+                 let coordinate: Tile<i32, {{ [128] }}> = bitcast(coordinate);\n\
+                 if axis != {axis}u32 {{ address_a = address_a + coordinate * broadcast_scalar(signed(stride_a{axis}), shape![128]); }}\n\
+                 address_b = address_b + coordinate * broadcast_scalar(signed(stride_b{axis}), shape![128]);\n"
+            )
+        })
+        .collect::<String>();
+    let stride = (0..7)
+        .map(|axis| format!("if axis == {axis}u32 {{ stride_a{axis} }} else "))
+        .collect::<String>()
+        + "{ stride_a7 }";
+    source.push_str(
+        &gather
+            .replace("GATHER_PARAMETERS", &parameters)
+            .replace("GATHER_ADDRESSES", &addresses)
+            .replace("GATHER_STRIDE", &stride),
+    );
     println!("cargo:rerun-if-changed=src/burn-reduction.rs.in");
     let reduction = fs::read_to_string("src/burn-reduction.rs.in").expect("read Burn reduction template");
     let mut parameters: Vec<String> = ["count", "_rank", "_operation", "axis", "offset", "extent", "length", "_reserved"]

@@ -1,4 +1,5 @@
 //! Check Burn tensor ownership and views on real native GPU allocations.
+mod indexing;
 mod math;
 mod words;
 use abi::elementwise::Elementwise;
@@ -97,6 +98,7 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     ));
     math::run(backend).map_err(|e| format!("Burn native math: {e}"))?;
     words::run(backend).map_err(|e| format!("Burn native words: {e}"))?;
+    indexing::run(backend).map_err(|e| format!("Burn native indexing: {e}"))?;
     Ok(())
 }
 
