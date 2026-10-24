@@ -5,6 +5,14 @@ use burn_backend::{
     tensor::{BoolTensor, FloatTensor, IntTensor},
 };
 impl ModuleOps<Self> for Native {
+    fn linear(x: FloatTensor<Self>, weight: FloatTensor<Self>, bias: Option<FloatTensor<Self>>) -> FloatTensor<Self> {
+        let mut refs = alloc::vec![&x, &weight];
+        if let Some(bias) = &bias {
+            refs.push(bias);
+        }
+        let shape = crate::linear::output_shape(&x.shape(), &weight.shape(), bias.as_ref().map(|b| b.shape()).as_ref()).unwrap_or_else(|_| x.shape());
+        BackendTensor::apply("linear", shape, DType::F32, &refs, |v| v[0].linear(v[1], v.get(2).copied()))
+    }
     fn conv2d(x: FloatTensor<Self>, weight: FloatTensor<Self>, bias: Option<FloatTensor<Self>>, options: ConvOptions<2>) -> FloatTensor<Self> {
         let mut refs = alloc::vec![&x, &weight];
         if let Some(bias) = &bias {

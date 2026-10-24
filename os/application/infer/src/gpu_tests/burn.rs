@@ -3,6 +3,7 @@ mod convolution;
 mod dispatch;
 mod indexing;
 mod integers;
+mod linear;
 mod math;
 mod memory;
 mod pooling;
@@ -112,6 +113,7 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     indexing::run(backend).map_err(|e| format!("Burn native indexing: {e}"))?;
     scatter::run(backend).map_err(|e| format!("Burn native scatter: {e}"))?;
     convolution::run(backend).map_err(|e| format!("Burn native convolution: {e}"))?;
+    linear::run(backend).map_err(|e| format!("Burn native linear: {e}"))?;
     pooling::run(backend).map_err(|e| format!("Burn native pooling: {e}"))?;
     updates::run(backend).map_err(|e| format!("Burn native updates: {e}"))?;
     random::run(backend).map_err(|e| format!("Burn native random: {e}"))?;

@@ -253,6 +253,15 @@ The selector also has metadata tests for workspace limits and unsupported fast-p
 The kernel bundle remains unchanged.
 Evidence is under `target/nvidia/burn/alexnet-optimization/`.
 
+A subsequent dispatcher fix activates backend-specific linear forward and backward operations.
+The native forward folds leading dimensions into matrix rows and adds bias to its private GPU result.
+AlexNet then uses three row-bias kernels and 14 generic elementwise kernels, instead of 17 generic elementwise kernels.
+Two D3OS GPU 100-pass samples measure 1.230 and 1.290 ms.
+The variation does not establish a separate throughput improvement over the preceding 1.300 ms sample.
+Public API tests check signed views, preserved inputs, folded batches, empty outputs, and zero input width.
+Native MNIST autodiff and SGD checks and all eight AlexNet references pass.
+The kernel bundle remains unchanged.
+
 ## Earlier Burn primitive measurements
 
 The following measurements describe earlier implementation stages. Current model migration results are above.

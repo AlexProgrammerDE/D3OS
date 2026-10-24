@@ -7,6 +7,7 @@ pub mod backend;
 pub mod convolution;
 mod device;
 pub mod layout;
+mod linear;
 pub mod pooling;
 pub mod random;
 pub mod range;
