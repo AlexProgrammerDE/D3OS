@@ -15,6 +15,33 @@ Large model assets also need a storage path that avoids the current FAT32 boot f
 Both large models now pass native validation through Burn, as described below.
 The existing 0.8B, AlexNet, and DOOM checks remain required.
 
+## Performance goal and acceptance
+
+The goal requires Linux performance parity for every workload in this table.
+Correctness, compiler reuse, and a fast result for one model do not complete the goal.
+
+| Workload | Required comparison |
+| --- | --- |
+| PTX and Tile IR compilation | Cold compilation inside D3OS versus inside Linux, with identical inputs, compiler versions, flags, and target GPU |
+| DOOM | Uncapped FPS and frame time for the same engine, WAD, demo, resolution, and comparable rendering and presentation work |
+| MNIST training | Training steps and images per second, including forward execution, backward execution, and optimizer updates |
+| MNIST inference | Latency and images per second for the same trained convolutional model and batch sizes |
+| AlexNet inference | Latency and images per second for the same model, inputs, precision, and batch sizes |
+| Qwen 0.8B, 9B, and 27B | Separate model load, prompt processing, and token generation measurements for all three variants |
+
+Each comparison identifies the execution OS, CPU or GPU backend, model, precision, workload size, and timing boundaries.
+The GPU comparisons use the same physical RTX 4090 Laptop GPU, with one VM at a time.
+Compiler comparisons also match guest memory, virtual CPUs, and host CPU affinity.
+Training comparisons match the dataset, model, initialization, optimizer, batch size, and training work.
+Model comparisons retain the numerical references, and DOOM retains its pixel references.
+
+Repeated measurements must establish comparable performance within the observed measurement variation.
+A remaining gap stays explicit for each workload, even after another workload reaches parity.
+Compilation remains a separate load phase and never enters average inference, training, or rendering throughput.
+Persistent cache hits must remain separate from cold compilation.
+The current Linux headless software DOOM reference has different presentation costs and cannot establish GPU rendering parity.
+The retained MNIST results establish training and inference correctness, with no matched Linux performance baseline yet.
+
 ## Measurement method
 
 These measurements use the same physical GPU through VFIO, with four KVM virtual CPUs.
