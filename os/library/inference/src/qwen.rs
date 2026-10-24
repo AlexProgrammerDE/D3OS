@@ -4,7 +4,8 @@ use alloc::{format, vec::Vec};
 use d3os_compute::transformer::{AttentionConfig, AttentionInputs, AttentionState, DeltaConfig, DeltaState, DeltaWeights, TransformerBackend};
 use d3os_compute::{Backend, Tensor, element_count};
 
-use crate::{Error, Result, archive::Archive};
+use crate::{Error, Result};
+use d3os_tensor_file::{Archive, DType};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Config {
@@ -250,7 +251,11 @@ fn load<B: Backend>(archive: &mut Archive<'_>, backend: &B, name: &str, shape: &
     if record.shape() != shape {
         return Err(Error::InvalidModelShape);
     }
-    record.load(backend)
+    if record.dtype() == DType::Bf16 && record.shape().len() == 2 {
+        Ok(Tensor::from_buffer(record.shape(), backend.upload_bf16_le(record.bytes())?)?)
+    } else {
+        Ok(Tensor::from_vec(backend, record.shape(), record.to_vec()?)?)
+    }
 }
 
 fn zeros<B: Backend>(backend: &B, shape: &[usize]) -> Result<Tensor<B>> {

@@ -1,5 +1,5 @@
 use d3os_compute::{Backend, cpu::Cpu};
-use d3os_inference::{Error, archive::Archive, qwen::Qwen, tokenizer::Tokenizer, verify};
+use d3os_inference::{Error, qwen::Qwen, tokenizer::Tokenizer, verify};
 
 type Record = (String, Vec<usize>, Vec<f32>);
 
@@ -219,31 +219,6 @@ fn loader_rejects_unsupported_configuration_and_misshaped_or_missing_weights() {
     let mut records = model_records();
     records.pop();
     assert!(matches!(Qwen::load(&Cpu, &archive(&records)), Err(Error::MissingTensor(_))));
-}
-
-#[test]
-fn typed_archive_decodes_bfloat16_and_rejects_truncation_and_nonfinite_weights() {
-    let mut bytes = b"D3TENSR\0".to_vec();
-    bytes.extend(2u32.to_le_bytes());
-    bytes.extend(1u32.to_le_bytes());
-    bytes.extend(1u16.to_le_bytes());
-    bytes.extend(1u16.to_le_bytes());
-    bytes.extend(3u64.to_le_bytes());
-    bytes.extend(1u16.to_le_bytes());
-    bytes.push(b'x');
-    bytes.extend(3u64.to_le_bytes());
-    for value in [0x3fc0u16, 0xc020, 0x3e00] {
-        bytes.extend(value.to_le_bytes());
-    }
-    for length in 0..bytes.len() {
-        assert!(Archive::parse(&bytes[..length]).is_err());
-    }
-    assert_eq!(Archive::parse(&bytes).unwrap().take("x").unwrap().to_vec().unwrap(), [1.5, -2.5, 0.125]);
-    let len = bytes.len();
-    bytes[len - 2..].copy_from_slice(&0x7fc0u16.to_le_bytes());
-    assert!(Archive::parse(&bytes).unwrap().take("x").unwrap().to_vec().is_err());
-    bytes[28..30].copy_from_slice(&2u16.to_le_bytes());
-    assert!(Archive::parse(&bytes).is_err());
 }
 
 fn tokenizer_bytes() -> Vec<u8> {

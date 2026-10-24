@@ -5,7 +5,7 @@ extern crate alloc;
 use alloc::{format, string::String, vec::Vec};
 use core::fmt;
 use d3os_compute::transformer::TransformerBackend;
-use d3os_compute::{Backend, cpu::Cpu, nvidia::Nvidia};
+use d3os_compute::{cpu::Cpu, nvidia::Nvidia};
 use d3os_inference::{
     qwen::{self, Qwen},
     tokenizer::{self, Tokenizer},
@@ -89,11 +89,10 @@ fn run() -> Result<(), String> {
             }
         }
         Some("gpu-alexnet") if args.len() == 1 || args.len() == 3 => {
-            let backend = Nvidia::new().map_err(|error| format!("{error}"))?;
-            alexnet(&backend, &args[1..])?;
+            alexnet(&d3os_ai::native_device().map_err(|e| format!("{e}"))?, &args[1..])?;
         }
         Some("alexnet") if args.len() == 1 || args.len() == 3 => {
-            alexnet(&Cpu, &args[1..])?;
+            alexnet(&d3os_ai::burn::tensor::Device::flex(), &args[1..])?;
         }
         Some("qwen") if args.len() == 1 || args.len() >= 3 => generate_qwen(&Cpu, &args[1..])?,
         Some("gpu-qwen") if args.len() == 1 || args.len() >= 3 => {
@@ -114,20 +113,20 @@ fn run() -> Result<(), String> {
     Ok(())
 }
 
-fn alexnet<B: Backend>(backend: &B, paths: &[String]) -> Result<(), String> {
+fn alexnet(device: &d3os_ai::burn::tensor::Device, paths: &[String]) -> Result<(), String> {
     let defaults = ["/usr/share/inference/alexnet.d3t", "/usr/share/inference/dog.d3t"];
     let paths = if paths.is_empty() { defaults } else { [paths[0].as_str(), paths[1].as_str()] };
     let start = time::systime().num_milliseconds();
-    report(format_args!("INFERENCE_START alexnet backend={}", backend.name()));
+    let backend = if *device == d3os_ai::burn::tensor::Device::flex() { "cpu" } else { "nvidia" };
+    report(format_args!("INFERENCE_START alexnet backend={backend} framework=burn"));
     let model = read_file(paths[0])?;
     let fixture = read_file(paths[1])?;
-    let predictions = d3os_inference::verify_alexnet(backend, &model, &fixture).map_err(|error| format!("{error}"))?;
+    let predictions = d3os_ai::alexnet::verify(device, &model, &fixture)?;
     for (class, probability) in predictions {
         report(format_args!("class={class} probability={probability:.6}"));
     }
     report(format_args!(
-        "INFERENCE_OK alexnet backend={} layers=8 elapsed_ms={}",
-        backend.name(),
+        "INFERENCE_OK alexnet backend={backend} layers=8 framework=burn elapsed_ms={}",
         time::systime().num_milliseconds() - start
     ));
     Ok(())

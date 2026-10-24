@@ -1,10 +1,49 @@
 //! Named, little-endian tensors: version 1 stores f32, version 2 adds per-record dtypes.
-//! Parsing checks the complete file before a backend receives any allocation.
-use alloc::collections::BTreeMap;
-use alloc::vec::Vec;
-use d3os_compute::{Backend, Tensor, element_count};
+//! Parsing validates the complete file structure without an execution backend.
+#![no_std]
 
-use crate::{Error, Result};
+extern crate alloc;
+use alloc::collections::BTreeMap;
+use alloc::string::String;
+use alloc::vec::Vec;
+use core::fmt;
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Error {
+    InvalidArchive,
+    MissingTensor(String),
+    UnexpectedTensor,
+    NonFinite,
+    AllocationFailed,
+}
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidArchive => f.write_str("invalid or unsupported tensor file"),
+            Self::MissingTensor(name) => write!(f, "missing tensor {name}"),
+            Self::UnexpectedTensor => f.write_str("tensor file contains unexpected records"),
+            Self::NonFinite => f.write_str("tensor file contains a nonfinite value"),
+            Self::AllocationFailed => f.write_str("cannot allocate tensor data"),
+        }
+    }
+}
+impl core::error::Error for Error {}
+pub type Result<T> = core::result::Result<T, Error>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DType {
+    F32,
+    Bf16,
+}
+
+fn element_count(shape: &[usize]) -> Result<usize> {
+    if shape.is_empty() || shape.len() > 8 || shape.contains(&0) {
+        return Err(Error::InvalidArchive);
+    }
+    shape.iter().try_fold(1usize, |count, &dim| {
+        count.checked_mul(dim).filter(|&n| n <= isize::MAX as usize / 4).ok_or(Error::InvalidArchive)
+    })
+}
 
 pub const MAGIC: &[u8; 8] = b"D3TENSR\0";
 pub const VERSION: u32 = 1;
@@ -21,18 +60,16 @@ impl Record<'_> {
         &self.shape
     }
 
-    pub fn load<B: Backend>(&self, backend: &B) -> Result<Tensor<B>> {
-        if self.width == 2 && self.shape.len() == 2 {
-            return Ok(Tensor::from_buffer(&self.shape, backend.upload_bf16_le(self.bytes)?)?);
-        }
-        Ok(Tensor::from_vec(backend, &self.shape, self.to_vec()?)?)
+    pub fn dtype(&self) -> DType {
+        if self.width == 2 { DType::Bf16 } else { DType::F32 }
+    }
+    pub fn bytes(&self) -> &[u8] {
+        self.bytes
     }
 
     pub fn to_vec(&self) -> Result<Vec<f32>> {
         let mut values = Vec::new();
-        values
-            .try_reserve_exact(self.bytes.len() / self.width)
-            .map_err(|_| d3os_compute::Error::AllocationFailed)?;
+        values.try_reserve_exact(self.bytes.len() / self.width).map_err(|_| Error::AllocationFailed)?;
         for bytes in self.bytes.chunks_exact(self.width) {
             let value = if self.width == 2 {
                 f32::from_bits(u32::from(u16::from_le_bytes(bytes.try_into().map_err(|_| Error::InvalidArchive)?)) << 16)
@@ -40,7 +77,7 @@ impl Record<'_> {
                 f32::from_le_bytes(bytes.try_into().map_err(|_| Error::InvalidArchive)?)
             };
             if !value.is_finite() {
-                return Err(d3os_compute::Error::NonFinite.into());
+                return Err(Error::NonFinite);
             }
             values.push(value);
         }

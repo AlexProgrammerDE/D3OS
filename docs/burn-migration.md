@@ -98,8 +98,10 @@ Burn is not a dependency of the renderer.
 
 ## Current status
 
-The existing native inference stack runs AlexNet and Qwen3.5-0.8B on the GPU.
-DOOM uses its separate native renderer. These workloads have not migrated to Burn.
+AlexNet now uses Burn modules and public tensors on the native GPU and the explicit Flex CPU device.
+Its legacy model implementation and execution API have been removed.
+Qwen3.5-0.8B still uses the existing native inference stack and awaits Burn migration.
+DOOM keeps its separate native renderer.
 Native Qwen 9B and 27B model integration remains in progress.
 Packed quantized GPU operations and grouped recurrent heads are validated independently.
 
@@ -156,7 +158,8 @@ Physical GPU checks compare forward results and all gradients with independent F
 The checks include partial tiles, empty batches, offset views, shared storage, malformed metadata, and neighboring guards.
 Service counters show no activation upload or download during these operations.
 All 151 earlier GPU instruction sections remain byte-identical after the three convolution entries are added.
-The existing AlexNet execution path remains unchanged. AI workload migration waits for the public Burn backend.
+At this convolution-primitive milestone, AlexNet still used the legacy execution path.
+The later model migration now uses Burn.
 
 Native pooling provides max, average, and adaptive average operations with backward passes in one to three spatial dimensions.
 The plans accept signed views, per-side padding, ceil windows, and max-pool dilation.
@@ -241,6 +244,16 @@ The final model uses five epochs at learning rate 0.001 and two at 0.0001, witho
 A fresh VM loads the exported model and reproduces all 10,000 test predictions.
 See [Train MNIST inside D3OS](mnist-training.howto.md) for commands and validation evidence.
 AI workload migration remains incomplete.
+The AlexNet migration preserves every value of all eight original layer references with absolute and relative tolerances of `2e-4`.
+The host CPU reference and physical D3OS GPU both return class 258.
+Forward execution uploads and downloads no activation data.
+Its classifier weight layout is materialized once during loading through resident Burn tensor operations.
+Tensor-file parsing now lives in the independent `d3os-tensor-file` package, with no execution backend dependency.
+
+Fresh 100-pass measurements report 0.930 ms for legacy D3OS and 2.420 ms for Burn on D3OS.
+Fresh Linux cuDNN/cuBLAS runs report 0.731 to 0.735 ms.
+The 2.60-fold D3OS regression remains open. Burn remains the model API while Qwen migration proceeds before optimization.
+
 The retained Linux and D3OS measurements are in [Native NVIDIA performance](nvidia-performance.md).
 
 ## Portable runtime validation

@@ -7,6 +7,7 @@ pub use burn;
 #[cfg(feature = "native")]
 pub use d3os_burn_native as native;
 
+pub mod alexnet;
 pub mod mnist;
 #[cfg(target_os = "none")]
 mod platform;

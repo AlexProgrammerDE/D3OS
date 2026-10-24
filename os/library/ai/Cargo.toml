@@ -10,6 +10,7 @@ training = ["burn/optim"]
 native = ["dep:d3os-burn-native", "dep:burn-dispatch", "burn-dispatch/d3os-native"]
 
 [dependencies]
+d3os-tensor-file = { path = "../tensor-file" }
 crc32fast = { version = "=1.5.3", default-features = false }
 burn-dispatch = { version = "=0.22.1", default-features = false, optional = true }
 burn = { version = "=0.22.1", default-features = false, features = ["extension"] }

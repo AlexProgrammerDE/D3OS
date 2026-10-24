@@ -895,6 +895,7 @@ dependencies = [
  "concurrent",
  "crc32fast",
  "d3os-burn-native",
+ "d3os-tensor-file",
  "embassy-time-driver",
  "spin 0.10.0",
  "time",
@@ -924,13 +925,19 @@ dependencies = [
 name = "d3os-inference"
 version = "0.1.0"
 dependencies = [
+ "d3os-ai",
  "d3os-compute",
+ "d3os-tensor-file",
  "unicode-general-category",
  "unicode-normalization",
 ]
 
 [[package]]
 name = "d3os-nvidia"
+version = "0.1.0"
+
+[[package]]
+name = "d3os-tensor-file"
 version = "0.1.0"
 
 [[package]]
@@ -2002,6 +2009,7 @@ dependencies = [
  "d3os-compute",
  "d3os-inference",
  "d3os-nvidia",
+ "d3os-tensor-file",
  "libm",
  "log",
  "logger",

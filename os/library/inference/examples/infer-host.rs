@@ -24,7 +24,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Some("alexnet") if args.len() == 3 => {
             let model = fs::read(&args[1])?;
             let fixture = fs::read(&args[2])?;
-            let predictions = d3os_inference::verify_alexnet(&Cpu, &model, &fixture)?;
+            let predictions = d3os_ai::alexnet::verify(&d3os_ai::burn::tensor::Device::flex(), &model, &fixture)?;
             for (class, probability) in predictions {
                 println!("class={class} probability={probability:.6}");
             }

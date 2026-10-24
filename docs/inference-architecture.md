@@ -5,7 +5,8 @@ The CPU backend is a real userspace implementation with `no_std` and `alloc`.
 Host verification builds the same libraries for Linux.
 
 The [Burn migration](burn-migration.md) replaces the public AI framework while retaining the native driver and cuTile kernels.
-Its portable runtime and first native GPU primitives are operational. Model migration and GPU training remain in progress.
+Its public native backend, convolutional training, checkpoint export, and AlexNet model are operational.
+Qwen migration and matched performance optimization remain in progress.
 DOOM keeps its separate native rendering API.
 
 The hardware-free phase delivers pretrained AlexNet and Qwen3.5-0.8B text inference inside D3OS.
@@ -19,10 +20,11 @@ The [renderer explanation](nvidia-rendering-design.md) describes command orderin
 
 ## Source layout
 
-- `os/library/ai`: Burn-based model definitions and portable training validation.
+- `os/library/ai`: public Burn models, AlexNet evaluation, MNIST training, and checkpoint export.
+- `os/library/tensor-file`: backend-independent F32 and BF16 tensor-file parsing.
 - `os/library/burn-native`: Burn tensor primitives, checked views, and native GPU operations.
 - `os/library/compute`: tensor storage, command scopes, CPU operators, and the native NVIDIA backend.
-- `os/library/inference`: checked tensor archives, AlexNet evaluation, Qwen text generation, tokenization, and numerical verification.
+- `os/library/inference`: remaining Qwen execution, tokenization, and numerical references during migration.
 - `os/application/infer`: D3OS file access, shell commands, and serial reports.
 - `os/library/inference/examples/infer-host.rs`: host execution of the same model implementation.
 - `tools/gpu-kernels`: the host cuTile compiler and Rust tile programs.
@@ -30,11 +32,14 @@ The [renderer explanation](nvidia-rendering-design.md) describes command orderin
 - `os/kernel/src/device/nvidia.rs`: native firmware startup, compute submission, and process-owned GPU storage for the RTX 4090 Laptop GPU.
 - `tools/nvidia/run-qemu.py`: verified VFIO launch and passthrough boot checks.
 
-The inference layer depends on the backend contract rather than CPU storage.
+Burn models depend on Burn backend operations. The remaining Qwen implementation still uses the earlier compute contract.
 The NVIDIA backend implements the same contract through a D3OS compute syscall.
 The model layer does not require Linux binary compatibility, a CUDA host runtime, or Python inside D3OS.
 
-## CPU implementation
+## Retained low-level CPU operators
+
+These operators support the remaining Qwen implementation and numerical references.
+AlexNet and training use Burn with an explicit Flex CPU or native NVIDIA device.
 
 Each tensor owns its buffer and records its dimensions.
 Shape products use checked arithmetic before allocation or indexing.
@@ -50,8 +55,21 @@ The input size is fixed at 224 by 224 pixels.
 At this size, the final feature map is already 6 by 6, so adaptive pooling is an identity.
 Other input sizes and AlexNet variants are not supported by this model implementation.
 
+## Burn AlexNet
+
+`d3os_ai::alexnet::AlexNet` uses Burn convolution, max-pooling, and linear modules.
+Its loader checks all 16 checkpoint records before uploading parameters.
+Torch classifier matrices are transposed into Burn's row layout once, with the layout copy on the selected device.
+The model retains GPU storage for subsequent forwards.
+
+`forward` accepts a public Burn `Tensor<4>` and returns logits as `Tensor<2>`.
+`forward_observed` uses a generic observer over resident tensors, with no rank erasure or automatic readback.
+The reference observer reads and checks all eight original layers at their unchanged tolerances.
+Both shell inference and the resident benchmark use this implementation. The old AlexNet execution API has been removed.
+
 ## Tensor archives
 
+`d3os-tensor-file` validates the data format without depending on a compute backend.
 An archive starts with eight magic bytes, `D3TENSR\0`.
 A little-endian `u32` version and a little-endian `u32` record count follow.
 Both supported versions accept one to 4,096 named tensors.

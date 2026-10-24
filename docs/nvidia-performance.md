@@ -59,6 +59,34 @@ The model also passes checkpoint resume across VM restarts and inference export 
 See [Train MNIST inside D3OS](mnist-training.howto.md) for the procedure and retained evidence.
 This validation contains no Linux training sample or matched performance comparison.
 
+## AlexNet Burn migration
+
+These are fresh measurements on the same passed-through RTX 4090 Laptop GPU, with four guest CPUs and host affinity `8,10,12,14`.
+All three paths use the same FP32 checkpoint, 224-by-224 fixture, and eight complete layer references.
+The original absolute and relative tolerances remain `2e-4`. The predicted class remains 258.
+
+| OS and execution path | File read | Model preparation | Warm forward mean |
+| --- | ---: | ---: | ---: |
+| D3OS, legacy native model | 444 ms | 263 ms | 0.930 ms |
+| D3OS, Burn native model | 242 ms | 319 ms | 2.420 ms |
+| Linux, cuDNN/cuBLAS | 856.773 ms | 722.932 ms | 0.731–0.735 ms |
+
+Each warm sample measures 100 passes after one warmup. Linux supplies three samples; its average is 0.732888 ms.
+Both timers include CPU submission and synchronized completion. Input upload and reference readback remain outside the forward interval.
+The file and preparation columns are single cold observations with different loading implementations, not a separate matched I/O benchmark.
+Linux uses cuDNN FMA and default cuBLAS FP32 math. D3OS uses the native compensated TF32 Tensor Core kernels with FP32 storage.
+
+Burn currently regresses D3OS warm forward time by 2.60 times.
+The model remains on Burn. Kernel dispatch and allocation improvements follow the remaining workload migrations.
+The forward residency check confirms zero activation uploads and downloads.
+The legacy model implementation has been removed; Qwen temporarily retains its earlier execution path.
+
+A separate instrumented GPU pass records 1.437 ms across the five generic convolution entries and 0.570 ms across the three classifier matrix entries.
+Those serialized device observations identify costs; they are not the uninstrumented forward measurement.
+No device kernel binary changes in this migration.
+The retained logs, Linux provenance, and comparison report are under `target/nvidia/burn/alexnet/`.
+The Burn CPU reference, Qwen references, native Burn training/checkpoints, and all 600 DOOM views also pass.
+
 ## Latest retained measurements
 
 ### Burn primitive regression

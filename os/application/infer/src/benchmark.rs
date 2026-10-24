@@ -3,8 +3,6 @@ use alloc::{format, string::String, vec::Vec};
 use d3os_compute::transformer::TransformerBackend;
 use d3os_compute::{Backend, Buffer, Tensor, nvidia::Nvidia};
 use d3os_inference::{
-    alexnet::AlexNet,
-    archive::Archive,
     qwen::{self, Qwen},
     tokenizer::Tokenizer,
 };
@@ -216,40 +214,59 @@ fn gated_projection(backend: &Nvidia) -> d3os_compute::Result<()> {
 }
 
 pub(super) fn alexnet(backend: &Nvidia) -> Result<(), String> {
+    use d3os_ai::{
+        alexnet::{AlexNet, Observer},
+        burn::tensor::{Tensor as BurnTensor, TensorData},
+    };
+    use d3os_tensor_file::Archive;
+    let device = d3os_ai::native_device().map_err(|e| format!("{e}"))?;
     let start = now();
     let weights = read_file("/usr/share/inference/alexnet.d3t")?;
     let fixture = read_file("/usr/share/inference/dog.d3t")?;
     let file_ms = now() - start;
     let start = now();
-    let model = AlexNet::load(backend, &weights).map_err(|error| format!("{error}"))?;
+    let model = AlexNet::load(&device, &weights)?;
     let load_ms = now() - start;
-    let mut archive = Archive::parse(&fixture).map_err(|error| format!("{error}"))?;
-    let input = archive.take("input").map_err(|error| format!("{error}"))?;
-    let values = input.to_vec().map_err(|error| format!("{error}"))?;
+    let mut archive = Archive::parse(&fixture).map_err(|e| format!("{e}"))?;
+    let record = archive.take("input").map_err(|e| format!("{e}"))?;
+    let values = record.to_vec().map_err(|e| format!("{e}"))?;
     let mut elapsed = 0;
     let mut final_logits = Vec::new();
     const REPEATS: usize = 100;
     for run in 0..=REPEATS {
-        let input = Tensor::from_vec(backend, input.shape(), values.clone()).map_err(|error| format!("{error}"))?;
+        let input = BurnTensor::<4>::from_data(TensorData::new(values.clone(), record.shape()), &device);
+        device.sync().map_err(|e| format!("AlexNet input: {e:?}"))?;
         let before = if run == REPEATS {
             Some((
-                backend.profile().map_err(|error| format!("{error}"))?,
-                backend.queue_profile().map_err(|error| format!("{error}"))?,
+                backend.profile().map_err(|e| format!("{e}"))?,
+                backend.queue_profile().map_err(|e| format!("{e}"))?,
+                backend.service_profile().map_err(|e| format!("{e}"))?,
             ))
         } else {
             None
         };
         let start = now();
-        let logits = model.forward(backend, input, |_, _| Ok(())).map_err(|error| format!("{error}"))?;
+        let logits = backend
+            .with_commands(|| Ok::<_, d3os_compute::Error>(model.forward(input)))
+            .map_err(|e| format!("{e}"))??;
+        device.sync().map_err(|e| format!("AlexNet forward: {e:?}"))?;
         let duration = now() - start;
         if run != 0 {
             elapsed += duration;
         }
-        if let Some((before, queue_before)) = before {
-            profile(&before, &backend.profile().map_err(|error| format!("{error}"))?, "alexnet_forward");
-            queue_profile(queue_before, backend.queue_profile().map_err(|error| format!("{error}"))?, "alexnet_forward");
+        if let Some((before, queue_before, service_before)) = before {
+            let service_after = backend.service_profile().map_err(|e| format!("{e}"))?;
+            if [d3os_nvidia::compute::UPLOAD, d3os_nvidia::compute::DOWNLOAD]
+                .iter()
+                .any(|&op| service_after[op as usize].calls != service_before[op as usize].calls)
+            {
+                return Err(String::from("Burn AlexNet forward transferred activation data"));
+            }
+            report(format_args!("INFERENCE_ALEXNET_RESIDENT_OK framework=burn os=d3os uploads=0 downloads=0"));
+            profile(&before, &backend.profile().map_err(|e| format!("{e}"))?, "alexnet_forward");
+            queue_profile(queue_before, backend.queue_profile().map_err(|e| format!("{e}"))?, "alexnet_forward");
         }
-        final_logits = backend.download(&logits).map_err(|error| format!("{error}"))?;
+        final_logits = logits.try_into_vec_as::<f32>().map_err(|e| format!("AlexNet output: {e:?}"))?;
     }
     let top = final_logits
         .iter()
@@ -258,39 +275,47 @@ pub(super) fn alexnet(backend: &Nvidia) -> Result<(), String> {
         .map(|(i, _)| i)
         .ok_or("empty logits")?;
     report(format_args!(
-        "INFERENCE_BENCH alexnet backend=nvidia file_ms={file_ms} load_ms={load_ms} repeats={REPEATS} forward_total_ms={elapsed} forward_mean_ms={:.3} class={top}",
+        "INFERENCE_BENCH alexnet backend=nvidia file_ms={file_ms} load_ms={load_ms} repeats={REPEATS} forward_total_ms={elapsed} forward_mean_ms={:.3} class={top} framework=burn os=d3os",
         elapsed as f64 / REPEATS as f64
     ));
-    // Keep GPU timestamps in a separate pass: instrumentation serializes each
-    // launch and must not contribute to the normal forward-pass measurement.
-    backend.set_device_timing(true).map_err(|error| format!("{error}"))?;
-    let timing = DeviceTiming(Some(backend));
-    let input = Tensor::from_vec(backend, input.shape(), values).map_err(|error| format!("{error}"))?;
-    let mut before = backend.profile().map_err(|error| format!("{error}"))?;
-    drop(
-        model
-            .forward(backend, input, |name, _| {
-                let after = backend.profile()?;
-                for kernel in [Kernel::Matmul, Kernel::Project] {
-                    let previous = before[kernel as usize];
-                    let current = after[kernel as usize];
-                    if current.calls != previous.calls {
-                        report(format_args!(
-                            "NATIVE_ALEXNET_MATRIX_DEVICE layer={name} calls={} device_ns={}",
-                            current.calls.wrapping_sub(previous.calls),
-                            current.device_ns.wrapping_sub(previous.device_ns)
-                        ));
-                    }
+
+    struct LayerTiming<'a> {
+        backend: &'a Nvidia,
+        before: [d3os_nvidia::compute::ProfileEntry; d3os_nvidia::compute::KERNEL_COUNT],
+    }
+    impl Observer for LayerTiming<'_> {
+        fn observe<const D: usize>(&mut self, name: &'static str, _: &BurnTensor<D>) -> Result<(), String> {
+            let after = self.backend.profile().map_err(|e| format!("{e}"))?;
+            for kernel in [Kernel::Conv2d, Kernel::Matmul, Kernel::Project] {
+                let previous = self.before[kernel as usize];
+                let current = after[kernel as usize];
+                if current.calls != previous.calls {
+                    report(format_args!(
+                        "BURN_ALEXNET_LAYER_DEVICE layer={name} kernel={} calls={} device_ns={} os=d3os",
+                        kernel as u32,
+                        current.calls - previous.calls,
+                        current.device_ns - previous.device_ns
+                    ));
                 }
-                before = after;
-                Ok(())
-            })
-            .map_err(|error| format!("{error}"))?,
-    );
-    timing.finish().map_err(|error| format!("{error}"))?;
-    drop(model);
-    d3os_inference::verify_alexnet(backend, &weights, &fixture).map_err(|error| format!("{error}"))?;
-    report(format_args!("INFERENCE_BENCH_OK alexnet backend=nvidia reference_layers=8"));
+            }
+            self.before = after;
+            Ok(())
+        }
+    }
+    backend.set_device_timing(true).map_err(|e| format!("{e}"))?;
+    let timing = DeviceTiming(Some(backend));
+    let input = BurnTensor::<4>::from_data(TensorData::new(values, record.shape()), &device);
+    let mut layers = LayerTiming {
+        backend,
+        before: backend.profile().map_err(|e| format!("{e}"))?,
+    };
+    drop(model.forward_observed(input, &mut layers)?);
+    device.sync().map_err(|e| format!("AlexNet timing: {e:?}"))?;
+    timing.finish().map_err(|e| format!("{e}"))?;
+    d3os_ai::alexnet::verify_model(&model, &device, &fixture)?;
+    report(format_args!(
+        "INFERENCE_BENCH_OK alexnet backend=nvidia reference_layers=8 framework=burn os=d3os"
+    ));
     Ok(())
 }
 

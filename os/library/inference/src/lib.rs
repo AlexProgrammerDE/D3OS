@@ -3,8 +3,6 @@
 
 extern crate alloc;
 
-pub mod alexnet;
-pub mod archive;
 pub mod qwen;
 pub mod tokenizer;
 
@@ -22,7 +20,6 @@ pub enum Error {
     UnexpectedTensor,
     InvalidModelShape,
     VerificationFailed,
-    LayerMismatch { name: String, index: usize, actual: u32, expected: u32 },
     InvalidConfig,
     InvalidToken,
     InvalidTokenizer,
@@ -34,6 +31,19 @@ pub enum Error {
 impl From<d3os_compute::Error> for Error {
     fn from(value: d3os_compute::Error) -> Self {
         Self::Compute(value)
+    }
+}
+
+impl From<d3os_tensor_file::Error> for Error {
+    fn from(value: d3os_tensor_file::Error) -> Self {
+        use d3os_tensor_file::Error as FileError;
+        match value {
+            FileError::InvalidArchive => Self::InvalidArchive,
+            FileError::MissingTensor(name) => Self::MissingTensor(name),
+            FileError::UnexpectedTensor => Self::UnexpectedTensor,
+            FileError::NonFinite => Self::Compute(d3os_compute::Error::NonFinite),
+            FileError::AllocationFailed => Self::Compute(d3os_compute::Error::AllocationFailed),
+        }
     }
 }
 
@@ -52,12 +62,6 @@ impl fmt::Display for Error {
             Self::ContextFull => f.write_str("sequence exceeds the session capacity"),
             Self::SessionFailed => f.write_str("session failed; create a new session before continuing"),
             Self::VerificationFailed => f.write_str("inference output differs from the reference"),
-            Self::LayerMismatch { name, index, actual, expected } => write!(
-                f,
-                "AlexNet reference mismatch at {name}[{index}]: actual={}, expected={}",
-                f32::from_bits(*actual),
-                f32::from_bits(*expected)
-            ),
         }
     }
 }
@@ -79,7 +83,7 @@ pub fn top_k(probabilities: &[f32], count: usize) -> Result<Vec<(usize, f32)>> {
 }
 
 /// A small convolutional network with independently calculated exact logits.
-/// This runs the same backend interface that AlexNet uses, without model files.
+/// This validates low-level compute operators without model files.
 pub fn self_test<B: Backend>(backend: &B) -> Result<()> {
     let input = Tensor::from_vec(
         backend,
@@ -108,36 +112,6 @@ pub fn self_test<B: Backend>(backend: &B) -> Result<()> {
         return Err(Error::VerificationFailed);
     }
     Ok(())
-}
-
-/// Execute pretrained AlexNet and compare all eight observed layers with a fixture.
-pub fn verify_alexnet<B: Backend>(backend: &B, model: &[u8], fixture: &[u8]) -> Result<Vec<(usize, f32)>> {
-    let model = alexnet::AlexNet::load(backend, model)?;
-    let mut reference = archive::Archive::parse(fixture)?;
-    let input = reference.take("input")?.load(backend)?;
-    let logits = model.forward(backend, input, |name, tensor| {
-        let record = reference.take(name)?;
-        if record.shape() != tensor.shape() {
-            return Err(Error::InvalidModelShape);
-        }
-        let actual = backend.download(tensor)?;
-        let expected = record.to_vec()?;
-        verify(&actual, &expected, 2e-4, 2e-4).map_err(|_| {
-            let index = actual
-                .iter()
-                .zip(&expected)
-                .position(|(&a, &b)| !a.is_finite() || !b.is_finite() || (a - b).abs() > 2e-4 + 2e-4 * b.abs())
-                .unwrap_or(0);
-            Error::LayerMismatch {
-                name: name.into(),
-                index,
-                actual: actual[index].to_bits(),
-                expected: expected[index].to_bits(),
-            }
-        })
-    })?;
-    reference.finish()?;
-    top_k(&backend.download(&backend.softmax(&logits)?)?, 5)
 }
 
 /// Check every value, including low-magnitude logits. NaNs never pass.

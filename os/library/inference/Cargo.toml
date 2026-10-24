@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+d3os-tensor-file = { path = "../tensor-file" }
 d3os-compute = { path = "../compute" }
 unicode-normalization = { version = "0.1", default-features = false }
 unicode-general-category = "1"
+
+[dev-dependencies]
+d3os-ai = { path = "../ai", features = ["cpu"] }
