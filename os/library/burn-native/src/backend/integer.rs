@@ -208,19 +208,28 @@ impl IntTensorOps<Self> for Native {
         BackendTensor::unsupported("int_matmul", lhs.shape(), DType::I32, &[&lhs, &rhs], "int_matmul")
     }
     fn int_sum(tensor: IntTensor<Self>) -> IntTensor<Self> {
-        BackendTensor::unsupported("int_sum", tensor.shape(), DType::I32, &[&tensor], "int_sum")
+        reduce("int_sum", &tensor, None, Reduction::Sum, DType::I32)
     }
-    fn int_sum_dim(tensor: IntTensor<Self>, _dim: usize) -> IntTensor<Self> {
-        BackendTensor::unsupported("int_sum_dim", tensor.shape(), DType::I32, &[&tensor], "int_sum_dim")
+    fn int_sum_dim(tensor: IntTensor<Self>, dim: usize) -> IntTensor<Self> {
+        reduce("int_sum_dim", &tensor, Some(dim), Reduction::Sum, DType::I32)
     }
     fn int_prod(tensor: IntTensor<Self>) -> IntTensor<Self> {
-        BackendTensor::unsupported("int_prod", tensor.shape(), DType::I32, &[&tensor], "int_prod")
+        reduce("int_prod", &tensor, None, Reduction::Product, DType::I32)
     }
-    fn int_prod_dim(tensor: IntTensor<Self>, _dim: usize) -> IntTensor<Self> {
-        BackendTensor::unsupported("int_prod_dim", tensor.shape(), DType::I32, &[&tensor], "int_prod_dim")
+    fn int_prod_dim(tensor: IntTensor<Self>, dim: usize) -> IntTensor<Self> {
+        reduce("int_prod_dim", &tensor, Some(dim), Reduction::Product, DType::I32)
     }
-    fn int_mean_dim(tensor: IntTensor<Self>, _dim: usize) -> IntTensor<Self> {
-        BackendTensor::unsupported("int_mean_dim", tensor.shape(), DType::I32, &[&tensor], "int_mean_dim")
+    fn int_mean(tensor: IntTensor<Self>) -> IntTensor<Self> {
+        BackendTensor::apply("int_mean", Shape::new([1]), DType::I32, &[&tensor], |v| {
+            // Integer means must sum once before division. A sequence of
+            // per-axis integer means would truncate at each intermediate axis.
+            let tensor = if v[0].layout().is_contiguous() { v[0].clone() } else { v[0].copy()? };
+            let length = tensor.layout().len();
+            tensor.reshape(Shape::new([length]))?.reduce(0, Reduction::Mean)
+        })
+    }
+    fn int_mean_dim(tensor: IntTensor<Self>, dim: usize) -> IntTensor<Self> {
+        reduce("int_mean_dim", &tensor, Some(dim), Reduction::Mean, DType::I32)
     }
     fn int_cumsum(tensor: IntTensor<Self>, _dim: usize) -> IntTensor<Self> {
         BackendTensor::unsupported("int_cumsum", tensor.shape(), DType::I32, &[&tensor], "int_cumsum")
@@ -234,11 +243,23 @@ impl IntTensorOps<Self> for Native {
     fn int_cummax(tensor: IntTensor<Self>, _dim: usize) -> IntTensor<Self> {
         BackendTensor::unsupported("int_cummax", tensor.shape(), DType::I32, &[&tensor], "int_cummax")
     }
-    fn int_argmax(tensor: IntTensor<Self>, _dim: usize) -> IntTensor<Self> {
-        BackendTensor::unsupported("int_argmax", tensor.shape(), DType::I32, &[&tensor], "int_argmax")
+    fn int_argmax(tensor: IntTensor<Self>, dim: usize) -> IntTensor<Self> {
+        reduce("int_argmax", &tensor, Some(dim), Reduction::ArgMax, DType::I32)
     }
-    fn int_argmin(tensor: IntTensor<Self>, _dim: usize) -> IntTensor<Self> {
-        BackendTensor::unsupported("int_argmin", tensor.shape(), DType::I32, &[&tensor], "int_argmin")
+    fn int_argmin(tensor: IntTensor<Self>, dim: usize) -> IntTensor<Self> {
+        reduce("int_argmin", &tensor, Some(dim), Reduction::ArgMin, DType::I32)
+    }
+    fn int_min(tensor: IntTensor<Self>) -> IntTensor<Self> {
+        reduce("int_min", &tensor, None, Reduction::Min, DType::I32)
+    }
+    fn int_max(tensor: IntTensor<Self>) -> IntTensor<Self> {
+        reduce("int_max", &tensor, None, Reduction::Max, DType::I32)
+    }
+    fn int_min_dim(tensor: IntTensor<Self>, dim: usize) -> IntTensor<Self> {
+        reduce("int_min_dim", &tensor, Some(dim), Reduction::Min, DType::I32)
+    }
+    fn int_max_dim(tensor: IntTensor<Self>, dim: usize) -> IntTensor<Self> {
+        reduce("int_max_dim", &tensor, Some(dim), Reduction::Max, DType::I32)
     }
     fn int_abs(tensor: IntTensor<Self>) -> IntTensor<Self> {
         one("int_abs", &tensor, tensor.dtype(), |t| t.word_unary(WordOp::Absolute))
@@ -347,12 +368,14 @@ impl IntTensorOps<Self> for Native {
         BackendTensor::unsupported("int_argsort", tensor.shape(), tensor.dtype(), &[&tensor], "GPU sorting")
     }
     fn int_arange_step(range: core::ops::Range<i64>, step: usize, _device: &NativeDevice, dtype: IntDType) -> BackendTensor {
-        let count = if step == 0 {
-            0
-        } else {
-            ((range.end as i128 - range.start as i128).max(0) as u128).div_ceil(step as u128) as usize
-        };
-        BackendTensor::unsupported("int_arange", Shape::new([count]), dtype.into(), &[], "GPU index generation")
+        let plan = crate::range::RangePlan::new(range, step);
+        let shape = plan.as_ref().map_or_else(|_| Shape::new([0]), |p| Shape::new([p.len()]));
+        BackendTensor::build("int_arange", shape, dtype.into(), || {
+            if dtype != IntDType::I32 {
+                return Err(Error::InvalidParameter);
+            }
+            NativeTensor::arange(plan?)
+        })
     }
     async fn int_mask_select(tensor: BackendTensor, mask: BackendTensor) -> BackendTensor {
         BackendTensor::unsupported("int_mask_select", Shape::new([0]), tensor.dtype(), &[&tensor, &mask], "GPU compaction")

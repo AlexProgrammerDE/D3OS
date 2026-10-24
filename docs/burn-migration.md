@@ -116,7 +116,7 @@ The GPU operations include FP32 arithmetic and math, reductions, exact tensor fi
 Another 29 entries implement I32 arithmetic, signed comparisons, bitwise operations, boolean logic, masks, and conversions.
 These operations support strided views and broadcasting. Input tensors remain shared and immutable.
 Full writers avoid a separate output clear. Empty logical outputs require no element work.
-The matching SDK and driver use native compute protocol version 16.
+The matching SDK and driver use native compute protocol version 17.
 
 The D3OS GPU self-test passes reversed and transposed views, overlapping windows, broadcast batches, subviews, empty dimensions, and neighboring guards.
 Matrix references use independent FP64 accumulation. Math references use independent libm functions and include 2,816 FP32 edge values.
@@ -217,8 +217,21 @@ One SGD step decreases its loss and preserves a retained model clone.
 The training step uploads no activations and downloads only the two four-byte bounds flags for max-pool gradients.
 Batched gradient products use initialized GPU allocations because individual matrix launches write only one batch.
 
+I32 reductions now provide sum, product, mean, extrema, and first-index selection without FP32 conversion.
+Sum and product wrap at 32 bits. Mean divides the wrapped sum once and truncates toward zero.
+Empty sums return zero, and empty products return one. Empty integer means and extrema return errors.
+GPU index generation checks length and signed endpoints before dispatch and performs no host tensor upload.
+These operations support strided and broadcast views and avoid separate output clears.
+
+Physical D3OS checks pass exact references beyond FP32 integer precision, signed extrema, overflow, ties across tiles, and neighboring guards.
+Burn cross-entropy passes an analytic loss and gradient reference. Its accuracy count uses resident integer reduction.
+Four four-byte bounds flags return to the host before explicit result reads.
+They come from target selection, maximum selection for stable log-softmax, and their two backward scatters.
+All 166 earlier GPU instruction sections remain byte-identical after the eight new entries are added.
+AlexNet, Qwen, and all 600 DOOM reference views pass with the matching SDK and kernel bundle.
+
 Operator coverage remains incomplete. Unsupported native operations return execution errors instead of CPU results.
-The gaps include integer division and reductions, scans, some FP32 math, GPU index generation, compaction, and sorting.
+The gaps include integer division, integer matrix products, scans, some FP32 math, compaction, and sorting.
 Generic Burn quantization, non-additive indexed updates, three-dimensional convolutions, transposed convolutions, and interpolation also remain incomplete.
 Qwen's packed-weight extensions still need public Burn integration.
 Full MNIST dataset training, complete checkpoint export, and AI workload migration remain incomplete.

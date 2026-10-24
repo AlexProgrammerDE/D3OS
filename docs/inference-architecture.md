@@ -149,6 +149,7 @@ The public Burn backend selects this GPU through `d3os_ai::native_device()`.
 The dispatcher registers native devices, tensors, and autodiff through the [pinned source patches](../third_party/README.md).
 FP32 uses native tensor arithmetic, reductions, Tensor Core products, convolutions, and pooling.
 I32 and boolean tensors support resident views, indexing, exact word operations, and conversions.
+I32 also supports reductions and GPU index generation.
 I32 currently advertises storage support while its remaining arithmetic operations are incomplete.
 
 Burn's operation traits return tensors directly. The native adapter therefore carries failures as tensor states without device storage.
@@ -157,7 +158,7 @@ Acknowledging an error through synchronization does not make failed tensor clone
 Recoverable failures do not poison later valid work. Fatal GPU errors persist until the process restarts.
 Unsupported operations also use this error path, including operations whose upstream defaults sort or compact data on the CPU.
 
-Native compute protocol version 16 includes command scopes, queue profiles, and 58 built-in kernels.
+Native compute protocol version 17 includes command scopes, queue profiles, and 59 built-in kernel families.
 Its expanded profile array requires the matching SDK.
 Rebuild compute applications with the matching SDK. The kernel rejects incompatible request versions.
 
@@ -239,6 +240,15 @@ Empty reduction axes produce zero for sum, one for product, and NaN for mean.
 Extrema reject empty reduction axes when the output is nonempty. Empty outputs require no launch.
 Hardware checks cover partial tiles, multiple passes per row, strided broadcasting, nonfinite inputs, exact extrema bits, guards, and resident execution.
 All 88 earlier GPU instruction sections remain byte-identical after the seven reduction entries are added.
+
+Seven additional entries reduce I32 tensors without FP32 conversion.
+Sum and product wrap at 32 bits. Means divide the wrapped sum once and truncate toward zero.
+Signed extrema preserve the first logical index for equal values.
+Empty integer sums and products return their identities. Empty integer means and extrema return errors.
+Whole-tensor integer means flatten a resident copy when necessary, avoiding repeated per-axis truncation.
+
+GPU index generation checks positive steps, length, and signed I32 endpoints before dispatch.
+Its full-writer kernel generates the indices in device memory without a host tensor upload.
 
 The elementwise family also includes 21 unary math entries and a broadcast power entry.
 They use the same checked strided layout protocol. Unary operations reject scalar-operand flags.

@@ -1,4 +1,4 @@
-//! Strided FP32 reduction contract shared by the driver and native tensor backend.
+//! Strided FP32 and exact I32 reduction contract shared by the driver and native tensor backend.
 use crate::{Error, Result};
 
 pub const PARAMETERS: usize = 24;
@@ -13,13 +13,43 @@ pub enum Reduction {
     Max = 4,
     ArgMin = 5,
     ArgMax = 6,
+    IntSum = 7,
+    IntMean = 8,
+    IntProduct = 9,
+    IntMin = 10,
+    IntMax = 11,
+    IntArgMin = 12,
+    IntArgMax = 13,
 }
 
 impl Reduction {
     pub const ALL: [Self; 7] = [Self::Sum, Self::Mean, Self::Product, Self::Min, Self::Max, Self::ArgMin, Self::ArgMax];
 
+    pub const INTEGERS: [Self; 7] = [
+        Self::IntSum,
+        Self::IntMean,
+        Self::IntProduct,
+        Self::IntMin,
+        Self::IntMax,
+        Self::IntArgMin,
+        Self::IntArgMax,
+    ];
+
     pub fn from_raw(raw: u32) -> Result<Self> {
-        Self::ALL.get(raw as usize).copied().ok_or(Error::InvalidField)
+        Self::ALL
+            .iter()
+            .chain(Self::INTEGERS.iter())
+            .find(|&&op| op as u32 == raw)
+            .copied()
+            .ok_or(Error::InvalidField)
+    }
+
+    pub fn integer(self) -> Self {
+        if (self as u32) < 7 { Self::INTEGERS[self as usize] } else { self }
+    }
+
+    pub fn is_integer(self) -> bool {
+        (self as u32) >= 7
     }
 
     pub fn symbol(self) -> &'static str {
@@ -31,15 +61,22 @@ impl Reduction {
             Self::Max => "burn_max",
             Self::ArgMin => "burn_arg_min",
             Self::ArgMax => "burn_arg_max",
+            Self::IntSum => "burn_i32_sum",
+            Self::IntMean => "burn_i32_mean",
+            Self::IntProduct => "burn_i32_product",
+            Self::IntMin => "burn_i32_min",
+            Self::IntMax => "burn_i32_max",
+            Self::IntArgMin => "burn_i32_arg_min",
+            Self::IntArgMax => "burn_i32_arg_max",
         }
     }
 
     pub fn index(self) -> bool {
-        matches!(self, Self::ArgMin | Self::ArgMax)
+        matches!(self, Self::ArgMin | Self::ArgMax | Self::IntArgMin | Self::IntArgMax)
     }
 
     pub fn allows_empty(self) -> bool {
-        matches!(self, Self::Sum | Self::Mean | Self::Product)
+        matches!(self, Self::Sum | Self::Mean | Self::Product | Self::IntSum | Self::IntProduct)
     }
 }
 

@@ -7,11 +7,12 @@ pub mod elementwise;
 pub mod indexing;
 pub mod pooling;
 pub mod random;
+pub mod range;
 pub mod reduction;
 pub mod updates;
 pub mod words;
 
-pub const VERSION: u32 = 16;
+pub const VERSION: u32 = 17;
 pub const INFO: u32 = 0;
 pub const ALLOCATE: u32 = 1;
 pub const FREE: u32 = 2;
@@ -31,7 +32,7 @@ pub const END_COMMANDS: u32 = 10;
 pub const QUEUE_PROFILE: u32 = 11;
 pub const SERVICE_PROFILE: u32 = 12;
 pub const SERVICE_OPERATIONS: usize = 13;
-pub const KERNEL_COUNT: usize = 58;
+pub const KERNEL_COUNT: usize = 59;
 
 /// CPU service costs by request operation, including queue work within it.
 #[derive(Clone, Copy, Debug, Default)]
@@ -144,9 +145,10 @@ pub enum Kernel {
     MaskWhere = 55,
     ViewAssign = 56,
     Random = 57,
+    Range = 58,
 }
 
-const _: () = assert!(Kernel::Random as usize + 1 == KERNEL_COUNT);
+const _: () = assert!(Kernel::Range as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -193,6 +195,7 @@ impl Kernel {
             Self::TensorElementwise
                 | Self::MaskWhere
                 | Self::Random
+                | Self::Range
                 | Self::Conv2d
                 | Self::Conv2dWindows
                 | Self::Conv2dFold
@@ -291,6 +294,7 @@ impl Kernel {
             55 => Self::MaskWhere,
             56 => Self::ViewAssign,
             57 => Self::Random,
+            58 => Self::Range,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -355,6 +359,7 @@ impl Kernel {
             Self::MaskWhere => "burn_mask_where",
             Self::ViewAssign => "burn_view_assign",
             Self::Random => "burn_random_words",
+            Self::Range => "burn_i32_range",
         }
     }
 
@@ -470,6 +475,10 @@ impl Kernel {
             (Self::TensorWords, p) => {
                 extents[..3].copy_from_slice(&words::validate(p)?);
                 (p[0], 3, 2, false)
+            }
+            (Self::Range, p) => {
+                extents[0] = range::validate(p)?;
+                (p[0], 1, 0, false)
             }
             (Self::Fill, &[count, _bits]) => {
                 if count > i32::MAX as u32 {

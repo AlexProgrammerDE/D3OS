@@ -4,6 +4,7 @@ fn main() {
     for file in [
         "common.rs",
         "burn-math.rs",
+        "burn-range.rs",
         "burn-random-common.rs",
         "burn-pooling-common.rs",
         "quantized.rs",
@@ -219,20 +220,22 @@ fn main() {
         })
         .collect::<String>();
     let stride = (0..7).map(|axis| format!("if axis == {axis}u32 {{ stride{axis} }} else ")).collect::<String>() + "{ stride7 }";
-    for op in d3os_nvidia::compute::reduction::Reduction::ALL {
-        let minimum = matches!(
-            op,
-            d3os_nvidia::compute::reduction::Reduction::Min | d3os_nvidia::compute::reduction::Reduction::ArgMin
-        );
+    println!("cargo:rerun-if-changed=src/burn-i32-reduction.rs.in");
+    let integer_reduction = fs::read_to_string("src/burn-i32-reduction.rs.in").expect("read integer reduction source");
+    use d3os_nvidia::compute::reduction::Reduction;
+    for op in Reduction::ALL.into_iter().chain(Reduction::INTEGERS) {
+        let minimum = matches!(op, Reduction::Min | Reduction::ArgMin | Reduction::IntMin | Reduction::IntArgMin);
         source.push_str(
-            &reduction
+            &if op.is_integer() { &integer_reduction } else { &reduction }
                 .replace("REDUCE_ENTRY", op.symbol())
                 .replace("REDUCE_PARAMETERS", &parameters)
                 .replace("REDUCE_ADDRESSES", &addresses)
                 .replace("REDUCE_STRIDE", &stride)
                 .replace(
                     "REDUCE_IDENTITY",
-                    if minimum {
+                    if op.is_integer() {
+                        if minimum { "2147483647i32" } else { "-2147483647i32 - 1i32" }
+                    } else if minimum {
                         "bits_f32(0x7f800000u32)"
                     } else {
                         "bits_f32(unsigned(-8388608i32))"
@@ -240,7 +243,7 @@ fn main() {
                 )
                 .replace("REDUCE_COMPARE", if minimum { "lt_tile" } else { "gt_tile" })
                 .replace("REDUCE_EXTREME", if minimum { "reduce_min" } else { "reduce_max" })
-                .replace("REDUCE_OP", &format!("{}u32", op as u32)),
+                .replace("REDUCE_OP", &format!("{}u32", (op as u32) % 7)),
         );
     }
     println!("cargo:rerun-if-changed=src/quantized.rs.in");

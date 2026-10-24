@@ -2,6 +2,7 @@
 mod convolution;
 mod dispatch;
 mod indexing;
+mod integers;
 mod math;
 mod pooling;
 mod random;
@@ -103,6 +104,7 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
         "NVIDIA_BURN_REDUCTION_OK operations=7 views=strided_broadcast nan=first ties=first empty=ok guards=ok resident=ok backend=nvidia"
     ));
     math::run(backend).map_err(|e| format!("Burn native math: {e}"))?;
+    integers::run(backend).map_err(|e| format!("Burn native integer reductions: {e}"))?;
     words::run(backend).map_err(|e| format!("Burn native words: {e}"))?;
     indexing::run(backend).map_err(|e| format!("Burn native indexing: {e}"))?;
     scatter::run(backend).map_err(|e| format!("Burn native scatter: {e}"))?;

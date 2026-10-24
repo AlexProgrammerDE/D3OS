@@ -444,14 +444,17 @@ impl NativeTensor {
         })
     }
 
-    /// Reduce one dimension, preserving its rank. Extrema propagate the first
-    /// NaN and use the first logical index for equal values, including zeros.
+    /// Reduce one dimension, preserving its rank. FP32 extrema propagate the
+    /// first NaN. Both types select the first logical index for equal values.
+    /// I32 sum and product wrap; means divide the wrapped sum toward zero.
     pub fn reduce(&self, axis: usize, operation: Reduction) -> Result<Self> {
-        if self.dtype != DType::F32 {
-            return Err(Error::InvalidParameter);
-        }
+        let operation = match self.dtype {
+            DType::F32 if !operation.is_integer() => operation,
+            DType::I32 => operation.integer(),
+            _ => return Err(Error::InvalidParameter),
+        };
         let layout = Layout::contiguous(self.layout.reduction_shape(axis)?)?;
-        let dtype = if operation.index() { DType::I32 } else { DType::F32 };
+        let dtype = if operation.index() { DType::I32 } else { self.dtype };
         if layout.is_empty() {
             return Ok(Self {
                 buffer: self.buffer.clone(),

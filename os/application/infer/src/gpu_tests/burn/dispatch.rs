@@ -145,10 +145,49 @@ fn convolution_gradients(backend: &Nvidia, device: &Device) -> Result<(), String
     Ok(())
 }
 
+fn classification(backend: &Nvidia, device: &Device) -> Result<(), String> {
+    use d3os_ai::burn::nn::loss::CrossEntropyLossConfig;
+    let device = device.clone().autodiff();
+    let logits = Tensor::<2>::from_floats(
+        [[0.0, core::f32::consts::LN_2, 1.098_612_3], [1.098_612_3, core::f32::consts::LN_2, 0.0]],
+        &device,
+    )
+    .require_grad();
+    let targets = Tensor::<1, Int>::from_ints([2, 0], &device);
+    let criterion = CrossEntropyLossConfig::new().init(&device);
+    let before = backend.service_profile().map_err(|e| format!("Burn classification profile: {e}"))?;
+    let kernels_before = backend.profile().map_err(|e| format!("Burn classification kernels: {e}"))?;
+    let correct = logits.clone().argmax(1).reshape([2]).equal(targets.clone()).int().sum();
+    let loss = criterion.forward(logits.clone(), targets);
+    let gradients = loss.clone().backward();
+    let gradient = logits.grad(&gradients).ok_or("Burn classification gradient is missing")?;
+    // Burn's default maximum-with-indices and target selection each gather.
+    // Their two backward scatters also validate device indices. The detached
+    // maximum retains require_grad in Burn, so its separate branch runs too.
+    resident(backend, &before, 4)?;
+    let kernels_after = backend.profile().map_err(|e| format!("Burn classification kernels: {e}"))?;
+    if [abi::Kernel::Gather, abi::Kernel::Scatter]
+        .iter()
+        .any(|&kernel| kernels_after[kernel as usize].calls - kernels_before[kernel as usize].calls != 2)
+    {
+        return Err(String::from("Burn classification bounds reads do not match the indexed operations"));
+    }
+    check(loss, &[core::f32::consts::LN_2])?;
+    check(gradient, &[1.0 / 12.0, 1.0 / 6.0, -0.25, -0.25, 1.0 / 6.0, 1.0 / 12.0])?;
+    if correct.try_into_scalar::<i32>().map_err(|e| format!("Burn classification accuracy: {e:?}"))? != 2 {
+        return Err(String::from("Burn classification accuracy reference"));
+    }
+    crate::report(format_args!(
+        "NVIDIA_BURN_CLASSIFICATION_OK loss=cross_entropy gradients=analytic accuracy=exact backend=nvidia"
+    ));
+    Ok(())
+}
+
 pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     let device = d3os_ai::native_device().map_err(|e| format!("Burn native device: {e}"))?;
     tensors_and_errors(backend, &device)?;
     convolution_gradients(backend, &device)?;
+    classification(backend, &device)?;
     d3os_ai::validation::training(&device.clone().autodiff())?;
     crate::report(format_args!("NVIDIA_BURN_PUBLIC_OPTIMIZER_OK sgd=analytic adam_checkpoint=ok backend=nvidia"));
     convolutional_step(backend, &device)?;

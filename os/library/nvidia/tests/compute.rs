@@ -178,7 +178,7 @@ fn reductions_validate_strided_ranges_empty_axes_and_full_output_writes() {
     p[8..16].fill(1);
     p[8..11].copy_from_slice(&[3, 4, 1]);
     p[16..19].copy_from_slice(&[(-4i32) as u32, (-1i32) as u32, 0]);
-    for op in Reduction::ALL {
+    for op in Reduction::ALL.into_iter().chain(Reduction::INTEGERS) {
         p[2] = op as u32;
         let work = Kernel::TensorReduction.work(&p).unwrap();
         assert_eq!(work.extents[..2], [12, 3]);
@@ -192,7 +192,7 @@ fn reductions_validate_strided_ranges_empty_axes_and_full_output_writes() {
         (0, 4),
         (1, 0),
         (1, 9),
-        (2, 7),
+        (2, 14),
         (3, 3),
         (4, 10),
         (4, 12),
@@ -217,7 +217,7 @@ fn reductions_validate_strided_ranges_empty_axes_and_full_output_writes() {
     p[6] = 0;
     p[9] = 0;
     p[16..24].fill(0);
-    for op in Reduction::ALL {
+    for op in Reduction::ALL.into_iter().chain(Reduction::INTEGERS) {
         p[2] = op as u32;
         assert_eq!(Kernel::TensorReduction.work(&p).is_ok(), op.allows_empty());
     }

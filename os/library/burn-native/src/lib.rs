@@ -9,6 +9,7 @@ mod device;
 pub mod layout;
 pub mod pooling;
 pub mod random;
+pub mod range;
 mod tensor;
 mod updates;
 

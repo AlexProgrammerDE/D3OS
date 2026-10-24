@@ -40,6 +40,16 @@ The boot check calibrates a cuTile kernel to run for at least 10 ms and compares
 The first `mean_us` pass runs without timestamp instrumentation.
 These measurements separate end-to-end overhead from device throughput. They are not interchangeable timers.
 
+## Native Burn integer coverage
+
+The I32 backend adds exact wrapping reductions and GPU-generated index ranges.
+Physical D3OS checks use independent integer references, signed views, broadcast inputs, partial tiles, and neighboring guards.
+Public Burn cross-entropy also passes an analytic loss, gradient, and accuracy reference on the NVIDIA device.
+The matching native compute protocol is version 17, with 59 kernel families and 174 inference entries.
+All 166 earlier GPU instruction sections remain byte-identical after the eight new entries are added.
+Validation logs are under `target/nvidia/burn/integers/`.
+This work adds no D3OS or Linux throughput measurement. Workload migration remains the priority before optimization.
+
 ## Latest retained measurements
 
 ### Burn primitive regression
@@ -60,7 +70,7 @@ Both operations keep tensors resident. All 88 earlier instruction sections remai
 The latest primitive checks add 21 unary math operations, broadcast power, and exact tensor fill.
 Independent libm references cover 2,816 FP32 edge values, including rounding boundaries, zeros, infinities, and NaNs.
 Fill performs no host upload and requires no separate clear. All 95 earlier GPU instruction sections remain byte-identical.
-The matching SDK and driver use native compute protocol version 16.
+The current SDK and driver use native compute protocol version 17.
 
 The accompanying regression passes AlexNet's eight layer references, Qwen's layer and cache references, and all 600 DOOM views.
 D3OS AlexNet averages 0.960 ms across 100 passes.

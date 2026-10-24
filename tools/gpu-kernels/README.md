@@ -26,7 +26,7 @@ The output directory contains three binary families:
 | --- | --- |
 | `vector-add` | Native boot arithmetic check |
 | `tensor-matmul` | FP16 and BF16 Tensor Core boot checks |
-| `inference` | All 38 public operators, projection specializations, and timing and scratch diagnostics |
+| `inference` | All 59 public kernel families, operation specializations, and timing and scratch diagnostics |
 
 Each family also includes textual IR, binary Tile IR, disassembly, and resource metadata.
 The manifest records hashes and compiler validation.
