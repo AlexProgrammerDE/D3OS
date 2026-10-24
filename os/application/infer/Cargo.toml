@@ -22,3 +22,4 @@ d3os-compute = { path = "../../library/compute", features = ["nvidia"] }
 d3os-nvidia = { path = "../../library/nvidia" }
 d3os-inference = { path = "../../library/inference" }
 log = "0.4"
+libm = "0.2"

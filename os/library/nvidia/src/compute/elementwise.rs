@@ -18,10 +18,32 @@ pub enum Elementwise {
     Less = 8,
     LessEqual = 9,
     MaskFill = 10,
+    Negate = 11,
+    Absolute = 12,
+    Reciprocal = 13,
+    Sqrt = 14,
+    Exp = 15,
+    Log = 16,
+    Log1p = 17,
+    Tanh = 18,
+    Sin = 19,
+    Cos = 20,
+    Floor = 21,
+    Ceil = 22,
+    Round = 23,
+    Trunc = 24,
+    Sign = 25,
+    IsNan = 26,
+    IsInfinite = 27,
+    IsFinite = 28,
+    Power = 29,
+    Sinh = 30,
+    Cosh = 31,
+    Tan = 32,
 }
 
 impl Elementwise {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 33] = [
         Self::Copy,
         Self::Add,
         Self::Subtract,
@@ -33,6 +55,28 @@ impl Elementwise {
         Self::Less,
         Self::LessEqual,
         Self::MaskFill,
+        Self::Negate,
+        Self::Absolute,
+        Self::Reciprocal,
+        Self::Sqrt,
+        Self::Exp,
+        Self::Log,
+        Self::Log1p,
+        Self::Tanh,
+        Self::Sin,
+        Self::Cos,
+        Self::Floor,
+        Self::Ceil,
+        Self::Round,
+        Self::Trunc,
+        Self::Sign,
+        Self::IsNan,
+        Self::IsInfinite,
+        Self::IsFinite,
+        Self::Power,
+        Self::Sinh,
+        Self::Cosh,
+        Self::Tan,
     ];
 
     pub fn from_raw(raw: u32) -> Result<Self> {
@@ -52,11 +96,45 @@ impl Elementwise {
             Self::Less => "burn_less",
             Self::LessEqual => "burn_less_equal",
             Self::MaskFill => "burn_mask_fill",
+            Self::Negate => "burn_negate",
+            Self::Absolute => "burn_absolute",
+            Self::Reciprocal => "burn_reciprocal",
+            Self::Sqrt => "burn_sqrt",
+            Self::Exp => "burn_exp",
+            Self::Log => "burn_log",
+            Self::Log1p => "burn_log1p",
+            Self::Tanh => "burn_tanh",
+            Self::Sin => "burn_sin",
+            Self::Cos => "burn_cos",
+            Self::Floor => "burn_floor",
+            Self::Ceil => "burn_ceil",
+            Self::Round => "burn_round",
+            Self::Trunc => "burn_trunc",
+            Self::Sign => "burn_sign",
+            Self::IsNan => "burn_is_nan",
+            Self::IsInfinite => "burn_is_infinite",
+            Self::IsFinite => "burn_is_finite",
+            Self::Power => "burn_power",
+            Self::Sinh => "burn_sinh",
+            Self::Cosh => "burn_cosh",
+            Self::Tan => "burn_tan",
         }
     }
 
     pub fn comparison(self) -> bool {
         matches!(self, Self::Equal | Self::Greater | Self::GreaterEqual | Self::Less | Self::LessEqual)
+    }
+
+    pub fn binary(self) -> bool {
+        self.comparison() || matches!(self, Self::Add | Self::Subtract | Self::Multiply | Self::Divide | Self::Power)
+    }
+
+    pub fn unary(self) -> bool {
+        !self.binary() && !matches!(self, Self::Copy | Self::MaskFill)
+    }
+
+    pub fn boolean(self) -> bool {
+        self.comparison() || matches!(self, Self::IsNan | Self::IsInfinite | Self::IsFinite)
     }
 }
 
@@ -70,7 +148,7 @@ pub fn validate(parameters: &[u32]) -> Result<[u64; 3]> {
         return Err(Error::InvalidField);
     }
     let op = Elementwise::from_raw(p[2] & 0xff)?;
-    if (op == Elementwise::MaskFill && p[2] & SCALAR_RHS != 0) || (p[2] & SCALAR_RHS == 0 && op != Elementwise::MaskFill && p[3] != 0) {
+    if ((op == Elementwise::MaskFill || op.unary()) && p[2] & SCALAR_RHS != 0) || (p[2] & SCALAR_RHS == 0 && op != Elementwise::MaskFill && p[3] != 0) {
         return Err(Error::InvalidField);
     }
     let count = p[8..16]

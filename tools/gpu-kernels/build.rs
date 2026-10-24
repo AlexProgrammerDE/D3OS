@@ -3,6 +3,7 @@ fn main() {
     let mut source = String::from("#[cutile::module] pub mod kernels { use cutile::core::*;\n");
     for file in [
         "common.rs",
+        "burn-math.rs",
         "quantized.rs",
         "quad.rs",
         "elementwise.rs",

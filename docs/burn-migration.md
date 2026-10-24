@@ -93,35 +93,35 @@ Burn is not a dependency of the renderer.
 
 ## Current status
 
-The native stack runs AlexNet, Qwen3.5-0.8B, and DOOM before the Burn migration.
+The existing native inference stack runs AlexNet and Qwen3.5-0.8B on the GPU.
+DOOM uses its separate native renderer. These workloads have not migrated to Burn.
+Native Qwen 9B and 27B model integration remains in progress.
 Packed quantized GPU operations and grouped recurrent heads are validated independently.
-Native 9B and 27B model integration remains in progress.
-Burn 0.22.1 now compiles and links on the D3OS target with `no_std` and `alloc`.
-Its module optimizer needs a [local portability patch](../third_party/README.md).
-The D3OS AI library supplies native clock and timer wakeups for the portable runtime.
-The first VM validation uses Burn's explicit Flex CPU device.
-It passes analytic gradients, SGD updates, shared-tensor preservation, Adam checkpoint resume, and native timer wakeups.
+
+Burn 0.22.1 compiles and links on D3OS with `no_std` and `alloc`.
+Its optimizer needs a [local portability patch](../third_party/README.md).
+The D3OS AI library supplies clock and timer wakeups for the portable runtime.
+The explicit Flex CPU device passes analytic gradients, SGD updates, shared-tensor preservation, Adam checkpoint resume, and native timer wakeups inside D3OS.
 The MNIST model definition uses Burn convolutions, pooling, and linear layers.
-The native backend now has a Burn tensor primitive with shared GPU storage and checked tensor views.
-Host checks cover every three-dimensional permutation and reversal, composed slices, broadcasts, overlapping windows, empty tensors, and invalid address ranges.
-Physical GPU checks pass view addressing, aliasing, lifetime, exact floating-point bits, boolean storage, and empty tensors.
-View construction performs no GPU allocation or transfer. The existing GPU operator checks also pass.
-Eleven specialized cuTile entries now provide exact copies, FP32 arithmetic, comparisons, and mask filling for these views.
-They support strided broadcasting and scalar operands without host activation transfers.
-The driver rejects invalid address ranges before dispatch. Full writers avoid redundant output clears.
-GPU checks pass partial tiles, neighboring guards, malformed metadata, chained resident operations, and exact bit copies.
-All 77 existing device instruction sections remain byte-identical.
-The tensor primitive also uses the existing Tensor Core kernel for FP32 matrix products.
-GPU checks pass broadcast batches, transposed inputs, reversed rows, subviews, empty outputs, and zero inner dimensions.
-Matrix execution keeps inputs and outputs resident. Noncontiguous matrices use an explicit GPU copy before batch expansion.
+
+The native tensor primitive owns shared GPU storage and checked views.
+It supports FP32, I32, and boolean storage, including exact floating-point bit preservation.
+View construction performs no GPU allocation or transfer.
+The GPU operations include 33 elementwise entries, seven reduction entries, exact tensor fill, and FP32 Tensor Core matrix products.
+These operations support strided views and broadcasting. Input tensors remain shared and immutable.
+Full writers avoid a separate output clear. Empty logical outputs require no element work.
+The matching SDK and driver use native compute protocol version 9.
+
+The D3OS GPU self-test passes reversed and transposed views, overlapping windows, broadcast batches, subviews, empty dimensions, and neighboring guards.
+Matrix references use independent FP64 accumulation. Math references use independent libm functions and include 2,816 FP32 edge values.
+Checks cover every exponent range, rounding boundaries, signed zeros, nonfinite inputs, canonical booleans, and first-index extrema ties.
+The driver rejects invalid address ranges and malformed launches before dispatch.
+Resident-operation counters show no host activation transfers during the checked GPU operations.
 The CI operator suite includes the portable AI library and native tensor package.
-Seven additional cuTile entries provide strided sum, mean, product, extrema, and extrema indices.
-GPU checks pass every axis of a reversed transposed tensor, broadcast input, nonfinite values, empty dimensions, and neighboring guards.
-Extrema preserve the first logical index for ties and NaNs, including exact signed-zero and NaN payload bits.
-Execution uses resident storage without activation transfers or a separate output clear.
-All 88 earlier GPU instruction sections remain byte-identical. The native compute protocol is now version 8.
+All 95 earlier GPU instruction sections remain byte-identical after the 23 math and fill entries are added.
+
 These checks validate native primitives. Burn device dispatch and autodiff integration still need implementation.
-The native Burn GPU backend, full dataset training, and workload migration remain incomplete.
+Full native Burn training, dataset handling, checkpoint export, and workload migration remain incomplete.
 The retained Linux and D3OS measurements are in [Native NVIDIA performance](nvidia-performance.md).
 
 ## Portable runtime validation

@@ -57,14 +57,17 @@ The next primitive checks add Tensor Core matrix products and seven strided redu
 Matrix checks cover broadcast batches, noncontiguous inputs, subviews, empty outputs, and zero inner dimensions.
 Reduction checks cover every tensor axis, repeated tiles, broadcasting, nonfinite values, first-index ties, empty axes, and neighboring guards.
 Both operations keep tensors resident. All 88 earlier instruction sections remain byte-identical after the reductions are added.
-The matching SDK and driver use native compute protocol version 8.
+The latest primitive checks add 21 unary math operations, broadcast power, and exact tensor fill.
+Independent libm references cover 2,816 FP32 edge values, including rounding boundaries, zeros, infinities, and NaNs.
+Fill performs no host upload and requires no separate clear. All 95 earlier GPU instruction sections remain byte-identical.
+The matching SDK and driver use native compute protocol version 9.
 
 The accompanying regression passes AlexNet's eight layer references, Qwen's layer and cache references, and all 600 DOOM views.
-AlexNet averages 0.950 ms across 100 passes.
-Qwen's two warm 64-token samples reach 264.463 and 252.964 tokens/s, with the existing checksum unchanged.
-DOOM reaches 1,556.84 uncapped FPS. Regular gameplay remains capped around 70 FPS.
+D3OS AlexNet averages 0.960 ms across 100 passes.
+Both D3OS Qwen warm 64-token samples reach 264.463 tokens/s, with the existing checksum unchanged.
+D3OS DOOM reaches 1,596.76 uncapped FPS. Regular D3OS gameplay remains capped around 70 FPS.
 These samples remain within the recent run-to-run variation and do not establish a throughput improvement.
-The primitive checks and regression logs are under `target/nvidia/burn/reduction-*`.
+The latest primitive checks and regression logs are under `target/nvidia/burn/math/`.
 These are regression measurements of the existing workloads. Their migration to Burn remains pending.
 The first Burn training check runs on the explicit CPU device inside D3OS and validates gradients and Adam checkpoint resume.
 Full native Burn training and matched performance comparisons remain open.

@@ -2001,6 +2001,7 @@ dependencies = [
  "d3os-compute",
  "d3os-inference",
  "d3os-nvidia",
+ "libm",
  "log",
  "logger",
  "naming",

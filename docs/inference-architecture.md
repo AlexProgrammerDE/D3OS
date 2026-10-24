@@ -145,7 +145,7 @@ The CI workflow provides repeatable numerical tests and an optional pretrained Q
 The current target is the RTX 4090 Laptop GPU (`10de:2757`, AD103) with one serialized compute queue.
 The driver boots pinned signed firmware and allocates a private, virtually bound compute context.
 The process-owned syscall interface accepts built-in kernels and opaque buffer handles.
-Native compute protocol version 8 includes command scopes, queue profiles, and 46 built-in kernels.
+Native compute protocol version 9 includes command scopes, queue profiles, and 47 built-in kernels.
 Its expanded profile array requires the matching SDK.
 Rebuild compute applications with the matching SDK. The kernel rejects incompatible request versions.
 
@@ -166,6 +166,17 @@ Empty reduction axes produce zero for sum, one for product, and NaN for mean.
 Extrema reject empty reduction axes when the output is nonempty. Empty outputs require no launch.
 Hardware checks cover partial tiles, multiple passes per row, strided broadcasting, nonfinite inputs, exact extrema bits, guards, and resident execution.
 All 88 earlier GPU instruction sections remain byte-identical after the seven reduction entries are added.
+
+The elementwise family also includes 21 unary math entries and a broadcast power entry.
+They use the same checked strided layout protocol. Unary operations reject scalar-operand flags.
+The compiler uses full-range exponential and hyperbolic tangent operations, with explicit rounding for square root and reciprocal.
+The log1p implementation corrects cancellation near zero and preserves signed zeros.
+Rounding uses ties to even and preserves large integral values and NaN payloads.
+Sign follows Burn's contract: both zeros and NaNs produce zero.
+Three classification entries produce canonical boolean words.
+A separate full-writer kernel fills FP32, I32, and boolean storage without a host upload or a separate clear.
+Native GPU checks compare these operations with independent libm references, including 2,816 FP32 edge values.
+All 95 earlier GPU instruction sections remain byte-identical after the 23 math and fill entries are added.
 
 `Backend::upload_quantized()` accepts borrowed Q8_0, Q3_K, Q4_K, Q5_K, and Q6_K weight blocks.
 It checks block lengths and finite FP16 scales before allocating device storage.

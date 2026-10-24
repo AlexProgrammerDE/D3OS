@@ -38,8 +38,59 @@ unsafe fn BURN_ENTRY(a: *const u32, b: *const u32, output: *mut u32, BURN_PARAME
         select(lt_tile(x, y), one, zero)
     } else if BURN_OP == 9u32 {
         select(le_tile(x, y), one, zero)
-    } else {
+    } else if BURN_OP == 10u32 {
         select(eq_tile(right, zero), left, broadcast_scalar(scalar, shape![128]))
+    } else if BURN_OP == 11u32 {
+        left ^ broadcast_scalar(unsigned(-1i32) << 31u32, shape![128])
+    } else if BURN_OP == 12u32 {
+        left & broadcast_scalar(0x7fffffffu32, shape![128])
+    } else if BURN_OP == 13u32 {
+        bitcast(divf(broadcast_scalar(1f32, shape![128]), x, rounding::NearestEven, ftz::Disabled))
+    } else if BURN_OP == 14u32 {
+        bitcast(sqrt(x, rounding::NearestEven, ftz::Disabled))
+    } else if BURN_OP == 15u32 {
+        bitcast(unsafe { exp_with_rounding(x, rounding::Full) })
+    } else if BURN_OP == 16u32 {
+        bitcast(log(x))
+    } else if BURN_OP == 17u32 {
+        let unit = broadcast_scalar(1f32, shape![128]);
+        let u = unit + x;
+        let corrected = log(u) * divf(x, u - unit, rounding::NearestEven, ftz::Disabled);
+        let unchanged = eq_tile(u, unit) | eq_tile(x, broadcast_scalar(bits_f32(0x7f800000u32), shape![128]));
+        select(unchanged, left, bitcast(corrected))
+    } else if BURN_OP == 18u32 {
+        bitcast(unsafe { tanh_with_rounding(x, rounding::Full) })
+    } else if BURN_OP == 19u32 {
+        bitcast(sin(x))
+    } else if BURN_OP == 20u32 {
+        bitcast(cos(x))
+    } else if BURN_OP == 21u32 {
+        bitcast(floor(x))
+    } else if BURN_OP == 22u32 {
+        bitcast(ceil(x))
+    } else if BURN_OP == 23u32 {
+        burn_round_even(left)
+    } else if BURN_OP == 24u32 {
+        bitcast(select(lt_tile(x, broadcast_scalar(0f32, shape![128])), ceil(x), floor(x)))
+    } else if BURN_OP == 25u32 {
+        let positive = gt_tile(x, broadcast_scalar(0f32, shape![128]));
+        let negative = lt_tile(x, broadcast_scalar(0f32, shape![128]));
+        bitcast(select(positive, broadcast_scalar(1f32, shape![128]), select(negative, broadcast_scalar(-1f32, shape![128]), broadcast_scalar(0f32, shape![128]))))
+    } else if BURN_OP == 26u32 {
+        let ordered: Tile<bool, { [128] }> = eq_tile(x, x);
+        select(eq_tile(ordered, broadcast_scalar(false, shape![128])), one, zero)
+    } else if BURN_OP == 27u32 {
+        select(eq_tile(left & broadcast_scalar(0x7fffffffu32, shape![128]), broadcast_scalar(0x7f800000u32, shape![128])), one, zero)
+    } else if BURN_OP == 28u32 {
+        select(lt_tile(left & broadcast_scalar(0x7fffffffu32, shape![128]), broadcast_scalar(0x7f800000u32, shape![128])), one, zero)
+    } else if BURN_OP == 29u32 {
+        bitcast(unsafe { fpowf(x, y) })
+    } else if BURN_OP == 30u32 {
+        bitcast(sinh(x))
+    } else if BURN_OP == 31u32 {
+        bitcast(cosh(x))
+    } else {
+        bitcast(tan(x))
     };
     unsafe { write_tile(output, i, result, mask) };
 }

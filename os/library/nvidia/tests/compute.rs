@@ -1,6 +1,44 @@
 use d3os_nvidia::compute::Kernel;
 
 #[test]
+fn fill_is_a_full_writer_with_no_input_or_aliases() {
+    for word in [0, 1, u32::MAX, 0x7fc0_1234] {
+        let work = Kernel::Fill.work(&[257, word]).unwrap();
+        assert_eq!(work.extents[0], 257);
+        assert_eq!((work.blocks, work.pointers, work.output), (3, 1, 0));
+        assert!(Kernel::Fill.allocates_output());
+        assert!(!work.in_place);
+    }
+    for p in [&[0, 1][..], &[u32::MAX, 0], &[1], &[1, 0, 0]] {
+        assert!(Kernel::Fill.work(p).is_err());
+    }
+}
+
+#[test]
+fn unary_math_rejects_binary_scalar_flags_and_unused_scalar_data() {
+    use d3os_nvidia::compute::elementwise::{Elementwise, SCALAR_RHS};
+    let mut p = [0; 32];
+    p[..8].copy_from_slice(&[3, 1, 0, 0, 2, 2, 3, 3]);
+    p[8..16].fill(1);
+    p[8] = 3;
+    p[16] = (-1i32) as u32;
+    p[24] = (-1i32) as u32;
+    for op in Elementwise::ALL.into_iter().filter(|op| op.unary()) {
+        p[2] = op as u32;
+        assert!(Kernel::TensorElementwise.work(&p).is_ok());
+        p[2] |= SCALAR_RHS;
+        assert!(Kernel::TensorElementwise.work(&p).is_err());
+        p[2] = op as u32;
+        p[3] = 1;
+        assert!(Kernel::TensorElementwise.work(&p).is_err());
+        p[3] = 0;
+    }
+    p[2] = Elementwise::Power as u32 | SCALAR_RHS;
+    p[3] = 0.5f32.to_bits();
+    assert!(Kernel::TensorElementwise.work(&p).is_ok());
+}
+
+#[test]
 fn reductions_validate_strided_ranges_empty_axes_and_full_output_writes() {
     use d3os_nvidia::compute::reduction::Reduction;
     let mut p = [0u32; 24];
@@ -78,7 +116,7 @@ fn strided_elementwise_validates_every_reachable_address_before_dispatch() {
         (0, 7),
         (1, 0),
         (1, 9),
-        (2, 11),
+        (2, 33),
         (2, 1 << 17),
         (3, 1),
         (4, 4),

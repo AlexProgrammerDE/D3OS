@@ -20,6 +20,24 @@ fn supported(dtype: DType) -> bool {
 }
 
 impl NativeTensor {
+    /// Fill dense GPU storage with exact raw words without a host upload or a
+    /// separate clear. Boolean words must have their canonical zero/one values.
+    pub fn full(shape: Shape, dtype: DType, word: u32) -> Result<Self> {
+        if !supported(dtype) || (matches!(dtype, DType::Bool(_)) && word > 1) {
+            return Err(Error::InvalidParameter);
+        }
+        let layout = Layout::contiguous(shape.clone())?;
+        if layout.is_empty() {
+            return Self::empty(shape, dtype);
+        }
+        let buffer = Nvidia.produce_words(layout.len(), Kernel::Fill, &[], &[layout.len(), word as usize])?;
+        Ok(Self {
+            buffer: Arc::new(buffer),
+            layout,
+            dtype,
+        })
+    }
+
     pub fn empty(shape: Shape, dtype: DType) -> Result<Self> {
         if !supported(dtype) {
             return Err(Error::InvalidParameter);
@@ -126,7 +144,7 @@ impl NativeTensor {
     }
 
     pub fn binary(&self, rhs: &Self, operation: Elementwise) -> Result<Self> {
-        if self.dtype != DType::F32 || rhs.dtype != DType::F32 || matches!(operation, Elementwise::Copy | Elementwise::MaskFill) {
+        if self.dtype != DType::F32 || rhs.dtype != DType::F32 || !operation.binary() {
             return Err(Error::InvalidParameter);
         }
         let dtype = if operation.comparison() { DType::Bool(BoolStore::U32) } else { DType::F32 };
@@ -134,7 +152,7 @@ impl NativeTensor {
     }
 
     pub fn scalar(&self, operation: Elementwise, value: f32) -> Result<Self> {
-        if self.dtype != DType::F32 || matches!(operation, Elementwise::Copy | Elementwise::MaskFill) {
+        if self.dtype != DType::F32 || !operation.binary() {
             return Err(Error::InvalidParameter);
         }
         let dtype = if operation.comparison() { DType::Bool(BoolStore::U32) } else { DType::F32 };
@@ -146,6 +164,14 @@ impl NativeTensor {
             return Err(Error::InvalidParameter);
         }
         self.elementwise(mask, Elementwise::MaskFill, value.to_bits(), false, DType::F32)
+    }
+
+    pub fn unary(&self, operation: Elementwise) -> Result<Self> {
+        if self.dtype != DType::F32 || !operation.unary() {
+            return Err(Error::InvalidParameter);
+        }
+        let dtype = if operation.boolean() { DType::Bool(BoolStore::U32) } else { DType::F32 };
+        self.elementwise(self, operation, 0, false, dtype)
     }
 
     /// FP32 matrix multiplication with Tensor Core accumulation and broadcast batches.

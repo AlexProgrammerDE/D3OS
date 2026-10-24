@@ -5,7 +5,7 @@ use crate::{Error, Result};
 pub mod elementwise;
 pub mod reduction;
 
-pub const VERSION: u32 = 8;
+pub const VERSION: u32 = 9;
 pub const INFO: u32 = 0;
 pub const ALLOCATE: u32 = 1;
 pub const FREE: u32 = 2;
@@ -25,7 +25,7 @@ pub const END_COMMANDS: u32 = 10;
 pub const QUEUE_PROFILE: u32 = 11;
 pub const SERVICE_PROFILE: u32 = 12;
 pub const SERVICE_OPERATIONS: usize = 13;
-pub const KERNEL_COUNT: usize = 46;
+pub const KERNEL_COUNT: usize = 47;
 
 /// CPU service costs by request operation, including queue work within it.
 #[derive(Clone, Copy, Debug, Default)]
@@ -126,9 +126,10 @@ pub enum Kernel {
     EmbeddingQuantized = 43,
     TensorElementwise = 44,
     TensorReduction = 45,
+    Fill = 46,
 }
 
-const _: () = assert!(Kernel::TensorReduction as usize + 1 == KERNEL_COUNT);
+const _: () = assert!(Kernel::Fill as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -174,6 +175,7 @@ impl Kernel {
             self,
             Self::TensorElementwise
                 | Self::TensorReduction
+                | Self::Fill
                 | Self::Matmul
                 | Self::Im2col
                 | Self::MaxPool
@@ -251,6 +253,7 @@ impl Kernel {
             43 => Self::EmbeddingQuantized,
             44 => Self::TensorElementwise,
             45 => Self::TensorReduction,
+            46 => Self::Fill,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -303,6 +306,7 @@ impl Kernel {
             Self::EmbeddingQuantized => "embedding_quantized",
             Self::TensorElementwise => "burn_strided_copy",
             Self::TensorReduction => "burn_sum",
+            Self::Fill => "burn_fill",
         }
     }
 
@@ -353,6 +357,13 @@ impl Kernel {
         let mut mutated = 0;
         let mut threads = 128;
         let (count, pointers, output, in_place) = match (self, p) {
+            (Self::Fill, &[count, _bits]) => {
+                if count > i32::MAX as u32 {
+                    return Err(Error::InvalidField);
+                }
+                extents[0] = product(&[count])? as u64;
+                (count, 1, 0, false)
+            }
             (Self::TensorReduction, p) => {
                 extents[..2].copy_from_slice(&reduction::validate(p)?);
                 (product(&[p[0], 128])?, 2, 1, false)
