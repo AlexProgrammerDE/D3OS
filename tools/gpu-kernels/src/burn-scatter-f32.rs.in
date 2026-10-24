@@ -1,0 +1,25 @@
+// Global FP32 atomic addition can flush subnormals on Ada. Compare raw words
+// and use explicit non-FTZ addition, including when the stored value is NaN.
+let value: Tile<f32, { [128] }> = bitcast(value);
+let (initial, initial_token): (Tile<u32, { [128] }>, Token) = unsafe {
+    atomic_rmw_tko(pointer, broadcast_scalar(0u32, shape![128]), atomic::Or, ordering::Relaxed, scope::Device, Some(valid), None)
+};
+let mut expected = initial;
+let mut token = initial_token;
+let mut active = valid;
+let mut remaining = 1u32;
+while remaining != 0u32 {
+    let previous: Tile<f32, { [128] }> = bitcast(expected);
+    let sum = addf(previous, value, rounding::NearestEven, ftz::Disabled);
+    let sum: Tile<u32, { [128] }> = bitcast(sum);
+    let (observed, next_token): (Tile<u32, { [128] }>, Token) = unsafe {
+        atomic_cas_tko(pointer, expected, sum, ordering::Relaxed, scope::Device, Some(active), Some(token))
+    };
+    let succeeded: Tile<bool, { [128] }> = eq_tile(observed, expected);
+    active = active & eq_tile(succeeded, broadcast_scalar(false, shape![128]));
+    expected = observed;
+    token = next_token;
+    let pending = select(active, broadcast_scalar(1u32, shape![128]), broadcast_scalar(0u32, shape![128]));
+    let pending: Tile<u32, { [] }> = reduce_sum(pending, 0i32);
+    remaining = tile_to_scalar(pending);
+}

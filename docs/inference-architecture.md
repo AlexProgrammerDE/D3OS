@@ -145,7 +145,7 @@ The CI workflow provides repeatable numerical tests and an optional pretrained Q
 The current target is the RTX 4090 Laptop GPU (`10de:2757`, AD103) with one serialized compute queue.
 The driver boots pinned signed firmware and allocates a private, virtually bound compute context.
 The process-owned syscall interface accepts built-in kernels and opaque buffer handles.
-Native compute protocol version 11 includes command scopes, queue profiles, and 49 built-in kernels.
+Native compute protocol version 12 includes command scopes, queue profiles, and 50 built-in kernels.
 Its expanded profile array requires the matching SDK.
 Rebuild compute applications with the matching SDK. The kernel rejects incompatible request versions.
 
@@ -164,6 +164,16 @@ The kernel masks invalid source reads and atomically records a bounds error.
 The tensor API reads one four-byte flag and returns an error before exposing an invalid result.
 This control read synchronizes queued work. Tensor values stay on the GPU until an explicit data read.
 Vector select expands a checked index view and uses the same kernel without an index upload or materialization.
+
+The scatter family reuses the indexing geometry with an operation tag in the rank word's high half.
+Three entries provide FP32 addition, wrapping I32 addition, and boolean OR.
+Values are contiguous at the kernel boundary. Indices and the destination support signed strides.
+The tensor API copies shared destinations and materializes noncontiguous values on the GPU before dispatch.
+The kernel updates only selected elements, so it cannot use the uninitialized full-writer allocation path.
+Private copies isolate valid partial updates when another device index is invalid.
+The same bounds flag and host synchronization report those errors before the caller receives an output.
+FP32 updates use integer compare-and-swap and explicit non-FTZ addition, including for NaN values.
+Colliding FP32 additions have an unspecified order. I32 updates wrap modulo 32 bits.
 
 The reduction family provides sum, mean, product, minimum, maximum, and their two index operations for FP32 views.
 Each output retains the reduced dimension with size one. Input strides can be negative or zero.

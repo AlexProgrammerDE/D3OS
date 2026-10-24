@@ -322,6 +322,13 @@ impl Layout {
         Ok(p.map(|v| v as usize))
     }
 
+    pub fn scatter_parameters(&self, indices: &Self, axis: usize, operation: indexing::Scatter) -> Result<[usize; 32]> {
+        let mut p = self.gather_parameters(indices, axis)?.map(|v| v as u32);
+        p[0] |= (operation as u32) << 16;
+        indexing::validate_scatter(&p).map_err(|_| Error::InvalidParameter)?;
+        Ok(p.map(|v| v as usize))
+    }
+
     /// Encode one-axis reductions without materializing strided input views.
     pub fn reduction_parameters(&self, axis: usize, op: Reduction) -> Result<[usize; 24]> {
         let shape = self.reduction_shape(axis)?;

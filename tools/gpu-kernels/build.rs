@@ -100,6 +100,29 @@ fn main() {
             .replace("GATHER_ADDRESSES", &addresses)
             .replace("GATHER_STRIDE", &stride),
     );
+    println!("cargo:rerun-if-changed=src/burn-scatter.rs.in");
+    println!("cargo:rerun-if-changed=src/burn-scatter-f32.rs.in");
+    let scatter = fs::read_to_string("src/burn-scatter.rs.in").expect("read scatter template");
+    let float_add = fs::read_to_string("src/burn-scatter-f32.rs.in").expect("read floating-point scatter accumulation");
+    for operation in d3os_nvidia::compute::indexing::Scatter::ALL {
+        use d3os_nvidia::compute::indexing::Scatter;
+        let update = match operation {
+            Scatter::FloatAdd => float_add.clone(),
+            Scatter::IntAdd | Scatter::BoolOr => format!(
+                "let (_old, _token): (Tile<u32, {{ [128] }}>, Token) = unsafe {{\n\
+                 atomic_rmw_tko(pointer, value, atomic::{}, ordering::Relaxed, scope::Device, Some(valid), None)\n}};",
+                if operation == Scatter::IntAdd { "Add" } else { "Or" },
+            ),
+        };
+        source.push_str(
+            &scatter
+                .replace("SCATTER_ENTRY", operation.symbol())
+                .replace("GATHER_PARAMETERS", &parameters)
+                .replace("GATHER_ADDRESSES", &addresses)
+                .replace("GATHER_STRIDE", &stride)
+                .replace("SCATTER_UPDATE", &update),
+        );
+    }
     println!("cargo:rerun-if-changed=src/burn-reduction.rs.in");
     let reduction = fs::read_to_string("src/burn-reduction.rs.in").expect("read Burn reduction template");
     let mut parameters: Vec<String> = ["count", "_rank", "_operation", "axis", "offset", "extent", "length", "_reserved"]

@@ -185,6 +185,13 @@ fn gather_metadata_uses_the_source_axis_extent_and_both_view_strides() {
     assert_eq!(p[8..11], [7, 3, 131]);
     assert_eq!(p[16..19], [(-1i32) as u32 as usize, 35, (-7i32) as u32 as usize]);
     assert_eq!(p[24..27], [393, 131, (-1i32) as u32 as usize]);
+    for operation in d3os_nvidia::compute::indexing::Scatter::ALL {
+        let scatter = source.scatter_parameters(&indices, 2, operation).unwrap();
+        assert_eq!(scatter[0], 3 | ((operation as usize) << 16));
+        assert_eq!(scatter[1..], p[1..]);
+        let extents = d3os_nvidia::compute::indexing::validate_scatter(&scatter.map(|v| v as u32)).unwrap();
+        assert_eq!(extents, [2751, 2751, 1, 105]);
+    }
     assert!(source.gather_shape(&indices, 1).is_err());
     assert!(source.gather_shape(&indices, 3).is_err());
     let empty_axis = Layout::contiguous(Shape::new([3, 0])).unwrap();

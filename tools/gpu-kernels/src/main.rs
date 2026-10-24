@@ -121,6 +121,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         inference.extend(d3os_nvidia::compute::elementwise::Elementwise::ALL.iter().skip(1).map(|op| op.symbol()));
         inference.extend(d3os_nvidia::compute::reduction::Reduction::ALL.iter().skip(1).map(|op| op.symbol()));
         inference.extend(d3os_nvidia::compute::words::WordOp::ALL.iter().skip(1).map(|op| op.symbol()));
+        inference.extend(d3os_nvidia::compute::indexing::Scatter::ALL.iter().skip(1).map(|op| op.symbol()));
         compile(&output, "inference", &inference, &toolkit)?;
     } else {
         let names: Vec<&str> = names.iter().map(String::as_str).collect();

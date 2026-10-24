@@ -1,7 +1,41 @@
-//! Checked strided gather metadata. Device index values need a runtime bounds check.
+//! Checked strided indexing metadata. Device index values need a runtime bounds check.
 use crate::{Error, Result};
 
 pub const PARAMETERS: usize = 32;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u32)]
+pub enum Scatter {
+    FloatAdd = 0,
+    IntAdd = 1,
+    BoolOr = 2,
+}
+
+impl Scatter {
+    pub const ALL: [Self; 3] = [Self::FloatAdd, Self::IntAdd, Self::BoolOr];
+
+    pub fn from_raw(raw: u32) -> Result<Self> {
+        Self::ALL.get(raw as usize).copied().ok_or(Error::InvalidField)
+    }
+
+    pub fn symbol(self) -> &'static str {
+        match self {
+            Self::FloatAdd => "burn_scatter_add_f32",
+            Self::IntAdd => "burn_scatter_add_i32",
+            Self::BoolOr => "burn_scatter_or_bool",
+        }
+    }
+}
+
+/// Scatter shares gather geometry, with the operation in the rank word's high
+/// half. Values are dense; indices and the destination can have signed strides.
+pub fn validate_scatter(p: &[u32]) -> Result<[u64; 4]> {
+    let mut p: [u32; PARAMETERS] = p.try_into().map_err(|_| Error::InvalidField)?;
+    Scatter::from_raw(p[0] >> 16)?;
+    p[0] &= 0xffff;
+    let [destination, indices, status, values] = validate(&p)?;
+    Ok([values, indices, status, destination])
+}
 
 /// rank, axis, count, source extent/offset, index extent/offset, axis length,
 /// eight index dimensions, eight source strides, and eight index strides.

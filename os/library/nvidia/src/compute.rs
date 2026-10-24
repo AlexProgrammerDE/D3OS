@@ -7,7 +7,7 @@ pub mod indexing;
 pub mod reduction;
 pub mod words;
 
-pub const VERSION: u32 = 11;
+pub const VERSION: u32 = 12;
 pub const INFO: u32 = 0;
 pub const ALLOCATE: u32 = 1;
 pub const FREE: u32 = 2;
@@ -27,7 +27,7 @@ pub const END_COMMANDS: u32 = 10;
 pub const QUEUE_PROFILE: u32 = 11;
 pub const SERVICE_PROFILE: u32 = 12;
 pub const SERVICE_OPERATIONS: usize = 13;
-pub const KERNEL_COUNT: usize = 49;
+pub const KERNEL_COUNT: usize = 50;
 
 /// CPU service costs by request operation, including queue work within it.
 #[derive(Clone, Copy, Debug, Default)]
@@ -131,9 +131,10 @@ pub enum Kernel {
     Fill = 46,
     TensorWords = 47,
     Gather = 48,
+    Scatter = 49,
 }
 
-const _: () = assert!(Kernel::Gather as usize + 1 == KERNEL_COUNT);
+const _: () = assert!(Kernel::Scatter as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -262,6 +263,7 @@ impl Kernel {
             46 => Self::Fill,
             47 => Self::TensorWords,
             48 => Self::Gather,
+            49 => Self::Scatter,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -317,12 +319,14 @@ impl Kernel {
             Self::Fill => "burn_fill",
             Self::TensorWords => "burn_i32_add",
             Self::Gather => "burn_gather",
+            Self::Scatter => "burn_scatter_add_f32",
         }
     }
 
     /// Select the cuTile specialization without changing the public request ABI.
     pub fn entry(self, parameters: &[u32]) -> &'static str {
         match (self, parameters) {
+            (Self::Scatter, p) if p.len() == indexing::PARAMETERS => indexing::Scatter::from_raw(p[0] >> 16).map_or(self.symbol(), |op| op.symbol()),
             (Self::TensorWords, p) if p.len() == elementwise::PARAMETERS => words::WordOp::from_raw(p[2] & 0xff).map_or(self.symbol(), |op| op.symbol()),
             (Self::TensorReduction, p) if p.len() == reduction::PARAMETERS => reduction::Reduction::from_raw(p[2]).map_or(self.symbol(), |op| op.symbol()),
             (Self::TensorElementwise, p) if p.len() == elementwise::PARAMETERS => {
@@ -368,6 +372,11 @@ impl Kernel {
         let mut mutated = 0;
         let mut threads = 128;
         let (count, pointers, output, in_place) = match (self, p) {
+            (Self::Scatter, p) => {
+                extents[..4].copy_from_slice(&indexing::validate_scatter(p)?);
+                mutated = 1 << 2;
+                (p[2], 4, 3, false)
+            }
             (Self::Gather, p) => {
                 extents[..4].copy_from_slice(&indexing::validate(p)?);
                 mutated = 1 << 2;

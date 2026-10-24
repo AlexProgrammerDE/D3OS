@@ -1,6 +1,7 @@
 //! Check Burn tensor ownership and views on real native GPU allocations.
 mod indexing;
 mod math;
+mod scatter;
 mod words;
 use abi::elementwise::Elementwise;
 use abi::reduction::Reduction;
@@ -99,6 +100,7 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     math::run(backend).map_err(|e| format!("Burn native math: {e}"))?;
     words::run(backend).map_err(|e| format!("Burn native words: {e}"))?;
     indexing::run(backend).map_err(|e| format!("Burn native indexing: {e}"))?;
+    scatter::run(backend).map_err(|e| format!("Burn native scatter: {e}"))?;
     Ok(())
 }
 

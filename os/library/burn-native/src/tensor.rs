@@ -6,7 +6,7 @@ use d3os_compute::{
     nvidia::{GpuBuffer, Nvidia},
 };
 use d3os_nvidia::compute::words::{ValueType, WordOp};
-use d3os_nvidia::compute::{Kernel, elementwise::Elementwise, reduction::Reduction};
+use d3os_nvidia::compute::{Kernel, elementwise::Elementwise, indexing::Scatter, reduction::Reduction};
 
 /// A Burn tensor primitive backed by shared, process-owned GPU storage.
 #[derive(Clone, Debug)]
@@ -298,6 +298,10 @@ impl NativeTensor {
     }
 
     pub fn select(&self, axis: usize, indices: &Self) -> Result<Self> {
+        self.gather(axis, &self.selection_indices(axis, indices)?)
+    }
+
+    fn selection_indices(&self, axis: usize, indices: &Self) -> Result<Self> {
         if indices.dtype != DType::I32 || indices.layout.shape().num_dims() != 1 || axis >= self.layout.shape().num_dims() {
             return Err(Error::InvalidParameter);
         }
@@ -306,7 +310,70 @@ impl NativeTensor {
         let mut strides = alloc::vec![0;shape.len()];
         strides[axis] = indices.layout.strides()[0];
         let layout = Layout::from_parts(Shape::from(shape), strides, indices.layout.offset() as i64, indices.layout.storage_elements())?;
-        self.gather(axis, &indices.with_layout(layout)?)
+        indices.with_layout(layout)
+    }
+
+    /// Accumulate repeated indices without modifying shared inputs. Floating
+    /// additions preserve subnormals; their ordering is unspecified for collisions.
+    pub fn scatter_add(&self, axis: usize, indices: &Self, values: &Self) -> Result<Self> {
+        let operation = match self.dtype {
+            DType::F32 => Scatter::FloatAdd,
+            DType::I32 => Scatter::IntAdd,
+            _ => return Err(Error::InvalidParameter),
+        };
+        self.scatter(axis, indices, values, operation)
+    }
+
+    pub fn scatter_or(&self, axis: usize, indices: &Self, values: &Self) -> Result<Self> {
+        if self.dtype != DType::Bool(BoolStore::U32) {
+            return Err(Error::InvalidParameter);
+        }
+        self.scatter(axis, indices, values, Scatter::BoolOr)
+    }
+
+    pub fn select_add(&self, axis: usize, indices: &Self, values: &Self) -> Result<Self> {
+        self.scatter_add(axis, &self.selection_indices(axis, indices)?, values)
+    }
+
+    pub fn select_or(&self, axis: usize, indices: &Self, values: &Self) -> Result<Self> {
+        self.scatter_or(axis, &self.selection_indices(axis, indices)?, values)
+    }
+
+    fn scatter(&self, axis: usize, indices: &Self, values: &Self, operation: Scatter) -> Result<Self> {
+        if indices.dtype != DType::I32 || values.dtype != self.dtype {
+            return Err(Error::InvalidParameter);
+        }
+        let shape = self.layout.gather_shape(&indices.layout, axis)?;
+        if values.layout.shape() != &shape {
+            return Err(Error::ShapeMismatch);
+        }
+        if indices.layout.is_empty() {
+            return Ok(self.clone());
+        }
+        if self.layout.shape()[axis] == 0 {
+            return Err(Error::InvalidParameter);
+        }
+        let layout = Layout::contiguous(self.layout.shape().clone())?;
+        let parameters = layout.scatter_parameters(&indices.layout, axis, operation)?;
+        let values = if values.layout.is_contiguous() { values.clone() } else { values.copy()? };
+        let output = self.copy()?;
+        let status = Nvidia.produce_words(1, Kernel::Fill, &[], &[1, 0])?;
+        Nvidia.dispatch_words(
+            Kernel::Scatter,
+            &[
+                (&values.buffer, values.layout.offset()),
+                (&indices.buffer, 0),
+                (&status, 0),
+                (&output.buffer, 0),
+            ],
+            &parameters,
+        )?;
+        let mut invalid = [0];
+        Nvidia.read_words_into(&status, 0, &mut invalid)?;
+        if invalid[0] != 0 {
+            return Err(Error::InvalidParameter);
+        }
+        Ok(output)
     }
 
     /// FP32 matrix multiplication with Tensor Core accumulation and broadcast batches.

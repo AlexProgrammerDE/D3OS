@@ -60,7 +60,7 @@ Both operations keep tensors resident. All 88 earlier instruction sections remai
 The latest primitive checks add 21 unary math operations, broadcast power, and exact tensor fill.
 Independent libm references cover 2,816 FP32 edge values, including rounding boundaries, zeros, infinities, and NaNs.
 Fill performs no host upload and requires no separate clear. All 95 earlier GPU instruction sections remain byte-identical.
-The matching SDK and driver use native compute protocol version 11.
+The matching SDK and driver use native compute protocol version 12.
 
 The accompanying regression passes AlexNet's eight layer references, Qwen's layer and cache references, and all 600 DOOM views.
 D3OS AlexNet averages 0.960 ms across 100 passes.
@@ -86,6 +86,18 @@ Invalid indices return an error without changing inputs or preventing later GPU 
 All 147 previous GPU instruction sections remain byte-identical.
 This step adds functional validation, with no new D3OS or Linux throughput measurement.
 Its logs are under `target/nvidia/burn/indexing/`.
+
+The next training primitive adds scatter accumulation and vector select accumulation.
+FP32 and I32 values use addition. Boolean values use OR.
+Inputs remain immutable through a private GPU copy of the destination and GPU materialization of noncontiguous values.
+A four-byte bounds read synchronizes each nonempty operation. Colliding FP32 additions have an unspecified order.
+FP32 compare-and-swap preserves subnormal values that Ada's global atomic addition can flush to zero.
+NVIDIA describes this behavior in its [PTX atomic instruction reference](https://docs.nvidia.com/cuda/archive/12.1.0/parallel-thread-execution/index.html#parallel-synchronization-and-communication-instructions-atom).
+Physical D3OS GPU checks pass strided scatter, duplicate indices, offset views, guards, shared inputs, and invalid-index recovery.
+They also preserve subnormal accumulation and match a weighted gather gradient against independent FP64 finite differences.
+All 148 previous GPU instruction sections remain byte-identical.
+This step does not establish a D3OS or Linux throughput improvement.
+Its evidence is under `target/nvidia/burn/scatter/`.
 
 ### Grouped recurrent attention
 

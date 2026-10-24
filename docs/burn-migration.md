@@ -111,7 +111,7 @@ The GPU operations include FP32 arithmetic and math, reductions, exact tensor fi
 Another 29 entries implement I32 arithmetic, signed comparisons, bitwise operations, boolean logic, masks, and conversions.
 These operations support strided views and broadcasting. Input tensors remain shared and immutable.
 Full writers avoid a separate output clear. Empty logical outputs require no element work.
-The matching SDK and driver use native compute protocol version 11.
+The matching SDK and driver use native compute protocol version 12.
 
 The D3OS GPU self-test passes reversed and transposed views, overlapping windows, broadcast batches, subviews, empty dimensions, and neighboring guards.
 Matrix references use independent FP64 accumulation. Math references use independent libm functions and include 2,816 FP32 edge values.
@@ -130,8 +130,21 @@ Invalid indices return an error, release private output storage, and leave the G
 The checks cover reversed views, subviews, repeated indices, empty axes, command scopes, partial tiles, and neighboring guards.
 All 147 earlier GPU instruction sections remain byte-identical after the gather entry is added.
 
+Native scatter accumulation adds repeated FP32 and I32 values, or combines boolean values with OR.
+Vector select accumulation uses the same checked view expansion as select.
+The operations copy the destination on the GPU to preserve shared tensors.
+Noncontiguous values also require a GPU copy. Indices retain their original signed strides.
+Each nonempty operation reads a four-byte bounds result and synchronizes before exposing the output.
+FP32 accumulation uses raw-word compare-and-swap with non-FTZ addition to preserve subnormal inputs and results.
+Colliding additions have an unspecified order. Results can therefore differ by floating-point rounding between runs.
+These primitives provide gradient accumulation for gather and select; they do not implement Burn autodiff registration.
+Physical GPU checks pass all three operations across every axis of strided tensors, including repeated indices and offset views.
+They also pass alias preservation, invalid-index recovery, guarded partial tiles, NaN handling, and exact subnormal accumulation.
+A weighted gather loss and its scatter gradient agree with an independent FP64 finite-difference reference.
+All 148 earlier GPU instruction sections remain byte-identical after the three scatter entries are added.
+
 These checks validate native primitives. Burn device dispatch and autodiff integration still need implementation.
-Integer division, remainder, scatter operations, and additional training primitives also remain incomplete.
+Integer division, remainder, other indexed updates, and additional training primitives also remain incomplete.
 Full native Burn training, dataset handling, checkpoint export, and workload migration remain incomplete.
 The retained Linux and D3OS measurements are in [Native NVIDIA performance](nvidia-performance.md).
 
