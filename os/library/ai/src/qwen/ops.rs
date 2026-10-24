@@ -73,6 +73,7 @@ pub struct DeltaWeightPrimitive<B: Backend> {
 
 #[backend_extension(Native: cfg(feature = "native"), Flex: cfg(feature = "cpu"))]
 pub trait QwenOps: Backend {
+    fn greedy(input: FloatTensor<Self>) -> core::result::Result<Option<u32>, burn::backend::ExecutionError>;
     fn attention(#[extension_type] input: AttentionPrimitive<Self>, config: super::AttentionConfig) -> AttentionResult<Self>;
     fn delta(#[extension_type] input: DeltaPrimitive<Self>, config: super::DeltaConfig) -> DeltaResult<Self>;
     fn project_delta(
@@ -124,6 +125,9 @@ pub trait QwenOps: Backend {
 
 #[cfg(feature = "native")]
 impl QwenOps for d3os_burn_native::backend::Native {
+    fn greedy(input: FloatTensor<Self>) -> core::result::Result<Option<u32>, burn::backend::ExecutionError> {
+        Self::qwen_greedy(input)
+    }
     fn attention(input: AttentionPrimitive<Self>, config: super::AttentionConfig) -> AttentionResult<Self> {
         let [output, keys, values] = Self::qwen_attention(
             [input.query_gate, input.key, input.value, input.query_norm, input.key_norm],

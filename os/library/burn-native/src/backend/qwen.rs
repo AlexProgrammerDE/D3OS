@@ -68,6 +68,25 @@ fn projection(input: &NativeTensor, packed: &NativeTensor, shape: [usize; 2], fo
 }
 
 impl Native {
+    pub fn qwen_greedy(input: BackendTensor) -> core::result::Result<Option<u32>, burn_backend::ExecutionError> {
+        input.read_value("greedy selection", |input| {
+            let [1, columns] = *input.shape().as_slice() else {
+                return Err(Error::ShapeMismatch);
+            };
+            if columns == 0 {
+                return Err(Error::ShapeMismatch);
+            }
+            Nvidia.record_commands(|| {
+                let input = dense(input, DType::F32)?;
+                match Nvidia.argmax_words(&input.buffer, input.layout.offset(), columns) {
+                    Ok(index) => u32::try_from(index).map(Some).map_err(|_| Error::SizeOverflow),
+                    Err(Error::NonFinite) => Ok(None),
+                    Err(error) => Err(error),
+                }
+            })
+        })
+    }
+
     pub fn qwen_project(input: BackendTensor, packed: BackendTensor, shape: [usize; 2], format: MatrixFormat) -> BackendTensor {
         let batch = input.shape().first().copied().unwrap_or(0);
         BackendTensor::apply("packed projection", Shape::new([batch, shape[0]]), DType::F32, &[&input, &packed], |v| {

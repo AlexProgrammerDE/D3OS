@@ -418,13 +418,12 @@ pub(super) fn qwen<const DECODE: usize>(backend: &Nvidia, device_timing: bool) -
                 if prefill_after[upload].calls - service_prefill[upload].calls != prompt_uploads
                     || prefill_after[download].calls != service_prefill[download].calls
                     || service_after[upload].calls - prefill_after[upload].calls != DECODE as u64
-                    || service_after[download].calls - prefill_after[download].calls != 2 * DECODE as u64
+                    || service_after[download].calls - prefill_after[download].calls != DECODE as u64
                 {
                     return Err(String::from("Burn Qwen performed an unexpected host tensor transfer"));
                 }
                 report(format_args!(
-                    "NVIDIA_BURN_QWEN_RESIDENT_OK prompt_id_uploads={prompt_uploads} decode_id_uploads={DECODE} selection_scalar_reads={} activation_uploads=0 activation_downloads=0 backend=nvidia",
-                    2 * DECODE
+                    "NVIDIA_BURN_QWEN_RESIDENT_OK prompt_id_uploads={prompt_uploads} decode_id_uploads={DECODE} selection_read_calls={DECODE} selection_bytes_per_read=256 selection_candidates_per_read=32 activation_uploads=0 activation_downloads=0 backend=nvidia"
                 ));
                 profile(&prefill_before, &before, "prefill");
                 queue_profile(queue_prefill, queue_before, "prefill");

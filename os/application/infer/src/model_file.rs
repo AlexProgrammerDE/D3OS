@@ -148,12 +148,12 @@ pub(super) fn benchmark(device: &Device, backend: &d3os_compute::nvidia::Nvidia)
         if prompt_uploads != prompt_count.div_ceil(32) as u64
             || prompt_downloads != 0
             || decode_uploads != decode_count as u64
-            || decode_downloads != (2 * decode_count) as u64
+            || decode_downloads != decode_count as u64
         {
             return Err(String::from("GGUF benchmark transferred resident activation tensors"));
         }
         super::report(format_args!(
-            "NATIVE_LARGE_QWEN_RESIDENT_OK os=d3os framework=burn backend=nvidia run={run} prompt_id_uploads={prompt_uploads} decode_id_uploads={decode_uploads} selection_scalar_reads={decode_downloads} activation_uploads=0 activation_downloads=0"
+            "NATIVE_LARGE_QWEN_RESIDENT_OK os=d3os framework=burn backend=nvidia run={run} prompt_id_uploads={prompt_uploads} decode_id_uploads={decode_uploads} selection_read_calls={decode_downloads} selection_bytes_per_read=256 selection_candidates_per_read=32 activation_uploads=0 activation_downloads=0"
         ));
         let matching_prefix = generated.iter().zip(reference).take_while(|(actual, expected)| actual == expected).count();
         super::report(format_args!(

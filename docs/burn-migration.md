@@ -303,7 +303,11 @@ The old inference crate and its model execution API are removed. The host exampl
 Packed weights remain integer parameters in Burn module records, while normalization and convolution parameters use floating tensors.
 The same model definition supports the explicit Flex CPU device and native NVIDIA device.
 A session owns its caches and rejects further work after execution or observer errors.
-Model outputs are resident Burn tensors. Greedy selection reads only a finite-value flag and the selected token index.
+Model outputs are resident Burn tensors. Greedy selection uses a native Burn extension.
+The GPU reduces logits into 32 candidate pairs, which the host combines after one 256-byte read.
+The selection preserves the first global maximum and rejects any nonfinite input, including values in losing partitions.
+The explicit CPU backend preserves the input float precision and logical view order.
+Selection detaches its borrowed logits without changing the caller's autodiff graph.
 
 Physical D3OS verification passes every original 29-position, 24-layer reference and the complete final cache comparisons.
 The original `2e-3` absolute and `5e-4` relative tolerances remain unchanged.

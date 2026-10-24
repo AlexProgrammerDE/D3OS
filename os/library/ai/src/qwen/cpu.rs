@@ -21,6 +21,16 @@ fn decode(matrix: MatrixPrimitive<Flex>) -> FloatTensor<Flex> {
 }
 
 impl QwenOps for Flex {
+    fn greedy(input: FloatTensor<Self>) -> core::result::Result<Option<u32>, burn::backend::ExecutionError> {
+        let input = input.to_contiguous();
+        if let Some(values) = input.as_slice::<f32>() {
+            select(values.iter().copied().map(f64::from))
+        } else {
+            // Keep every supported CPU float dtype's precision. Model logits
+            // use the borrowed F32 slice above without a copy or conversion.
+            select(input.into_data().iter::<f64>())
+        }
+    }
     fn attention(input: super::ops::AttentionPrimitive<Self>, config: super::AttentionConfig) -> super::ops::AttentionResult<Self> {
         super::cpu_state::attention(input, config)
     }
@@ -45,4 +55,19 @@ impl QwenOps for Flex {
         }
         Self::float_from_data(TensorData::new(output, [rows, width]), &device)
     }
+}
+
+fn select(values: impl Iterator<Item = f64>) -> core::result::Result<Option<u32>, burn::backend::ExecutionError> {
+    let mut best = None;
+    for (index, value) in values.enumerate() {
+        if !value.is_finite() {
+            return Ok(None);
+        }
+        if best.is_none_or(|(_, previous)| value > previous) {
+            let index = u32::try_from(index).map_err(|_| burn::backend::ExecutionError::with_context("Qwen token index exceeds U32"))?;
+            best = Some((index, value));
+        }
+    }
+    best.map(|(index, _)| Some(index))
+        .ok_or_else(|| burn::backend::ExecutionError::with_context("Qwen logits are empty"))
 }

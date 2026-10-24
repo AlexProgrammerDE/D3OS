@@ -12,7 +12,8 @@ Both targets must fit entirely in the GPU's 16 GiB of VRAM, including context an
 The work includes pinned Linux measurements, native Rust/cuTile quantized kernels, numerical references, and matched performance comparisons.
 The native loader also needs separate output weights and grouped key/value heads for recurrent attention.
 Large model assets also need a storage path that avoids the current FAT32 boot file limit and duplicate archive copies.
-These models are pending native validation. The existing 0.8B, AlexNet, and DOOM checks remain required.
+Both large models now pass native validation through Burn, as described below.
+The existing 0.8B, AlexNet, and DOOM checks remain required.
 
 ## Measurement method
 
@@ -309,6 +310,23 @@ The final D3OS GPU DOOM timedemo measures 1607.064575 FPS for 7117 game ticks an
 The separate 600-frame pixel, control, cache-purge, atlas-rollover, and post-exit inference checks pass at the 70 FPS gameplay cap.
 DOOM retains its title-bar FPS display and no corner overlay.
 The retained Linux headless software results still lack matching presentation costs. They do not establish GPU rendering parity.
+
+## Parallel Burn token selection
+
+Qwen now selects tokens through a native Burn extension with 32 parallel GPU partitions.
+The host combines exact index/value pairs and preserves the first global tie.
+The operation rejects nonfinite values in every partition, including losing partitions.
+Physical D3OS checks cover partition boundaries, full vocabulary width, signed views, positive offsets, source guards, and recoverable execution errors.
+The explicit CPU backend preserves F64 precision. Selection also preserves the caller's autodiff graph.
+
+Each token now needs one 256-byte metadata read instead of two four-byte scalar reads.
+This reduces host transactions but increases transferred metadata from 8 to 256 bytes per token.
+No activation tensor crosses to the host. The existing kernel bundle remains unchanged.
+A fresh serialized D3OS GPU sample measures 1.106144 ms for 64 selection launches, or 0.017284 ms per token.
+The preceding serialized reduction sample measures 10.393120 ms for 64 steps, or about 0.162393 ms per token.
+These device samples diagnose selection cost. They do not establish an end-to-end model speedup.
+The uninstrumented warm sample in the new diagnostic VM measures 240.602 tokens/s with the original checksum and all references unchanged.
+No fresh Linux sample accompanies this change. Evidence is under `target/nvidia/burn/selection/`.
 
 ## Earlier Burn primitive measurements
 

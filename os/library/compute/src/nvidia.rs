@@ -4,6 +4,7 @@ use d3os_nvidia::compute::{self as abi, Kernel, Request};
 
 use crate::{Backend, Buffer, Conv2d, Error, Pool2d, Result, Tensor, element_count, output_extent};
 
+mod selection;
 mod transformer;
 
 fn request(request: Request) -> Result<usize> {
@@ -423,32 +424,7 @@ impl Backend for Nvidia {
     }
 
     fn argmax(&self, input: &Tensor<Self>) -> Result<usize> {
-        // Each of 32 warps returns an exact index and value. Combining 32 pairs
-        // avoids downloading and scanning the complete vocabulary on the CPU.
-        let output = self.produce_storage(64, Kernel::ArgMax, &[(&input.buffer, 0)], &[input.len()], Storage::Words, &[])?;
-        let mut partials = [0u32; 64];
-        self.read_words_into(&output, 0, &mut partials)?;
-        let mut best = (usize::MAX, f32::NEG_INFINITY);
-        for pair in partials.chunks_exact(2) {
-            let index = pair[0] as usize;
-            if index == u32::MAX as usize {
-                continue;
-            }
-            let value = f32::from_bits(pair[1]);
-            if !value.is_finite() {
-                return Err(Error::NonFinite);
-            }
-            if index >= input.len() {
-                return Err(Error::DeviceFault);
-            }
-            if value > best.1 || (value == best.1 && index < best.0) {
-                best = (index, value);
-            }
-        }
-        if best.0 == usize::MAX {
-            return Err(Error::DeviceFault);
-        }
-        Ok(best.0)
+        self.argmax_buffer(&input.buffer, 0, input.len())
     }
 
     fn upload_bf16(&self, values: impl ExactSizeIterator<Item = u16>) -> Result<GpuBuffer> {

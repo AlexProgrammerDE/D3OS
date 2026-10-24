@@ -538,11 +538,11 @@ pub fn greedy(logits: &Tensor<2>) -> Result<u32> {
     if logits.dims()[0] != 1 || logits.dims()[1] == 0 {
         return Err(Error::InvalidModelShape);
     }
-    if !logits.clone().is_finite().all().try_into_scalar::<bool>()? {
-        return Err(Error::NonFinite);
-    }
-    let index = logits.clone().argmax(1).try_into_scalar::<i32>()?;
-    u32::try_from(index).map_err(|_| Error::InvalidToken)
+    // Selecting a host token has no derivative. Detach only this borrowed
+    // view; callers can retain the original differentiable logits.
+    let logits = logits.clone().without_autodiff();
+    device_supported(&logits.device())?;
+    <burn::backend::Dispatch as super::ops::QwenOps>::greedy(logits.into_dispatch())?.ok_or(Error::NonFinite)
 }
 pub fn verify(actual: &[f32], expected: &[f32], absolute: f32, relative: f32) -> Result<()> {
     if actual.len() != expected.len() || actual.is_empty() || !absolute.is_finite() || !relative.is_finite() || absolute < 0. || relative < 0. {

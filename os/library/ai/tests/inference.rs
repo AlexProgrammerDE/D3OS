@@ -1,5 +1,5 @@
 #![cfg(feature = "cpu")]
-use d3os_ai::burn::tensor::{Device, Tensor};
+use d3os_ai::burn::tensor::{DType, Device, Tensor, TensorData};
 use d3os_ai::{
     qwen::{Error, greedy, verify},
     self_test, top_k,
@@ -32,4 +32,24 @@ fn greedy_selection_rejects_nonfinite_logits_and_keeps_the_first_equal_maximum()
         assert!(matches!(greedy(&Tensor::<2>::from_floats([[1., invalid, 2.]], &device)), Err(Error::NonFinite)));
     }
     assert_eq!(greedy(&Tensor::<2>::from_floats([[0.2, 0.4, 0.4]], &device)).unwrap(), 1);
+}
+
+#[test]
+fn greedy_selection_preserves_cpu_precision_and_logical_view_order() {
+    let device = Device::flex();
+    let values = Tensor::<2>::from_data(
+        TensorData::new(vec![1f64, 1.0000000000000002, 1.0000000000000002], [1, 3]),
+        (&device, DType::F64),
+    );
+    assert_eq!(greedy(&values).unwrap(), 1);
+    assert_eq!(greedy(&values.clone().flip([1])).unwrap(), 0);
+    assert_eq!(greedy(&values).unwrap(), 1);
+    #[cfg(feature = "training")]
+    {
+        let device = device.autodiff();
+        let input = Tensor::<2>::from_floats([[1., 3., 3.]], &device).require_grad();
+        assert_eq!(greedy(&input).unwrap(), 1);
+        let gradients = input.clone().sum().backward();
+        assert_eq!(input.grad(&gradients).unwrap().into_data().as_slice::<f32>().unwrap(), &[1.; 3]);
+    }
 }

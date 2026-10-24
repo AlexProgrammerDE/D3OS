@@ -11,6 +11,7 @@ mod pooling;
 mod qwen;
 mod random;
 mod scatter;
+mod selection;
 mod updates;
 mod words;
 use abi::elementwise::Elementwise;
@@ -120,6 +121,7 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     updates::run(backend).map_err(|e| format!("Burn native updates: {e}"))?;
     random::run(backend).map_err(|e| format!("Burn native random: {e}"))?;
     qwen::run(backend).map_err(|e| format!("Burn Qwen extensions: {e}"))?;
+    selection::run(backend)?;
     dispatch::run(backend).map_err(|e| format!("Burn public dispatch: {e}"))?;
     Ok(())
 }
