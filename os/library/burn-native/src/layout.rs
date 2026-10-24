@@ -4,6 +4,7 @@ use burn_backend::{Shape, Slice};
 use d3os_compute::{Error, Result};
 use d3os_nvidia::compute::elementwise::{self, Elementwise};
 use d3os_nvidia::compute::reduction::{self, Reduction};
+use d3os_nvidia::compute::words::{self, WordOp};
 
 /// Native kernels use signed 32-bit element indices, including reversed views.
 const INDEX_MAX: usize = i32::MAX as usize;
@@ -245,6 +246,18 @@ impl Layout {
 
     /// Encode two equally shaped views into the checked native launch protocol.
     pub fn elementwise_parameters(&self, rhs: &Self, op: Elementwise, scalar_bits: u32, scalar_rhs: bool) -> Result<[usize; 32]> {
+        let parameters = self.strided_parameters(rhs, op as u32, scalar_bits, scalar_rhs)?;
+        elementwise::validate(&parameters).map_err(|_| Error::InvalidParameter)?;
+        Ok(parameters.map(|value| value as usize))
+    }
+
+    pub fn word_parameters(&self, rhs: &Self, op: WordOp, scalar_bits: u32, scalar_rhs: bool) -> Result<[usize; 32]> {
+        let parameters = self.strided_parameters(rhs, op as u32, scalar_bits, scalar_rhs)?;
+        words::validate(&parameters).map_err(|_| Error::InvalidParameter)?;
+        Ok(parameters.map(|value| value as usize))
+    }
+
+    fn strided_parameters(&self, rhs: &Self, operation: u32, scalar_bits: u32, scalar_rhs: bool) -> Result<[u32; 32]> {
         if self.shape != rhs.shape {
             return Err(Error::ShapeMismatch);
         }
@@ -252,7 +265,7 @@ impl Layout {
         parameters[..8].copy_from_slice(&[
             self.elements as u32,
             self.shape.num_dims() as u32,
-            op as u32 | if scalar_rhs { elementwise::SCALAR_RHS } else { 0 },
+            operation | if scalar_rhs { elementwise::SCALAR_RHS } else { 0 },
             scalar_bits,
             self.offset as u32,
             rhs.offset as u32,
@@ -265,8 +278,7 @@ impl Layout {
             parameters[16 + axis] = self.strides[axis] as i32 as u32;
             parameters[24 + axis] = rhs.strides[axis] as i32 as u32;
         }
-        elementwise::validate(&parameters).map_err(|_| Error::InvalidParameter)?;
-        Ok(parameters.map(|value| value as usize))
+        Ok(parameters)
     }
 
     pub fn reduction_shape(&self, axis: usize) -> Result<Shape> {

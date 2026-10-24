@@ -54,6 +54,17 @@ fn main() {
                 .replace("BURN_OP", &format!("{}u32", op as u32)),
         );
     }
+    println!("cargo:rerun-if-changed=src/burn-words.rs.in");
+    let words = fs::read_to_string("src/burn-words.rs.in").expect("read Burn word template");
+    for op in d3os_nvidia::compute::words::WordOp::ALL {
+        source.push_str(
+            &words
+                .replace("BURN_ENTRY", op.symbol())
+                .replace("BURN_PARAMETERS", &parameters)
+                .replace("BURN_ADDRESSES", &addresses)
+                .replace("BURN_OP", &format!("{}u32", op as u32)),
+        );
+    }
     println!("cargo:rerun-if-changed=src/burn-reduction.rs.in");
     let reduction = fs::read_to_string("src/burn-reduction.rs.in").expect("read Burn reduction template");
     let mut parameters: Vec<String> = ["count", "_rank", "_operation", "axis", "offset", "extent", "length", "_reserved"]

@@ -1,6 +1,56 @@
 use d3os_nvidia::compute::Kernel;
 
 #[test]
+fn typed_words_check_flags_scalar_domains_and_original_storage_bounds() {
+    use d3os_nvidia::compute::{
+        elementwise::SCALAR_RHS,
+        words::{ValueType, WordOp},
+    };
+    let mut p = [0u32; 32];
+    p[..8].copy_from_slice(&[6, 2, 0, 0, 5, 0, 6, 3]);
+    p[8..16].fill(1);
+    p[8..10].copy_from_slice(&[2, 3]);
+    p[16..18].copy_from_slice(&[(-3i32) as u32, (-1i32) as u32]);
+    p[25] = 1;
+    for op in WordOp::ALL {
+        p[2] = op as u32;
+        let work = Kernel::TensorWords.work(&p).unwrap();
+        assert_eq!(work.extents[..3], [6, 3, 6]);
+        assert_eq!((work.blocks, work.pointers, work.output), (1, 3, 2));
+        assert!(Kernel::TensorWords.allocates_output());
+        assert!(work.validate_aliases(&[0x1000, 0x1000, 0x2000]).is_ok());
+        assert!(work.validate_aliases(&[0x1000, 0x2000, 0x1004]).is_err());
+        p[2] |= SCALAR_RHS;
+        p[3] = 1;
+        assert_eq!(Kernel::TensorWords.work(&p).is_ok(), op.binary());
+        p[3] = 2;
+        assert_eq!(Kernel::TensorWords.work(&p).is_ok(), op.binary() && op.input() != ValueType::Bool);
+        p[2] = op as u32;
+        assert_eq!(Kernel::TensorWords.work(&p).is_ok(), op == WordOp::IntMaskFill);
+        p[3] = 0;
+    }
+    for (index, value) in [
+        (0, 0),
+        (0, 5),
+        (1, 9),
+        (2, 29),
+        (2, 1 << 17),
+        (4, 4),
+        (5, 1),
+        (6, 5),
+        (7, 2),
+        (10, 2),
+        (18, 1),
+        (26, 1),
+    ] {
+        let mut invalid = p;
+        invalid[index] = value;
+        assert!(Kernel::TensorWords.work(&invalid).is_err());
+    }
+    assert!(Kernel::TensorWords.work(&p[..31]).is_err());
+}
+
+#[test]
 fn fill_is_a_full_writer_with_no_input_or_aliases() {
     for word in [0, 1, u32::MAX, 0x7fc0_1234] {
         let work = Kernel::Fill.work(&[257, word]).unwrap();

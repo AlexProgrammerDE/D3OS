@@ -1,0 +1,97 @@
+#[cutile::entry()]
+unsafe fn BURN_ENTRY(a: *const u32, b: *const u32, output: *mut u32, BURN_PARAMETERS) {
+    let i = indices();
+    let mask = lt_tile(i, broadcast_scalar(count, shape![128]));
+    let mut linear = i;
+    let mut address_a = broadcast_scalar(signed(offset_a), shape![128]);
+    let mut address_b = broadcast_scalar(signed(offset_b), shape![128]);
+    BURN_ADDRESSES
+    let address_a: Tile<u32, { [128] }> = bitcast(address_a);
+    let address_b: Tile<u32, { [128] }> = bitcast(address_b);
+    let left = unsafe { read_tile(a, address_a, mask & lt_tile(address_a, broadcast_scalar(extent_a, shape![128])), 0u32) };
+    let right = if operation & 65536u32 != 0u32 {
+        broadcast_scalar(scalar, shape![128])
+    } else {
+        unsafe { read_tile(b, address_b, mask & lt_tile(address_b, broadcast_scalar(extent_b, shape![128])), 0u32) }
+    };
+    let x: Tile<i32, { [128] }> = bitcast(left);
+    let y: Tile<i32, { [128] }> = bitcast(right);
+    let zero = broadcast_scalar(0u32, shape![128]);
+    let one = broadcast_scalar(1u32, shape![128]);
+    let zero_i = broadcast_scalar(0i32, shape![128]);
+    let result: Tile<u32, { [128] }> = if BURN_OP == 0u32 {
+        left + right
+    } else if BURN_OP == 1u32 {
+        left - right
+    } else if BURN_OP == 2u32 {
+        left * right
+    } else if BURN_OP == 3u32 {
+        select(eq_tile(x, y), one, zero)
+    } else if BURN_OP == 4u32 {
+        select(gt_tile(x, y), one, zero)
+    } else if BURN_OP == 5u32 {
+        select(ge_tile(x, y), one, zero)
+    } else if BURN_OP == 6u32 {
+        select(lt_tile(x, y), one, zero)
+    } else if BURN_OP == 7u32 {
+        select(le_tile(x, y), one, zero)
+    } else if BURN_OP == 8u32 {
+        zero - left
+    } else if BURN_OP == 9u32 {
+        select(lt_tile(x, zero_i), zero - left, left)
+    } else if BURN_OP == 10u32 {
+        select(gt_tile(x, zero_i), one, select(lt_tile(x, zero_i), broadcast_scalar(unsigned(-1i32), shape![128]), zero))
+    } else if BURN_OP == 11u32 {
+        left & right
+    } else if BURN_OP == 12u32 {
+        left | right
+    } else if BURN_OP == 13u32 {
+        left ^ right
+    } else if BURN_OP == 14u32 {
+        left ^ broadcast_scalar(unsigned(-1i32), shape![128])
+    } else if BURN_OP == 15u32 {
+        left << (right & broadcast_scalar(31u32, shape![128]))
+    } else if BURN_OP == 16u32 {
+        let counts: Tile<i32, { [128] }> = bitcast(right & broadcast_scalar(31u32, shape![128]));
+        bitcast(shri(x, counts))
+    } else if BURN_OP == 17u32 {
+        let left_zero: Tile<bool, { [128] }> = eq_tile(left, zero);
+        let right_zero: Tile<bool, { [128] }> = eq_tile(right, zero);
+        select(eq_tile(left_zero, right_zero), one, zero)
+    } else if BURN_OP == 18u32 {
+        select(eq_tile(left, zero) | eq_tile(right, zero), zero, one)
+    } else if BURN_OP == 19u32 {
+        select(eq_tile(left, zero) & eq_tile(right, zero), zero, one)
+    } else if BURN_OP == 20u32 {
+        let left_zero: Tile<bool, { [128] }> = eq_tile(left, zero);
+        let right_zero: Tile<bool, { [128] }> = eq_tile(right, zero);
+        select(eq_tile(left_zero, right_zero), zero, one)
+    } else if BURN_OP == 21u32 {
+        select(eq_tile(left, zero), one, zero)
+    } else if BURN_OP == 22u32 {
+        let value: Tile<f32, { [128] }> = itof(x, rounding::NearestEven);
+        bitcast(value)
+    } else if BURN_OP == 23u32 {
+        let value: Tile<f32, { [128] }> = bitcast(left);
+        let low = le_tile(value, broadcast_scalar(-2147483648.0f32, shape![128]));
+        let high = ge_tile(value, broadcast_scalar(2147483648.0f32, shape![128]));
+        let middle = gt_tile(value, broadcast_scalar(-2147483648.0f32, shape![128])) & lt_tile(value, broadcast_scalar(2147483648.0f32, shape![128]));
+        // Convert only finite, representable values. Selection occurs before
+        // ftoi, so NaNs, infinities and overflow never reach its undefined domain.
+        let safe = select(middle, value, broadcast_scalar(0f32, shape![128]));
+        let converted: Tile<i32, { [128] }> = ftoi(safe, rounding::NearestIntToZero);
+        let converted: Tile<u32, { [128] }> = bitcast(converted);
+        select(low, broadcast_scalar(unsigned(-1i32) << 31u32, shape![128]), select(high, broadcast_scalar(0x7fffffffu32, shape![128]), converted))
+    } else if BURN_OP == 24u32 {
+        select(eq_tile(left, zero), zero, one)
+    } else if BURN_OP == 25u32 {
+        let value: Tile<f32, { [128] }> = bitcast(left);
+        select(eq_tile(value, broadcast_scalar(0f32, shape![128])), zero, one)
+    } else if BURN_OP == 26u32 {
+        let value = select(eq_tile(left, zero), broadcast_scalar(0f32, shape![128]), broadcast_scalar(1f32, shape![128]));
+        bitcast(value)
+    } else {
+        select(eq_tile(right, zero), left, broadcast_scalar(scalar, shape![128]))
+    };
+    unsafe { write_tile(output, i, result, mask) };
+}

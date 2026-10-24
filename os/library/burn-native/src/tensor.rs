@@ -5,6 +5,7 @@ use d3os_compute::{
     Error, Result,
     nvidia::{GpuBuffer, Nvidia},
 };
+use d3os_nvidia::compute::words::{ValueType, WordOp};
 use d3os_nvidia::compute::{Kernel, elementwise::Elementwise, reduction::Reduction};
 
 /// A Burn tensor primitive backed by shared, process-owned GPU storage.
@@ -17,6 +18,14 @@ pub struct NativeTensor {
 
 fn supported(dtype: DType) -> bool {
     matches!(dtype, DType::F32 | DType::I32 | DType::Bool(BoolStore::U32))
+}
+
+fn word_dtype(value: ValueType) -> DType {
+    match value {
+        ValueType::F32 => DType::F32,
+        ValueType::I32 => DType::I32,
+        ValueType::Bool => DType::Bool(BoolStore::U32),
+    }
 }
 
 impl NativeTensor {
@@ -172,6 +181,86 @@ impl NativeTensor {
         }
         let dtype = if operation.boolean() { DType::Bool(BoolStore::U32) } else { DType::F32 };
         self.elementwise(self, operation, 0, false, dtype)
+    }
+
+    fn words(&self, rhs: &Self, op: WordOp, scalar: u32, scalar_rhs: bool) -> Result<Self> {
+        if self.dtype != word_dtype(op.input()) || rhs.dtype != if op.mask_fill() { DType::Bool(BoolStore::U32) } else { self.dtype } {
+            return Err(Error::InvalidParameter);
+        }
+        let shape = crate::layout::broadcast(self.layout.shape(), rhs.layout.shape())?;
+        let layout = Layout::contiguous(shape.clone())?;
+        let dtype = word_dtype(op.output());
+        if layout.is_empty() {
+            return Ok(Self {
+                buffer: self.buffer.clone(),
+                layout,
+                dtype,
+            });
+        }
+        let left = self.layout.expand(shape.clone())?;
+        let right = rhs.layout.expand(shape)?;
+        let parameters = left.word_parameters(&right, op, scalar, scalar_rhs)?;
+        let buffer = Nvidia.produce_words(layout.len(), Kernel::TensorWords, &[(&self.buffer, 0), (&rhs.buffer, 0)], &parameters)?;
+        Ok(Self {
+            buffer: Arc::new(buffer),
+            layout,
+            dtype,
+        })
+    }
+
+    pub fn word_binary(&self, rhs: &Self, operation: WordOp) -> Result<Self> {
+        if !operation.binary() {
+            return Err(Error::InvalidParameter);
+        }
+        self.words(rhs, operation, 0, false)
+    }
+
+    /// Scalar words retain their exact I32 representation. Boolean scalars must
+    /// use canonical zero/one words, including for empty logical results.
+    pub fn word_scalar(&self, operation: WordOp, value: u32) -> Result<Self> {
+        if !operation.binary() || (operation.input() == ValueType::Bool && value > 1) {
+            return Err(Error::InvalidParameter);
+        }
+        self.words(self, operation, value, true)
+    }
+
+    pub fn word_unary(&self, operation: WordOp) -> Result<Self> {
+        if !operation.unary() {
+            return Err(Error::InvalidParameter);
+        }
+        self.words(self, operation, 0, false)
+    }
+
+    pub fn mask_fill_i32(&self, mask: &Self, value: i32) -> Result<Self> {
+        self.words(mask, WordOp::IntMaskFill, value as u32, false)
+    }
+
+    pub fn mask_fill_bool(&self, mask: &Self, value: bool) -> Result<Self> {
+        self.words(mask, WordOp::BoolMaskFill, u32::from(value), false)
+    }
+
+    /// Convert supported native dtypes. Float-to-int truncates toward zero,
+    /// clamps overflow to I32 bounds, and maps NaN to zero, as Rust casts do.
+    pub fn cast(&self, dtype: DType) -> Result<Self> {
+        if !supported(dtype) {
+            return Err(Error::InvalidParameter);
+        }
+        if self.dtype == dtype || (self.dtype == DType::Bool(BoolStore::U32) && dtype == DType::I32) {
+            return Ok(Self {
+                buffer: self.buffer.clone(),
+                layout: self.layout.clone(),
+                dtype,
+            });
+        }
+        let op = match (self.dtype, dtype) {
+            (DType::F32, DType::I32) => WordOp::FloatToInt,
+            (DType::F32, DType::Bool(_)) => WordOp::FloatToBool,
+            (DType::I32, DType::F32) => WordOp::IntToFloat,
+            (DType::I32, DType::Bool(_)) => WordOp::IntToBool,
+            (DType::Bool(_), DType::F32) => WordOp::BoolToFloat,
+            _ => return Err(Error::InvalidParameter),
+        };
+        self.word_unary(op)
     }
 
     /// FP32 matrix multiplication with Tensor Core accumulation and broadcast batches.

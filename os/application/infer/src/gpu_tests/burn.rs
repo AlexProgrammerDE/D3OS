@@ -1,5 +1,6 @@
 //! Check Burn tensor ownership and views on real native GPU allocations.
 mod math;
+mod words;
 use abi::elementwise::Elementwise;
 use abi::reduction::Reduction;
 use alloc::{format, string::String, vec::Vec};
@@ -95,6 +96,7 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
         "NVIDIA_BURN_REDUCTION_OK operations=7 views=strided_broadcast nan=first ties=first empty=ok guards=ok resident=ok backend=nvidia"
     ));
     math::run(backend).map_err(|e| format!("Burn native math: {e}"))?;
+    words::run(backend).map_err(|e| format!("Burn native words: {e}"))?;
     Ok(())
 }
 

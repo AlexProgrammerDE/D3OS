@@ -4,8 +4,9 @@ use crate::{Error, Result};
 
 pub mod elementwise;
 pub mod reduction;
+pub mod words;
 
-pub const VERSION: u32 = 9;
+pub const VERSION: u32 = 10;
 pub const INFO: u32 = 0;
 pub const ALLOCATE: u32 = 1;
 pub const FREE: u32 = 2;
@@ -25,7 +26,7 @@ pub const END_COMMANDS: u32 = 10;
 pub const QUEUE_PROFILE: u32 = 11;
 pub const SERVICE_PROFILE: u32 = 12;
 pub const SERVICE_OPERATIONS: usize = 13;
-pub const KERNEL_COUNT: usize = 47;
+pub const KERNEL_COUNT: usize = 48;
 
 /// CPU service costs by request operation, including queue work within it.
 #[derive(Clone, Copy, Debug, Default)]
@@ -127,9 +128,10 @@ pub enum Kernel {
     TensorElementwise = 44,
     TensorReduction = 45,
     Fill = 46,
+    TensorWords = 47,
 }
 
-const _: () = assert!(Kernel::Fill as usize + 1 == KERNEL_COUNT);
+const _: () = assert!(Kernel::TensorWords as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -176,6 +178,7 @@ impl Kernel {
             Self::TensorElementwise
                 | Self::TensorReduction
                 | Self::Fill
+                | Self::TensorWords
                 | Self::Matmul
                 | Self::Im2col
                 | Self::MaxPool
@@ -254,6 +257,7 @@ impl Kernel {
             44 => Self::TensorElementwise,
             45 => Self::TensorReduction,
             46 => Self::Fill,
+            47 => Self::TensorWords,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -307,12 +311,14 @@ impl Kernel {
             Self::TensorElementwise => "burn_strided_copy",
             Self::TensorReduction => "burn_sum",
             Self::Fill => "burn_fill",
+            Self::TensorWords => "burn_i32_add",
         }
     }
 
     /// Select the cuTile specialization without changing the public request ABI.
     pub fn entry(self, parameters: &[u32]) -> &'static str {
         match (self, parameters) {
+            (Self::TensorWords, p) if p.len() == elementwise::PARAMETERS => words::WordOp::from_raw(p[2] & 0xff).map_or(self.symbol(), |op| op.symbol()),
             (Self::TensorReduction, p) if p.len() == reduction::PARAMETERS => reduction::Reduction::from_raw(p[2]).map_or(self.symbol(), |op| op.symbol()),
             (Self::TensorElementwise, p) if p.len() == elementwise::PARAMETERS => {
                 elementwise::Elementwise::from_raw(p[2] & 0xff).map_or(self.symbol(), |op| op.symbol())
@@ -357,6 +363,10 @@ impl Kernel {
         let mut mutated = 0;
         let mut threads = 128;
         let (count, pointers, output, in_place) = match (self, p) {
+            (Self::TensorWords, p) => {
+                extents[..3].copy_from_slice(&words::validate(p)?);
+                (p[0], 3, 2, false)
+            }
             (Self::Fill, &[count, _bits]) => {
                 if count > i32::MAX as u32 {
                     return Err(Error::InvalidField);

@@ -145,7 +145,7 @@ The CI workflow provides repeatable numerical tests and an optional pretrained Q
 The current target is the RTX 4090 Laptop GPU (`10de:2757`, AD103) with one serialized compute queue.
 The driver boots pinned signed firmware and allocates a private, virtually bound compute context.
 The process-owned syscall interface accepts built-in kernels and opaque buffer handles.
-Native compute protocol version 9 includes command scopes, queue profiles, and 47 built-in kernels.
+Native compute protocol version 10 includes command scopes, queue profiles, and 48 built-in kernels.
 Its expanded profile array requires the matching SDK.
 Rebuild compute applications with the matching SDK. The kernel rejects incompatible request versions.
 
@@ -177,6 +177,17 @@ Three classification entries produce canonical boolean words.
 A separate full-writer kernel fills FP32, I32, and boolean storage without a host upload or a separate clear.
 Native GPU checks compare these operations with independent libm references, including 2,816 FP32 edge values.
 All 95 earlier GPU instruction sections remain byte-identical after the 23 math and fill entries are added.
+
+The typed-word family adds 29 entries for I32 arithmetic, comparisons, bitwise operations, boolean logic, masks, and conversions.
+Arithmetic wraps at 32 bits. Shift counts wrap modulo 32, and signed right shifts preserve the sign.
+The float-to-I32 conversion truncates toward zero, clamps overflow, and maps NaN to zero.
+It selects finite, representable operands before conversion to avoid undefined floating-to-integer conversion results.
+Boolean outputs use canonical zero/one words.
+Boolean-to-I32 casts share GPU storage and retain ownership without a launch, allocation, or transfer.
+The driver reuses the checked strided address contract and rejects invalid operand flags and boolean scalar words.
+D3OS hardware checks pass wrapping arithmetic, signed comparisons, conversions, shared ownership, partial tiles, and neighboring guards.
+All 118 earlier GPU instruction sections remain byte-identical after the typed-word entries are added.
+Integer division, remainder, and general indexed operations remain backend work.
 
 `Backend::upload_quantized()` accepts borrowed Q8_0, Q3_K, Q4_K, Q5_K, and Q6_K weight blocks.
 It checks block lengths and finite FP16 scales before allocating device storage.

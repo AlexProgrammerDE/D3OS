@@ -143,12 +143,19 @@ impl Elementwise {
 /// Every reachable address must lie within its declared storage extent.
 pub fn validate(parameters: &[u32]) -> Result<[u64; 3]> {
     let p: &[u32; PARAMETERS] = parameters.try_into().map_err(|_| Error::InvalidField)?;
-    let rank = p[1] as usize;
-    if !(1..=8).contains(&rank) || p[2] & !(SCALAR_RHS | 0xff) != 0 || p[0] == 0 || p[0] > i32::MAX as u32 {
+    if p[2] & !(SCALAR_RHS | 0xff) != 0 {
         return Err(Error::InvalidField);
     }
     let op = Elementwise::from_raw(p[2] & 0xff)?;
     if ((op == Elementwise::MaskFill || op.unary()) && p[2] & SCALAR_RHS != 0) || (p[2] & SCALAR_RHS == 0 && op != Elementwise::MaskFill && p[3] != 0) {
+        return Err(Error::InvalidField);
+    }
+    validate_layout(p)
+}
+
+pub(crate) fn validate_layout(p: &[u32; PARAMETERS]) -> Result<[u64; 3]> {
+    let rank = p[1] as usize;
+    if !(1..=8).contains(&rank) || p[0] == 0 || p[0] > i32::MAX as u32 {
         return Err(Error::InvalidField);
     }
     let count = p[8..16]

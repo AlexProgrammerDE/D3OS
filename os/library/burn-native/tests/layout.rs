@@ -157,3 +157,16 @@ fn reduction_metadata_preserves_rank_signed_strides_and_original_storage() {
     assert_eq!(empty.reduction_shape(0).unwrap().as_slice(), [1, 0, 4]);
     assert!(empty.reduction_parameters(0, Reduction::Sum).is_err());
 }
+
+#[test]
+fn typed_words_use_the_same_view_addresses_with_distinct_operand_rules() {
+    use d3os_nvidia::compute::words::WordOp;
+    let view = Layout::contiguous(Shape::new([3, 257])).unwrap().permute(&[1, 0]).unwrap().flip(&[0]).unwrap();
+    let rhs = Layout::contiguous(Shape::new([3])).unwrap().expand(Shape::new([257, 3])).unwrap();
+    let parameters = view.word_parameters(&rhs, WordOp::ShiftRight, 0, false).unwrap();
+    assert_eq!(parameters[..8], [771, 2, WordOp::ShiftRight as usize, 0, 256, 0, 771, 3]);
+    assert_eq!(parameters[16..18], [(-1i32) as u32 as usize, 257]);
+    assert_eq!(parameters[24..26], [0, 1]);
+    assert!(view.word_parameters(&rhs, WordOp::BoolAnd, 2, true).is_err());
+    assert!(view.word_parameters(&rhs, WordOp::FloatToInt, 1, false).is_err());
+}
