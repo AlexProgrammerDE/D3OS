@@ -77,6 +77,8 @@ jobs:
           --all-targets -- -D warnings
       - name: Verify guest training artifact recovery
         run: python3 tools/nvidia/test-mnist.py
+      - name: Verify sharded GGUF firmware preparation
+        run: python3 tools/nvidia/test-qwen-shards.py
       - name: Install cuTile host compiler dependencies
         run: |
           sudo apt-get update

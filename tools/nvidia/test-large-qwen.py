@@ -84,6 +84,7 @@ def main():
                     ("qemu.log", "qemu.log"),
                     ("large-qwen-manifest.json", "manifest.json"),
                     ("manifest.json", "driver-manifest.json"),
+                    ("root/large-qwen-logits.bin", "logits.bin"),
                 ]:
                     path = guest / source
                     if path.exists() and path.stat().st_mtime_ns >= started_ns:

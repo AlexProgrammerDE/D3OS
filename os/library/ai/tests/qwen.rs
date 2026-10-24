@@ -32,6 +32,29 @@ fn owned_qwen_state_matches_independent_binary64_sequences_and_preserves_snapsho
 }
 
 #[test]
+fn cpu_packed_float_views_honor_transformed_parameter_layouts() {
+    use d3os_ai::burn::{
+        module::{Module, ModuleMapper, Param},
+        tensor::Int,
+    };
+    struct Reverse;
+    impl ModuleMapper for Reverse {
+        fn map_int<const D: usize>(&mut self, param: Param<Tensor<D, Int>>) -> Param<Tensor<D, Int>> {
+            param.map(|tensor| tensor.flip([0]))
+        }
+    }
+    let device = Device::flex();
+    let bytes: Vec<_> = [1f32, 2., 3., 4., 5., 6.].into_iter().flat_map(f32::to_le_bytes).collect();
+    let original = PackedMatrix::from_bytes([2, 3], MatrixFormat::F32, &bytes, &device).unwrap();
+    let reversed = original.clone().map(&mut Reverse);
+    let input = Tensor::<2>::from_floats([[1., 2., 3.]], &device);
+    let actual = reversed.project(input.clone()).unwrap().try_into_vec_as::<f32>().unwrap();
+    assert_eq!(actual, [28., 10.]);
+    assert_eq!(original.project(input).unwrap().try_into_vec_as::<f32>().unwrap(), [14., 32.]);
+    assert_eq!(reversed.embedding(&[1, 0]).unwrap().try_into_vec_as::<f32>().unwrap(), [3., 2., 1., 6., 5., 4.]);
+}
+
+#[test]
 fn qwen_state_rejects_invalid_geometry_and_autodiff_devices() {
     use d3os_ai::qwen::{AttentionConfig, AttentionState, DeltaConfig, DeltaState};
     let device = Device::flex();

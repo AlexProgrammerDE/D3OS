@@ -19,6 +19,31 @@ mod benchmark;
 mod file_tests;
 mod gpu_tests;
 mod mnist;
+mod model_file;
+
+#[derive(Clone, Copy)]
+enum QwenSource {
+    Archive,
+    FirmwareGguf,
+}
+
+impl QwenSource {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Archive => "Qwen3.5-0.8B",
+            Self::FirmwareGguf => "Qwen GGUF",
+        }
+    }
+    fn load(self, device: &Device) -> Result<Qwen, String> {
+        match self {
+            Self::Archive => {
+                let bytes = read_file("/usr/share/inference/qwen3.5-0.8b.d3t")?;
+                Qwen::load(device, &bytes).map_err(|e| format!("{e}"))
+            }
+            Self::FirmwareGguf => model_file::load(device).map(|(model, _)| model),
+        }
+    }
+}
 
 fn report(message: fmt::Arguments<'_>) {
     terminal::println!("{}", message);
@@ -94,9 +119,29 @@ fn run() -> Result<(), String> {
         Some("alexnet") if args.len() == 1 || args.len() == 3 => {
             alexnet(&d3os_ai::burn::tensor::Device::flex(), &args[1..])?;
         }
-        Some("qwen") if args.len() == 1 || args.len() >= 3 => generate_qwen(&Device::flex(), "cpu", &args[1..])?,
+        Some("qwen") if args.len() == 1 || args.len() >= 3 => generate_qwen(&Device::flex(), "cpu", QwenSource::Archive, &args[1..])?,
         Some("gpu-qwen") if args.len() == 1 || args.len() >= 3 => {
-            generate_qwen(&d3os_ai::native_device().map_err(|e| format!("{e}"))?, "nvidia", &args[1..])?;
+            generate_qwen(
+                &d3os_ai::native_device().map_err(|e| format!("{e}"))?,
+                "nvidia",
+                QwenSource::Archive,
+                &args[1..],
+            )?;
+        }
+        Some("gpu-qwen-gguf") if args.len() == 1 || args.len() >= 3 => {
+            generate_qwen(
+                &d3os_ai::native_device().map_err(|e| format!("{e}"))?,
+                "nvidia",
+                QwenSource::FirmwareGguf,
+                &args[1..],
+            )?;
+        }
+        Some("gpu-qwen-gguf-bench") if args.len() == 1 => {
+            let backend = Nvidia::new().map_err(|e| format!("{e}"))?;
+            model_file::benchmark(&d3os_ai::native_device().map_err(|e| format!("{e}"))?, &backend)?;
+        }
+        Some("gpu-qwen-gguf-verify") if args.len() == 1 => {
+            model_file::verify(&d3os_ai::native_device().map_err(|e| format!("{e}"))?)?;
         }
         Some("qwen-verify") if args.len() == 1 => verify_qwen(&Device::flex(), "cpu")?,
         Some("gpu-qwen-verify") if args.len() == 1 => {
@@ -104,7 +149,7 @@ fn run() -> Result<(), String> {
         }
         _ => {
             return Err(String::from(
-                "usage: infer self-test | burn-self-test | gpu-mnist-train | gpu-mnist-infer | fwcfg-self-test | gpu-self-test | gpu-kernel-bench | alexnet [MODEL FIXTURE] | gpu-alexnet [MODEL FIXTURE] | gpu-alexnet-bench | qwen [MAX_TOKENS PROMPT...] | qwen-verify | gpu-qwen [MAX_TOKENS PROMPT...] | gpu-qwen-verify | gpu-qwen-bench [long] [device-timing]",
+                "usage: infer self-test | burn-self-test | gpu-mnist-train | gpu-mnist-infer | fwcfg-self-test | gpu-self-test | gpu-kernel-bench | alexnet [MODEL FIXTURE] | gpu-alexnet [MODEL FIXTURE] | gpu-alexnet-bench | qwen [MAX_TOKENS PROMPT...] | qwen-verify | gpu-qwen [MAX_TOKENS PROMPT...] | gpu-qwen-verify | gpu-qwen-bench [long] [device-timing] | gpu-qwen-gguf [MAX_TOKENS PROMPT...] | gpu-qwen-gguf-bench | gpu-qwen-gguf-verify",
             ));
         }
     }
@@ -130,7 +175,7 @@ fn alexnet(device: &d3os_ai::burn::tensor::Device, paths: &[String]) -> Result<(
     Ok(())
 }
 
-fn generate_qwen(device: &Device, backend: &str, args: &[String]) -> Result<(), String> {
+fn generate_qwen(device: &Device, backend: &str, source: QwenSource, args: &[String]) -> Result<(), String> {
     let start = time::systime().num_milliseconds();
     let limit = if args.is_empty() {
         32
@@ -150,14 +195,13 @@ fn generate_qwen(device: &Device, backend: &str, args: &[String]) -> Result<(), 
     let tokenizer = Tokenizer::parse(&data).map_err(|error| format!("{error}"))?;
     let tokens = tokenizer.encode_chat(&prompt).map_err(|error| format!("{error}"))?;
     report(format_args!(
-        "INFERENCE_START qwen3.5-0.8b backend={} prompt_tokens={} framework=burn",
+        "INFERENCE_START qwen backend={} prompt_tokens={} framework=burn model={}",
         backend,
-        tokens.len()
+        tokens.len(),
+        source.label()
     ));
-    let bytes = read_file("/usr/share/inference/qwen3.5-0.8b.d3t")?;
-    let model = Qwen::load(device, &bytes).map_err(|error| format!("{error}"))?;
-    drop(bytes);
-    report(format_args!("Qwen3.5-0.8B | {} | streaming greedy generation", backend));
+    let model = source.load(device)?;
+    report(format_args!("{} | {} | streaming greedy generation", source.label(), backend));
     let generation_start = time::systime().num_milliseconds();
     let mut first_token = None;
     let mut count = 0usize;

@@ -153,6 +153,8 @@ struct FullAttention {
 }
 #[derive(Module, Debug)]
 struct LinearAttention {
+    #[module(skip)]
+    output_heads_tiled: bool,
     qkv: PackedMatrix,
     z: PackedMatrix,
     beta: PackedMatrix,
@@ -205,6 +207,14 @@ impl<'a, 'data, F: FnMut(&str, &[usize]) -> Result<WeightData<'data>>> Loader<'a
     }
     fn matrix(&mut self, name: &str, shape: [usize; 2]) -> Result<PackedMatrix> {
         let data = self.data(name, &shape)?;
+        #[cfg(feature = "cpu")]
+        if *self.device == Device::flex() && data.format == MatrixFormat::Bf16 {
+            // Flex projections accumulate in FP32. Expand constant BF16
+            // weights once at import, rather than on every generated token.
+            let values = data.format.decode(shape, &data.bytes)?;
+            let bytes = TensorData::new(values, shape);
+            return PackedMatrix::from_bytes(shape, MatrixFormat::F32, bytes.as_bytes(), self.device);
+        }
         PackedMatrix::from_bytes(shape, data.format, &data.bytes, self.device)
     }
     fn tensor<const D: usize>(&mut self, name: &str, shape: [usize; D]) -> Result<Param<Tensor<D>>> {
@@ -266,6 +276,7 @@ impl Qwen {
                 })
             } else {
                 Mixer::Linear(LinearAttention {
+                    output_heads_tiled: false,
                     qkv: load.matrix(&format!("{prefix}.linear_attn.in_proj_qkv.weight"), [config.conv_width(), config.hidden])?,
                     z: load.matrix(&format!("{prefix}.linear_attn.in_proj_z.weight"), [config.linear_width(), config.hidden])?,
                     beta: load.matrix(&format!("{prefix}.linear_attn.in_proj_b.weight"), [config.linear_heads, config.hidden])?,
@@ -301,6 +312,14 @@ impl Qwen {
     }
     fn output_weights(&self) -> &PackedMatrix {
         self.output.as_ref().unwrap_or(&self.embedding)
+    }
+    pub(crate) fn with_tiled_linear_outputs(mut self) -> Self {
+        for layer in &mut self.layers {
+            if let Mixer::Linear(weights) = &mut layer.mixer {
+                weights.output_heads_tiled = true;
+            }
+        }
+        self
     }
     pub fn config(&self) -> Config {
         self.config
@@ -471,6 +490,22 @@ impl<'a> Session<'a> {
                             config.delta(),
                         )?;
                         *slot = Some(Cache::Linear(state));
+                        // GGUF keeps output-projection columns in tiled V-head
+                        // order. Permute the small activation instead of
+                        // decoding or requantizing packed weight blocks.
+                        let attention = if weights.output_heads_tiled {
+                            attention
+                                .reshape([
+                                    tokens.len(),
+                                    config.linear_key_heads,
+                                    config.linear_heads / config.linear_key_heads,
+                                    config.linear_value_dim,
+                                ])
+                                .swap_dims(1, 2)
+                                .reshape([tokens.len(), config.linear_width()])
+                        } else {
+                            attention
+                        };
                         weights.out.project(attention)?
                     }
                     _ => return Err(Error::InvalidConfig),

@@ -129,8 +129,8 @@ impl Nvidia {
         Ok(Self)
     }
 
-    fn upload_packed(&self, elements: usize, bytes: &[u8], storage: Storage) -> Result<GpuBuffer> {
-        let mut buffer = self.allocate_storage::<f32>(bytes.len().div_ceil(4))?;
+    fn upload_packed<T>(&self, elements: usize, bytes: &[u8], storage: Storage) -> Result<GpuBuffer<T>> {
+        let mut buffer = self.allocate_storage::<T>(bytes.len().div_ceil(4))?;
         let words = bytes.len() / 4;
         if words != 0 {
             request(Request {
@@ -287,7 +287,7 @@ impl Nvidia {
     /// Pack little-endian bytes into owned words. The final word is zero padded;
     /// kernels must receive the logical byte length separately for bounds checks.
     pub fn upload_bytes(&self, values: &[u8]) -> Result<GpuBuffer<u32>> {
-        self.upload_words(&Self::pack_bytes(values)?)
+        self.upload_packed(values.len().div_ceil(4), values, Storage::Words)
     }
 
     /// Write packed bytes at a word offset and zero-pad the final partial word.

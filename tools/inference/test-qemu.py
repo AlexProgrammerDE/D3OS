@@ -244,6 +244,9 @@ def main():
         help="verify all Qwen layers, logits, and tokenizer fixtures",
     )
     parser.add_argument("--qwen-assets", type=Path, default=ROOT / "target/qwen")
+    parser.add_argument(
+        "--directory", type=Path, help="isolate this guest's image, logs, and monitor"
+    )
     parser.add_argument("--bios", type=Path, help="OVMF firmware image")
     parser.add_argument(
         "--large-pci-bar",
@@ -302,12 +305,16 @@ def main():
             "provide --bios with an OVMF firmware image, or run cargo make --no-workspace ovmf"
         )
     directory = (
-        ROOT
-        / "target"
-        / (
-            "inference-qemu-qwen"
-            if mode.startswith("qwen")
-            else f"inference-qemu-{mode}"
+        args.directory.resolve()
+        if args.directory
+        else (
+            ROOT
+            / "target"
+            / (
+                "inference-qemu-qwen"
+                if mode.startswith("qwen")
+                else f"inference-qemu-{mode}"
+            )
         )
     )
     directory.mkdir(parents=True, exist_ok=True)

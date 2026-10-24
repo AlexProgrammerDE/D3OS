@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import subprocess
+import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -19,6 +20,9 @@ MODELS = {
         "layers": 32,
         "hidden": 4096,
         "quantization": "Q8_0",
+        "config_revision": "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+        "config_source_sha256": "d0883072e01861ed0b2d47be3c16c36a8e81c224c7ffaa310c6558fb3f932b05",
+        "config_sha256": "cb1a0d3d7f169532311b6f5d5ee6a649c49667248878fdfe22f163dc16797070",
     },
     "27b": {
         "model": "Qwen/Qwen3.6-27B",
@@ -30,6 +34,9 @@ MODELS = {
         "layers": 64,
         "hidden": 5120,
         "quantization": "Q3_K_M",
+        "config_revision": "6a9e13bd6fc8f0983b9b99948120bc37f49c13e9",
+        "config_source_sha256": "69db4eb7196bc8190813231b3018ca05d8c2e3abc7b1af19d55c157af44a9d9c",
+        "config_sha256": "1390512aaf85b8e294ea26bbe09ac3a79e1e687b9f6755e370e991c95f90f3a7",
     },
 }
 
@@ -73,6 +80,21 @@ def prepare(directory, key):
         temporary.replace(path)
     elif path.stat().st_size != model["bytes"] or digest(path) != model["sha256"]:
         raise ValueError(f"model checksum mismatch: {path}")
+    config = directory / f"{key}-config.json"
+    if not config.exists():
+        url = f"https://huggingface.co/{model['model']}/resolve/{model['config_revision']}/config.json"
+        with urllib.request.urlopen(url, timeout=30) as source:
+            raw = source.read()
+        if hashlib.sha256(raw).hexdigest() != model["config_source_sha256"]:
+            raise ValueError("Qwen configuration download checksum mismatch")
+        canonical = (json.dumps(json.loads(raw), indent=2) + "\n").encode()
+        if hashlib.sha256(canonical).hexdigest() != model["config_sha256"]:
+            raise ValueError("Qwen canonical configuration checksum mismatch")
+        temporary = config.with_suffix(".download")
+        temporary.write_bytes(canonical)
+        temporary.replace(config)
+    elif digest(config) != model["config_sha256"]:
+        raise ValueError(f"configuration checksum mismatch: {config}")
     manifest = dict(model, path=str(path.resolve()))
     (directory / f"{key}-manifest.json").write_text(
         json.dumps(manifest, indent=2) + "\n"

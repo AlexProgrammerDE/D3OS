@@ -53,18 +53,20 @@ impl PackedMatrix {
     pub fn from_bytes(shape: [usize; 2], format: MatrixFormat, bytes: &[u8], device: &Device) -> Result<Self> {
         device_supported(device)?;
         format.validate(shape, bytes).map_err(|e| format!("Qwen packed matrix: {e}"))?;
-        let mut words = Vec::new();
-        words
-            .try_reserve_exact(bytes.len().div_ceil(4))
+        let count = bytes.len().div_ceil(4);
+        let length = count.checked_mul(4).ok_or(Error::AllocationFailed)?;
+        let mut packed = Vec::new();
+        packed
+            .try_reserve_exact(length)
             .map_err(|_| String::from("cannot allocate Qwen packed matrix"))?;
-        for chunk in bytes.chunks(4) {
-            let mut word = [0; 4];
-            word[..chunk.len()].copy_from_slice(chunk);
-            words.push(i32::from_le_bytes(word));
-        }
-        let count = words.len();
+        // Copy the complete encoding once, then initialize only its partial word.
+        packed.extend_from_slice(bytes);
+        packed.resize(length, 0);
         Ok(Self {
-            words: Param::initialized(ParamId::new(), Tensor::<1, Int>::from_data(TensorData::new(words, [count]), device)),
+            words: Param::initialized(
+                ParamId::new(),
+                Tensor::<1, Int>::from_data(TensorData::from_bytes_vec(packed, [count], DType::I32), device),
+            ),
             shape,
             format,
         })

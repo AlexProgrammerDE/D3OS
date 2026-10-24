@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-exclude = ["tools/gpu-kernels", "third_party/burn-optim", "third_party/burn-dispatch", "third_party/burn-backend-extension"]
+exclude = ["tools/gpu-kernels", "third_party/burn-optim", "third_party/burn-dispatch", "third_party/burn-backend-extension", "third_party/gemm-common"]
 
 members = [
     "os/application/doom",
@@ -38,6 +38,7 @@ members = [
 burn-optim = { path = "third_party/burn-optim" }
 burn-dispatch = { path = "third_party/burn-dispatch" }
 burn-backend-extension = { path = "third_party/burn-backend-extension" }
+gemm-common = { path = "third_party/gemm-common" }
 
 # [profile.release]
 # debug = true

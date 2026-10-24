@@ -1,4 +1,5 @@
 //! Streaming GGUF v3 reader for the Qwen3.5/3.6 text architecture.
+pub mod shards;
 use super::model::{Error, Result};
 use super::{Config, MatrixFormat, Qwen, WeightData};
 use alloc::{borrow::Cow, collections::BTreeMap, format, string::String, vec, vec::Vec};
@@ -345,7 +346,11 @@ impl<R: ReadAt> Gguf<R> {
         if !self.tensors.is_empty() {
             return Err(Error::UnexpectedTensor);
         }
-        Ok(model)
+        Ok(if self.config.linear_heads != self.config.linear_key_heads {
+            model.with_tiled_linear_outputs()
+        } else {
+            model
+        })
     }
     fn tensor(&mut self, name: &str, shape: &[usize]) -> Result<WeightData<'static>> {
         let mapped = tensor_name(name)?;
@@ -363,6 +368,7 @@ impl<R: ReadAt> Gguf<R> {
             Encoding::Bf16 => MatrixFormat::Bf16,
             Encoding::Quantized(format) => MatrixFormat::Quantized(format),
         };
+        self.restore_linear_heads(name, shape, format, &mut bytes)?;
         if shape.len() != 2 {
             let elements = element_count(shape)?;
             let mut values = format.decode([1, elements], &bytes)?;
@@ -396,7 +402,49 @@ impl<R: ReadAt> Gguf<R> {
             bytes: Cow::Owned(bytes),
         })
     }
+
+    fn restore_linear_heads(&self, name: &str, shape: &[usize], format: MatrixFormat, bytes: &mut [u8]) -> Result<()> {
+        let config = self.config;
+        if config.linear_key_heads == config.linear_heads || !name.contains(".linear_attn.") {
+            return Ok(());
+        }
+        let keys = config.linear_key_heads;
+        let values = config.linear_heads;
+        let key_channels = 2 * keys * config.linear_key_dim;
+        let (offset, head_bytes) = if name.ends_with("in_proj_qkv.weight") {
+            let row = format.byte_len([1, shape[1]])?;
+            (key_channels * row, config.linear_value_dim * row)
+        } else if name.ends_with("in_proj_z.weight") {
+            (0, config.linear_value_dim * format.byte_len([1, shape[1]])?)
+        } else if name.ends_with("in_proj_a.weight") || name.ends_with("in_proj_b.weight") {
+            (0, format.byte_len([1, shape[1]])?)
+        } else if name.ends_with("conv1d.weight") {
+            let row = format.byte_len([1, config.convolution_kernel])?;
+            (key_channels * row, config.linear_value_dim * row)
+        } else if name.ends_with("A_log") || name.ends_with("dt_bias") {
+            (0, format.byte_len([1, 1])?)
+        } else {
+            return Ok(());
+        };
+        restore_tiled_heads(bytes, offset, head_bytes, keys, values)
+    }
 }
+
+fn restore_tiled_heads(bytes: &mut [u8], offset: usize, head_bytes: usize, keys: usize, values: usize) -> Result<()> {
+    let length = head_bytes.checked_mul(values).ok_or(Error::InvalidModelShape)?;
+    let end = offset.checked_add(length).ok_or(Error::InvalidModelShape)?;
+    let data = bytes.get_mut(offset..end).ok_or(Error::InvalidModelShape)?;
+    let mut tiled = Vec::new();
+    tiled.try_reserve_exact(length).map_err(|_| Error::AllocationFailed)?;
+    tiled.extend_from_slice(data);
+    let repeats = values / keys;
+    for head in 0..values {
+        let source = (head % repeats) * keys + head / repeats;
+        data[head * head_bytes..(head + 1) * head_bytes].copy_from_slice(&tiled[source * head_bytes..(source + 1) * head_bytes]);
+    }
+    Ok(())
+}
+
 
 fn tensor_name(name: &str) -> Result<String> {
     match name {
@@ -436,4 +484,33 @@ fn tensor_name(name: &str) -> Result<String> {
         _ => return Err(Error::InvalidModelShape),
     };
     Ok(format!("blk.{layer}.{mapped}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn restoring_grouped_heads_preserves_packed_blocks_and_neighboring_regions() {
+        for (keys, repeats, head_bytes) in [(2, 3, 4), (16, 2, 128 * 34), (16, 3, 128 * 176)] {
+            let heads = keys * repeats;
+            let canonical: Vec<_> = (0..heads * head_bytes)
+                .map(|i| (i as u8).wrapping_mul(117).wrapping_add((i / head_bytes) as u8))
+                .collect();
+            // Independently export grouped heads by visiting each tile in turn.
+            let mut exported = vec![0x53; 17];
+            for tile in 0..repeats {
+                for key in 0..keys {
+                    let start = (key * repeats + tile) * head_bytes;
+                    exported.extend_from_slice(&canonical[start..start + head_bytes]);
+                }
+            }
+            exported.extend([0xa7; 23]);
+            restore_tiled_heads(&mut exported, 17, head_bytes, keys, heads).unwrap();
+            assert_eq!(&exported[..17], &[0x53; 17]);
+            assert_eq!(&exported[17..17 + canonical.len()], canonical);
+            assert_eq!(&exported[17 + canonical.len()..], &[0xa7; 23]);
+            assert!(restore_tiled_heads(&mut exported, usize::MAX, head_bytes, keys, heads).is_err());
+        }
+    }
 }

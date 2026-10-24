@@ -161,6 +161,7 @@ def large_qwen_benchmark(root, directory, source, model, target):
     benchmark = root / "benchmark"
     benchmark.write_text(
         "#!/bin/bash\nset -eux\nexport LD_LIBRARY_PATH=/bin:/lib64\n"
+        f"export D3OS_QWEN_REFERENCE_OUT=/large-qwen-logits.bin D3OS_MODEL_SHA256={expected['sha256']}\n"
         f"/bin/linux-large-qwen-bench /model.gguf {expected['layers']} {expected['hidden']}\n"
     )
     benchmark.chmod(0o755)

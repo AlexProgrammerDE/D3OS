@@ -104,7 +104,8 @@ Qwen3.5-0.8B now uses Burn modules, packed parameters, sessions, and generation.
 Its original layer, logit, cache, and tokenizer references pass on the physical GPU.
 The previous inference crate is removed.
 DOOM keeps its separate native renderer.
-Native Qwen 9B and 27B model integration remains in progress.
+Native Qwen 9B and 27B now use the same Burn model and streaming GGUF loader.
+Both pass independent FP32 layer and logit references at 165 positions, with matching sequential and batched final caches.
 Packed quantized GPU operations and grouped recurrent heads are validated independently.
 
 Burn 0.22.1 compiles and links on D3OS with `no_std` and `alloc`.
@@ -247,7 +248,7 @@ A physical D3OS run completes seven epochs and reaches 99.26 percent test accura
 The final model uses five epochs at learning rate 0.001 and two at 0.0001, without resetting Adam state.
 A fresh VM loads the exported model and reproduces all 10,000 test predictions.
 See [Train MNIST inside D3OS](mnist-training.howto.md) for commands and validation evidence.
-AI workload migration remains incomplete.
+AlexNet, all three Qwen profiles, and MNIST now use Burn. Performance optimization remains open.
 The AlexNet migration preserves every value of all eight original layer references with absolute and relative tolerances of `2e-4`.
 The host CPU reference and physical D3OS GPU both return class 258.
 Forward execution uploads and downloads no activation data.
@@ -305,8 +306,10 @@ Burn module-record tests preserve packed parameters and identical predictions.
 Synthetic CPU batch comparisons use `3e-5` absolute and relative tolerance because Flex matrix operations can use different accumulation orders.
 
 The fresh D3OS comparison records 238.806 warm decode tokens/s after migration, versus 251.969 before migration.
-Model preparation increases from 615 ms to 21880 ms. Both regressions need fixes in the maintained Burn stack.
-Large-model native integration and matched Linux parity remain open.
+Initial model preparation increases from 615 ms to 21880 ms.
+Bulk packed-weight copies reduce it to 1940 ms in a subsequent D3OS GPU run.
+The remaining preparation and generation gaps need fixes in the maintained Burn stack.
+Large-model native correctness now passes; matched Linux parity remains open.
 
 The retained Linux and D3OS measurements are in [Native NVIDIA performance](nvidia-performance.md).
 
@@ -340,5 +343,6 @@ The success marker starts with `INFERENCE_OK burn-self-test backend=cpu`.
 This check establishes portable runtime behavior. It does not measure native Burn GPU training or inference performance.
 
 The full pretrained reference also passes on the Linux host with Burn Flex CPU.
-The D3OS software CPU emulation run exceeds its 900-second limit without completing the reference check.
-That run remains unresolved. GPU correctness results do not establish CPU emulation success.
+The initial D3OS software CPU emulation run exceeds its 900-second limit.
+After the import and SIMD selection fixes, it passes all references in 704920 ms under TCG.
+This is a D3OS CPU correctness result, not a GPU performance measurement.

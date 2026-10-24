@@ -163,7 +163,74 @@ No fresh Linux sample accompanies this migration comparison.
 Fresh AlexNet references and all 600 DOOM views also pass; DOOM stays outside Burn and reaches its 70 FPS gameplay cap.
 Evidence and the before-and-after report are under `target/nvidia/burn/qwen-model/`.
 
-## Latest retained measurements
+## Quantized Qwen models on Burn
+
+Qwen3.5-9B Q8_0 and Qwen3.6-27B Q3_K_M now run through the native Burn stack.
+Each passes 165 independent FP32 layer and logit references, with matching sequential and batched final caches.
+The reference exporter runs PyTorch on the Linux host, one complete layer at a time.
+It uses the original GGUF weights, the pinned Hugging Face configuration, and the Linux CUDA benchmark's token IDs.
+This avoids loading a complete 27B FP32 model into host RAM.
+
+The original absolute and relative tolerances remain `2e-3` and `5e-4`.
+A separate check compares all 248320 logits at 129 positions after the prompt.
+Both models pass all 32033280 values.
+Maximum absolute errors are `0.00003064` for 9B and `0.00003553` for 27B.
+The complete token, merge, and token-type tables match the 0.8B tokenizer.
+
+GGUF exports grouped value heads in tiled order.
+The reader restores input projections and state parameters to the model's grouped order.
+It preserves packed output projection weights and reorders their input activation on the GPU.
+This handles quantization blocks that span more than one value head without requantization.
+
+These fresh speed samples use the passed-through RTX 4090 Laptop GPU, four guest CPUs, and affinity `8,10,12,14`.
+Both guests use 15360 MiB of RAM, a 37-token prompt, 128 decode steps, and a 2048-token FP32 cache.
+D3OS replays the Linux CUDA token IDs and continues all benchmark steps through EOS.
+Transfer counters permit two prompt-ID uploads, 128 decode-ID uploads, and 256 selection-scalar reads per run.
+They show no activation tensor upload or download during timing.
+Numerical reference reads occur afterward.
+
+| Model and weights | D3OS native Burn warm decode | Linux guest llama.cpp CUDA warm decode |
+| --- | ---: | ---: |
+| Qwen3.5-9B Q8_0 | 31.9205 tokens/s | 58.3715 tokens/s |
+| Qwen3.6-27B Q3_K_M | 5.2260 tokens/s | 34.4025 tokens/s |
+
+These are diagnostic speed comparisons. They do not establish Linux parity.
+Native projections retain FP32 activation arithmetic.
+The normal quantized Linux CUDA path produces different raw logits and one or two different greedy choices on these inputs.
+D3OS instead agrees with the independent FP32 reference within the errors above.
+The Linux CUDA speed results and Linux CPU accuracy results are separate evidence.
+Some runs overlap CPU verification on separate cores; quiet matched timing and kernel profiling remain required.
+
+Compute-buffer weight storage is 9516859392 bytes for 9B and 13575868416 bytes for 27B.
+These counters exclude firmware and channel allocations.
+Both models also fit their measured context and working storage in the physical GPU's 16 GiB VRAM.
+
+Packed weight preparation now uses bulk copies and direct byte uploads.
+The initial 0.8B Burn preparation regression falls from 21880 ms to 1940 ms in the first corrected D3OS run.
+The earlier native model took 615 ms, so preparation still needs improvement.
+Flex CPU model import widens BF16 constants to FP32 once, rather than for each projection.
+Embedding lookup decodes only the requested token rows.
+A local GEMM portability patch enables target-guaranteed SIMD without `std`.
+
+D3OS CPU correctness checks pass all 29 positions, 24 layers, and 105 tokenizer cases.
+The full check takes 704920 ms under TCG and 32072 ms under KVM in the retained runs.
+These are CPU validation times, not GPU inference measurements.
+The initial CPU emulation timeout is resolved without removing references or increasing its 900-second limit.
+
+Commands are in [the Qwen guide](qwen.howto.md#run-the-quantized-9b-and-27b-models).
+Reference manifests, source checksums, before-and-after failures, complete token traces, and comparisons are under `target/nvidia/burn/large-qwen/`.
+CPU and loading evidence is under `target/nvidia/burn/qwen-load/`.
+
+The final D3OS smoke suite also passes the GPU self-test, all eight AlexNet references, and the original 0.8B Qwen references.
+Its latest 0.8B preparation sample is 1439 ms, with warm decode samples of 219.178 and 226.148 tokens/s.
+These samples show remaining timing variation and a generation gap; they do not establish an improvement.
+D3OS DOOM measures 1617.5 uncapped timedemo FPS and retains its 70 FPS gameplay cap.
+All 600 verification frames, input controls, cache purges, cleanup, and post-exit GPU inference checks pass.
+The GPU kernel bundle remains unchanged.
+
+## Earlier Burn primitive measurements
+
+The following measurements describe earlier implementation stages. Current model migration results are above.
 
 ### Burn primitive regression
 

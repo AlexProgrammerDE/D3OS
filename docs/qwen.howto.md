@@ -248,7 +248,7 @@ A backend or observer error invalidates that session; create a new session befor
 
 ## Implementation boundaries
 
-The implementation includes all 24 text layers: 18 gated-delta layers and six grouped attention layers.
+The default 0.8B profile includes all 24 text layers: 18 gated-delta layers and six grouped attention layers.
 It supports the depthwise causal convolution, normalized delta rule, gated RMSNorm, partial RoPE, SwiGLU, and tied output embeddings.
 The backend performs all numerical operations and owns cache tensors.
 The model returns resident Burn logits. Greedy selection reads a finite-value flag and the selected token ID.
@@ -258,10 +258,83 @@ Burn modules own the model parameters, including packed integer tensors for BF16
 `qwen::gguf::Gguf` supplies the streaming GGUF reader through the same loader.
 The previous inference crate and generic model execution API are removed.
 The same model code and tokenizer work with either backend.
+Flex import expands BF16 matrix constants to FP32 once. Native import retains their original BF16 encoding.
+Packed model records need a template with the same physical encoding. Burn device moves preserve the existing encoding.
 
-The supported checkpoint profile uses equal key and value head counts in its gated-delta layers.
+The native GGUF loader also supports grouped key heads, untied output weights, and the pinned 9B and 27B profiles.
 Image input, video input, auxiliary prediction heads, quantized CPU kernels, and stochastic sampling are outside this implementation.
 The checkpoint advertises 262,144 positions; this work verifies short prompts and cached continuation, not full-length context behavior or performance.
 
 For CI verification, dispatch the `Native inference` workflow with its `qwen` input enabled.
 That job prepares the pinned model, verifies the host implementation, builds D3OS, and runs the guest checks with TCG.
+
+## Run the quantized 9B and 27B models
+
+These workloads use the same Burn model, sessions, and generation API as 0.8B.
+The native profiles are Qwen3.5-9B Q8_0 and Qwen3.6-27B Q3_K_M.
+Both fit the passed-through RTX 4090 Laptop GPU with a 2048-token FP32 cache.
+Their token tables, merge tables, and token types match the 0.8B tokenizer exactly.
+
+First, prepare the pinned models and Linux CUDA speed references:
+
+```bash
+python3 tools/nvidia/prepare-large-qwen.py 9b 27b
+taskset -c 8,10,12,14 python3 tools/nvidia/test-large-qwen.py 9b 27b \
+  --memory-mib 15360 --timeout 600
+```
+
+Prepare the independent Linux CPU FP32 reference for 9B:
+
+```bash
+model=9b
+weights=target/nvidia/large-qwen/Qwen3.5-9B-Q8_0.gguf
+taskset -c 24,26,28,30 target/qwen-venv/bin/python \
+  tools/nvidia/prepare-qwen-reference.py "$weights" \
+  "target/nvidia/large-qwen/$model-config.json" \
+  "target/nvidia/large-qwen/$model-linux-results.json" \
+  "target/nvidia/burn/large-qwen/$model-fp32"
+python3 tools/nvidia/prepare-qwen-shards.py "$weights" \
+  "target/nvidia/burn/large-qwen/$model" \
+  --linux-reference "target/nvidia/burn/large-qwen/$model-fp32/logits.bin"
+```
+
+For 27B, set `model=27b` and `weights=target/nvidia/large-qwen/Qwen3.6-27B-Q3_K_M.gguf`, then repeat those commands.
+The reference exporter uses the pinned Qwen Python environment from the earlier preparation steps.
+It loads one Transformers layer at a time and keeps inference arithmetic in FP32.
+The complete 27B model does not need to fit in host RAM as FP32 weights.
+
+Build D3OS, then verify the model on the physical GPU:
+
+```bash
+cargo make --no-workspace --profile production image
+taskset -c 8,10,12,14 python3 tools/nvidia/run-qemu.py \
+  --firmware target/nvidia/firmware --kernels target/nvidia/kernels \
+  --memory-mib 15360 --boot-check --timeout 600 \
+  --inference gpu-qwen-gguf-verify \
+  --qwen-gguf-parts "target/nvidia/burn/large-qwen/$model"
+```
+
+The check covers 165 positions, every layer, all logits, and sequential versus batched final caches.
+It retains the original `2e-3` absolute and `5e-4` relative reference tolerances.
+For timing and transfer counters, replace `gpu-qwen-gguf-verify` with `gpu-qwen-gguf-bench`.
+That benchmark replays the Linux CUDA reference token IDs, including all 128 decode steps after the prompt.
+The full-logit reference check runs after timing.
+
+For interactive generation, start the same image with `--display gtk` and omit `--boot-check`.
+Use `--inference gpu-qwen-gguf` to stage its tokenizer and model parts.
+At the D3OS shell, run:
+
+```text
+infer gpu-qwen-gguf 128 What country is largest by area?
+```
+
+The host preparer verifies the source and part checksums before creating the firmware index.
+It uses filesystem sharing when available and a bounded copy otherwise.
+The guest checks part counts, lengths, read bounds, GGUF offsets, shapes, and weight encodings.
+Its reported source checksum comes from the host index; the guest does not hash the full model again.
+Each source tensor is released after its Burn upload.
+
+GGUF reorders grouped value heads during export.
+The reader restores input projections and state parameters to the model's head order.
+Output projection weights retain their packed bytes, including quantization blocks that span multiple heads.
+Burn reorders the small input activation on the GPU before that projection.

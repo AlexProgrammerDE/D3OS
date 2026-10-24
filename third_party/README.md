@@ -38,3 +38,16 @@ The runtime patch remains compatible with `no_std` and `alloc`. The extension co
 Both packages include the upstream MIT and Apache 2.0 licenses.
 The workspace uses these sources through `[patch.crates-io]`.
 These patches do not replace Burn's optimizer or autodiff algorithms.
+
+## gemm-common 0.19.0
+
+Source: [gemm-common 0.19.0](https://crates.io/crates/gemm-common/0.19.0).
+The original archive SHA-256 is `88027625910cc9b1085aaaa1c4bc46bb3a36aad323452b33c25b5e4e7c8e2a3e`.
+The upstream MIT license is included in `gemm-common`.
+
+Without `std`, the upstream feature detector checks Cargo features instead of CPU target features.
+This selects scalar GEMM on D3OS even when the application target guarantees AVX2 and FMA.
+The patch changes that check to `cfg!(target_feature = ...)`.
+The standard-library runtime detector remains unchanged.
+D3OS applications can then select the SIMD implementation guaranteed by their compilation target.
+The workspace uses this source through `[patch.crates-io]`.

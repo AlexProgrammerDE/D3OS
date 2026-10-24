@@ -48,6 +48,65 @@ static void memory(ggml_backend_dev_t device, const char *phase) {
          phase, free_bytes, total_bytes, total_bytes - free_bytes);
 }
 
+static void write_u32(FILE *file, uint32_t value) {
+  const unsigned char bytes[4] = {value, value >> 8, value >> 16, value >> 24};
+  require(fwrite(bytes, 1, sizeof(bytes), file) == sizeof(bytes), "write reference integer");
+}
+
+static void reference(struct llama_model *model, struct llama_context_params params,
+                      struct llama_batch *batch, const llama_token *prompt, int count,
+                      const llama_token *tokens) {
+  const char *path = getenv("D3OS_QWEN_REFERENCE_OUT");
+  if (path == NULL) {
+    return;
+  }
+  const char *identity = getenv("D3OS_MODEL_SHA256");
+  require(identity != NULL && strlen(identity) == 64, "reference model identity");
+  params.samplers = NULL;
+  params.n_samplers = 0;
+  struct llama_context *context = llama_init_from_model(model, params);
+  require(context != NULL, "create reference context");
+  for (int position = 0; position < count; position += BATCH) {
+    int rows = count - position < BATCH ? count - position : BATCH;
+    evaluate(context, batch, prompt + position, rows, position);
+  }
+  FILE *file = fopen(path, "wb");
+  require(file != NULL, "open reference output");
+  require(fwrite("D3QLOG\0\0", 1, 8, file) == 8, "write reference magic");
+  const int vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
+  for (int i = 0; i < 6; ++i) {
+    const uint32_t fields[] = {1, (uint32_t)vocab, (uint32_t)count, DECODE, CAPACITY, BATCH};
+    write_u32(file, fields[i]);
+  }
+  for (int i = 0; i < 32; ++i) {
+    unsigned int byte;
+    require(sscanf(identity + 2 * i, "%2x", &byte) == 1, "parse reference model identity");
+    require(fputc((int)byte, file) != EOF, "write reference model identity");
+  }
+  for (int i = 0; i < count; ++i) {
+    write_u32(file, (uint32_t)prompt[i]);
+  }
+  for (int i = 0; i < DECODE; ++i) {
+    write_u32(file, (uint32_t)tokens[i]);
+  }
+  const uint32_t endian = 1;
+  require(sizeof(float) == 4 && *(const unsigned char *)&endian == 1, "reference FP32 encoding");
+  for (int i = 0; i <= DECODE; ++i) {
+    const float *logits = llama_get_logits_ith(context, -1);
+    require(logits != NULL, "read reference logits");
+    for (int j = 0; j < vocab; ++j) {
+      require(isfinite(logits[j]), "finite reference logits");
+    }
+    require(fwrite(logits, sizeof(float), (size_t)vocab, file) == (size_t)vocab, "write reference logits");
+    if (i < DECODE) {
+      evaluate(context, batch, &tokens[i], 1, count + i);
+    }
+  }
+  require(fclose(file) == 0, "close reference output");
+  llama_free(context);
+  printf("LINUX_LARGE_QWEN_REFERENCE rows=%d vocab=%d cache=f32 n_ctx=%d file=%s\n", DECODE + 1, vocab, CAPACITY, path);
+}
+
 int main(int argc, char **argv) {
   require(argc == 4, "usage: linux-large-qwen-bench MODEL LAYERS HIDDEN");
   const int layers = atoi(argv[2]), hidden = atoi(argv[3]);
@@ -132,6 +191,7 @@ int main(int argc, char **argv) {
     printf("%s%d", i ? "," : "", prompt[i]);
   }
   puts("]");
+  llama_token reference_tokens[DECODE];
   for (int run = 0; run < 3; ++run) {
     llama_memory_clear(llama_get_memory(context), true);
     llama_sampler_reset(sampler);
@@ -171,6 +231,7 @@ int main(int argc, char **argv) {
     }
     puts("]");
     if (run == 0) {
+      memcpy(reference_tokens, tokens, sizeof(reference_tokens));
       printf("LINUX_LARGE_QWEN_ANSWER ");
       for (int i = 0; i < DECODE && !llama_vocab_is_eog(vocab, tokens[i]);
            ++i) {
@@ -184,8 +245,9 @@ int main(int argc, char **argv) {
     }
   }
   memory(device, "after_decode");
-  llama_batch_free(batch);
   llama_free(context);
+  reference(model, params, &batch, prompt, count, reference_tokens);
+  llama_batch_free(batch);
   llama_sampler_free(sampler);
   llama_model_free(model);
   llama_backend_free();

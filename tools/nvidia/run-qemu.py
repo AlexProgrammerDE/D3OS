@@ -7,6 +7,7 @@ import os
 import re
 import resource
 import shlex
+import struct
 import subprocess
 import time
 from pathlib import Path
@@ -68,6 +69,9 @@ def main():
             "gpu-qwen",
             "gpu-qwen-verify",
             "gpu-qwen-bench",
+            "gpu-qwen-gguf",
+            "gpu-qwen-gguf-bench",
+            "gpu-qwen-gguf-verify",
             "gpu-doom",
             "gpu-doom-verify",
             "gpu-doom-bench",
@@ -76,6 +80,11 @@ def main():
         help="native workload to validate during --boot-check",
     )
     parser.add_argument("--memory-mib", type=int, default=4096)
+    parser.add_argument(
+        "--qwen-gguf-parts",
+        type=Path,
+        help="firmware parts from prepare-qwen-shards.py",
+    )
     parser.add_argument(
         "--qwen-device-timing",
         action="store_true",
@@ -107,6 +116,49 @@ def main():
     )
     args = parser.parse_args()
     firmware_files = {}
+    if args.qwen_gguf_parts:
+        if not args.inference.startswith("gpu-qwen-gguf"):
+            parser.error("--qwen-gguf-parts requires a GGUF inference workload")
+        directory = args.qwen_gguf_parts.resolve()
+        index = (directory / "model.index").read_bytes()
+        if len(index) != 60 or index[:8] != b"D3MODEL\0":
+            parser.error("invalid model shard index")
+        version, part_bytes, length, parts = struct.unpack_from("<IIQI", index, 8)
+        if (
+            version != 1
+            or not (1 << 20) <= part_bytes <= (1 << 30)
+            or part_bytes & (part_bytes - 1)
+            or not 1 <= parts <= 64
+            or (length + part_bytes - 1) // part_bytes != parts
+        ):
+            parser.error("invalid model shard extents")
+        firmware_files["model.index"] = directory / "model.index"
+        for part in range(parts):
+            path = directory / f"model.{part:03}"
+            if not path.is_file() or path.stat().st_size != min(
+                part_bytes, length - part * part_bytes
+            ):
+                parser.error(f"missing or truncated model part: {path}")
+            firmware_files[path.name] = path
+        if args.inference == "gpu-qwen-gguf-bench":
+            reference = directory / "model.reference"
+            if (
+                not reference.is_file()
+                or not 64 <= reference.stat().st_size <= 0xFFFFFFFF
+            ):
+                parser.error(
+                    "GGUF benchmark requires the prepared Linux logit reference"
+                )
+            firmware_files[reference.name] = reference
+        if args.inference == "gpu-qwen-gguf-verify":
+            fixture = directory / "model.fixture"
+            if not fixture.is_file() or not 16 <= fixture.stat().st_size <= 0xFFFFFFFF:
+                parser.error(
+                    "GGUF verification requires the prepared full layer fixture"
+                )
+            firmware_files[fixture.name] = fixture
+    elif args.inference.startswith("gpu-qwen-gguf"):
+        parser.error("GGUF inference requires --qwen-gguf-parts")
     for argument in args.fwcfg_file:
         name, separator, filename = argument.partition("=")
         if not separator or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,45}", name):
@@ -191,7 +243,14 @@ def main():
             args.image = directory / "d3os.img"
         else:
             mode = "self-test"
-            if args.inference.startswith("gpu-qwen"):
+            if args.inference.startswith("gpu-qwen-gguf"):
+                assets.append(
+                    (
+                        ROOT / "target/qwen/qwen3.5.bpe",
+                        Path("usr/share/inference/qwen3.5.bpe"),
+                    )
+                )
+            elif args.inference.startswith("gpu-qwen"):
                 mode = "qwen"
             elif args.inference.startswith("gpu-alexnet"):
                 mode = "alexnet"
@@ -343,6 +402,9 @@ def main():
                     "gpu-qwen": "INFERENCE_OK qwen backend=nvidia",
                     "gpu-qwen-verify": "INFERENCE_OK qwen-verify backend=nvidia positions=29 layers=24",
                     "gpu-qwen-bench": "INFERENCE_BENCH_OK qwen backend=nvidia reference_positions=29 reference_layers=24",
+                    "gpu-qwen-gguf": "INFERENCE_OK qwen backend=nvidia",
+                    "gpu-qwen-gguf-bench": "INFERENCE_BENCH_OK qwen-gguf backend=nvidia framework=burn os=d3os reference_tokens=128",
+                    "gpu-qwen-gguf-verify": "INFERENCE_OK qwen-gguf-verify backend=nvidia framework=burn os=d3os positions=165",
                     "gpu-doom": "NVIDIA_DOOM_FRAME_OK frame=600",
                     "gpu-doom-verify": "NVIDIA_DOOM_FRAME_OK frame=600",
                     "gpu-doom-bench": "NVIDIA_DOOM_PROFILE_DONE",
