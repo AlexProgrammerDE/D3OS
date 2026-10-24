@@ -83,10 +83,12 @@ fn compile(family: &str, target: &str, sm: u32) -> Result<Vec<u8>> {
     let options = vec![target_option.as_str(), "--opt-level=3", input.as_str(), "-o", output.as_str()];
     let start = crate::timer().systime_ms();
     let thread = Thread::load_application(compiler, compiler, &options).map_err(|_| Error::Firmware)?;
+    let loaded = crate::timer().systime_ms();
     let process = thread.process();
     let id = thread.id();
     scheduler().ready(thread);
     let _ = scheduler().join(id);
+    let completed = crate::timer().systime_ms();
     let status = process.exit_status.load(Ordering::Acquire);
     if status != 0 {
         log::warn!("NVIDIA_COMPILE_FAIL family={family} target={target} exit={status}");
@@ -102,10 +104,14 @@ fn compile(family: &str, target: &str, sm: u32) -> Result<Vec<u8>> {
         );
         return Err(Error::Firmware);
     }
+    let validated = crate::timer().systime_ms();
     log::info!(
-        "NVIDIA_COMPILE_MODULE os=d3os family={family} input={} input_sha256={input_hash} target={target} compile_ms={} bytes={} sha256={} exit=0",
+        "NVIDIA_COMPILE_MODULE os=d3os family={family} input={} input_sha256={input_hash} target={target} compile_ms={} image_load_ms={} execute_ms={} output_ms={} bytes={} sha256={} exit=0",
         if tile { "tile_ir" } else { "ptx" },
-        crate::timer().systime_ms() - start,
+        validated - start,
+        loaded - start,
+        completed - loaded,
+        validated - completed,
         bytes.len(),
         sha256(&bytes)
     );

@@ -151,6 +151,114 @@ Warm D3OS generation measures 5.339 and 5.118 tokens per second, compared with t
 Two greedy selections differ from the retained Linux CUDA trace; the same teacher-forced inputs remain enforced.
 The retained Linux CUDA 27B baseline is 34.4025 tokens per second. Comparable throughput is not established.
 
+## Compiler scheduling and current-input comparison
+
+Timer preemption now keeps the current runnable thread when its ready queue has no peer.
+Previously, that path queued the runnable thread and selected idle until the next scheduling opportunity.
+The kernel also uses explicit cooperative yields in input and network polling loops.
+Those yields retain their existing behavior.
+
+The current compiler comparison uses CUDA 13.4.92 and the packed-block kernel inputs from the following section.
+Both guests use four KVM CPUs, 4 GiB of RAM, affinity `8,10,12,14`, and target `sm_89`.
+The Linux trial first copies compiler inputs and executables to guest tmpfs.
+Linux repeats fresh compiler invocations in one VM. Each D3OS sample uses a fresh boot.
+All three generated GPU binaries match between Linux and D3OS in every completed trial.
+
+| Execution OS | Compiler CPUs | Three cold compilation samples | Mean |
+| --- | --- | --- | ---: |
+| Linux | CPU 0 | 70.668, 71.081, 70.817 s | 70.855 s |
+| Linux | CPUs 0 through 3 | 70.403, 71.037, 70.765 s | 70.735 s |
+| D3OS, timer policy only | Four online CPUs | 83.754, 73.914, 74.635 s | 77.434 s |
+| D3OS, scheduler and process fixes | Four online CPUs | 74.024, 78.954, 74.892 s | 75.957 s |
+
+The preceding matched 4 GiB D3OS AlexNet boot compiled this bundle in 149.398 seconds.
+Earlier 15 GiB D3OS boots took 82.223 and 82.527 seconds, so the previous timing spread remains relevant.
+The final D3OS mean is 7.38 percent slower than the four-CPU Linux mean.
+Compilation parity remains open. The final D3OS samples still span 4.930 seconds.
+
+Linux now records user CPU time, system CPU time, memory, page faults, and context switches for each compiler invocation.
+Its first inference-module trial spends 70.03 seconds in user code and 0.12 seconds in the kernel.
+D3OS records executable image loading, compiler execution, and output validation separately.
+The execution interval includes dynamic linking and waiting for compiler subprocesses.
+The launcher also measures host wall time between compilation start and GPU validation completion.
+These observations agree with the guest phase totals inside the launcher's 100 ms polling interval.
+GPU validation remains outside compilation and inference throughput.
+
+All three final D3OS boots pass the eight AlexNet references, with forward means of 1.020, 1.000, and 1.010 ms.
+The context-switch interrupt test and its three repeated CPU inference checks also pass under TCG.
+Evidence and per-module phase records are under `target/nvidia/compile-parity/`.
+The `linux-results.json`, `d3os-results.json`, and `cleanup-d3os-results.json` files retain the Linux, timer-only, and final samples respectively.
+
+## Multicore process cleanup
+
+The DOOM regression exposed an input thread that survived game exit on another CPU.
+It consumed shell input as raw keyboard events and panicked with `invalid key state 10!`.
+The old process lookup searched only the calling CPU's ready queue.
+It missed running, sleeping, blocked, and remote threads.
+
+The scheduler now records process ownership for every live thread across all CPUs.
+Process exit uses that registry to request cleanup of every other thread.
+Remote cancellation moves a running target off its CPU before removing it.
+The removal logic also compares each queue's own length and decrements runnable counts only for runnable targets.
+
+Longer regressions exposed additional scheduler and lifetime failures:
+
+- The heap lock allowed timer preemption while held. Scheduler heap-lock polling could then prevent its owner from running again.
+- A suspended Rust mutex guard could later unlock its original CPU's scheduler after the thread resumed on another CPU.
+- Scheduler lookup could select a CPU before a preemption and use that CPU's scheduler after migration.
+- The syscall dispatcher retained a process reference across native handlers that never returned, preventing address-space cleanup.
+
+The heap now uses an IRQ-save lock. Scheduler lookup also masks local interrupts until the scheduler operation finishes.
+Blocking operations restore the caller's interrupt state when they resume, including after migration.
+The assembly switch callback releases the lock transferred by a context switch.
+It releases the outgoing thread reference after switching stacks.
+Native dispatch releases its process reference before entering a native handler.
+Process exit also releases its lookup guard before acquiring the process-manager write lock.
+
+The CPU regression launches four busy workers in a child process, then exits that process without joining them.
+Shared counters must stop, and the global thread count must return to its previous value.
+Thirty repetitions pass with four KVM CPUs and with two TCG CPUs, each in a 512 MiB guest.
+Before the native reference fix, that guest exhausted physical memory after 17 successful repetitions.
+The context-switch interrupt test, heap interrupt-mask checks, and three CPU inference repetitions also pass under TCG.
+CI runs the process-exit regression without NVIDIA hardware.
+
+The native NVIDIA DOOM regression passes 600 pixel-reference frames, control events, cache purges, and atlas resets.
+GPU operator checks also pass after quitting DOOM, through the same terminal that previously failed.
+The following native GPU timedemo completes 7,117 game ticks at 1,596.763 FPS.
+This D3OS result does not establish parity with the retained Linux headless software reference.
+
+Reproduce the CPU lifecycle check after building the production image:
+
+```sh
+python3 tools/kernel/test-process-exit.py --accel kvm --cpus 4 --repeat 30
+python3 tools/kernel/test-process-exit.py --accel tcg --cpus 2 --repeat 30
+```
+
+The GPU evidence is under `target/nvidia/compile-parity/policy-doom-*`.
+The CPU evidence is under `target/process-exit-kvm-4/` and `target/process-exit-tcg-2/`.
+
+The four-step MNIST training smoke test exports its checkpoint and verifies inference after reloading the model.
+Its 188,272-byte model matches the previous GPU smoke-test artifact byte for byte.
+This partial training run establishes a regression check, with no matched Linux training or inference performance result.
+Evidence is under `target/nvidia/compile-parity/mnist-smoke/`.
+
+The final Qwen regressions retain the numerical references and benchmark checksums.
+The 0.8B model passes 29 reference positions across 24 layers.
+Each large model passes 32,033,280 reference logits with the original tolerances.
+The large models retain their prior one-token and two-token greedy-selection differences from Linux.
+
+| Model | D3OS native Burn warm decode | Retained Linux CUDA warm decode |
+| --- | ---: | ---: |
+| Qwen3.5-0.8B | 259.109, 259.109 tokens/s | 251 to 256 tokens/s |
+| Qwen3.5-9B Q8_0 | 32.242, 32.193 tokens/s | 58.3715 tokens/s |
+| Qwen3.6-27B Q3_K_M | 14.449, 14.321 tokens/s | 34.4025 tokens/s |
+
+These decode results do not establish prompt-processing parity.
+The 0.8B D3OS warm prompt samples take 9 and 10 ms for 22 tokens.
+The retained Linux prompt samples take about 6.6 ms.
+The large-model execution gaps remain open.
+The final Qwen evidence is in `cleanup-ai-serial.log` and `policy-27b-serial.log` under `target/nvidia/compile-parity/`.
+
 ## Packed-block quantized projections
 
 The large-model benchmark now accepts `device-timing` and records separate prefill and decode profiles.

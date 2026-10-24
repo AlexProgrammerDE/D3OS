@@ -382,8 +382,28 @@ def main():
             qmp = harness.Qmp(monitor, process, deadline)
             started = False
             controls = False
+            compilation_observed = None
+            compilation_reported = False
             while time.monotonic() < deadline:
                 text = serial.read_text(errors="replace") if serial.is_file() else ""
+                if (
+                    args.kernels
+                    and compilation_observed is None
+                    and "NVIDIA_COMPILE_START os=d3os" in text
+                    and "NVIDIA_COMPILE_READY os=d3os" not in text
+                ):
+                    compilation_observed = time.monotonic()
+                if (
+                    compilation_observed is not None
+                    and not compilation_reported
+                    and "NVIDIA_COMPILE_READY os=d3os" in text
+                ):
+                    elapsed = (time.monotonic() - compilation_observed) * 1000
+                    print(
+                        f"NVIDIA_COMPILE_HOST_PHASE os=d3os observed_ms={elapsed:.3f} includes_gpu_validation=true source=serial_markers",
+                        flush=True,
+                    )
+                    compilation_reported = True
                 if (
                     args.kernels
                     and not started
@@ -605,19 +625,36 @@ def main():
                         )
                         for family in compiler.FAMILIES:
                             record = re.search(
-                                rf"NVIDIA_COMPILE_MODULE os=d3os family={re.escape(family)} input=(tile_ir|ptx) input_sha256=([0-9a-f]{{64}}) target=(sm_[0-9]+) compile_ms=([0-9]+) bytes=([0-9]+) sha256=([0-9a-f]{{64}}) exit=0",
+                                rf"NVIDIA_COMPILE_MODULE os=d3os family={re.escape(family)} "
+                                r"input=(?P<format>tile_ir|ptx) "
+                                r"input_sha256=(?P<input_hash>[0-9a-f]{64}) "
+                                r"target=sm_[0-9]+ compile_ms=(?P<total>[0-9]+) "
+                                r"image_load_ms=(?P<load>[0-9]+) "
+                                r"execute_ms=(?P<execute>[0-9]+) "
+                                r"output_ms=(?P<output>[0-9]+) "
+                                r"bytes=[0-9]+ sha256=[0-9a-f]{64} exit=0",
                                 text,
                             )
                             suffix = (
-                                "tilebc" if record and record[1] == "tile_ir" else "ptx"
+                                "tilebc"
+                                if record and record["format"] == "tile_ir"
+                                else "ptx"
                             )
                             asset = f"usr/share/nvidia/{family}.{suffix}"
                             if (
                                 not record
-                                or record[2] != manifest["assets"][asset]["sha256"]
+                                or record["input_hash"]
+                                != manifest["assets"][asset]["sha256"]
                             ):
                                 raise RuntimeError(
                                     f"guest did not compile the staged input: {family}"
+                                )
+                            if int(record["total"]) != sum(
+                                int(record[phase])
+                                for phase in ("load", "execute", "output")
+                            ):
+                                raise RuntimeError(
+                                    f"guest compiler phase times disagree: {family}"
                                 )
                     if args.kernels and "NVIDIA_KERNEL_OK" not in text:
                         raise RuntimeError(
@@ -641,6 +678,11 @@ def main():
         except BaseException:
             if qmp is not None:
                 try:
+                    registers = qmp.execute(
+                        "human-monitor-command",
+                        {"command-line": "info registers -a"},
+                    )
+                    (directory / "failure-registers.txt").write_text(registers)
                     qmp.execute(
                         "human-monitor-command",
                         {"command-line": f"screendump {directory / 'failure.ppm'}"},

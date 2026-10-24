@@ -60,7 +60,7 @@ def stage_compiler(root):
 
 def compiler_benchmark(root, repeats):
     stage_compiler(root)
-    for name in ("date", "taskset", "sha256sum", "cp"):
+    for name in ("date", "taskset", "sha256sum", "cp", "time"):
         executable(root, name)
     benchmark = root / "benchmark"
     benchmark.write_text(
@@ -86,12 +86,13 @@ for cpus in 0 0-3; do
                 input="/tmp/kernels/$family.ptx"
             fi
             start=$(date +%s%N)
-            taskset -c "$cpus" "/tmp/cuda/bin/$tool" --gpu-name="$target" --opt-level=3 "$input" -o /tmp/output.cubin
+            /bin/time -o /tmp/compiler-time -f "LINUX_COMPILE_CPU os=linux cpus=$cpus run=$run family=$family user_s=%U system_s=%S elapsed_s=%e max_rss_kib=%M major_faults=%F minor_faults=%R voluntary_switches=%w involuntary_switches=%c" taskset -c "$cpus" "/tmp/cuda/bin/$tool" --gpu-name="$target" --opt-level=3 "$input" -o /tmp/output.cubin
             end=$(date +%s%N)
             elapsed_ms=$(((end-start)/1000000))
             total_ms=$((total_ms+elapsed_ms))
             hash=$(sha256sum /tmp/output.cubin)
             echo "LINUX_COMPILE_MODULE os=linux cpus=$cpus run=$run family=$family target=$target compile_ms=$elapsed_ms sha256=${hash%% *} phase=load"
+            cat /tmp/compiler-time
         done
         echo "LINUX_COMPILE_BENCH os=linux cpus=$cpus run=$run modules=3 compile_ms=$total_ms source=tmpfs phase=load"
     done
