@@ -1,0 +1,59 @@
+#[cutile::entry()]
+unsafe fn POOL_ENTRY(input: *const f32, output: *mut f32, POOL_PARAMETERS) {
+    let raw = indices();
+    let count = batch * channels * depth * height * width;
+    let mask = lt_tile(raw, broadcast_scalar(count, shape![128]));
+    let i = select(mask, raw, broadcast_scalar(0u32, shape![128]));
+    let x = i % broadcast_scalar(width, shape![128]);
+    let y = i / broadcast_scalar(width, shape![128]) % broadcast_scalar(height, shape![128]);
+    let z = i / broadcast_scalar(height * width, shape![128]) % broadcast_scalar(depth, shape![128]);
+    let channel = i / broadcast_scalar(depth * height * width, shape![128]) % broadcast_scalar(channels, shape![128]);
+    let n = i / broadcast_scalar(channels * depth * height * width, shape![128]);
+    let zb = if POOL_MODE == 2u32 { pool_scaled(z, od, depth, false) } else { pool_inverse_begin(z, od, kd, sd, pd) };
+    let yb = if POOL_MODE == 2u32 { pool_scaled(y, oh, height, false) } else { pool_inverse_begin(y, oh, kh, sh, ph) };
+    let xb = if POOL_MODE == 2u32 { pool_scaled(x, ow, width, false) } else { pool_inverse_begin(x, ow, kw, sw, pw) };
+    let ze = if POOL_MODE == 2u32 { pool_scaled(z + broadcast_scalar(1u32, shape![128]), od, depth, true) } else { pool_inverse_end(z, od, sd, pd) };
+    let ye = if POOL_MODE == 2u32 { pool_scaled(y + broadcast_scalar(1u32, shape![128]), oh, height, true) } else { pool_inverse_end(y, oh, sh, ph) };
+    let xe = if POOL_MODE == 2u32 { pool_scaled(x + broadcast_scalar(1u32, shape![128]), ow, width, true) } else { pool_inverse_end(x, ow, sw, pw) };
+    let nz = pool_span(zb, ze);
+    let ny = pool_span(yb, ye);
+    let nx = pool_span(xb, xe);
+    let n: Tile<i32, { [128] }> = bitcast(n);
+    let channel: Tile<i32, { [128] }> = bitcast(channel);
+    let base = broadcast_scalar(signed(offset), shape![128]) + n * broadcast_scalar(signed(stride_n), shape![128]) + channel * broadcast_scalar(signed(stride_c), shape![128]);
+    let include = flags & 2u32 != 0u32;
+    let mut sum: Tile<f32, { [128] }> = broadcast_scalar(0f32, shape![128]);
+    let mut dz = 0u32;
+    while dz < nz {
+        let rz = zb + broadcast_scalar(dz, shape![128]);
+        let oz = min_tile(rz, broadcast_scalar(od - 1u32, shape![128]));
+        let len_z = if POOL_MODE == 2u32 { pool_scaled(oz + broadcast_scalar(1u32, shape![128]), depth, od, true) - pool_scaled(oz, depth, od, false) } else { pool_width(oz, depth, kd, sd, pd, ed, include) };
+        let mut dy = 0u32;
+        while dy < ny {
+            let ry = yb + broadcast_scalar(dy, shape![128]);
+            let oy = min_tile(ry, broadcast_scalar(oh - 1u32, shape![128]));
+            let len_y = if POOL_MODE == 2u32 { pool_scaled(oy + broadcast_scalar(1u32, shape![128]), height, oh, true) - pool_scaled(oy, height, oh, false) } else { pool_width(oy, height, kh, sh, ph, eh, include) };
+            let mut dx = 0u32;
+            while dx < nx {
+                let rx = xb + broadcast_scalar(dx, shape![128]);
+                let ox = min_tile(rx, broadcast_scalar(ow - 1u32, shape![128]));
+                let len_x = if POOL_MODE == 2u32 { pool_scaled(ox + broadcast_scalar(1u32, shape![128]), width, ow, true) - pool_scaled(ox, width, ow, false) } else { pool_width(ox, width, kw, sw, pw, ew, include) };
+                let divisor = max_tile(len_z * len_y * len_x, broadcast_scalar(1u32, shape![128]));
+                let divisor: Tile<f32, { [128] }> = itof(divisor, rounding::NearestEven);
+                let valid = mask & lt_tile(rz, ze) & lt_tile(ry, ye) & lt_tile(rx, xe);
+                let oz: Tile<i32, { [128] }> = bitcast(oz);
+                let oy: Tile<i32, { [128] }> = bitcast(oy);
+                let ox: Tile<i32, { [128] }> = bitcast(ox);
+                let address = base + oz * broadcast_scalar(signed(stride_d), shape![128]) + oy * broadcast_scalar(signed(stride_h), shape![128]) + ox * broadcast_scalar(signed(stride_w), shape![128]);
+                let address: Tile<u32, { [128] }> = bitcast(address);
+                let value = unsafe { read_tile(input, address, valid & lt_tile(address, broadcast_scalar(extent, shape![128])), 0f32) };
+                let value = divf(value, divisor, rounding::NearestEven, ftz::Disabled);
+                sum = addf(sum, value, rounding::NearestEven, ftz::Disabled);
+                dx = dx + 1u32;
+            }
+            dy = dy + 1u32;
+        }
+        dz = dz + 1u32;
+    }
+    unsafe { write_tile(output, raw, sum, mask) };
+}

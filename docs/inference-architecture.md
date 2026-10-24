@@ -145,7 +145,7 @@ The CI workflow provides repeatable numerical tests and an optional pretrained Q
 The current target is the RTX 4090 Laptop GPU (`10de:2757`, AD103) with one serialized compute queue.
 The driver boots pinned signed firmware and allocates a private, virtually bound compute context.
 The process-owned syscall interface accepts built-in kernels and opaque buffer handles.
-Native compute protocol version 13 includes command scopes, queue profiles, and 53 built-in kernels.
+Native compute protocol version 14 includes command scopes, queue profiles, and 55 built-in kernels.
 Its expanded profile array requires the matching SDK.
 Rebuild compute applications with the matching SDK. The kernel rejects incompatible request versions.
 
@@ -183,6 +183,15 @@ Backward passes extract resident windows for the weight gradient and fold matrix
 Each fold thread sums the windows that contain its input element, so overlapping windows require no atomic writes.
 Bias gradients use resident reductions. Empty batches return empty input gradients and zero weight and bias gradients.
 The driver rejects invalid geometry, address ranges, and output aliasing before dispatch.
+
+The pooling families normalize one to three spatial dimensions into NCDHW metadata.
+Their 32 parameters contain input and output sizes, window geometry, padding, dilation, flags, a checked source view, and the operation.
+Backward source views describe the output gradient rather than the original input.
+Max pooling writes cached I32 indices and FP32 values into separate halves of one full-writer allocation.
+The tensor views share ownership of that allocation. Padding-only windows contain index -1 and negative infinity.
+Average and adaptive average backward entries sum contributions per input element without atomic writes.
+Adaptive bounds use 64-bit products before division, while final element addresses retain the checked 32-bit range.
+Max backward masks the -1 sentinel and uses resident scatter addition with its four-byte bounds result.
 
 The reduction family provides sum, mean, product, minimum, maximum, and their two index operations for FP32 views.
 Each output retains the reduced dimension with size one. Input strides can be negative or zero.

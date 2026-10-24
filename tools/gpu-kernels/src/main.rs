@@ -122,6 +122,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         inference.extend(d3os_nvidia::compute::reduction::Reduction::ALL.iter().skip(1).map(|op| op.symbol()));
         inference.extend(d3os_nvidia::compute::words::WordOp::ALL.iter().skip(1).map(|op| op.symbol()));
         inference.extend(d3os_nvidia::compute::indexing::Scatter::ALL.iter().skip(1).map(|op| op.symbol()));
+        inference.extend(["burn_avg_pool", "burn_adaptive_avg_pool", "burn_adaptive_avg_pool_backward"]);
         compile(&output, "inference", &inference, &toolkit)?;
     } else {
         let names: Vec<&str> = names.iter().map(String::as_str).collect();

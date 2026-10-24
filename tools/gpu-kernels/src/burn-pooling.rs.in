@@ -1,0 +1,87 @@
+#[cutile::entry()]
+unsafe fn POOL_ENTRY(input: *const u32, output: *mut u32, POOL_PARAMETERS) {
+    let raw = indices();
+    let count = batch * channels * od * oh * ow;
+    let mask = lt_tile(raw, broadcast_scalar(count, shape![128]));
+    let i = select(mask, raw, broadcast_scalar(0u32, shape![128]));
+    let x = i % broadcast_scalar(ow, shape![128]);
+    let y = i / broadcast_scalar(ow, shape![128]) % broadcast_scalar(oh, shape![128]);
+    let z = i / broadcast_scalar(oh * ow, shape![128]) % broadcast_scalar(od, shape![128]);
+    let channel = i / broadcast_scalar(od * oh * ow, shape![128]) % broadcast_scalar(channels, shape![128]);
+    let n = i / broadcast_scalar(channels * od * oh * ow, shape![128]);
+    let zz = if POOL_MODE == 2u32 { pool_scaled(z, depth, od, false) } else { z * broadcast_scalar(sd, shape![128]) };
+    let yy = if POOL_MODE == 2u32 { pool_scaled(y, height, oh, false) } else { y * broadcast_scalar(sh, shape![128]) };
+    let xx = if POOL_MODE == 2u32 { pool_scaled(x, width, ow, false) } else { x * broadcast_scalar(sw, shape![128]) };
+    let zz: Tile<i32, { [128] }> = bitcast(zz);
+    let yy: Tile<i32, { [128] }> = bitcast(yy);
+    let xx: Tile<i32, { [128] }> = bitcast(xx);
+    let zz = zz - broadcast_scalar(signed(pd), shape![128]);
+    let yy = yy - broadcast_scalar(signed(ph), shape![128]);
+    let xx = xx - broadcast_scalar(signed(pw), shape![128]);
+    let zend = if POOL_MODE == 2u32 { pool_scaled(z + broadcast_scalar(1u32, shape![128]), depth, od, true) } else { broadcast_scalar(depth + ed, shape![128]) };
+    let yend = if POOL_MODE == 2u32 { pool_scaled(y + broadcast_scalar(1u32, shape![128]), height, oh, true) } else { broadcast_scalar(height + eh, shape![128]) };
+    let xend = if POOL_MODE == 2u32 { pool_scaled(x + broadcast_scalar(1u32, shape![128]), width, ow, true) } else { broadcast_scalar(width + ew, shape![128]) };
+    let zend: Tile<i32, { [128] }> = bitcast(zend);
+    let yend: Tile<i32, { [128] }> = bitcast(yend);
+    let xend: Tile<i32, { [128] }> = bitcast(xend);
+    let n: Tile<i32, { [128] }> = bitcast(n);
+    let channel: Tile<i32, { [128] }> = bitcast(channel);
+    let base = broadcast_scalar(signed(offset), shape![128]) + n * broadcast_scalar(signed(stride_n), shape![128]) + channel * broadcast_scalar(signed(stride_c), shape![128]);
+    let nz = if POOL_MODE == 2u32 { (depth + od - 1u32) / od + 1u32 } else { kd };
+    let ny = if POOL_MODE == 2u32 { (height + oh - 1u32) / oh + 1u32 } else { kh };
+    let nx = if POOL_MODE == 2u32 { (width + ow - 1u32) / ow + 1u32 } else { kw };
+    let mut best = broadcast_scalar(unsigned(-8388608i32), shape![128]);
+    let mut winner = broadcast_scalar(unsigned(-1i32), shape![128]);
+    let mut sum: Tile<f32, { [128] }> = broadcast_scalar(0f32, shape![128]);
+    let mut denominator = broadcast_scalar(0u32, shape![128]);
+    let mut dz = 0u32;
+    while dz < nz {
+        let iz = zz + broadcast_scalar(signed(dz * dd), shape![128]);
+        let mut dy = 0u32;
+        while dy < ny {
+            let iy = yy + broadcast_scalar(signed(dy * dh), shape![128]);
+            let mut dx = 0u32;
+            while dx < nx {
+                let ix = xx + broadcast_scalar(signed(dx * dw), shape![128]);
+                let valid = mask & ge_tile(iz, broadcast_scalar(0i32, shape![128])) & lt_tile(iz, broadcast_scalar(signed(depth), shape![128]))
+                    & ge_tile(iy, broadcast_scalar(0i32, shape![128])) & lt_tile(iy, broadcast_scalar(signed(height), shape![128]))
+                    & ge_tile(ix, broadcast_scalar(0i32, shape![128])) & lt_tile(ix, broadcast_scalar(signed(width), shape![128]))
+                    & lt_tile(iz, zend) & lt_tile(iy, yend) & lt_tile(ix, xend);
+                let address = base + iz * broadcast_scalar(signed(stride_d), shape![128]) + iy * broadcast_scalar(signed(stride_h), shape![128]) + ix * broadcast_scalar(signed(stride_w), shape![128]);
+                let address: Tile<u32, { [128] }> = bitcast(address);
+                let bits = unsafe { read_tile(input, address, valid & lt_tile(address, broadcast_scalar(extent, shape![128])), 0u32) };
+                let value: Tile<f32, { [128] }> = bitcast(bits);
+                if POOL_MODE == 0u32 {
+                    let previous: Tile<f32, { [128] }> = bitcast(best);
+                    let is_number: Tile<bool, { [128] }> = eq_tile(value, value);
+                    let take = valid & (eq_tile(winner, broadcast_scalar(unsigned(-1i32), shape![128])) | gt_tile(value, previous) | eq_tile(is_number, broadcast_scalar(false, shape![128])));
+                    let position = (iz * broadcast_scalar(signed(height), shape![128]) + iy) * broadcast_scalar(signed(width), shape![128]) + ix;
+                    let position: Tile<u32, { [128] }> = bitcast(position);
+                    best = select(take, bits, best);
+                    winner = select(take, position, winner);
+                } else {
+                    sum = addf(sum, value, rounding::NearestEven, ftz::Disabled);
+                    let padded = mask & ge_tile(iz, broadcast_scalar(0i32 - signed(pd), shape![128])) & lt_tile(iz, zend)
+                        & ge_tile(iy, broadcast_scalar(0i32 - signed(ph), shape![128])) & lt_tile(iy, yend)
+                        & ge_tile(ix, broadcast_scalar(0i32 - signed(pw), shape![128])) & lt_tile(ix, xend);
+                    let included = if flags & 2u32 != 0u32 { padded } else { valid };
+                    denominator = denominator + select(included, broadcast_scalar(1u32, shape![128]), broadcast_scalar(0u32, shape![128]));
+                }
+                dx = dx + 1u32;
+            }
+            dy = dy + 1u32;
+        }
+        dz = dz + 1u32;
+    }
+    if POOL_MODE == 0u32 {
+        unsafe {
+            write_tile(output, raw, winner, mask);
+            write_tile(output, raw + broadcast_scalar(count, shape![128]), best, mask);
+        }
+    } else {
+        let denominator: Tile<f32, { [128] }> = itof(max_tile(denominator, broadcast_scalar(1u32, shape![128])), rounding::NearestEven);
+        let result = divf(sum, denominator, rounding::NearestEven, ftz::Disabled);
+        let result: Tile<u32, { [128] }> = bitcast(result);
+        unsafe { write_tile(output, raw, result, mask) };
+    }
+}

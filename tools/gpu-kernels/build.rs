@@ -4,6 +4,7 @@ fn main() {
     for file in [
         "common.rs",
         "burn-math.rs",
+        "burn-pooling-common.rs",
         "quantized.rs",
         "quad.rs",
         "elementwise.rs",
@@ -20,6 +21,40 @@ fn main() {
         source.push('\n');
     }
     println!("cargo:rerun-if-changed=src/burn-elementwise.rs.in");
+    let pool_names = [
+        "batch", "channels", "depth", "height", "width", "od", "oh", "ow", "kd", "kh", "kw", "sd", "sh", "sw", "pd", "ph", "pw", "ed", "eh", "ew", "dd", "dh",
+        "dw", "flags", "extent", "offset", "stride_n", "stride_c", "stride_d", "stride_h", "stride_w", "_mode",
+    ];
+    for backward in [false, true] {
+        let file = if backward { "burn-pooling-backward.rs.in" } else { "burn-pooling.rs.in" };
+        println!("cargo:rerun-if-changed=src/{file}");
+        let template = fs::read_to_string(format!("src/{file}")).expect("read pooling source");
+        let parameters = pool_names
+            .iter()
+            .map(|&name| {
+                format!(
+                    "{}: u32",
+                    if backward && ["dd", "dh", "dw"].contains(&name) {
+                        format!("_{name}")
+                    } else {
+                        name.to_owned()
+                    }
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        for mode in d3os_nvidia::compute::pooling::Mode::ALL {
+            if backward && mode == d3os_nvidia::compute::pooling::Mode::Max {
+                continue;
+            }
+            source.push_str(
+                &template
+                    .replace("POOL_ENTRY", mode.symbol(backward))
+                    .replace("POOL_PARAMETERS", &parameters)
+                    .replace("POOL_MODE", &format!("{}u32", mode as u32)),
+            );
+        }
+    }
     println!("cargo:rerun-if-changed=src/burn-convolution.rs.in");
     let convolution = fs::read_to_string("src/burn-convolution.rs.in").expect("read convolution source");
     let geometry = [

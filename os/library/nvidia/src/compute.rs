@@ -5,10 +5,11 @@ use crate::{Error, Result};
 pub mod convolution;
 pub mod elementwise;
 pub mod indexing;
+pub mod pooling;
 pub mod reduction;
 pub mod words;
 
-pub const VERSION: u32 = 13;
+pub const VERSION: u32 = 14;
 pub const INFO: u32 = 0;
 pub const ALLOCATE: u32 = 1;
 pub const FREE: u32 = 2;
@@ -28,7 +29,7 @@ pub const END_COMMANDS: u32 = 10;
 pub const QUEUE_PROFILE: u32 = 11;
 pub const SERVICE_PROFILE: u32 = 12;
 pub const SERVICE_OPERATIONS: usize = 13;
-pub const KERNEL_COUNT: usize = 53;
+pub const KERNEL_COUNT: usize = 55;
 
 /// CPU service costs by request operation, including queue work within it.
 #[derive(Clone, Copy, Debug, Default)]
@@ -136,9 +137,11 @@ pub enum Kernel {
     Conv2d = 50,
     Conv2dWindows = 51,
     Conv2dFold = 52,
+    Pool = 53,
+    PoolBackward = 54,
 }
 
-const _: () = assert!(Kernel::Conv2dFold as usize + 1 == KERNEL_COUNT);
+const _: () = assert!(Kernel::PoolBackward as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -186,6 +189,8 @@ impl Kernel {
                 | Self::Conv2d
                 | Self::Conv2dWindows
                 | Self::Conv2dFold
+                | Self::Pool
+                | Self::PoolBackward
                 | Self::TensorReduction
                 | Self::Fill
                 | Self::TensorWords
@@ -274,6 +279,8 @@ impl Kernel {
             50 => Self::Conv2d,
             51 => Self::Conv2dWindows,
             52 => Self::Conv2dFold,
+            53 => Self::Pool,
+            54 => Self::PoolBackward,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -333,12 +340,17 @@ impl Kernel {
             Self::Conv2d => "burn_conv2d",
             Self::Conv2dWindows => "burn_conv2d_windows",
             Self::Conv2dFold => "burn_conv2d_fold",
+            Self::Pool => "burn_max_pool",
+            Self::PoolBackward => "burn_avg_pool_backward",
         }
     }
 
     /// Select the cuTile specialization without changing the public request ABI.
     pub fn entry(self, parameters: &[u32]) -> &'static str {
         match (self, parameters) {
+            (Self::Pool | Self::PoolBackward, p) if p.len() == pooling::PARAMETERS => {
+                pooling::Mode::from_raw(p[31]).map_or(self.symbol(), |op| op.symbol(self == Self::PoolBackward))
+            }
             (Self::Scatter, p) if p.len() == indexing::PARAMETERS => indexing::Scatter::from_raw(p[0] >> 16).map_or(self.symbol(), |op| op.symbol()),
             (Self::TensorWords, p) if p.len() == elementwise::PARAMETERS => words::WordOp::from_raw(p[2] & 0xff).map_or(self.symbol(), |op| op.symbol()),
             (Self::TensorReduction, p) if p.len() == reduction::PARAMETERS => reduction::Reduction::from_raw(p[2]).map_or(self.symbol(), |op| op.symbol()),
@@ -385,6 +397,16 @@ impl Kernel {
         let mut mutated = 0;
         let mut threads = 128;
         let (count, pointers, output, in_place) = match (self, p) {
+            (Self::Pool | Self::PoolBackward, p) => {
+                let backward = self == Self::PoolBackward;
+                let (geometry, ranges) = pooling::validate(p, backward)?;
+                let count = if backward { geometry.images } else { geometry.outputs };
+                if count == 0 {
+                    return Err(Error::InvalidField);
+                }
+                extents[..2].copy_from_slice(&ranges);
+                (count, 2, 1, false)
+            }
             (Self::Conv2d, p) => {
                 let (geometry, ranges) = convolution::validate(p)?;
                 if geometry.outputs == 0 {

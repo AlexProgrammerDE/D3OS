@@ -116,7 +116,7 @@ The GPU operations include FP32 arithmetic and math, reductions, exact tensor fi
 Another 29 entries implement I32 arithmetic, signed comparisons, bitwise operations, boolean logic, masks, and conversions.
 These operations support strided views and broadcasting. Input tensors remain shared and immutable.
 Full writers avoid a separate output clear. Empty logical outputs require no element work.
-The matching SDK and driver use native compute protocol version 13.
+The matching SDK and driver use native compute protocol version 14.
 
 The D3OS GPU self-test passes reversed and transposed views, overlapping windows, broadcast batches, subviews, empty dimensions, and neighboring guards.
 Matrix references use independent FP64 accumulation. Math references use independent libm functions and include 2,816 FP32 edge values.
@@ -157,6 +157,19 @@ The checks include partial tiles, empty batches, offset views, shared storage, m
 Service counters show no activation upload or download during these operations.
 All 151 earlier GPU instruction sections remain byte-identical after the three convolution entries are added.
 The existing AlexNet execution path remains unchanged. AI workload migration waits for the public Burn backend.
+
+Native pooling provides max, average, and adaptive average operations with backward passes in one to three spatial dimensions.
+The plans accept signed views, per-side padding, ceil windows, and max-pool dilation.
+Max pooling preserves the first equal value and the last NaN, including its index and stored bits.
+An empty window returns negative infinity and index -1. Backward ignores that sentinel and rejects other invalid device indices.
+The value and index tensors share one initialized GPU allocation.
+Average divisors distinguish explicit padding from the extra extent of a ceil window.
+Adaptive pooling supports larger and smaller output dimensions, with 64-bit intermediate ratios.
+Average backward operations gather overlapping contributions without atomics or host transfers.
+Max backward uses checked scatter accumulation and reads one four-byte bounds flag before returning.
+Physical D3OS GPU checks pass independent FP64 forward and gradient references, finite differences, signed views, and neighboring guards.
+They also pass NaN payloads, tie selection, subnormal arithmetic, invalid-index recovery, empty dimensions, and adaptive ratios beyond 32-bit products.
+All 154 earlier GPU instruction sections remain byte-identical. AlexNet, Qwen, and DOOM functional regression checks also pass.
 
 These checks validate native primitives. Burn device dispatch and autodiff integration still need implementation.
 Integer division, remainder, other indexed updates, and additional training primitives also remain incomplete.

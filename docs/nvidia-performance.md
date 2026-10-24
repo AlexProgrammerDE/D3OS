@@ -60,7 +60,7 @@ Both operations keep tensors resident. All 88 earlier instruction sections remai
 The latest primitive checks add 21 unary math operations, broadcast power, and exact tensor fill.
 Independent libm references cover 2,816 FP32 edge values, including rounding boundaries, zeros, infinities, and NaNs.
 Fill performs no host upload and requires no separate clear. All 95 earlier GPU instruction sections remain byte-identical.
-The matching SDK and driver use native compute protocol version 13.
+The matching SDK and driver use native compute protocol version 14.
 
 The accompanying regression passes AlexNet's eight layer references, Qwen's layer and cache references, and all 600 DOOM views.
 D3OS AlexNet averages 0.960 ms across 100 passes.
@@ -105,6 +105,14 @@ The operations keep activations resident. All 151 previous GPU instruction secti
 This step leaves the existing AlexNet path unchanged and adds no performance improvement claim.
 Its functional validation evidence is under `target/nvidia/burn/convolution/`.
 Further performance optimization waits until the native Burn backend and AI workload migration are complete.
+
+The pooling step adds max, average, and adaptive average forward and backward operations for the native Burn backend.
+The operations retain tensor values on the GPU. Max backward reads one four-byte bounds flag and synchronizes.
+Physical D3OS GPU checks pass FP64 references, finite differences, signed views, guarded writes, and recoverable index errors.
+The checks include exact NaN payloads, subnormal arithmetic, empty dimensions, and adaptive ratios with products beyond 32 bits.
+All 154 previous GPU instruction sections remain byte-identical. AlexNet, Qwen, and DOOM functional regressions also pass.
+This step targets Burn operation coverage and correctness, with no new throughput comparison or optimization claim.
+Its validation evidence is under `target/nvidia/burn/pooling/`.
 
 ### Grouped recurrent attention
 

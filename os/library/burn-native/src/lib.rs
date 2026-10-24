@@ -6,6 +6,7 @@ extern crate alloc;
 pub mod convolution;
 mod device;
 pub mod layout;
+pub mod pooling;
 mod tensor;
 
 pub use device::NativeDevice;
