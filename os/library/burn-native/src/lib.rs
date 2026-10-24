@@ -8,6 +8,7 @@ mod device;
 pub mod layout;
 pub mod pooling;
 mod tensor;
+mod updates;
 
 pub use device::NativeDevice;
 pub use tensor::NativeTensor;

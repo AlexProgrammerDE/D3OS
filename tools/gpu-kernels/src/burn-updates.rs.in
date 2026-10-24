@@ -1,0 +1,30 @@
+#[cutile::entry()]
+unsafe fn burn_mask_where(a: *const u32, b: *const u32, condition: *const u32, output: *mut u32, BURN_PARAMETERS) {
+    let i = indices();
+    let mask = lt_tile(i, broadcast_scalar(count, shape![128]));
+    let mut linear = i;
+    let mut address_a = broadcast_scalar(signed(offset_a), shape![128]);
+    let mut address_b = broadcast_scalar(signed(offset_b), shape![128]);
+    BURN_ADDRESSES
+    let address_a: Tile<u32, { [128] }> = bitcast(address_a);
+    let address_b: Tile<u32, { [128] }> = bitcast(address_b);
+    let left = unsafe { read_tile(a, address_a, mask & lt_tile(address_a, broadcast_scalar(extent_a, shape![128])), 0u32) };
+    let right = unsafe { read_tile(b, address_b, mask & lt_tile(address_b, broadcast_scalar(extent_b, shape![128])), 0u32) };
+    let selected = unsafe { read_tile(condition, i, mask, 0u32) };
+    let result = select(eq_tile(selected, broadcast_scalar(0u32, shape![128])), left, right);
+    unsafe { write_tile(output, i, result, mask) };
+}
+
+#[cutile::entry()]
+unsafe fn burn_view_assign(a: *mut u32, b: *const u32, BURN_PARAMETERS) {
+    let i = indices();
+    let mask = lt_tile(i, broadcast_scalar(count, shape![128]));
+    let mut linear = i;
+    let mut address_a = broadcast_scalar(signed(offset_a), shape![128]);
+    let mut address_b = broadcast_scalar(signed(offset_b), shape![128]);
+    BURN_ADDRESSES
+    let address_a: Tile<u32, { [128] }> = bitcast(address_a);
+    let address_b: Tile<u32, { [128] }> = bitcast(address_b);
+    let source = unsafe { read_tile(b, address_b, mask & lt_tile(address_b, broadcast_scalar(extent_b, shape![128])), 0u32) };
+    unsafe { write_tile(a, address_a, source, mask & lt_tile(address_a, broadcast_scalar(extent_a, shape![128]))) };
+}

@@ -145,7 +145,7 @@ The CI workflow provides repeatable numerical tests and an optional pretrained Q
 The current target is the RTX 4090 Laptop GPU (`10de:2757`, AD103) with one serialized compute queue.
 The driver boots pinned signed firmware and allocates a private, virtually bound compute context.
 The process-owned syscall interface accepts built-in kernels and opaque buffer handles.
-Native compute protocol version 14 includes command scopes, queue profiles, and 55 built-in kernels.
+Native compute protocol version 15 includes command scopes, queue profiles, and 57 built-in kernels.
 Its expanded profile array requires the matching SDK.
 Rebuild compute applications with the matching SDK. The kernel rejects incompatible request versions.
 
@@ -156,6 +156,17 @@ The driver validates every reachable input address before dispatch and rejects o
 Every entry writes the complete output, so native allocation avoids a separate clear kernel.
 Empty logical results reuse resident storage without a GPU launch.
 Hardware checks cover partial tiles, neighboring guards, rejected addresses, exact floating-point copies, and chained resident operations.
+
+Masked selection uses two signed source views, a dense resident mask, and a full-writer output.
+It copies raw words, including NaN payloads and signed zeros, without arithmetic on either branch.
+The tensor API materializes noncontiguous masks on the GPU and supports broadcasting across all three inputs.
+
+Strided assignment uses the same 32-parameter view geometry and updates only the destination view.
+The driver proves distinct destination addresses through sorted absolute strides and rejects layouts outside that proof.
+This includes overlapping windows and broadcast writes. Sources can overlap logically because they remain read-only.
+The API creates a private GPU copy before slice assignment, so shared tensors retain their original values.
+Concatenation starts from zeroed storage. Padding starts from an exact full fill, then assigns the interior view.
+Neither operation permits partial writers to expose uninitialized allocations.
 
 The gather entry supports FP32, I32, and boolean values with I32 indices.
 Its 32 parameters describe both views, the selected axis, and the output shape.

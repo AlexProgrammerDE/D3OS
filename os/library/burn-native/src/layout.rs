@@ -258,6 +258,13 @@ impl Layout {
         Ok(parameters.map(|value| value as usize))
     }
 
+    /// Encode a partial write with a provably nonoverlapping destination view.
+    pub fn assignment_parameters(&self, source: &Self) -> Result<[usize; 32]> {
+        let parameters = self.strided_parameters(source, 0, 0, false)?;
+        d3os_nvidia::compute::updates::validate_assign(&parameters).map_err(|_| Error::InvalidParameter)?;
+        Ok(parameters.map(|value| value as usize))
+    }
+
     fn strided_parameters(&self, rhs: &Self, operation: u32, scalar_bits: u32, scalar_rhs: bool) -> Result<[u32; 32]> {
         if self.shape != rhs.shape {
             return Err(Error::ShapeMismatch);

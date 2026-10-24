@@ -116,7 +116,7 @@ The GPU operations include FP32 arithmetic and math, reductions, exact tensor fi
 Another 29 entries implement I32 arithmetic, signed comparisons, bitwise operations, boolean logic, masks, and conversions.
 These operations support strided views and broadcasting. Input tensors remain shared and immutable.
 Full writers avoid a separate output clear. Empty logical outputs require no element work.
-The matching SDK and driver use native compute protocol version 14.
+The matching SDK and driver use native compute protocol version 15.
 
 The D3OS GPU self-test passes reversed and transposed views, overlapping windows, broadcast batches, subviews, empty dimensions, and neighboring guards.
 Matrix references use independent FP64 accumulation. Math references use independent libm functions and include 2,816 FP32 edge values.
@@ -171,8 +171,19 @@ Physical D3OS GPU checks pass independent FP64 forward and gradient references, 
 They also pass NaN payloads, tie selection, subnormal arithmetic, invalid-index recovery, empty dimensions, and adaptive ratios beyond 32-bit products.
 All 154 earlier GPU instruction sections remain byte-identical. AlexNet, Qwen, and DOOM functional regression checks also pass.
 
+Native masked selection copies exact FP32, I32, and boolean words from the selected input.
+All three inputs support broadcasting and signed views. The mask requires a resident GPU copy when its layout is noncontiguous.
+Slice assignment preserves shared tensors through a private GPU copy, including when the replacement shares overlapping source storage.
+Concatenation and padding use checked resident copies. Partial writers always start from initialized destination storage.
+The driver proves that writable views contain distinct addresses and rejects overlapping windows and broadcast destinations.
+
+Physical D3OS GPU checks pass all three data types, signed views, broadcasting, overlapping-source snapshots, and concatenation across every axis.
+They also pass exact NaN payloads, signed zeros, empty tensors, guarded partial tiles, and rejected invalid writes inside command scopes.
+Service counters show no activation upload or download. All 159 earlier GPU instruction sections remain byte-identical.
+AlexNet, Qwen, and DOOM functional regressions pass with the expanded bundle.
+
 These checks validate native primitives. Burn device dispatch and autodiff integration still need implementation.
-Integer division, remainder, other indexed updates, and additional training primitives also remain incomplete.
+Integer division, remainder, and additional training primitives also remain incomplete.
 Full native Burn training, dataset handling, checkpoint export, and workload migration remain incomplete.
 The retained Linux and D3OS measurements are in [Native NVIDIA performance](nvidia-performance.md).
 

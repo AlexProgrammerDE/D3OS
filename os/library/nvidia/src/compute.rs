@@ -7,9 +7,10 @@ pub mod elementwise;
 pub mod indexing;
 pub mod pooling;
 pub mod reduction;
+pub mod updates;
 pub mod words;
 
-pub const VERSION: u32 = 14;
+pub const VERSION: u32 = 15;
 pub const INFO: u32 = 0;
 pub const ALLOCATE: u32 = 1;
 pub const FREE: u32 = 2;
@@ -29,7 +30,7 @@ pub const END_COMMANDS: u32 = 10;
 pub const QUEUE_PROFILE: u32 = 11;
 pub const SERVICE_PROFILE: u32 = 12;
 pub const SERVICE_OPERATIONS: usize = 13;
-pub const KERNEL_COUNT: usize = 55;
+pub const KERNEL_COUNT: usize = 57;
 
 /// CPU service costs by request operation, including queue work within it.
 #[derive(Clone, Copy, Debug, Default)]
@@ -139,9 +140,11 @@ pub enum Kernel {
     Conv2dFold = 52,
     Pool = 53,
     PoolBackward = 54,
+    MaskWhere = 55,
+    ViewAssign = 56,
 }
 
-const _: () = assert!(Kernel::PoolBackward as usize + 1 == KERNEL_COUNT);
+const _: () = assert!(Kernel::ViewAssign as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -186,6 +189,7 @@ impl Kernel {
         matches!(
             self,
             Self::TensorElementwise
+                | Self::MaskWhere
                 | Self::Conv2d
                 | Self::Conv2dWindows
                 | Self::Conv2dFold
@@ -281,6 +285,8 @@ impl Kernel {
             52 => Self::Conv2dFold,
             53 => Self::Pool,
             54 => Self::PoolBackward,
+            55 => Self::MaskWhere,
+            56 => Self::ViewAssign,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -342,6 +348,8 @@ impl Kernel {
             Self::Conv2dFold => "burn_conv2d_fold",
             Self::Pool => "burn_max_pool",
             Self::PoolBackward => "burn_avg_pool_backward",
+            Self::MaskWhere => "burn_mask_where",
+            Self::ViewAssign => "burn_view_assign",
         }
     }
 
@@ -397,6 +405,14 @@ impl Kernel {
         let mut mutated = 0;
         let mut threads = 128;
         let (count, pointers, output, in_place) = match (self, p) {
+            (Self::MaskWhere, p) => {
+                extents[..4].copy_from_slice(&updates::validate_mask(p)?);
+                (p[0], 4, 3, false)
+            }
+            (Self::ViewAssign, p) => {
+                extents[..2].copy_from_slice(&updates::validate_assign(p)?);
+                (p[0], 2, 0, false)
+            }
             (Self::Pool | Self::PoolBackward, p) => {
                 let backward = self == Self::PoolBackward;
                 let (geometry, ranges) = pooling::validate(p, backward)?;

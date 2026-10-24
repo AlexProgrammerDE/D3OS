@@ -4,6 +4,7 @@ mod indexing;
 mod math;
 mod pooling;
 mod scatter;
+mod updates;
 mod words;
 use abi::elementwise::Elementwise;
 use abi::reduction::Reduction;
@@ -105,6 +106,7 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     scatter::run(backend).map_err(|e| format!("Burn native scatter: {e}"))?;
     convolution::run(backend).map_err(|e| format!("Burn native convolution: {e}"))?;
     pooling::run(backend).map_err(|e| format!("Burn native pooling: {e}"))?;
+    updates::run(backend).map_err(|e| format!("Burn native updates: {e}"))?;
     Ok(())
 }
 

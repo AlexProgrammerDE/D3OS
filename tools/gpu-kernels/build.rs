@@ -100,6 +100,16 @@ fn main() {
             )
         })
         .collect::<String>();
+    println!("cargo:rerun-if-changed=src/burn-updates.rs.in");
+    let updates = fs::read_to_string("src/burn-updates.rs.in").expect("read update source");
+    source.push_str(
+        &updates
+            .replace(
+                "BURN_PARAMETERS",
+                &parameters.replace("operation: u32", "_operation: u32").replace("scalar: u32", "_scalar: u32"),
+            )
+            .replace("BURN_ADDRESSES", &addresses),
+    );
     for op in d3os_nvidia::compute::elementwise::Elementwise::ALL {
         source.push_str(
             &elementwise
