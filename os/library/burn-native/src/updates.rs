@@ -1,7 +1,7 @@
 use crate::{NativeTensor, layout::Layout};
 use alloc::{sync::Arc, vec, vec::Vec};
 use burn_backend::{BoolStore, DType, Shape, Slice};
-use d3os_compute::{Backend, Error, Result, nvidia::Nvidia};
+use d3os_compute::{Error, Result, nvidia::Nvidia};
 use d3os_nvidia::compute::{Kernel, elementwise::Elementwise};
 
 impl NativeTensor {
@@ -24,7 +24,7 @@ impl NativeTensor {
         let right = value.layout.expand(shape.clone())?;
         let parameters = left.elementwise_parameters(&right, Elementwise::Copy, 0, false)?;
         let mask = mask.clone().expand(shape)?;
-        Nvidia.with_commands(|| {
+        Nvidia.record_commands(|| {
             let mask = if mask.layout.is_contiguous() { mask } else { mask.copy()? };
             let buffer = Nvidia.produce_words(
                 layout.len(),
@@ -52,7 +52,7 @@ impl NativeTensor {
             return Ok(self.clone());
         }
         let parameters = target.assignment_parameters(&source)?;
-        Nvidia.with_commands(|| {
+        Nvidia.record_commands(|| {
             let output = self.copy()?;
             Nvidia.dispatch_words(Kernel::ViewAssign, &[(&output.buffer, 0), (&value.buffer, 0)], &parameters)?;
             Ok(output)
@@ -95,7 +95,7 @@ impl NativeTensor {
             }
             start = end;
         }
-        Nvidia.with_commands(|| {
+        Nvidia.record_commands(|| {
             // This partial-writer path starts from initialized storage. No
             // uninitialized allocation is exposed if any later dispatch fails.
             let buffer = Nvidia.allocate_words(layout.len())?;
@@ -140,7 +140,7 @@ impl NativeTensor {
                 .collect();
             Some(layout.slice(&slices)?.assignment_parameters(&self.layout)?)
         };
-        Nvidia.with_commands(|| {
+        Nvidia.record_commands(|| {
             let output = Self::full(layout.shape().clone(), self.dtype, word)?;
             if let Some(parameters) = parameters {
                 Nvidia.dispatch_words(Kernel::ViewAssign, &[(&output.buffer, 0), (&self.buffer, 0)], &parameters)?;

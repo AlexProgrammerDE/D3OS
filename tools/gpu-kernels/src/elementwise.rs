@@ -21,12 +21,17 @@ unsafe fn tensor_copy(input: *const u32, output: *mut u32, count: u32) {
     unsafe { write_tile(output, i, value, mask) };
 }
 #[cutile::entry()]
-unsafe fn inference_relu(input: *const f32, output: *mut f32, count: u32) {
+unsafe fn inference_relu(input: *const u32, output: *mut u32, count: u32) {
     let i = indices();
     let mask = lt_tile(i, broadcast_scalar(count, shape![128]));
-    let value = unsafe { read_tile(input, i, mask, 0f32) };
-    let zero = broadcast_scalar(0f32, shape![128]);
-    unsafe { write_tile(output, i, select(lt_tile(value, zero), zero, value), mask) };
+    let bits = unsafe { read_tile(input, i, mask, 0u32) };
+    // Floating maximum canonicalizes NaNs. Select integer bits so both NaN
+    // signs and payloads survive, while either signed zero becomes +0.
+    let magnitude = bits & broadcast_scalar(0x7fff_ffffu32, shape![128]);
+    let zero = broadcast_scalar(0u32, shape![128]);
+    let negative = gt_tile(bits, broadcast_scalar(0x7fff_ffffu32, shape![128]));
+    let nonpositive = eq_tile(magnitude, zero) | (negative & le_tile(magnitude, broadcast_scalar(0x7f80_0000u32, shape![128])));
+    unsafe { write_tile(output, i, select(nonpositive, zero, bits), mask) };
 }
 #[cutile::entry()]
 unsafe fn tensor_add(input: *const f32, other: *const f32, output: *mut f32, count: u32) {

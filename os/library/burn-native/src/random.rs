@@ -2,7 +2,7 @@
 use crate::{NativeTensor, layout::Layout};
 use alloc::sync::Arc;
 use burn_backend::{BoolStore, DType, Distribution, Shape};
-use d3os_compute::{Backend, Error, Result, nvidia::Nvidia};
+use d3os_compute::{Error, Result, nvidia::Nvidia};
 use d3os_nvidia::compute::{
     Kernel,
     random::{self as abi, Mode},
@@ -88,7 +88,7 @@ impl RandomGenerator {
         }
         self.reserve((plan.layout.len() as u64).div_ceil(4), |state| {
             let parameters = plan.parameters(state)?;
-            Nvidia.with_commands(|| {
+            Nvidia.record_commands(|| {
                 let buffer = Nvidia.produce_words(plan.layout.len(), Kernel::Random, &[], &parameters)?;
                 let output = NativeTensor {
                     buffer: Arc::new(buffer),

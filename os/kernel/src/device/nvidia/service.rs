@@ -145,8 +145,13 @@ fn serve(device: &Device, compute: &mut super::rm::Compute, owner: Uuid, request
             Ok(0)
         }
         abi::END_COMMANDS => {
+            if request.elements & !abi::DEFER_NESTED_COMPLETION != 0 {
+                return Err(Errno::EINVAL);
+            }
             let depth = compute.command_scopes.get(&owner).copied().ok_or(Errno::EINVAL)?;
-            gpu_result(compute.flush_pending(device))?;
+            if depth == 1 || request.elements == 0 {
+                gpu_result(compute.flush_pending(device))?;
+            }
             if depth == 1 {
                 compute.command_scopes.remove(&owner);
             } else {

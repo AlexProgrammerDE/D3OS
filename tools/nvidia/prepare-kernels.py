@@ -54,6 +54,8 @@ def audit(family, sass):
         if name not in bodies or not re.search(instruction, bodies[name]):
             raise RuntimeError(f"{name}: missing Tensor Core instruction")
     if family == "inference":
+        if re.search(r"\bFMNMX\b", bodies.get("inference_relu", "")):
+            raise RuntimeError("ReLU must preserve NaN payloads")
         for name in ("delta_fused_four_taps", "tensor_matmul_tf32x3_k16"):
             body = bodies.get(name, "")
             if not body or re.search(r"\b(?:LDL|STL)\b", body):

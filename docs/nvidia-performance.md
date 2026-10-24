@@ -262,6 +262,54 @@ Public API tests check signed views, preserved inputs, folded batches, empty out
 Native MNIST autodiff and SGD checks and all eight AlexNet references pass.
 The kernel bundle remains unchanged.
 
+### Native linear storage, ReLU, and recording scopes
+
+AlexNet now keeps its dense classifier weights in their original physical `[output, input]` order.
+Burn sees a transposed `[input, output]` view. The native linear operation selects the existing projection kernels without copying those weights.
+Single-row projections use the vector specialization. Batched projections retain Tensor Core execution.
+Public API checks cover positive offsets, signed views, source preservation, and analytic input, weight, and bias gradients.
+The D3OS CPU AlexNet run also passes every original layer reference.
+
+ReLU now uses one native kernel and reuses uniquely owned contiguous storage.
+Shared inputs receive a private result. Strided inputs first use the checked resident copy operation.
+The integer selection preserves quiet and signaling NaN payloads, infinities, and positive subnormals. Both signed zeros produce positive zero.
+The first floating selection compiled into a NaN-canonicalizing maximum instruction and failed the bit-pattern check.
+The corrected integer implementation passes that check. The compiler audit rejects the unsafe maximum instruction.
+Only the ReLU instruction section changes among the 174 inference entries. All Tensor Core and spill audits pass.
+
+Compound Burn operations now use recording scopes that join their parent transaction.
+Explicit `with_commands()` calls retain their synchronous contract, including nested calls.
+Hardware checks cover joined recording scopes, handled callback errors, explicit nested completion, ordered writes, and allocation lifetimes.
+AlexNet uses 31 launches in two submission batches, versus 15 batches with synchronous layer scopes.
+
+Fresh D3OS GPU 100-pass means are 1.030 and 1.010 ms with the corrected ReLU and synchronous layer scopes.
+The recording build measures 0.970 and 1.060 ms. Their overlap does not establish a separate stable speedup from scope composition alone.
+The preceding linear build measures 1.230 and 1.290 ms, and column-storage samples measure 1.150 and 1.250 ms.
+Fresh Linux GPU cuDNN/cuBLAS samples measure 0.733869, 0.732027, and 0.732209 ms.
+All guests use four CPUs and affinity `8,10,12,14`.
+AlexNet guests use 4096 MiB RAM and the same FP32 weights and input.
+Every D3OS sample passes the original eight layer references, without changing their tolerances.
+
+The final D3OS serialized device sample totals about 0.908 ms.
+It includes 0.326 ms for convolution matrix products, 0.453 ms for classifier products, and 0.053 ms for window extraction.
+ReLU, bias, and pooling kernels account for the remaining device time.
+These device timestamps are diagnostic and remain separate from the normal forward timer.
+Evidence, binary identities, retained comparison images, and the complete kernel profile are under `target/nvidia/burn/alexnet-optimization/`.
+
+The same final build passes Qwen 0.8B layer, logit, tokenizer, and final-cache references.
+Its two uninstrumented warm D3OS GPU samples measure 211.221 and 242.424 tokens/s.
+An earlier diagnostic session measures 243.346 tokens/s without instrumentation. Its instrumented sample is excluded from that throughput figure.
+The retained Linux GPU reference remains about 251 to 256 tokens/s.
+Fresh D3OS GPU warm rates are 32.064 to 32.250 tokens/s for Qwen 9B and 5.180 to 5.420 for Qwen 27B.
+The retained Linux CUDA rates are 58.3715 and 34.4025 tokens/s, with the arithmetic differences described above.
+Each large model again passes 32,033,280 independent FP32 reference logits with zero tolerance failures.
+These changes do not establish a Qwen throughput improvement.
+
+The final D3OS GPU DOOM timedemo measures 1607.064575 FPS for 7117 game ticks and 155 real ticks.
+The separate 600-frame pixel, control, cache-purge, atlas-rollover, and post-exit inference checks pass at the 70 FPS gameplay cap.
+DOOM retains its title-bar FPS display and no corner overlay.
+The retained Linux headless software results still lack matching presentation costs. They do not establish GPU rendering parity.
+
 ## Earlier Burn primitive measurements
 
 The following measurements describe earlier implementation stages. Current model migration results are above.

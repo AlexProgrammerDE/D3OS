@@ -1,4 +1,5 @@
 //! Burn backend dispatch over the fallible native tensor implementation.
+mod activation;
 mod boolean;
 mod execution;
 mod float;
@@ -13,9 +14,8 @@ use crate::{
 };
 use alloc::{string::String, vec::Vec};
 use burn_backend::{
-    Backend, BackendTypes, DType, DTypeUsage, DTypeUsageSet, ExecutionError, GraphUnsupported, Shape, TensorMetadata,
-    distributed::DistributedOps,
-    ops::{ActivationOps, TransactionOps},
+    Backend, BackendTypes, DType, DTypeUsage, DTypeUsageSet, ExecutionError, GraphUnsupported, Shape, TensorMetadata, distributed::DistributedOps,
+    ops::TransactionOps,
 };
 use d3os_compute::{Backend as _, Error, nvidia::Nvidia};
 use d3os_nvidia::compute::{elementwise::Elementwise, reduction::Reduction, words::WordOp};
@@ -69,7 +69,6 @@ impl Backend for Native {
     }
 }
 
-impl ActivationOps<Self> for Native {}
 impl TransactionOps<Self> for Native {}
 impl DistributedOps<Self> for Native {}
 
@@ -119,7 +118,7 @@ fn reduce(op: &'static str, tensor: &BackendTensor, axis: Option<usize>, reducti
         if let Some(axis) = axis {
             v[0].reduce(axis, reduction)
         } else {
-            Nvidia.with_commands(|| {
+            Nvidia.record_commands(|| {
                 let mut tensor = v[0].clone();
                 for axis in (0..tensor.shape().num_dims()).rev() {
                     tensor = tensor.reduce(axis, reduction)?;

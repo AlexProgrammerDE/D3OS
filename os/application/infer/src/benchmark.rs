@@ -306,8 +306,10 @@ pub(super) fn alexnet(backend: &Nvidia) -> Result<(), String> {
         backend,
         before: backend.profile().map_err(|e| format!("{e}"))?,
     };
+    let instrumented_before = layers.before;
     drop(model.forward_observed(input, &mut layers)?);
     device.sync().map_err(|e| format!("AlexNet timing: {e:?}"))?;
+    profile(&instrumented_before, &backend.profile().map_err(|e| format!("{e}"))?, "alexnet_device");
     timing.finish().map_err(|e| format!("{e}"))?;
     d3os_ai::alexnet::verify_model(&model, &device, &fixture)?;
     report(format_args!(

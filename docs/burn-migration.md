@@ -1,12 +1,12 @@
 # Burn migration and training goal
 
-Burn will provide the public AI framework for D3OS.
+Burn provides the public AI framework for D3OS.
 The migration covers tensor operations, model definitions, training, and inference.
 The native D3OS driver and precompiled cuTile kernels remain the GPU execution stack.
 DOOM keeps its native renderer and remains part of the separate Linux performance comparison.
 
 This work extends the [native NVIDIA performance goal](nvidia-performance.md).
-Qwen3.5-0.8B, Qwen3.5-9B Q8_0, Qwen3.6-27B Q3_K_M, and AlexNet must all migrate to Burn.
+Qwen3.5-0.8B, Qwen3.5-9B Q8_0, Qwen3.6-27B Q3_K_M, and AlexNet now use Burn.
 The goal also includes an MNIST convolutional model trained and exported inside D3OS.
 Correctness alone does not complete the goal. Matched Linux performance comparisons remain required.
 
@@ -23,6 +23,12 @@ CPU execution is an explicit device choice. Unsupported GPU operations cannot si
 Shared tensors must preserve values needed by other tensors and backward passes.
 Queued operations must retain their buffers until completion.
 Allocation failures and GPU faults must reach the application without corrupting later work.
+
+Native compound operations use `Nvidia::record_commands()` to group their kernels.
+Inside a parent scope, recording joins the parent's completion without adding a wait between layers.
+A standalone recording scope waits before returning.
+`with_commands()` retains explicit completion, including nested calls. Burn device synchronization also waits for outstanding work.
+Reads, process cleanup, and page-table growth retain their completion barriers.
 
 Burn's backend interface covers more operations than the current inference interface.
 The implementation needs tensor views, broadcasting, reductions, indexing, and integer and boolean operations.

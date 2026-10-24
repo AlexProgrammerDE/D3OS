@@ -1,4 +1,5 @@
 //! Check Burn tensor ownership and views on real native GPU allocations.
+mod activation;
 mod convolution;
 mod dispatch;
 mod indexing;
@@ -114,6 +115,7 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     scatter::run(backend).map_err(|e| format!("Burn native scatter: {e}"))?;
     convolution::run(backend).map_err(|e| format!("Burn native convolution: {e}"))?;
     linear::run(backend).map_err(|e| format!("Burn native linear: {e}"))?;
+    activation::run(backend).map_err(|e| format!("Burn native ReLU: {e}"))?;
     pooling::run(backend).map_err(|e| format!("Burn native pooling: {e}"))?;
     updates::run(backend).map_err(|e| format!("Burn native updates: {e}"))?;
     random::run(backend).map_err(|e| format!("Burn native random: {e}"))?;

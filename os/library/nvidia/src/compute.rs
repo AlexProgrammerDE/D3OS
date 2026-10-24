@@ -13,6 +13,9 @@ pub mod updates;
 pub mod words;
 
 pub const VERSION: u32 = 18;
+/// END_COMMANDS flag: an inner recording scope joins its parent's completion.
+/// The outermost scope always waits. Zero retains synchronous nested scopes.
+pub const DEFER_NESTED_COMPLETION: u64 = 1;
 pub const INFO: u32 = 0;
 pub const ALLOCATE: u32 = 1;
 pub const FREE: u32 = 2;
@@ -220,6 +223,7 @@ impl Kernel {
                 | Self::Im2col
                 | Self::MaxPool
                 | Self::Project
+                | Self::Relu
                 | Self::Copy
                 | Self::RmsNorm
                 | Self::ProjectBf16

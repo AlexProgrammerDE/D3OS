@@ -187,6 +187,42 @@ fn verify_command_scopes(backend: &Nvidia) -> d3os_compute::Result<()> {
         return Err(d3os_compute::Error::DeviceFault);
     }
     verify(98)?;
+    // Layer-local recording scopes join the enclosing transaction, including
+    // an inner callback error that the outer caller handles and continues.
+    let before = backend.queue_profile()?;
+    backend.with_commands(|| -> d3os_compute::Result<()> {
+        backend.record_commands(|| -> d3os_compute::Result<()> {
+            backend.dispatch_words(Kernel::Add, &[(&counter, 1), (&increment, 0), (&counter, 1)], &[COUNT])
+        })?;
+        let failed: d3os_compute::Result<()> = backend.record_commands(|| {
+            backend.dispatch_words(Kernel::Add, &[(&counter, 1), (&increment, 0), (&counter, 1)], &[COUNT])?;
+            Err(d3os_compute::Error::InvalidParameter)
+        });
+        if failed != Err(d3os_compute::Error::InvalidParameter) {
+            return Err(d3os_compute::Error::DeviceFault);
+        }
+        backend.dispatch_words(Kernel::Add, &[(&counter, 1), (&increment, 0), (&counter, 1)], &[COUNT])
+    })?;
+    let after = backend.queue_profile()?;
+    if after.batches.wrapping_sub(before.batches) != 1 || after.launches.wrapping_sub(before.launches) != 3 {
+        return Err(d3os_compute::Error::DeviceFault);
+    }
+    verify(101)?;
+    // Explicit nested completion keeps its original synchronous contract.
+    let before = backend.queue_profile()?;
+    backend.record_commands(|| -> d3os_compute::Result<()> {
+        for _ in 0..2 {
+            backend.with_commands(|| -> d3os_compute::Result<()> {
+                backend.dispatch_words(Kernel::Add, &[(&counter, 1), (&increment, 0), (&counter, 1)], &[COUNT])
+            })?;
+        }
+        Ok(())
+    })?;
+    let after = backend.queue_profile()?;
+    if after.batches.wrapping_sub(before.batches) != 2 || after.launches.wrapping_sub(before.launches) != 2 {
+        return Err(d3os_compute::Error::DeviceFault);
+    }
+    verify(103)?;
     let before = backend.queue_profile()?;
     for _ in 0..2 {
         backend.dispatch_words(Kernel::Relu, &[(&counter, 1), (&counter, 1)], &[COUNT])?;
@@ -195,7 +231,9 @@ fn verify_command_scopes(backend: &Nvidia) -> d3os_compute::Result<()> {
     if after.batches.wrapping_sub(before.batches) != 2 || after.launches.wrapping_sub(before.launches) != 2 {
         return Err(d3os_compute::Error::DeviceFault);
     }
-    super::report(format_args!("NVIDIA_COMMAND_SCOPES_OK steps=98 count={COUNT} backend=nvidia"));
+    super::report(format_args!(
+        "NVIDIA_COMMAND_SCOPES_OK steps=103 count={COUNT} recording=joined explicit_nested=waits backend=nvidia"
+    ));
     Ok(())
 }
 

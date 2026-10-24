@@ -645,6 +645,7 @@ fn stateful_dispatch_protects_every_mutated_range() {
     assert_eq!(update.extents[..4], [14, 8, 12, 6]);
     assert!(update.validate_aliases(&[0x1000, 0x2000, 0x3000, 0x1004]).is_err());
     let relu = Kernel::Relu.work(&[16]).unwrap();
+    assert!(Kernel::Relu.allocates_output());
     assert!(relu.validate_aliases(&[0x1000, 0x1000]).is_ok());
     assert!(relu.validate_aliases(&[0x1000, 0x1004]).is_err());
 }

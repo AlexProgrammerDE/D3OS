@@ -2,7 +2,7 @@
 use crate::{NativeTensor, layout::Layout};
 use alloc::sync::Arc;
 use burn_backend::{DType, Shape, ops::ConvOptions};
-use d3os_compute::{Backend, Error, Result, nvidia::Nvidia};
+use d3os_compute::{Error, Result, nvidia::Nvidia};
 use d3os_nvidia::compute::{Kernel, convolution as abi, reduction::Reduction};
 
 #[derive(Clone, Debug)]
@@ -152,7 +152,7 @@ impl NativeTensor {
                 dtype: DType::F32,
             });
         }
-        Nvidia.with_commands(|| {
+        Nvidia.record_commands(|| {
             let bias = bias.map(dense).transpose()?;
             if plan.explicit_columns(&self.layout, &weights.layout) {
                 let p = plan.geometry.map(|v| v as usize);
@@ -205,7 +205,7 @@ impl NativeTensor {
             return Err(Error::ShapeMismatch);
         }
         let parameters = plan.windows_parameters(&self.layout)?;
-        Nvidia.with_commands(|| {
+        Nvidia.record_commands(|| {
             let p = plan.geometry.map(|v| v as usize);
             let [n, g, k, s]: [usize; 4] = plan.columns_shape().as_slice().try_into().unwrap();
             let o = p[17] / g;

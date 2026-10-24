@@ -72,6 +72,27 @@ impl<T> Drop for GpuBuffer<T> {
 pub struct Nvidia;
 
 impl Nvidia {
+    /// Group one operation without a completion wait inside a parent scope.
+    /// A standalone call still waits before returning. Reads and explicit
+    /// `with_commands` calls synchronize, including inside recording scopes.
+    pub fn record_commands<T, E: From<Error>>(&self, work: impl FnOnce() -> core::result::Result<T, E>) -> core::result::Result<T, E> {
+        self.commands(work, abi::DEFER_NESTED_COMPLETION)
+    }
+
+    fn commands<T, E: From<Error>>(&self, work: impl FnOnce() -> core::result::Result<T, E>, completion: u64) -> core::result::Result<T, E> {
+        request(operation(abi::BEGIN_COMMANDS)).map_err(E::from)?;
+        let result = work();
+        let completed = request(Request {
+            elements: completion,
+            ..operation(abi::END_COMMANDS)
+        })
+        .map_err(E::from);
+        match result {
+            Ok(output) => completed.map(|_| output),
+            Err(error) => Err(error),
+        }
+    }
+
     pub fn memory_profile(&self) -> Result<abi::MemoryProfile> {
         let mut profile = abi::MemoryProfile::default();
         request(Request {
@@ -378,13 +399,7 @@ impl Nvidia {
 
 impl Backend for Nvidia {
     fn with_commands<T, E: From<Error>>(&self, work: impl FnOnce() -> core::result::Result<T, E>) -> core::result::Result<T, E> {
-        request(operation(abi::BEGIN_COMMANDS)).map_err(E::from)?;
-        let result = work();
-        let completed = request(operation(abi::END_COMMANDS)).map_err(E::from);
-        match result {
-            Ok(output) => completed.map(|_| output),
-            Err(error) => Err(error),
-        }
+        self.commands(work, 0)
     }
 
     type Buffer = GpuBuffer;

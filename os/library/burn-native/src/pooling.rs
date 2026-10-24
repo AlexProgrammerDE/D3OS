@@ -5,7 +5,7 @@ use burn_backend::{
     DType, Shape,
     ops::{AvgPoolOptions, MaxPoolOptions},
 };
-use d3os_compute::{Backend, Error, Result, nvidia::Nvidia};
+use d3os_compute::{Error, Result, nvidia::Nvidia};
 use d3os_nvidia::compute::{
     Kernel,
     pooling::{self as abi, Mode},
@@ -213,7 +213,7 @@ impl NativeTensor {
         if self.layout.is_empty() {
             return self.empty_pool(plan.input, DType::F32);
         }
-        Nvidia.with_commands(|| {
+        Nvidia.record_commands(|| {
             let n = plan.input[0];
             let c = plan.input[1];
             let spatial = plan.input[2..].iter().product::<usize>();

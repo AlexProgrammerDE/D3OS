@@ -87,9 +87,9 @@ impl AlexNet {
                 convolutions.push(layer);
             } else {
                 let mut layer = LinearConfig::new(shape[1], shape[0]).init(device);
-                // Torch stores [out, in]. Materialize Burn's [in, out] layout
-                // once during loading; forwards reuse the resident matrix.
-                let weight = tensor::<2>(&pair[0], device)?.transpose().reshape([shape[1], shape[0]]);
+                // Burn sees [in, out]; the native backend can use Torch's
+                // original dense [out, in] storage directly for projections.
+                let weight = tensor::<2>(&pair[0], device)?.transpose();
                 layer.weight = Param::from_tensor(weight);
                 layer.bias = bias;
                 classifier.push(layer);
