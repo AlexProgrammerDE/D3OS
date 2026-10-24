@@ -7,4 +7,5 @@ mod lookup;
 mod traits;
 
 mod procfs;
+mod fwcfg;
 mod mount;

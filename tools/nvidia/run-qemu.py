@@ -58,6 +58,7 @@ def main():
         choices=(
             "cpu-self-test",
             "burn-self-test",
+            "fwcfg-self-test",
             "gpu-self-test",
             "gpu-kernel-bench",
             "gpu-alexnet",
@@ -84,6 +85,13 @@ def main():
         help="generate 4096 tokens per Qwen benchmark run with a 4352-token cache",
     )
     parser.add_argument("--cpus", type=int, default=4)
+    parser.add_argument(
+        "--fwcfg-file",
+        action="append",
+        default=[],
+        metavar="NAME=PATH",
+        help="expose a read-only file at /fwcfg/NAME",
+    )
     parser.add_argument("--display", choices=("none", "gtk", "sdl"), default="none")
     parser.add_argument(
         "--boot-check",
@@ -96,6 +104,21 @@ def main():
         "--gdb-port", type=int, help="pause at reset for a local GDB connection"
     )
     args = parser.parse_args()
+    firmware_files = {}
+    for argument in args.fwcfg_file:
+        name, separator, filename = argument.partition("=")
+        if not separator or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,45}", name):
+            parser.error("--fwcfg-file requires NAME=PATH with a short ASCII filename")
+        path = Path(filename).resolve()
+        if (
+            name in firmware_files
+            or not path.is_file()
+            or path.stat().st_size > 0xFFFFFFFF
+        ):
+            parser.error(
+                "firmware filenames must be unique and files must be smaller than 4 GiB"
+            )
+        firmware_files[name] = path
     if args.qwen_device_timing and args.inference != "gpu-qwen-bench":
         parser.error("--qwen-device-timing requires --inference gpu-qwen-bench")
     if args.qwen_long_bench and args.inference != "gpu-qwen-bench":
@@ -111,7 +134,7 @@ def main():
     devices = vfio_devices(args.gpu)
     if args.kernels and not args.firmware:
         parser.error("--kernels requires --firmware")
-    if args.inference not in ("cpu-self-test", "burn-self-test") and (
+    if args.inference not in ("cpu-self-test", "fwcfg-self-test", "burn-self-test") and (
         not args.kernels or not (args.kernels / "inference.cubin").is_file()
     ):
         parser.error("GPU inference requires --kernels with inference.cubin")
@@ -231,6 +254,9 @@ def main():
         if not 1 <= args.gdb_port <= 65535:
             parser.error("--gdb-port must be from 1 to 65535")
         command.extend(["-gdb", f"tcp:127.0.0.1:{args.gdb_port}", "-S"])
+    for name, path in firmware_files.items():
+        filename = str(path).replace(",", ",,")
+        command.extend(["-fw_cfg", f"name=opt/d3os/{name},file={filename}"])
     print(shlex.join(command), flush=True)
     if args.dry_run:
         return
@@ -303,6 +329,7 @@ def main():
                 expected = {
                     "cpu-self-test": "INFERENCE_OK self-test backend=cpu",
                     "burn-self-test": "INFERENCE_OK burn-self-test backend=cpu gradients=ok aliasing=ok checkpoint=ok resume=ok",
+                    "fwcfg-self-test": "INFERENCE_OK fwcfg-self-test",
                     "gpu-self-test": "INFERENCE_OK self-test backend=nvidia",
                     "gpu-kernel-bench": "INFERENCE_BENCH_OK kernels backend=nvidia",
                     "gpu-alexnet": "INFERENCE_OK alexnet backend=nvidia layers=8",

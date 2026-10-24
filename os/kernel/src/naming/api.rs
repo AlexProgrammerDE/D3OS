@@ -44,9 +44,13 @@ static CWD: Mutex<String> = Mutex::new(String::new());
 
 /// Initialize the naming service (must be called once before using it).
 pub fn init() {
+    let firmware = super::fwcfg::FirmwareFs::new();
     // Initialize ROOT with TmpFs
     ROOT.call_once(|| {
         let tmpfs = tmpfs::TmpFs::new();
+        if firmware.is_some() {
+            tmpfs.root_dir().create_dir("fwcfg", Mode::new(MODE_DIR)).expect("create firmware directory");
+        }
 
         // create the proc directory
         let _proc_dir = match tmpfs.root_dir().create_dir("proc", Mode::new(MODE_DIR)) {
@@ -68,6 +72,9 @@ pub fn init() {
     MOUNTS.call_once(|| {
         let mut mount = MountTable::new();
         mount.mount("/proc", Arc::new(procfs::ProcFs::new()));
+        if let Some(files) = firmware {
+            mount.mount("/fwcfg", Arc::new(files));
+        }
         RwLock::new(mount)
     });
 
