@@ -13,8 +13,90 @@ pub struct MatrixPrimitive<B: Backend> {
     pub format: MatrixFormat,
 }
 
+#[derive(ExtensionType)]
+pub struct AttentionPrimitive<B: Backend> {
+    pub query_gate: FloatTensor<B>,
+    pub key: FloatTensor<B>,
+    pub value: FloatTensor<B>,
+    pub query_norm: FloatTensor<B>,
+    pub key_norm: FloatTensor<B>,
+    pub keys: FloatTensor<B>,
+    pub values: FloatTensor<B>,
+    pub position: usize,
+}
+#[derive(ExtensionType)]
+pub struct AttentionResult<B: Backend> {
+    pub output: FloatTensor<B>,
+    pub keys: FloatTensor<B>,
+    pub values: FloatTensor<B>,
+}
+#[derive(ExtensionType)]
+pub struct DeltaParameterPrimitive<B: Backend> {
+    pub convolution: FloatTensor<B>,
+    pub log_decay: FloatTensor<B>,
+    pub time_bias: FloatTensor<B>,
+    pub norm: FloatTensor<B>,
+}
+#[derive(ExtensionType)]
+pub struct DeltaCachePrimitive<B: Backend> {
+    pub convolution: FloatTensor<B>,
+    pub recurrent: FloatTensor<B>,
+}
+#[derive(ExtensionType)]
+pub struct DeltaPrimitive<B: Backend> {
+    pub qkv: FloatTensor<B>,
+    pub gate: FloatTensor<B>,
+    pub beta: FloatTensor<B>,
+    pub alpha: FloatTensor<B>,
+    #[extension_type]
+    pub parameters: DeltaParameterPrimitive<B>,
+    pub convolution: FloatTensor<B>,
+    pub recurrent: FloatTensor<B>,
+}
+#[derive(ExtensionType)]
+pub struct DeltaResult<B: Backend> {
+    pub output: FloatTensor<B>,
+    pub convolution: FloatTensor<B>,
+    pub recurrent: FloatTensor<B>,
+}
+#[derive(ExtensionType)]
+pub struct DeltaWeightPrimitive<B: Backend> {
+    #[extension_type]
+    pub qkv: MatrixPrimitive<B>,
+    #[extension_type]
+    pub gate: MatrixPrimitive<B>,
+    #[extension_type]
+    pub beta: MatrixPrimitive<B>,
+    #[extension_type]
+    pub alpha: MatrixPrimitive<B>,
+}
+
 #[backend_extension(Native: cfg(feature = "native"), Flex: cfg(feature = "cpu"))]
 pub trait QwenOps: Backend {
+    fn attention(#[extension_type] input: AttentionPrimitive<Self>, config: super::AttentionConfig) -> AttentionResult<Self>;
+    fn delta(#[extension_type] input: DeltaPrimitive<Self>, config: super::DeltaConfig) -> DeltaResult<Self>;
+    fn project_delta(
+        input: FloatTensor<Self>, #[extension_type] weights: DeltaWeightPrimitive<Self>, #[extension_type] parameters: DeltaParameterPrimitive<Self>,
+        #[extension_type] cache: DeltaCachePrimitive<Self>, config: super::DeltaConfig,
+    ) -> DeltaResult<Self> {
+        let qkv = Self::project(input.clone(), weights.qkv);
+        let gate = Self::project(input.clone(), weights.gate);
+        let beta = Self::project(input.clone(), weights.beta);
+        let alpha = Self::project(input, weights.alpha);
+        Self::delta(
+            DeltaPrimitive {
+                qkv,
+                gate,
+                beta,
+                alpha,
+                parameters,
+                convolution: cache.convolution,
+                recurrent: cache.recurrent,
+            },
+            config,
+        )
+    }
+
     fn project(input: FloatTensor<Self>, #[extension_type] matrix: MatrixPrimitive<Self>) -> FloatTensor<Self>;
     fn embedding(#[extension_type] matrix: MatrixPrimitive<Self>, tokens: Vec<u32>) -> FloatTensor<Self>;
     fn gated_project(
@@ -42,6 +124,61 @@ pub trait QwenOps: Backend {
 
 #[cfg(feature = "native")]
 impl QwenOps for d3os_burn_native::backend::Native {
+    fn attention(input: AttentionPrimitive<Self>, config: super::AttentionConfig) -> AttentionResult<Self> {
+        let [output, keys, values] = Self::qwen_attention(
+            [input.query_gate, input.key, input.value, input.query_norm, input.key_norm],
+            [input.keys, input.values],
+            config.geometry(),
+            input.position,
+            config.rope_theta,
+            config.epsilon,
+        );
+        AttentionResult { output, keys, values }
+    }
+    fn delta(input: DeltaPrimitive<Self>, config: super::DeltaConfig) -> DeltaResult<Self> {
+        let parameters = input.parameters;
+        let [output, convolution, recurrent] = Self::qwen_delta(
+            [
+                input.qkv,
+                input.gate,
+                input.beta,
+                input.alpha,
+                parameters.convolution,
+                parameters.log_decay,
+                parameters.time_bias,
+                parameters.norm,
+            ],
+            [input.convolution, input.recurrent],
+            config.geometry(),
+            config.epsilon,
+        );
+        DeltaResult {
+            output,
+            convolution,
+            recurrent,
+        }
+    }
+    fn project_delta(
+        input: FloatTensor<Self>, weights: DeltaWeightPrimitive<Self>, parameters: DeltaParameterPrimitive<Self>, cache: DeltaCachePrimitive<Self>,
+        config: super::DeltaConfig,
+    ) -> DeltaResult<Self> {
+        let formats = [weights.qkv.format, weights.gate.format, weights.beta.format, weights.alpha.format];
+        let [output, convolution, recurrent] = Self::qwen_project_delta(
+            input,
+            [weights.qkv.words, weights.gate.words, weights.beta.words, weights.alpha.words],
+            [parameters.convolution, parameters.log_decay, parameters.time_bias, parameters.norm],
+            [cache.convolution, cache.recurrent],
+            config.geometry(),
+            config.epsilon,
+            formats,
+        );
+        DeltaResult {
+            output,
+            convolution,
+            recurrent,
+        }
+    }
+
     fn project(input: FloatTensor<Self>, matrix: MatrixPrimitive<Self>) -> FloatTensor<Self> {
         Self::qwen_project(input, matrix.words, matrix.shape, matrix.format)
     }

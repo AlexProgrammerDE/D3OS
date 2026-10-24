@@ -100,6 +100,35 @@ The complete Qwen model, attention caches, recurrent state, loading, and generat
 These checks add no D3OS throughput result and no Linux measurement.
 Logs are under `target/nvidia/burn/qwen-packed/`.
 
+## Qwen state extensions and migration baseline
+
+Fresh physical D3OS checks pass public Burn attention and recurrent operations against independent binary64 fixtures.
+Eight attention cases and sixteen recurrent cases cover single-token and batched execution, cache snapshots, and packed projection fusion.
+Native state updates perform zero activation uploads or downloads.
+Split attention, grouped heads, wider fallback dimensions, and error propagation also pass.
+The kernel bundle and compute protocol remain unchanged.
+
+The complete Qwen model still uses the legacy execution API.
+The following fresh D3OS baseline measures that path before the model migration, with the passed-through RTX 4090 Laptop GPU.
+Each session has capacity for 256 tokens, a 22-token prompt, and 64 decode steps.
+The host affinity remains `8,10,12,14`, with four guest CPUs.
+
+| D3OS legacy session | Prompt time | Prompt tokens/s | Decode time | Decode tokens/s |
+| --- | ---: | ---: | ---: | ---: |
+| First session | 13 ms | 1692.308 | 248 ms | 258.065 |
+| Warm session 1 | 9 ms | 2444.444 | 254 ms | 251.969 |
+| Warm session 2 | 9 ms | 2444.444 | 254 ms | 251.969 |
+
+The single file-read observation is 1543 ms; model preparation takes 615 ms.
+State allocation takes 21 ms initially and 6 ms for each later session.
+All three decode traces share checksum `11137929795425568356`.
+The original 29-position, 24-layer references and batched cache comparison pass after the benchmark.
+No fresh Linux sample or complete Burn Qwen model result accompanies this baseline.
+
+Fresh AlexNet references and all 600 DOOM views also pass.
+DOOM reports 69 to 70 FPS after startup under its gameplay cap; this is not an uncapped rendering benchmark.
+Evidence is under `target/nvidia/burn/qwen-state/`.
+
 ## Latest retained measurements
 
 ### Burn primitive regression

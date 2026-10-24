@@ -5,7 +5,7 @@ edition = "2024"
 
 [features]
 default = []
-cpu = ["burn/flex"]
+cpu = ["burn/flex", "dep:libm"]
 training = ["burn/optim", "dep:libm"]
 native = ["dep:d3os-burn-native", "dep:burn-dispatch", "burn-dispatch/d3os-native"]
 

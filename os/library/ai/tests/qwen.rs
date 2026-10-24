@@ -25,3 +25,56 @@ fn packed_weights_reject_corruption_and_autodiff_without_creating_a_model() {
     let matrix = PackedMatrix::from_bytes([1, 1], MatrixFormat::F32, &1f32.to_le_bytes(), &device).unwrap();
     assert!(matrix.project(Tensor::<2>::ones([1, 1], &device.clone().autodiff())).is_err());
 }
+
+#[test]
+fn owned_qwen_state_matches_independent_binary64_sequences_and_preserves_snapshots() {
+    d3os_ai::validation::qwen_state::run(&Device::flex()).unwrap();
+}
+
+#[test]
+fn qwen_state_rejects_invalid_geometry_and_autodiff_devices() {
+    use d3os_ai::qwen::{AttentionConfig, AttentionState, DeltaConfig, DeltaState};
+    let device = Device::flex();
+    let attention = AttentionConfig {
+        heads: 2,
+        kv_heads: 1,
+        head_dim: 4,
+        rotary_dim: 2,
+        rope_theta: 10000.,
+        epsilon: 1e-6,
+    };
+    let delta = DeltaConfig {
+        key_heads: 1,
+        heads: 2,
+        key_dim: 4,
+        value_dim: 3,
+        kernel: 3,
+        epsilon: 1e-6,
+    };
+    for invalid in [
+        AttentionConfig { heads: 0, ..attention },
+        AttentionConfig { kv_heads: 0, ..attention },
+        AttentionConfig { rotary_dim: 3, ..attention },
+        AttentionConfig {
+            epsilon: f32::NAN,
+            ..attention
+        },
+    ] {
+        assert!(AttentionState::new(invalid, 4, &device).is_err());
+    }
+    for invalid in [
+        DeltaConfig { key_heads: 0, ..delta },
+        DeltaConfig { heads: 0, ..delta },
+        DeltaConfig { key_heads: 3, ..delta },
+        DeltaConfig { kernel: 0, ..delta },
+        DeltaConfig { epsilon: -1., ..delta },
+    ] {
+        assert!(DeltaState::new(invalid, &device).is_err());
+    }
+    assert!(AttentionState::from_tensors(Tensor::zeros([4, 1, 4], &device), Tensor::zeros([4, 2, 4], &device), 0, attention).is_err());
+    assert!(AttentionState::from_tensors(Tensor::zeros([4, 1, 4], &device), Tensor::zeros([4, 1, 4], &device), 5, attention).is_err());
+    assert!(DeltaState::from_tensors(Tensor::zeros([14, 3], &device), Tensor::zeros([2, 4, 4], &device), delta).is_err());
+    let autodiff = device.autodiff();
+    assert!(AttentionState::new(attention, 4, &autodiff).is_err());
+    assert!(DeltaState::new(delta, &autodiff).is_err());
+}

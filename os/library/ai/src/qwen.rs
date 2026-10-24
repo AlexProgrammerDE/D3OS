@@ -1,7 +1,11 @@
 //! Qwen inference operations over public Burn tensors.
 #[cfg(feature = "cpu")]
 mod cpu;
+#[cfg(feature = "cpu")]
+mod cpu_state;
 mod ops;
+mod state;
+pub use state::{AttentionConfig, AttentionInputs, AttentionState, DeltaConfig, DeltaInputs, DeltaParameters, DeltaState, DeltaWeights};
 
 use alloc::{format, string::String, vec::Vec};
 use burn::{

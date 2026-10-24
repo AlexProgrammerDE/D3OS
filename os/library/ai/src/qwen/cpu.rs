@@ -20,6 +20,13 @@ fn decode(matrix: MatrixPrimitive<Flex>) -> FloatTensor<Flex> {
 }
 
 impl QwenOps for Flex {
+    fn attention(input: super::ops::AttentionPrimitive<Self>, config: super::AttentionConfig) -> super::ops::AttentionResult<Self> {
+        super::cpu_state::attention(input, config)
+    }
+    fn delta(input: super::ops::DeltaPrimitive<Self>, config: super::DeltaConfig) -> super::ops::DeltaResult<Self> {
+        super::cpu_state::delta(input, config)
+    }
+
     fn project(input: FloatTensor<Self>, matrix: MatrixPrimitive<Self>) -> FloatTensor<Self> {
         Self::float_matmul(input, Self::float_swap_dims(decode(matrix), 0, 1))
     }

@@ -119,19 +119,42 @@ impl BackendTensor {
         operation: &'static str, shapes: [Shape; 2], dtypes: [DType; 2], inputs: &[&Self],
         work: impl FnOnce(&[&NativeTensor]) -> d3os_compute::Result<(NativeTensor, NativeTensor)>,
     ) -> (Self, Self) {
-        let failure = inputs.iter().find_map(|t| t.value.as_ref().err().cloned()).or_else(|| CONTEXT.poisoned());
+        let [first, second] = Self::outputs(operation, shapes, dtypes, inputs, |values| {
+            let (first, second) = work(values)?;
+            Ok([first, second])
+        });
+        (first, second)
+    }
+
+    pub(super) fn outputs<const N: usize>(
+        operation: &'static str, shapes: [Shape; N], dtypes: [DType; N], inputs: &[&Self],
+        work: impl FnOnce(&[&NativeTensor]) -> d3os_compute::Result<[NativeTensor; N]>,
+    ) -> [Self; N] {
+        let failure = inputs
+            .iter()
+            .find_map(|tensor| tensor.value.as_ref().err().cloned())
+            .or_else(|| CONTEXT.poisoned());
         let result = if let Some(failure) = failure {
             Err(failure)
         } else {
-            let values: Vec<_> = inputs.iter().filter_map(|t| t.value()).collect();
-            work(&values).map_err(|error| CONTEXT.fail(operation, Cause::Native(error)))
+            let values: Vec<_> = inputs.iter().filter_map(|tensor| tensor.value()).collect();
+            work(&values)
+                .and_then(|outputs| {
+                    if outputs
+                        .iter()
+                        .enumerate()
+                        .any(|(index, tensor)| tensor.shape() != shapes[index] || tensor.dtype() != dtypes[index])
+                    {
+                        Err(Error::ShapeMismatch)
+                    } else {
+                        Ok(outputs)
+                    }
+                })
+                .map_err(|error| CONTEXT.fail(operation, Cause::Native(error)))
         };
         match result {
-            Ok((a, b)) => (Self::ready(a), Self::ready(b)),
-            Err(failure) => (
-                Self::failed(shapes[0].clone(), dtypes[0], failure.clone()),
-                Self::failed(shapes[1].clone(), dtypes[1], failure),
-            ),
+            Ok(outputs) => outputs.map(Self::ready),
+            Err(failure) => core::array::from_fn(|index| Self::failed(shapes[index].clone(), dtypes[index], failure.clone())),
         }
     }
     pub(super) fn ready(value: NativeTensor) -> Self {

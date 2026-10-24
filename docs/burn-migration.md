@@ -237,7 +237,8 @@ Operator coverage remains incomplete. Unsupported native operations return execu
 The gaps include integer division, integer matrix products, scans, some FP32 math, compaction, and sorting.
 Generic Burn quantization, non-additive indexed updates, three-dimensional convolutions, transposed convolutions, and interpolation also remain incomplete.
 Qwen now has public Burn extensions for packed projections, embeddings, gates, and normalization.
-Attention caches, recurrent state, model loading, and generation still need migration.
+Attention caches and recurrent state now use public Burn tensors.
+The full model, loading, and generation still need migration.
 The native MNIST runner now accepts all 60,000 training images and the separate 10,000-image test split.
 It supports complete Adam checkpoints, deterministic sample order, native random state, and inference export.
 A physical D3OS run completes seven epochs and reaches 99.26 percent test accuracy.
@@ -270,6 +271,23 @@ These inference extensions reject autodiff devices because they do not implement
 The full Qwen model and sessions still use the earlier implementation until their remaining operations migrate.
 This step adds no Linux or D3OS throughput measurement.
 Evidence is under `target/nvidia/burn/qwen-packed/`.
+
+Attention and recurrent operations now consume an owned state and return its continuation with the output tensor.
+Cloned states retain their original cache values. Native updates reuse unique storage and copy shared storage on the GPU.
+Validated constructors also accept resident cache tensors for restoration without a host readback.
+A failed operation attaches the same error to its output and both cache tensors, without placeholder allocations.
+
+Independent binary64 fixtures cover eight attention cases and sixteen recurrent cases across single-token and batched execution.
+The cases include grouped heads, nonzero cache prefixes, signed views, long-context attention splits, and wider fallback dimensions.
+Packed recurrent projection tests cover BF16 fusion, FP32 matrices, and mixed encodings.
+Physical D3OS checks retain all native kernel paths and report zero activation uploads or downloads during state updates.
+The native kernel bundle remains unchanged.
+
+The fixture generator uses Python math and rounded FP32 inputs and cache writes.
+Regenerate its data with `python3 tools/inference/prepare-burn-state-fixture.py`.
+The fixture and provenance manifest live under `os/library/ai/tests/fixtures/`.
+Logs and the fresh legacy Qwen baseline are under `target/nvidia/burn/qwen-state/`.
+This completes the state extensions, not the full model migration or the Linux performance goal.
 
 The retained Linux and D3OS measurements are in [Native NVIDIA performance](nvidia-performance.md).
 

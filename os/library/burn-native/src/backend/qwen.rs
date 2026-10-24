@@ -1,4 +1,5 @@
 //! Packed transformer operations over Burn-owned storage.
+mod state;
 use super::{BackendTensor, Native};
 use crate::{NativeTensor, layout::Layout};
 use alloc::sync::Arc;
