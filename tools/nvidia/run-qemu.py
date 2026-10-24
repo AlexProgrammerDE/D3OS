@@ -16,6 +16,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def host_cpu_ms(pid):
+    # /proc/<pid>/stat sums CPU time across the process's threads. Split
+    # after comm, which can contain spaces or parentheses, before indexing.
+    fields = (Path("/proc") / str(pid) / "stat").read_text().rsplit(")", 1)[1].split()
+    return (int(fields[11]) + int(fields[12])) * 1000 / os.sysconf("SC_CLK_TCK")
+
+
 def vfio_devices(gpu):
     device = Path("/sys/bus/pci/devices") / gpu
     if not device.is_dir() or (device / "vendor").read_text().strip() != "0x10de":
@@ -129,9 +136,18 @@ def main():
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
+        "--kernel-image",
+        type=Path,
+        help="use an alternate D3OS kernel ELF with --firmware",
+    )
+    parser.add_argument(
         "--gdb-port", type=int, help="pause at reset for a local GDB connection"
     )
     args = parser.parse_args()
+    if args.kernel_image is not None and (
+        not args.firmware or not args.kernel_image.is_file()
+    ):
+        parser.error("--kernel-image requires --firmware and a D3OS kernel ELF file")
     firmware_files = {}
     if args.qwen_gguf_parts:
         if not args.inference.startswith("gpu-qwen-gguf"):
@@ -294,6 +310,7 @@ def main():
                 mode,
                 ROOT / "target/qwen",
                 assets,
+                kernel_image=args.kernel_image,
             )
     firmware = next(
         (
@@ -383,6 +400,7 @@ def main():
             started = False
             controls = False
             compilation_observed = None
+            compilation_cpu = None
             compilation_reported = False
             while time.monotonic() < deadline:
                 text = serial.read_text(errors="replace") if serial.is_file() else ""
@@ -393,14 +411,16 @@ def main():
                     and "NVIDIA_COMPILE_READY os=d3os" not in text
                 ):
                     compilation_observed = time.monotonic()
+                    compilation_cpu = host_cpu_ms(process.pid)
                 if (
                     compilation_observed is not None
                     and not compilation_reported
                     and "NVIDIA_COMPILE_READY os=d3os" in text
                 ):
                     elapsed = (time.monotonic() - compilation_observed) * 1000
+                    cpu = host_cpu_ms(process.pid) - compilation_cpu
                     print(
-                        f"NVIDIA_COMPILE_HOST_PHASE os=d3os observed_ms={elapsed:.3f} includes_gpu_validation=true source=serial_markers",
+                        f"NVIDIA_COMPILE_HOST_PHASE os=d3os observed_ms={elapsed:.3f} host_vm_cpu_ms={cpu:.3f} host_vm_cpu_percent={cpu / elapsed * 100:.3f} includes_gpu_validation=true source=serial_markers",
                         flush=True,
                     )
                     compilation_reported = True

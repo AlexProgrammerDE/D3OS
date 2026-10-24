@@ -664,14 +664,15 @@ impl Scheduler {
             }
             drain_inbox_into_ready(10, &mut state);
 
-            // Check if this core has too many threads running
-            if read_resched_flag() || self.should_balance_now() {
-                self.balance_once(&mut state);
-            }
-
-            // Get clone of the current thread
             let current = Scheduler::current(&state);
             let current_was_idle = current.id() == state.idle_thread.id();
+
+            // An idle CPU must run queued work before donating it. Otherwise a
+            // newly arrived thread can bounce between CPUs whose sleepers wake
+            // on the same tick, without ever getting its first timeslice.
+            if !current_was_idle && (read_resched_flag() || self.should_balance_now()) {
+                self.balance_once(&mut state);
+            }
 
             // Current thread is initializing itself and may not be interrupted
             if current.stacks_locked() || tss_static().is_locked() {

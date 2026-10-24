@@ -156,7 +156,7 @@ def large_image(stage, image):
     subprocess.run(["mcopy", "-i", volume, *map(str, files), "::/"], check=True)
 
 
-def prepare(directory, mode, qwen_assets, extra_assets=()):
+def prepare(directory, mode, qwen_assets, extra_assets=(), *, kernel_image=None):
     stage = directory / "boot"
     initrd = stage / "initrd"
     # Each image contains only the assets requested for this invocation.
@@ -164,7 +164,7 @@ def prepare(directory, mode, qwen_assets, extra_assets=()):
     (initrd / "bin").mkdir(parents=True, exist_ok=True)
     for name in ("infer", "shell", "terminal_emulator"):
         shutil.copyfile(ROOT / "loader/initrd/bin" / name, initrd / "bin" / name)
-    if mode != "self-test":
+    if mode not in ("self-test", "burn-self-test"):
         assets = initrd / "usr/share/inference"
         assets.mkdir(parents=True, exist_ok=True)
         source = qwen_assets if mode.startswith("qwen") else ROOT / "target/inference"
@@ -202,7 +202,7 @@ def prepare(directory, mode, qwen_assets, extra_assets=()):
     ) as archive:
         for child in sorted(initrd.iterdir()):
             archive.add(child, arcname=child.name)
-    shutil.copyfile(ROOT / "loader/kernel.elf", stage / "kernel.elf")
+    shutil.copyfile(kernel_image or ROOT / "loader/kernel.elf", stage / "kernel.elf")
     shutil.copyfile(ROOT / "loader/towboot.toml", stage / "towboot.toml")
     image = directory / "d3os.img"
     # towbootctl expects a new destination. The file is private to this test run.
@@ -242,11 +242,19 @@ def main():
         action="store_true",
         help="verify all Qwen layers, logits, and tokenizer fixtures",
     )
+    models.add_argument(
+        "--burn-self-test",
+        action="store_true",
+        help="verify native Burn timers, gradients, aliasing, and optimizer resume",
+    )
     parser.add_argument("--qwen-assets", type=Path, default=ROOT / "target/qwen")
     parser.add_argument(
         "--directory", type=Path, help="isolate this guest's image, logs, and monitor"
     )
     parser.add_argument("--bios", type=Path, help="OVMF firmware image")
+    parser.add_argument(
+        "--kernel-image", type=Path, help="use an alternate D3OS kernel ELF"
+    )
     parser.add_argument(
         "--large-pci-bar",
         action="store_true",
@@ -275,8 +283,12 @@ def main():
         if args.qwen
         else "alexnet"
         if args.alexnet
+        else "burn-self-test"
+        if args.burn_self_test
         else "self-test"
     )
+    if args.kernel_image is not None and not args.kernel_image.is_file():
+        parser.error("--kernel-image must name a D3OS kernel ELF file")
     if args.timeout <= 0:
         parser.error("--timeout must be positive")
     if not 1 <= args.repeat <= 100:
@@ -317,7 +329,9 @@ def main():
         )
     )
     directory.mkdir(parents=True, exist_ok=True)
-    image = prepare(directory, mode, args.qwen_assets.resolve())
+    image = prepare(
+        directory, mode, args.qwen_assets.resolve(), kernel_image=args.kernel_image
+    )
     serial = directory / (
         f"serial-{mode}-{args.accel}.log" if mode.startswith("qwen") else "serial.log"
     )

@@ -89,7 +89,11 @@ pub(crate) fn validate_timers() -> Result<(), alloc::string::String> {
             return Ok(());
         }
         if now - start >= 200_000 {
-            return Err(String::from("Burn timers did not wake both tasks"));
+            return Err(alloc::format!(
+                "Burn timers did not wake both tasks: first={} second={}",
+                first.0.load(Ordering::SeqCst),
+                second.0.load(Ordering::SeqCst),
+            ));
         }
         concurrent::thread::sleep(1);
     }
