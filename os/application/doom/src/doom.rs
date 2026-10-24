@@ -13,6 +13,7 @@ use alloc::vec::Vec;
 use chrono::TimeDelta;
 use concurrent::thread;
 use core::ffi::{CStr, c_char, c_int};
+use core::sync::atomic::{AtomicBool, Ordering};
 use graphic::color;
 use graphic::lfb::{FramebufferInfo, LFB, map_framebuffer};
 use pc_keyboard::{DecodedKey, HandleControl, KeyCode, KeyEvent, KeyState, KeyboardLayout, Modifiers, layouts};
@@ -76,6 +77,7 @@ static FRAMEBUFFER: Once<FramebufferInfo> = Once::new();
 static SCREEN_OFFSET: Once<(u32, u32)> = Once::new();
 
 static INPUT_BUFFER: Mutex<VecDeque<KeyEvent>> = Mutex::new(VecDeque::new());
+static INPUT_STARTED: AtomicBool = AtomicBool::new(false);
 
 struct FpsInfo {
     start_time: TimeDelta,
@@ -190,8 +192,9 @@ unsafe extern "C" fn DG_Init() {
     let y_offset = (fb_info.height - DOOMGENERIC_RESY) / 2;
     SCREEN_OFFSET.call_once(|| (x_offset, y_offset));
 
-    // Start input reading thread
+    // Register the raw reader before the engine starts accepting input.
     thread::create(|| {
+        INPUT_STARTED.store(true, Ordering::Release);
         loop {
             if let Some(event) = terminal::read::read_raw() {
                 INPUT_BUFFER.lock().push_back(event);
@@ -199,7 +202,16 @@ unsafe extern "C" fn DG_Init() {
                 thread::switch();
             }
         }
-    });
+    })
+    .expect("start DOOM input reader");
+    while !INPUT_STARTED.load(Ordering::Acquire)
+        || syscall::syscall(syscall::SystemCall::TerminalCheckInputState, &[]).expect("check DOOM input mode") != terminal::TerminalInputState::Raw as usize
+    {
+        thread::switch();
+    }
+    if gpu::enabled() {
+        log::info!("NVIDIA_DOOM_INPUT_READY mode=raw");
+    }
 }
 
 #[unsafe(no_mangle)]

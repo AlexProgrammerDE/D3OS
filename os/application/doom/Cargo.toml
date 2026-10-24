@@ -20,6 +20,7 @@ log = "0.4"
 runtime = { path = "../../library/runtime" }
 terminal = { path = "../../library/terminal" }
 concurrent = { path = "../../library/concurrent" }
+syscall = { path = "../../library/syscall" }
 time = { path = "../../library/time" }
 graphic = { path = "../../library/graphic" }
 libc = { path = "../../library/libc" }
