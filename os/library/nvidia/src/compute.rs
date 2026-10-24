@@ -12,7 +12,7 @@ pub mod reduction;
 pub mod updates;
 pub mod words;
 
-pub const VERSION: u32 = 17;
+pub const VERSION: u32 = 18;
 pub const INFO: u32 = 0;
 pub const ALLOCATE: u32 = 1;
 pub const FREE: u32 = 2;
@@ -31,7 +31,18 @@ pub const BEGIN_COMMANDS: u32 = 9;
 pub const END_COMMANDS: u32 = 10;
 pub const QUEUE_PROFILE: u32 = 11;
 pub const SERVICE_PROFILE: u32 = 12;
-pub const SERVICE_OPERATIONS: usize = 13;
+pub const MEMORY_PROFILE: u32 = 13;
+pub const SERVICE_OPERATIONS: usize = 14;
+
+/// Compute-buffer bytes at a synchronized boundary, excluding driver firmware
+/// and channel allocations. Cached and retired bytes belong to the device pool.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(C)]
+pub struct MemoryProfile {
+    pub process_live_bytes: u64,
+    pub device_cached_bytes: u64,
+    pub device_retired_bytes: u64,
+}
 pub const KERNEL_COUNT: usize = 59;
 
 /// CPU service costs by request operation, including queue work within it.

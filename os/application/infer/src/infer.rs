@@ -18,6 +18,7 @@ static LOGGER: logger::Logger = logger::Logger::new();
 mod benchmark;
 mod file_tests;
 mod gpu_tests;
+mod mnist;
 
 fn report(message: fmt::Arguments<'_>) {
     terminal::println!("{}", message);
@@ -57,8 +58,12 @@ fn run() -> Result<(), String> {
             let device = d3os_ai::burn::tensor::Device::flex().autodiff();
             device.seed(42);
             d3os_ai::validation::training(&device)?;
-            report(format_args!("INFERENCE_OK burn-self-test backend=cpu gradients=ok aliasing=ok checkpoint=ok resume=ok"));
+            report(format_args!(
+                "INFERENCE_OK burn-self-test backend=cpu gradients=ok aliasing=ok checkpoint=ok resume=ok"
+            ));
         }
+        Some("gpu-mnist-train") if args.len() == 1 => mnist::train()?,
+        Some("gpu-mnist-infer") if args.len() == 1 => mnist::infer()?,
         Some("fwcfg-self-test") if args.len() == 1 => file_tests::firmware()?,
         None | Some("self-test") if args.len() <= 1 => {
             d3os_inference::self_test(&Cpu).map_err(|error| format!("{error}"))?;
@@ -102,7 +107,7 @@ fn run() -> Result<(), String> {
         }
         _ => {
             return Err(String::from(
-                "usage: infer self-test | burn-self-test | fwcfg-self-test | gpu-self-test | gpu-kernel-bench | alexnet [MODEL FIXTURE] | gpu-alexnet [MODEL FIXTURE] | gpu-alexnet-bench | qwen [MAX_TOKENS PROMPT...] | qwen-verify | gpu-qwen [MAX_TOKENS PROMPT...] | gpu-qwen-verify | gpu-qwen-bench [long] [device-timing]",
+                "usage: infer self-test | burn-self-test | gpu-mnist-train | gpu-mnist-infer | fwcfg-self-test | gpu-self-test | gpu-kernel-bench | alexnet [MODEL FIXTURE] | gpu-alexnet [MODEL FIXTURE] | gpu-alexnet-bench | qwen [MAX_TOKENS PROMPT...] | qwen-verify | gpu-qwen [MAX_TOKENS PROMPT...] | gpu-qwen-verify | gpu-qwen-bench [long] [device-timing]",
             ));
         }
     }

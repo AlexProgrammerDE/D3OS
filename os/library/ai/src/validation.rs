@@ -91,3 +91,79 @@ pub fn training(device: &Device) -> Result<(), String> {
     }
     Ok(())
 }
+
+/// Validate complete convolutional Adam checkpoints across a partial batch and
+/// epoch boundary, including device random state and inference artifacts.
+#[cfg(feature = "native")]
+pub fn mnist_checkpoint(device: &Device) -> Result<(), String> {
+    use crate::{
+        mnist::{
+            artifact,
+            data::Dataset,
+            training::{Config, Trainer},
+        },
+        native::NativeDevice,
+    };
+    use alloc::vec::Vec;
+    let mut images = Vec::new();
+    for word in [2051u32, 5, 28, 28] {
+        images.extend_from_slice(&word.to_be_bytes());
+    }
+    images.extend((0..5 * 784).map(|i| (i * 37 + i / 784 * 79) as u8));
+    let mut labels = Vec::new();
+    for word in [2049u32, 5] {
+        labels.extend_from_slice(&word.to_be_bytes());
+    }
+    labels.extend_from_slice(&[0, 1, 2, 3, 4]);
+    let data = Dataset::parse(&images, &labels)?;
+    let mut original = Trainer::new(
+        &data,
+        device,
+        Config {
+            batch_size: 2,
+            ..Config::default()
+        },
+    )?;
+    for _ in 0..2 {
+        original = original.step(&data)?.0;
+    }
+    let checkpoint = original.checkpoint()?;
+    let random = NativeDevice.random_state();
+    NativeDevice.seed(0x0bad_5eed);
+    let mut resumed = Trainer::restore(&checkpoint, &data, device)?;
+    if NativeDevice.random_state() != random || resumed.progress() != original.progress() {
+        return Err(String::from("MNIST checkpoint random state or progress changed"));
+    }
+    for _ in 0..3 {
+        let (next, expected) = original.step(&data)?;
+        original = next;
+        let (next, actual) = resumed.step(&data)?;
+        resumed = next;
+        if original.progress() != resumed.progress()
+            || expected.samples != actual.samples
+            || expected.completed_epoch != actual.completed_epoch
+            || (expected.loss - actual.loss).abs() > 2e-6
+        {
+            return Err(format!(
+                "MNIST Adam resume differs: expected_loss={} actual_loss={}",
+                expected.loss, actual.loss
+            ));
+        }
+    }
+    if (resumed.progress().epoch, resumed.progress().offset, resumed.progress().steps) != (1, 4, 5) {
+        return Err(String::from("MNIST resumed epoch or partial batch changed"));
+    }
+    let plain = device.clone().without_autodiff();
+    let (input, _) = data.batch(&[0, 1, 2, 3, 4], &plain)?;
+    let expected = original
+        .model()
+        .valid()
+        .forward(input.clone())
+        .try_into_vec_as::<f32>()
+        .map_err(|e| format!("MNIST checkpoint reference: {e:?}"))?;
+    check(resumed.model().valid().forward(input.clone()), &expected)?;
+    let bytes = artifact::export(resumed.model())?;
+    let reloaded = artifact::load(&bytes, &plain)?;
+    check(reloaded.forward(input), &expected)?;
+    Ok(())
+}

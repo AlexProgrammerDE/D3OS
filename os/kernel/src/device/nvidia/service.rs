@@ -154,6 +154,21 @@ fn serve(device: &Device, compute: &mut super::rm::Compute, owner: Uuid, request
             }
             Ok(0)
         }
+        abi::MEMORY_PROFILE => {
+            if request.elements != 1 {
+                return Err(Errno::EINVAL);
+            }
+            gpu_result(compute.flush_pending(device))?;
+            let profile = abi::MemoryProfile {
+                process_live_bytes: compute.buffers.live.values().filter(|b| b.owner == owner).map(|b| b.allocation.bytes).sum(),
+                device_cached_bytes: compute.buffers.free.iter().map(|a| a.bytes).sum(),
+                device_retired_bytes: compute.buffers.retired.iter().map(|(a, _)| a.bytes).sum(),
+            };
+            unsafe {
+                (request.pointer as *mut abi::MemoryProfile).write_unaligned(profile);
+            }
+            Ok(0)
+        }
         abi::QUEUE_PROFILE => {
             if request.elements != 1 {
                 return Err(Errno::EINVAL);

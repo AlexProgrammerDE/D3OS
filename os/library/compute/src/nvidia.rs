@@ -72,6 +72,16 @@ impl<T> Drop for GpuBuffer<T> {
 pub struct Nvidia;
 
 impl Nvidia {
+    pub fn memory_profile(&self) -> Result<abi::MemoryProfile> {
+        let mut profile = abi::MemoryProfile::default();
+        request(Request {
+            pointer: &mut profile as *mut abi::MemoryProfile as u64,
+            elements: 1,
+            ..operation(abi::MEMORY_PROFILE)
+        })?;
+        Ok(profile)
+    }
+
     pub fn service_profile(&self) -> Result<[abi::ServiceEntry; abi::SERVICE_OPERATIONS]> {
         let mut entries = [abi::ServiceEntry::default(); abi::SERVICE_OPERATIONS];
         request(Request {

@@ -11,6 +11,7 @@ doctest = false
 bench = false
 
 [dependencies]
+crc32fast = { version = "=1.5.3", default-features = false }
 d3os-ai = { path = "../../library/ai", features = ["cpu", "training", "native"] }
 runtime = { path = "../../library/runtime" }
 terminal = { path = "../../library/terminal" }

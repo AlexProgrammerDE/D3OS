@@ -11,6 +11,8 @@ The local patch makes the scheduler available with `alloc` and keeps filesystem 
 It adds explicit allocation imports, uses `core` constants and formatting traits, and uses portable floating-point methods without `std`.
 The logging dependency remains available without its `std` feature.
 The optimizer algorithms and checkpoint format remain unchanged.
+The patch also adds explicit device selection when loading optimizer records.
+D3OS uses this path to restore Adam state directly to the native GPU.
 
 The workspace uses this source through `[patch.crates-io]`.
 The remaining Burn crates come from the pinned release in `Cargo.lock`.

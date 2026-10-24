@@ -203,8 +203,12 @@ impl ModuleOptimizer {
     /// each parameter's state is migrated to that parameter's (gradient's) device on the next
     /// [`step`](ModuleOptimizer::step) — see the `to_device` call in the step path. The load device
     /// is therefore irrelevant to correctness.
-    pub fn load_record(mut self, record: OptimizerRecord) -> Self {
-        let device = Device::default();
+    pub fn load_record(self, record: OptimizerRecord) -> Self {
+        self.load_record_on_device(record, &Device::default())
+    }
+
+    /// Materialize checkpoint tensors on an explicitly selected execution device.
+    pub fn load_record_on_device(mut self, record: OptimizerRecord, device: &Device) -> Self {
         let mut ranks: BTreeMap<u64, usize> = BTreeMap::new();
         let mut paths: BTreeMap<u64, String> = BTreeMap::new();
 
@@ -242,7 +246,7 @@ impl ModuleOptimizer {
             let (optim, grad_clipping) = self.optim_from_param(id.into(), path.map(|path| path.as_str()));
             // Skip parameters whose state can't be reconstructed (truncated/foreign record); they
             // are re-initialized lazily on the next step rather than aborting the load.
-            if let Some(state) = optim.state_unflatten(rank, &prefix, &mut source, &device) {
+            if let Some(state) = optim.state_unflatten(rank, &prefix, &mut source, device) {
                 states.insert(
                     ParamId::from(id),
                     OptimizationContext {
@@ -267,6 +271,11 @@ impl ModuleOptimizer {
     /// Load the optimizer state from an in-memory burnpack byte buffer.
     pub fn from_bytes(self, bytes: Bytes) -> Result<Self, RecordError> {
         Ok(self.load_record(OptimizerRecord::from_bytes(bytes)?))
+    }
+
+    /// Load checkpoint state directly onto the selected device.
+    pub fn from_bytes_on_device(self, bytes: Bytes, device: &Device) -> Result<Self, RecordError> {
+        Ok(self.load_record_on_device(OptimizerRecord::from_bytes(bytes)?, device))
     }
 
     /// Save the optimizer state to a burnpack file on disk.

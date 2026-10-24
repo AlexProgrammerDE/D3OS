@@ -191,6 +191,10 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     d3os_ai::validation::training(&device.clone().autodiff())?;
     crate::report(format_args!("NVIDIA_BURN_PUBLIC_OPTIMIZER_OK sgd=analytic adam_checkpoint=ok backend=nvidia"));
     convolutional_step(backend, &device)?;
+    d3os_ai::validation::mnist_checkpoint(&device.clone().autodiff())?;
+    crate::report(format_args!(
+        "NVIDIA_BURN_MNIST_CHECKPOINT_OK optimizer=adam parameters=8 partial_batch=ok epoch_boundary=ok random_state=exact inference_export=verified backend=nvidia"
+    ));
     device.sync().map_err(|e| format!("Burn native synchronization: {e:?}"))?;
     crate::report(format_args!(
         "NVIDIA_BURN_DISPATCH_OK api=public backend=nvidia autodiff=ok sgd=analytic adam_checkpoint=ok convolutional_sgd=ok shared_model=preserved errors=recoverable"

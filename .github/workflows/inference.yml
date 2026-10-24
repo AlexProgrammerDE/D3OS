@@ -75,6 +75,8 @@ jobs:
           -p d3os-ai -p d3os-burn-native
           --features d3os-compute/nvidia,d3os-ai/cpu,d3os-ai/training,d3os-ai/native
           --all-targets -- -D warnings
+      - name: Verify guest training artifact recovery
+        run: python3 tools/nvidia/test-mnist.py
       - name: Install cuTile host compiler dependencies
         run: |
           sudo apt-get update

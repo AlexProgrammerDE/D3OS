@@ -893,6 +893,7 @@ dependencies = [
  "burn",
  "burn-dispatch",
  "concurrent",
+ "crc32fast",
  "d3os-burn-native",
  "embassy-time-driver",
  "spin 0.10.0",
@@ -1996,6 +1997,7 @@ dependencies = [
 name = "infer"
 version = "0.1.0"
 dependencies = [
+ "crc32fast",
  "d3os-ai",
  "d3os-compute",
  "d3os-inference",

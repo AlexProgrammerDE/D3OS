@@ -4,6 +4,7 @@ mod dispatch;
 mod indexing;
 mod integers;
 mod math;
+mod memory;
 mod pooling;
 mod random;
 mod scatter;
@@ -85,6 +86,7 @@ fn verify(backend: &Nvidia) -> Result<(), Error> {
 }
 
 pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
+    memory::run(backend)?;
     verify(backend).map_err(|e| format!("Burn native tensor storage: {e}"))?;
     crate::report(format_args!(
         "NVIDIA_BURN_STORAGE_OK views=ok aliasing=ok lifetime=ok ieee_bits=ok bool=ok empty=ok backend=nvidia"

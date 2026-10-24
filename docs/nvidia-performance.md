@@ -50,6 +50,15 @@ All 166 earlier GPU instruction sections remain byte-identical after the eight n
 Validation logs are under `target/nvidia/burn/integers/`.
 This work adds no D3OS or Linux throughput measurement. Workload migration remains the priority before optimization.
 
+## Native Burn training validation
+
+D3OS now trains and exports the convolutional MNIST model through Burn's public native GPU API.
+The physical RTX 4090 Laptop GPU run uses all 60,000 training images and the separate 10,000-image test set.
+Seven FP32 epochs reach 99.26 percent test accuracy: five at learning rate 0.001, then two at 0.0001 with Adam state preserved.
+The model also passes checkpoint resume across VM restarts and inference export checks.
+See [Train MNIST inside D3OS](mnist-training.howto.md) for the procedure and retained evidence.
+This validation contains no Linux training sample or matched performance comparison.
+
 ## Latest retained measurements
 
 ### Burn primitive regression
@@ -70,7 +79,7 @@ Both operations keep tensors resident. All 88 earlier instruction sections remai
 The latest primitive checks add 21 unary math operations, broadcast power, and exact tensor fill.
 Independent libm references cover 2,816 FP32 edge values, including rounding boundaries, zeros, infinities, and NaNs.
 Fill performs no host upload and requires no separate clear. All 95 earlier GPU instruction sections remain byte-identical.
-The current SDK and driver use native compute protocol version 17.
+The current SDK and driver use native compute protocol version 18.
 
 The accompanying regression passes AlexNet's eight layer references, Qwen's layer and cache references, and all 600 DOOM views.
 D3OS AlexNet averages 0.960 ms across 100 passes.

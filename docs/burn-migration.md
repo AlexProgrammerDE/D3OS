@@ -116,7 +116,7 @@ The GPU operations include FP32 arithmetic and math, reductions, exact tensor fi
 Another 29 entries implement I32 arithmetic, signed comparisons, bitwise operations, boolean logic, masks, and conversions.
 These operations support strided views and broadcasting. Input tensors remain shared and immutable.
 Full writers avoid a separate output clear. Empty logical outputs require no element work.
-The matching SDK and driver use native compute protocol version 17.
+The matching SDK and driver use native compute protocol version 18.
 
 The D3OS GPU self-test passes reversed and transposed views, overlapping windows, broadcast batches, subviews, empty dimensions, and neighboring guards.
 Matrix references use independent FP64 accumulation. Math references use independent libm functions and include 2,816 FP32 edge values.
@@ -234,7 +234,13 @@ Operator coverage remains incomplete. Unsupported native operations return execu
 The gaps include integer division, integer matrix products, scans, some FP32 math, compaction, and sorting.
 Generic Burn quantization, non-additive indexed updates, three-dimensional convolutions, transposed convolutions, and interpolation also remain incomplete.
 Qwen's packed-weight extensions still need public Burn integration.
-Full MNIST dataset training, complete checkpoint export, and AI workload migration remain incomplete.
+The native MNIST runner now accepts all 60,000 training images and the separate 10,000-image test split.
+It supports complete Adam checkpoints, deterministic sample order, native random state, and inference export.
+A physical D3OS run completes seven epochs and reaches 99.26 percent test accuracy.
+The final model uses five epochs at learning rate 0.001 and two at 0.0001, without resetting Adam state.
+A fresh VM loads the exported model and reproduces all 10,000 test predictions.
+See [Train MNIST inside D3OS](mnist-training.howto.md) for commands and validation evidence.
+AI workload migration remains incomplete.
 The retained Linux and D3OS measurements are in [Native NVIDIA performance](nvidia-performance.md).
 
 ## Portable runtime validation

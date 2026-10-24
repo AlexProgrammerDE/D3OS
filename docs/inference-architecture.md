@@ -158,8 +158,10 @@ Acknowledging an error through synchronization does not make failed tensor clone
 Recoverable failures do not poison later valid work. Fatal GPU errors persist until the process restarts.
 Unsupported operations also use this error path, including operations whose upstream defaults sort or compact data on the CPU.
 
-Native compute protocol version 17 includes command scopes, queue profiles, and 59 built-in kernel families.
+Native compute protocol version 18 includes command scopes, queue profiles, and 59 built-in kernel families.
 Its expanded profile array requires the matching SDK.
+The memory-profile request reports process-owned live compute buffers and the device cache at a synchronized boundary.
+These counters exclude firmware, channel allocations, and temporary peaks between samples.
 Rebuild compute applications with the matching SDK. The kernel rejects incompatible request versions.
 
 The new elementwise family dispatches eleven specialized cuTile entries for Burn tensor views.

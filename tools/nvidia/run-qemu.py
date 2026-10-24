@@ -59,6 +59,8 @@ def main():
             "cpu-self-test",
             "burn-self-test",
             "fwcfg-self-test",
+            "gpu-mnist-train",
+            "gpu-mnist-infer",
             "gpu-self-test",
             "gpu-kernel-bench",
             "gpu-alexnet",
@@ -134,9 +136,11 @@ def main():
     devices = vfio_devices(args.gpu)
     if args.kernels and not args.firmware:
         parser.error("--kernels requires --firmware")
-    if args.inference not in ("cpu-self-test", "fwcfg-self-test", "burn-self-test") and (
-        not args.kernels or not (args.kernels / "inference.cubin").is_file()
-    ):
+    if args.inference not in (
+        "cpu-self-test",
+        "fwcfg-self-test",
+        "burn-self-test",
+    ) and (not args.kernels or not (args.kernels / "inference.cubin").is_file()):
         parser.error("GPU inference requires --kernels with inference.cubin")
     if args.image and args.firmware:
         parser.error("use either --image or --firmware")
@@ -330,6 +334,8 @@ def main():
                     "cpu-self-test": "INFERENCE_OK self-test backend=cpu",
                     "burn-self-test": "INFERENCE_OK burn-self-test backend=cpu gradients=ok aliasing=ok checkpoint=ok resume=ok",
                     "fwcfg-self-test": "INFERENCE_OK fwcfg-self-test",
+                    "gpu-mnist-train": "INFERENCE_OK mnist mode=train backend=nvidia",
+                    "gpu-mnist-infer": "INFERENCE_OK mnist mode=infer os=d3os backend=nvidia",
                     "gpu-self-test": "INFERENCE_OK self-test backend=nvidia",
                     "gpu-kernel-bench": "INFERENCE_BENCH_OK kernels backend=nvidia",
                     "gpu-alexnet": "INFERENCE_OK alexnet backend=nvidia layers=8",
