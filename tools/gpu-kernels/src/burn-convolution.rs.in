@@ -1,0 +1,170 @@
+#[cutile::entry()]
+unsafe fn burn_conv2d(input: *const f32, weights: *const f32, bias: *const f32, output: *mut f32, CONV_PARAMETERS) {
+    let ci = channels / groups;
+    let co = outputs / groups;
+    let spatial = oh * ow;
+    let inner = ci * kh * kw;
+    let cols = batch * spatial;
+    let tiles_c = (cols + 31u32) / 32u32;
+    let tiles_r = (co + 15u32) / 16u32;
+    let group = block_id() / (tiles_c * tiles_r);
+    let block = block_id() % (tiles_c * tiles_r);
+    let r: Tile<u32, { [16] }> = lanes::<16>() + broadcast_scalar(block / tiles_c * 16u32, shape![16]);
+    let r: Tile<u32, { [16, 1] }> = r.reshape(shape![16, 1]);
+    let r: Tile<u32, { [16, 8] }> = r.broadcast(shape![16, 8]);
+    let c: Tile<u32, { [32] }> = lanes::<32>() + broadcast_scalar(block % tiles_c * 32u32, shape![32]);
+    let c: Tile<u32, { [1, 32] }> = c.reshape(shape![1, 32]);
+    let c: Tile<u32, { [8, 32] }> = c.broadcast(shape![8, 32]);
+    let ka: Tile<u32, { [8] }> = lanes::<8>();
+    let ka: Tile<u32, { [1, 8] }> = ka.reshape(shape![1, 8]);
+    let ka: Tile<u32, { [16, 8] }> = ka.broadcast(shape![16, 8]);
+    let kb: Tile<u32, { [8] }> = lanes::<8>();
+    let kb: Tile<u32, { [8, 1] }> = kb.reshape(shape![8, 1]);
+    let kb: Tile<u32, { [8, 32] }> = kb.broadcast(shape![8, 32]);
+    let n = c / broadcast_scalar(spatial, shape![8, 32]);
+    let y = (c % broadcast_scalar(spatial, shape![8, 32]) / broadcast_scalar(ow, shape![8, 32])) * broadcast_scalar(sh, shape![8, 32]);
+    let x = (c % broadcast_scalar(ow, shape![8, 32])) * broadcast_scalar(sw, shape![8, 32]);
+    let y: Tile<i32, { [8, 32] }> = bitcast(y);
+    let x: Tile<i32, { [8, 32] }> = bitcast(x);
+    let y = y - broadcast_scalar(signed(ph), shape![8, 32]);
+    let x = x - broadcast_scalar(signed(pw), shape![8, 32]);
+    let n: Tile<i32, { [8, 32] }> = bitcast(n);
+    let r_global = r + broadcast_scalar(group * co, shape![16, 8]);
+    let r_global: Tile<i32, { [16, 8] }> = bitcast(r_global);
+    let mut sum: Tile<f32, { [16, 32] }> = broadcast_scalar(0f32, shape![16, 32]);
+    let mut correction: Tile<f32, { [16, 32] }> = broadcast_scalar(0f32, shape![16, 32]);
+    let mut start = 0u32;
+    while start < inner {
+        let ak = ka + broadcast_scalar(start, shape![16, 8]);
+        let bk = kb + broadcast_scalar(start, shape![8, 32]);
+        let ac = ak / broadcast_scalar(kh * kw, shape![16, 8]);
+        let ay = ak / broadcast_scalar(kw, shape![16, 8]) % broadcast_scalar(kh, shape![16, 8]);
+        let ax = ak % broadcast_scalar(kw, shape![16, 8]);
+        let ac: Tile<i32, { [16, 8] }> = bitcast(ac);
+        let ay: Tile<i32, { [16, 8] }> = bitcast(ay);
+        let ax: Tile<i32, { [16, 8] }> = bitcast(ax);
+        let ai = broadcast_scalar(signed(offset_w), shape![16, 8]) + r_global * broadcast_scalar(signed(stride_w0), shape![16, 8])
+            + ac * broadcast_scalar(signed(stride_w1), shape![16, 8]) + ay * broadcast_scalar(signed(stride_w2), shape![16, 8]) + ax * broadcast_scalar(signed(stride_w3), shape![16, 8]);
+        let ai: Tile<u32, { [16, 8] }> = bitcast(ai);
+        let am = lt_tile(r, broadcast_scalar(co, shape![16, 8])) & lt_tile(ak, broadcast_scalar(inner, shape![16, 8])) & lt_tile(ai, broadcast_scalar(extent_w, shape![16, 8]));
+        let av = unsafe { read_matrix(weights, ai, am, 0f32, shape![128]) };
+        let bc = bk / broadcast_scalar(kh * kw, shape![8, 32]) + broadcast_scalar(group * ci, shape![8, 32]);
+        let by = (bk / broadcast_scalar(kw, shape![8, 32]) % broadcast_scalar(kh, shape![8, 32])) * broadcast_scalar(dh, shape![8, 32]);
+        let bx = (bk % broadcast_scalar(kw, shape![8, 32])) * broadcast_scalar(dw, shape![8, 32]);
+        let bc: Tile<i32, { [8, 32] }> = bitcast(bc);
+        let by: Tile<i32, { [8, 32] }> = bitcast(by);
+        let bx: Tile<i32, { [8, 32] }> = bitcast(bx);
+        let by = y + by;
+        let bx = x + bx;
+        let bi = broadcast_scalar(signed(offset_x), shape![8, 32]) + n * broadcast_scalar(signed(stride_x0), shape![8, 32]) + bc * broadcast_scalar(signed(stride_x1), shape![8, 32])
+            + by * broadcast_scalar(signed(stride_x2), shape![8, 32]) + bx * broadcast_scalar(signed(stride_x3), shape![8, 32]);
+        let bi: Tile<u32, { [8, 32] }> = bitcast(bi);
+        let bm = lt_tile(c, broadcast_scalar(cols, shape![8, 32])) & lt_tile(bk, broadcast_scalar(inner, shape![8, 32]))
+            & ge_tile(by, broadcast_scalar(0i32, shape![8, 32])) & lt_tile(by, broadcast_scalar(signed(height), shape![8, 32]))
+            & ge_tile(bx, broadcast_scalar(0i32, shape![8, 32])) & lt_tile(bx, broadcast_scalar(signed(width), shape![8, 32])) & lt_tile(bi, broadcast_scalar(extent_x, shape![8, 32]));
+        let bv = unsafe { read_matrix(input, bi, bm, 0f32, shape![256]) };
+        let zero = broadcast_scalar(0f32, shape![16, 32]);
+        let ah: Tile<tf32, { [16, 8] }> = ftof(av, rounding::NearestAway);
+        let bh: Tile<tf32, { [8, 32] }> = ftof(bv, rounding::NearestAway);
+        let ar: Tile<f32, { [16, 8] }> = ftof(ah, rounding::NearestEven);
+        let av: Tile<f32, { [16, 8] }> = av.reshape(shape![16, 8]);
+        let al: Tile<tf32, { [16, 8] }> = ftof(av - ar, rounding::NearestAway);
+        let br: Tile<f32, { [8, 32] }> = ftof(bh, rounding::NearestEven);
+        let bv: Tile<f32, { [8, 32] }> = bv.reshape(shape![8, 32]);
+        let bl: Tile<tf32, { [8, 32] }> = ftof(bv - br, rounding::NearestAway);
+        let high = mmaf(ah, bh, zero);
+        let low = mmaf(al, bh, zero);
+        let low = mmaf(ah, bl, low);
+        let adjusted = high - correction;
+        let next = sum + adjusted;
+        correction = (next - sum) - adjusted;
+        sum = next;
+        let adjusted = low - correction;
+        let next = sum + adjusted;
+        correction = (next - sum) - adjusted;
+        sum = next;
+        start = start + 8u32;
+    }
+    let r: Tile<u32, { [16] }> = lanes::<16>() + broadcast_scalar(block / tiles_c * 16u32, shape![16]);
+    let r: Tile<u32, { [16, 1] }> = r.reshape(shape![16, 1]);
+    let r: Tile<u32, { [16, 32] }> = r.broadcast(shape![16, 32]);
+    let c: Tile<u32, { [32] }> = lanes::<32>() + broadcast_scalar(block % tiles_c * 32u32, shape![32]);
+    let c: Tile<u32, { [1, 32] }> = c.reshape(shape![1, 32]);
+    let c: Tile<u32, { [16, 32] }> = c.broadcast(shape![16, 32]);
+    let index = ((c / broadcast_scalar(spatial, shape![16, 32])) * broadcast_scalar(outputs, shape![16, 32]) + r + broadcast_scalar(group * co, shape![16, 32])) * broadcast_scalar(spatial, shape![16, 32]) + c % broadcast_scalar(spatial, shape![16, 32]);
+    let mask = lt_tile(r, broadcast_scalar(co, shape![16, 32])) & lt_tile(c, broadcast_scalar(cols, shape![16, 32]));
+    let result = if bias_enabled != 0u32 {
+        let bias_index = r + broadcast_scalar(group * co, shape![16, 32]);
+        let b = unsafe { read_matrix(bias, bias_index, mask, 0f32, shape![512]) };
+        sum + b
+    } else { sum };
+    unsafe { write_matrix(output, index, result, mask, shape![512]) };
+}
+
+#[cutile::entry()]
+unsafe fn burn_conv2d_windows(input: *const u32, output: *mut u32, WINDOW_PARAMETERS) {
+    let i = indices();
+    let ci = channels / groups;
+    let spatial = oh * ow;
+    let inner = ci * kh * kw;
+    let count = batch * groups * inner * spatial;
+    let mask = lt_tile(i, broadcast_scalar(count, shape![128]));
+    let position = i % broadcast_scalar(spatial, shape![128]);
+    let k = i / broadcast_scalar(spatial, shape![128]) % broadcast_scalar(inner, shape![128]);
+    let group = i / broadcast_scalar(spatial * inner, shape![128]) % broadcast_scalar(groups, shape![128]);
+    let n = i / broadcast_scalar(spatial * inner * groups, shape![128]);
+    let channel = group * broadcast_scalar(ci, shape![128]) + k / broadcast_scalar(kh * kw, shape![128]);
+    let y = position / broadcast_scalar(ow, shape![128]) * broadcast_scalar(sh, shape![128]) + k / broadcast_scalar(kw, shape![128]) % broadcast_scalar(kh, shape![128]) * broadcast_scalar(dh, shape![128]);
+    let x = position % broadcast_scalar(ow, shape![128]) * broadcast_scalar(sw, shape![128]) + k % broadcast_scalar(kw, shape![128]) * broadcast_scalar(dw, shape![128]);
+    let n: Tile<i32, { [128] }> = bitcast(n);
+    let channel: Tile<i32, { [128] }> = bitcast(channel);
+    let y: Tile<i32, { [128] }> = bitcast(y);
+    let x: Tile<i32, { [128] }> = bitcast(x);
+    let y = y - broadcast_scalar(signed(ph), shape![128]);
+    let x = x - broadcast_scalar(signed(pw), shape![128]);
+    let address = broadcast_scalar(signed(offset_x), shape![128]) + n * broadcast_scalar(signed(stride_x0), shape![128]) + channel * broadcast_scalar(signed(stride_x1), shape![128]) + y * broadcast_scalar(signed(stride_x2), shape![128]) + x * broadcast_scalar(signed(stride_x3), shape![128]);
+    let address: Tile<u32, { [128] }> = bitcast(address);
+    let valid = mask & ge_tile(y, broadcast_scalar(0i32, shape![128])) & lt_tile(y, broadcast_scalar(signed(height), shape![128])) & ge_tile(x, broadcast_scalar(0i32, shape![128])) & lt_tile(x, broadcast_scalar(signed(width), shape![128])) & lt_tile(address, broadcast_scalar(extent_x, shape![128]));
+    let value = unsafe { read_tile(input, address, valid, 0u32) };
+    unsafe { write_tile(output, i, value, mask) };
+}
+
+#[cutile::entry()]
+unsafe fn burn_conv2d_fold(input: *const f32, output: *mut f32, GEOMETRY_PARAMETERS) {
+    let i = indices();
+    let count = batch * channels * height * width;
+    let mask = lt_tile(i, broadcast_scalar(count, shape![128]));
+    let x = i % broadcast_scalar(width, shape![128]);
+    let y = i / broadcast_scalar(width, shape![128]) % broadcast_scalar(height, shape![128]);
+    let channel = i / broadcast_scalar(height * width, shape![128]) % broadcast_scalar(channels, shape![128]);
+    let n = i / broadcast_scalar(height * width * channels, shape![128]);
+    let ci = channels / groups;
+    let group = channel / broadcast_scalar(ci, shape![128]);
+    let local_channel = channel % broadcast_scalar(ci, shape![128]);
+    let x: Tile<i32, { [128] }> = bitcast(x);
+    let y: Tile<i32, { [128] }> = bitcast(y);
+    let spatial = oh * ow;
+    let inner = ci * kh * kw;
+    let mut sum: Tile<f32, { [128] }> = broadcast_scalar(0f32, shape![128]);
+    let mut ky = 0u32;
+    while ky < kh {
+        let yy = y + broadcast_scalar(signed(ph), shape![128]) - broadcast_scalar(signed(ky * dh), shape![128]);
+        let oy = yy / broadcast_scalar(signed(sh), shape![128]);
+        let valid_y = ge_tile(yy, broadcast_scalar(0i32, shape![128])) & eq_tile(yy % broadcast_scalar(signed(sh), shape![128]), broadcast_scalar(0i32, shape![128])) & lt_tile(oy, broadcast_scalar(signed(oh), shape![128]));
+        let oy: Tile<u32, { [128] }> = bitcast(oy);
+        let mut kx = 0u32;
+        while kx < kw {
+            let xx = x + broadcast_scalar(signed(pw), shape![128]) - broadcast_scalar(signed(kx * dw), shape![128]);
+            let ox = xx / broadcast_scalar(signed(sw), shape![128]);
+            let valid_x = ge_tile(xx, broadcast_scalar(0i32, shape![128])) & eq_tile(xx % broadcast_scalar(signed(sw), shape![128]), broadcast_scalar(0i32, shape![128])) & lt_tile(ox, broadcast_scalar(signed(ow), shape![128]));
+            let ox: Tile<u32, { [128] }> = bitcast(ox);
+            let k = local_channel * broadcast_scalar(kh * kw, shape![128]) + broadcast_scalar(ky * kw + kx, shape![128]);
+            let address = ((n * broadcast_scalar(groups, shape![128]) + group) * broadcast_scalar(inner, shape![128]) + k) * broadcast_scalar(spatial, shape![128]) + oy * broadcast_scalar(ow, shape![128]) + ox;
+            let value = unsafe { read_tile(input, address, mask & valid_y & valid_x, 0f32) };
+            sum = addf(sum, value, rounding::NearestEven, ftz::Disabled);
+            kx = kx + 1u32;
+        }
+        ky = ky + 1u32;
+    }
+    unsafe { write_tile(output, i, sum, mask) };
+}

@@ -60,7 +60,7 @@ Both operations keep tensors resident. All 88 earlier instruction sections remai
 The latest primitive checks add 21 unary math operations, broadcast power, and exact tensor fill.
 Independent libm references cover 2,816 FP32 edge values, including rounding boundaries, zeros, infinities, and NaNs.
 Fill performs no host upload and requires no separate clear. All 95 earlier GPU instruction sections remain byte-identical.
-The matching SDK and driver use native compute protocol version 12.
+The matching SDK and driver use native compute protocol version 13.
 
 The accompanying regression passes AlexNet's eight layer references, Qwen's layer and cache references, and all 600 DOOM views.
 D3OS AlexNet averages 0.960 ms across 100 passes.
@@ -98,6 +98,13 @@ They also preserve subnormal accumulation and match a weighted gather gradient a
 All 148 previous GPU instruction sections remain byte-identical.
 This step does not establish a D3OS or Linux throughput improvement.
 Its evidence is under `target/nvidia/burn/scatter/`.
+
+The convolution step adds native forward execution and gradients for the Burn backend.
+Physical D3OS GPU checks pass independent FP64 references, finite differences, grouped and dilated cases, signed views, empty batches, and guards.
+The operations keep activations resident. All 151 previous GPU instruction sections remain byte-identical.
+This step leaves the existing AlexNet path unchanged and adds no performance improvement claim.
+Its functional validation evidence is under `target/nvidia/burn/convolution/`.
+Further performance optimization waits until the native Burn backend and AI workload migration are complete.
 
 ### Grouped recurrent attention
 

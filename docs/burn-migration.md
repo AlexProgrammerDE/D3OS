@@ -41,6 +41,11 @@ The D3OS target uses `no_std` with `alloc`. Host-only training interfaces are ou
 
 ## Migration sequence
 
+Complete the native Burn backend before rewriting AI workloads against its public API.
+Then migrate every AI workload and remove the replaced APIs.
+Resume performance optimization after that migration. Correctness and regression checks continue throughout the work.
+DOOM remains separate from Burn.
+
 1. Pin Burn and validate the portable dependency graph on the D3OS target.
 2. Implement and validate the native backend, including shared tensor ownership and command batching.
 3. Add training operations and run the MNIST workflow inside the VM.
@@ -111,7 +116,7 @@ The GPU operations include FP32 arithmetic and math, reductions, exact tensor fi
 Another 29 entries implement I32 arithmetic, signed comparisons, bitwise operations, boolean logic, masks, and conversions.
 These operations support strided views and broadcasting. Input tensors remain shared and immutable.
 Full writers avoid a separate output clear. Empty logical outputs require no element work.
-The matching SDK and driver use native compute protocol version 12.
+The matching SDK and driver use native compute protocol version 13.
 
 The D3OS GPU self-test passes reversed and transposed views, overlapping windows, broadcast batches, subviews, empty dimensions, and neighboring guards.
 Matrix references use independent FP64 accumulation. Math references use independent libm functions and include 2,816 FP32 edge values.
@@ -142,6 +147,16 @@ Physical GPU checks pass all three operations across every axis of strided tenso
 They also pass alias preservation, invalid-index recovery, guarded partial tiles, NaN handling, and exact subnormal accumulation.
 A weighted gather loss and its scatter gradient agree with an independent FP64 finite-difference reference.
 All 148 earlier GPU instruction sections remain byte-identical after the three scatter entries are added.
+
+Native convolution now provides FP32 forward passes and input, weight, and optional bias gradients.
+It supports NCHW tensors, groups, dilation, asymmetric padding, and signed views of inputs and weights.
+The forward kernel uses compensated TF32 Tensor Core products and includes optional bias in the same launch.
+Backward passes use resident matrix products, checked window extraction, and a fold kernel that sums overlapping windows without atomics.
+Physical GPU checks compare forward results and all gradients with independent FP64 references and finite differences.
+The checks include partial tiles, empty batches, offset views, shared storage, malformed metadata, and neighboring guards.
+Service counters show no activation upload or download during these operations.
+All 151 earlier GPU instruction sections remain byte-identical after the three convolution entries are added.
+The existing AlexNet execution path remains unchanged. AI workload migration waits for the public Burn backend.
 
 These checks validate native primitives. Burn device dispatch and autodiff integration still need implementation.
 Integer division, remainder, other indexed updates, and additional training primitives also remain incomplete.

@@ -2,12 +2,13 @@
 
 use crate::{Error, Result};
 
+pub mod convolution;
 pub mod elementwise;
 pub mod indexing;
 pub mod reduction;
 pub mod words;
 
-pub const VERSION: u32 = 12;
+pub const VERSION: u32 = 13;
 pub const INFO: u32 = 0;
 pub const ALLOCATE: u32 = 1;
 pub const FREE: u32 = 2;
@@ -27,7 +28,7 @@ pub const END_COMMANDS: u32 = 10;
 pub const QUEUE_PROFILE: u32 = 11;
 pub const SERVICE_PROFILE: u32 = 12;
 pub const SERVICE_OPERATIONS: usize = 13;
-pub const KERNEL_COUNT: usize = 50;
+pub const KERNEL_COUNT: usize = 53;
 
 /// CPU service costs by request operation, including queue work within it.
 #[derive(Clone, Copy, Debug, Default)]
@@ -132,9 +133,12 @@ pub enum Kernel {
     TensorWords = 47,
     Gather = 48,
     Scatter = 49,
+    Conv2d = 50,
+    Conv2dWindows = 51,
+    Conv2dFold = 52,
 }
 
-const _: () = assert!(Kernel::Scatter as usize + 1 == KERNEL_COUNT);
+const _: () = assert!(Kernel::Conv2dFold as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -179,6 +183,9 @@ impl Kernel {
         matches!(
             self,
             Self::TensorElementwise
+                | Self::Conv2d
+                | Self::Conv2dWindows
+                | Self::Conv2dFold
                 | Self::TensorReduction
                 | Self::Fill
                 | Self::TensorWords
@@ -264,6 +271,9 @@ impl Kernel {
             47 => Self::TensorWords,
             48 => Self::Gather,
             49 => Self::Scatter,
+            50 => Self::Conv2d,
+            51 => Self::Conv2dWindows,
+            52 => Self::Conv2dFold,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -320,6 +330,9 @@ impl Kernel {
             Self::TensorWords => "burn_i32_add",
             Self::Gather => "burn_gather",
             Self::Scatter => "burn_scatter_add_f32",
+            Self::Conv2d => "burn_conv2d",
+            Self::Conv2dWindows => "burn_conv2d_windows",
+            Self::Conv2dFold => "burn_conv2d_fold",
         }
     }
 
@@ -372,6 +385,30 @@ impl Kernel {
         let mut mutated = 0;
         let mut threads = 128;
         let (count, pointers, output, in_place) = match (self, p) {
+            (Self::Conv2d, p) => {
+                let (geometry, ranges) = convolution::validate(p)?;
+                if geometry.outputs == 0 {
+                    return Err(Error::InvalidField);
+                }
+                extents[..4].copy_from_slice(&ranges);
+                (geometry.blocks.checked_mul(128).ok_or(Error::InvalidField)?, 4, 3, false)
+            }
+            (Self::Conv2dWindows, p) => {
+                let (geometry, ranges) = convolution::validate_windows(p)?;
+                if geometry.columns == 0 {
+                    return Err(Error::InvalidField);
+                }
+                extents[..2].copy_from_slice(&ranges);
+                (geometry.columns, 2, 1, false)
+            }
+            (Self::Conv2dFold, p) => {
+                let geometry = convolution::geometry(p)?;
+                if geometry.images == 0 {
+                    return Err(Error::InvalidField);
+                }
+                extents[..2].copy_from_slice(&[u64::from(geometry.columns), u64::from(geometry.images)]);
+                (geometry.images, 2, 1, false)
+            }
             (Self::Scatter, p) => {
                 extents[..4].copy_from_slice(&indexing::validate_scatter(p)?);
                 mutated = 1 << 2;

@@ -3,6 +3,7 @@
 
 extern crate alloc;
 
+pub mod convolution;
 mod device;
 pub mod layout;
 mod tensor;

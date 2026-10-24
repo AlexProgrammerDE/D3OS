@@ -11,9 +11,9 @@ use d3os_nvidia::compute::{Kernel, elementwise::Elementwise, indexing::Scatter, 
 /// A Burn tensor primitive backed by shared, process-owned GPU storage.
 #[derive(Clone, Debug)]
 pub struct NativeTensor {
-    buffer: Arc<GpuBuffer<u32>>,
-    layout: Layout,
-    dtype: DType,
+    pub(crate) buffer: Arc<GpuBuffer<u32>>,
+    pub(crate) layout: Layout,
+    pub(crate) dtype: DType,
 }
 
 fn supported(dtype: DType) -> bool {

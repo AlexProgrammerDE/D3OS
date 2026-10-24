@@ -20,6 +20,26 @@ fn main() {
         source.push('\n');
     }
     println!("cargo:rerun-if-changed=src/burn-elementwise.rs.in");
+    println!("cargo:rerun-if-changed=src/burn-convolution.rs.in");
+    let convolution = fs::read_to_string("src/burn-convolution.rs.in").expect("read convolution source");
+    let geometry = [
+        "batch", "channels", "height", "width", "kh", "kw", "oh", "ow", "sh", "sw", "ph", "pw", "dh", "dw", "groups", "_end_h", "_end_w", "outputs",
+    ];
+    let mut window = geometry.map(str::to_owned).to_vec();
+    window.extend(["extent_x", "offset_x", "stride_x0", "stride_x1", "stride_x2", "stride_x3"].map(str::to_owned));
+    let mut full = window.clone();
+    full.extend(["extent_w", "offset_w", "stride_w0", "stride_w1", "stride_w2", "stride_w3"].map(str::to_owned));
+    full.push("bias_enabled".into());
+    window[17] = "_outputs".into();
+    let mut geometry = geometry.map(str::to_owned);
+    geometry[17] = "_outputs".into();
+    let parameters = |names: &[String]| names.iter().map(|n| format!("{n}: u32")).collect::<Vec<_>>().join(", ");
+    source.push_str(
+        &convolution
+            .replace("CONV_PARAMETERS", &parameters(&full))
+            .replace("WINDOW_PARAMETERS", &parameters(&window))
+            .replace("GEOMETRY_PARAMETERS", &parameters(&geometry)),
+    );
     let elementwise = fs::read_to_string("src/burn-elementwise.rs.in").expect("read Burn elementwise template");
     let mut parameters: Vec<String> = ["count", "_rank", "operation", "scalar", "offset_a", "offset_b", "extent_a", "extent_b"]
         .map(str::to_owned)
