@@ -19,6 +19,7 @@ pub struct Segment {
 
 #[derive(Debug)]
 pub struct Elf<'a> {
+    pub position_independent: bool,
     pub entry: u64,
     pub phdr: u64,
     pub phnum: u16,
@@ -58,6 +59,7 @@ impl<'a> Elf<'a> {
             return Err(Error::Truncated);
         }
         let mut result = Self {
+            position_independent: kind == 3,
             entry,
             phdr: 0,
             phnum,
@@ -166,5 +168,20 @@ mod tests {
     #[test]
     fn rejects_relocating_fixed_executables() {
         assert_eq!(Elf::parse(&image(), 0x10000000000).unwrap_err(), Error::Unsupported);
+    }
+
+    #[test]
+    fn relocates_position_independent_image_and_headers() {
+        let mut data = image();
+        data[16..18].copy_from_slice(&3u16.to_le_bytes());
+        data[24..32].copy_from_slice(&0x100u64.to_le_bytes());
+        data[80..88].copy_from_slice(&0u64.to_le_bytes());
+        let bias = 0x10080000000;
+        let elf = Elf::parse(&data, bias).unwrap();
+        assert!(elf.position_independent);
+        assert_eq!(elf.entry, bias + 0x100);
+        assert_eq!(elf.phdr, bias + 64);
+        assert_eq!(elf.segments[0].address, bias);
+        assert_eq!(elf.end, bias + 8192);
     }
 }

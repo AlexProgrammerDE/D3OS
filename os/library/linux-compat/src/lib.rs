@@ -12,6 +12,8 @@ pub use process::{LinuxProcess, StartContext, SyscallFrame, SyscallOutcome};
 pub type Result<T> = core::result::Result<T, isize>;
 
 pub const PAGE_SIZE: u64 = 4096;
+pub const LOW_EXECUTABLE_START: u64 = 4 * 1024 * 1024;
+pub const LOW_EXECUTABLE_END: u64 = 128 * 1024 * 1024;
 
 pub fn page_up(value: u64) -> Option<u64> {
     Some(value.checked_add(PAGE_SIZE - 1)? & !(PAGE_SIZE - 1))

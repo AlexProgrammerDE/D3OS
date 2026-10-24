@@ -27,6 +27,8 @@ pub unsafe trait Host {
     fn write(&self, handle: usize, buffer: &[u8]) -> SyscallResult;
     fn seek(&self, handle: usize, offset: isize, origin: SeekOrigin) -> SyscallResult;
     fn close(&self, handle: usize) -> SyscallResult;
+    fn duplicate(&self, handle: usize) -> SyscallResult;
+    fn unlink(&self, path: &str) -> core::result::Result<(), Errno>;
     fn truncate(&self, path: &str) -> core::result::Result<(), Errno>;
     fn console_write(&self, descriptor: u64, buffer: &[u8]) -> Result<usize>;
 

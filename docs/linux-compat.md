@@ -41,6 +41,34 @@ Linux output files remain in D3OS tmpfs after the process exits.
 Compiler diagnostics use the normal D3OS terminal output buffer.
 Tmpfs files do not survive a reboot.
 
+## Compile Tile IR
+
+Use matching CUDA 13.4.92 versions of `tileiras`, `ptxas`, and `libnvvm`.
+Preserve their relative directory layout:
+
+```text
+loader/initrd/usr/cuda/bin/tileiras
+loader/initrd/usr/cuda/bin/ptxas
+loader/initrd/usr/cuda/lib/libnvvm.so.4
+loader/initrd/usr/cuda/nvvm/libdevice/libdevice.10.bc
+```
+
+Copy the interpreter and shared libraries reported by `ldd` into `loader/initrd/lib64/`.
+These include `librt.so.1` and `libdl.so.2`, in addition to the libraries listed above.
+Copy the input Tile IR bytecode into `loader/initrd/usr/`.
+Build D3OS, then run:
+
+```text
+/usr/cuda/bin/tileiras --gpu-name=sm_80 /usr/vector-add.tilebc -o /output.cubin
+```
+
+The compiler loads `libnvvm` and launches its sibling `ptxas` as a child process.
+The Linux compatibility layer handles the child descriptors, environment, exit status, and temporary files.
+The output is a GPU cubin. GPU execution requires a separate driver.
+
+cuTile Python can export portable input through its [Tile IR bytecode API](https://docs.nvidia.com/cuda/cutile-python/compilation.html).
+Run that export on the host. The D3OS test tools contain vector-add, math, and matrix-multiply export fixtures.
+
 ## Implementation
 
 The `linux-compat` crate owns ELF validation, the initial process stack, Linux syscall decoding, descriptors, and memory bookkeeping.
@@ -49,14 +77,20 @@ The kernel implementation lives in `os/kernel/src/linux`.
 Each process has its own optional Linux execution state.
 
 Linux executables can require addresses starting at 4 MiB.
-D3OS reserves physical memory from 4 MiB to 64 MiB and links the kernel at 64 MiB.
+D3OS reserves physical memory from 4 MiB to 128 MiB and links the kernel at 128 MiB.
 This permits low Linux user mappings without replacing live kernel code or allocator data.
 The kernel heap is 128 MiB to accommodate compiler loading and process metadata.
-The ramdisk moves into the heap only when it overlaps the Linux executable window.
+If the ramdisk overlaps that window, it moves into separate physical frames outside the kernel heap.
 
 The loader reads executables through the naming service, including files created after boot.
+It borrows immutable ramdisk files directly, avoiding a second heap copy of large executables.
 Linux `exit` and `exit_group` release descriptors and use normal D3OS process cleanup.
 The kernel records the exit status. The existing shell still assumes success after joining external applications.
+
+The `clone3` spawn path suspends the parent while the child uses its shared address space.
+At `execve`, the kernel creates an independent D3OS process and restores the parent's registers and TLS.
+`wait4` and `waitid` collect the child's exit status.
+Descriptor duplication shares the underlying file position. Close-on-exec descriptors stay out of the new image.
 
 ## Verification
 
@@ -73,6 +107,7 @@ From that project, run:
 ```bash
 python3 tools/bootstrap.py
 python3 tools/test_ptxas.py --source /path/to/D3OS
+python3 tools/test_tileiras.py --source /path/to/D3OS
 ```
 
 The tools copy the current D3OS source, including local changes, into a disposable build directory.
@@ -88,13 +123,14 @@ It also checks repeated compilation in one VM and native application launch with
 
 ## Current limits
 
-The verified workload is CUDA 12.9.86 `ptxas` with its copied Linux runtime libraries.
+The verified workloads include CUDA 12.9.86 `ptxas` and CUDA 13.4.92 `tileiras` with matching `ptxas` and `libnvvm`.
 Other executables can run when their Linux interfaces fit the implemented subset.
 
-- The execution personality supports one thread per process. Compiler worker threads and process creation are not implemented.
+- Each Linux process has one thread and sees one logical CPU. Compiler worker threads and general `fork` are not implemented.
+- Child creation supports the shared-address-space `clone3` flags used by glibc `posix_spawn`. Direct process replacement and other clone modes are not implemented.
 - Signal masks and actions can be stored, but asynchronous signal delivery is not implemented.
 - Private file mappings use eager allocation. Shared mappings and file writeback are not implemented.
 - Linux standard input, sockets, and device interfaces are not implemented.
-- The loader supports the reserved low executable window and high user mappings. General PIE executable loading is not implemented.
+- The loader supports fixed executables in the reserved low window and position-independent executables at a high address.
 - Clock precision follows D3OS timers and scheduler accounting.
 - CUDA GPU loading and execution still require a GPU driver.

@@ -53,6 +53,7 @@ pub fn init() {
                 Ok(proc_dir) => proc_dir,
                 Err(_) => panic!("Failed to create proc directory in tmpfs"),
             };
+        tmpfs.root_dir().create_dir("tmp", Mode::new(MODE_DIR)).expect("Failed to create temporary directory");
 
         for entry in initrd().entries() {
             let res = tmpfs.create_static_file(entry.filename().as_str().unwrap(), entry.data());
@@ -132,8 +133,23 @@ pub fn stat(path: &str) -> Result<super::stat::Stat, Errno> {
     }
 }
 
+pub fn immutable_data(path: &str) -> Result<Option<&'static [u8]>, Errno> {
+    Ok(lookup::lookup_named_object(path)?.as_file()?.immutable_data())
+}
+
 pub fn truncate(path: &str, size: usize) -> Result<(), Errno> {
     lookup::lookup_named_object(path)?.as_file()?.truncate(size)
+}
+
+pub fn unlink(path: &str) -> Result<(), Errno> {
+    let (parent, name) = path.rsplit_once('/').ok_or(Errno::EINVAL)?;
+    if name.is_empty() || matches!(name, "." | "..") { return Err(Errno::EINVAL); }
+    let parent = if parent.is_empty() { "/" } else { parent };
+    lookup::lookup_named_object(parent)?.as_dir()?.unlink(name)
+}
+
+pub fn duplicate(handle: usize) -> Result<usize, Errno> {
+    open_objects::duplicate(handle)
 }
 
 /// Create a directory for the given `path`. \

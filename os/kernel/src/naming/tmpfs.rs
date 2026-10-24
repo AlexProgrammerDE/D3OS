@@ -109,6 +109,15 @@ impl Dir {
 }
 
 impl DirectoryObject for Dir {
+    fn unlink(&self, name: &str) -> Result<(), Errno> {
+        let mut guard = self.0.write();
+        let index = guard.files.iter().position(|(entry, _)| entry == name).ok_or(Errno::ENOENT)?;
+        if matches!(guard.files[index].1, TmpFsINode::Directory(_)) {
+            return Err(Errno::EISDIR);
+        }
+        guard.files.remove(index);
+        Ok(())
+    }
     // check if an object with the given name exists in the directory
     fn lookup(&self, name: &str) -> Result<NamedObject, Errno> {
         let guard = self.0.read(); // Lock the mutex to access the inner data
@@ -288,6 +297,7 @@ impl StaticFile {
 }
 
 impl FileObject for StaticFile {
+    fn immutable_data(&self) -> Option<&'static [u8]> { Some(self.data) }
     fn stat(&self) -> Result<Stat, Errno> {
         Ok(self.stat)
     }

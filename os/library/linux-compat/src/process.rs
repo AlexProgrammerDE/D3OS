@@ -1,4 +1,4 @@
-use crate::{Host, Result, elf::Elf, linux_errno, page_up, stack};
+use crate::{Host, LOW_EXECUTABLE_END, LOW_EXECUTABLE_START, Result, elf::Elf, linux_errno, page_up, stack};
 use alloc::{collections::BTreeMap, string::String, vec::Vec};
 use naming::shared_types::{OpenOptions, SeekOrigin};
 use syscall::return_vals::Errno;
@@ -9,15 +9,41 @@ pub struct StartContext {
     pub stack: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SyscallOutcome {
     Return(isize),
     Exit(u8),
+    Vfork {
+        stack: u64,
+    },
+    Exec {
+        path: String,
+        arguments: Vec<String>,
+        environment: Vec<String>,
+    },
+    Wait(WaitRequest),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WaitRequest {
+    pub pid: i64,
+    pub output: u64,
+    pub usage: u64,
+    pub nonblocking: bool,
+    pub keep: bool,
+    pub information: bool,
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct SyscallFrame {
     pub number: u64,
+    pub r15: u64,
+    pub r14: u64,
+    pub r13: u64,
+    pub r12: u64,
+    pub rbp: u64,
+    pub rbx: u64,
     pub r11: u64,
     pub r10: u64,
     pub r9: u64,
@@ -28,7 +54,7 @@ pub struct SyscallFrame {
     pub rcx: u64,
     pub rsp: u64,
 }
-const _: () = assert!(core::mem::size_of::<SyscallFrame>() == 80);
+const _: () = assert!(core::mem::size_of::<SyscallFrame>() == 128);
 
 impl SyscallFrame {
     pub fn arguments(&self) -> [u64; 6] {
@@ -47,14 +73,17 @@ pub struct LinuxProcess<H: Host> {
     host: H,
     id: u32,
     cwd: String,
+    executable: String,
     pages: BTreeMap<u64, u32>,
     files: BTreeMap<u64, File>,
+    consoles: BTreeMap<u64, u64>,
     next_map: u64,
     brk: u64,
     signal_mask: u64,
     actions: [[u8; 32]; 64],
     clear_tid: u64,
     robust_list: u64,
+    alternate_stack: [u8; 24],
 }
 
 struct File {
@@ -69,19 +98,79 @@ impl<H: Host> LinuxProcess<H> {
             host,
             id,
             cwd: cwd.into(),
+            executable: String::new(),
             pages: BTreeMap::new(),
             files: BTreeMap::new(),
+            consoles: [(0, 0), (1, 1), (2, 2)].into(),
             next_map: MMAP,
             brk: HEAP,
             signal_mask: 0,
             actions: [[0; 32]; 64],
             clear_tid: 0,
             robust_list: 0,
+            alternate_stack: {
+                let mut stack = [0; 24];
+                stack[8] = 2;
+                stack
+            },
         }
     }
 
     pub fn host(&self) -> &H {
         &self.host
+    }
+
+    pub fn id(&self) -> u32 {
+        self.id
+    }
+    pub fn cwd(&self) -> &str {
+        &self.cwd
+    }
+    pub fn set_executable_path(&mut self, path: &str) {
+        self.executable = path.into();
+    }
+
+    /// Copy process metadata and descriptors for a serialized vfork child.
+    /// The host still refers to the shared address space until exec or exit.
+    pub fn vfork(&self, host: H, id: u32) -> Result<Self> {
+        let mut child = Self::new(host, id, &self.cwd);
+        child.pages = self.pages.clone();
+        child.next_map = self.next_map;
+        child.brk = self.brk;
+        child.executable = self.executable.clone();
+        child.signal_mask = self.signal_mask;
+        child.alternate_stack = self.alternate_stack;
+        child.inherit_descriptors(self, false)?;
+        Ok(child)
+    }
+
+    pub fn inherit_descriptors(&mut self, parent: &Self, exec: bool) -> Result<()> {
+        self.close_files();
+        self.consoles = parent.consoles.clone();
+        for (&fd, file) in &parent.files {
+            if exec && file.flags & 0x80000 != 0 {
+                continue;
+            }
+            let handle = self.host.duplicate(file.handle).map_err(errno)?;
+            self.files.insert(
+                fd,
+                File {
+                    handle,
+                    path: file.path.clone(),
+                    flags: file.flags,
+                },
+            );
+        }
+        Ok(())
+    }
+
+    /// Write a syscall result into validated guest memory.
+    ///
+    /// # Safety
+    /// The caller must activate this process's mappings and exclude concurrent
+    /// access to its memory, as required by `dispatch`.
+    pub unsafe fn write_memory(&self, address: u64, data: &[u8]) -> Result<()> {
+        self.output(address, data)
     }
 
     /// Execute a Linux syscall in the process's active address space.
@@ -96,14 +185,22 @@ impl<H: Host> LinuxProcess<H> {
             }
             self.close_files();
             SyscallOutcome::Exit(args[0] as u8)
+        } else if matches!(number, 59 | 61 | 247 | 435) {
+            self.process_call(number, args).unwrap_or_else(SyscallOutcome::Return)
         } else {
             SyscallOutcome::Return(self.call(number, args).unwrap_or_else(|e| e))
         }
     }
 
     pub fn start(&mut self, executable: &[u8], interpreter: Option<&[u8]>, args: &[&str]) -> Result<StartContext> {
+        self.start_with_environment(executable, interpreter, args, &["LANG=C", "LC_ALL=C", "LD_LIBRARY_PATH=/lib64"])
+    }
+
+    pub fn start_with_environment(&mut self, executable: &[u8], interpreter: Option<&[u8]>, args: &[&str], environment: &[&str]) -> Result<StartContext> {
         let elf = Elf::parse(executable, 0).map_err(|_| -8isize)?;
-        let (entry, phdr, phnum) = self.image(executable, 0)?;
+        self.executable = (*args.first().ok_or(-22isize)?).into();
+        let bias = if elf.position_independent { HIGH + 0x8000_0000 } else { 0 };
+        let (entry, phdr, phnum) = self.image(executable, bias)?;
         let (instruction, interpreter_base) = if elf.interpreter.is_some() {
             let (start, _, _) = self.image(interpreter.ok_or(-2isize)?, HIGH)?;
             (start, HIGH)
@@ -118,7 +215,7 @@ impl<H: Host> LinuxProcess<H> {
             STACK,
             STACK_SIZE,
             args,
-            &["LANG=C", "LC_ALL=C", "LD_LIBRARY_PATH=/lib64"],
+            environment,
             &[
                 (3, phdr),
                 (4, 56),
@@ -152,6 +249,104 @@ impl<H: Host> LinuxProcess<H> {
             let _ = self.host.close(file.handle);
         }
         self.files.clear();
+    }
+
+    fn process_call(&self, number: u64, args: [u64; 6]) -> Result<SyscallOutcome> {
+        match number {
+            435 => {
+                if args[1] < 64 || args[1] > 88 {
+                    return Err(-22);
+                }
+                let data = self.bytes(args[0], args[1] as usize)?;
+                let word = |offset| u64::from_le_bytes(data[offset..offset + 8].try_into().unwrap());
+                // Serialized, shared-address-space spawn with cleared signal handlers.
+                if word(0) != 0x100004100 || word(32) != 17 || [8, 16, 24, 56].iter().any(|&at| word(at) != 0) || data[64..].iter().any(|&byte| byte != 0) {
+                    return Err(-38);
+                }
+                let stack = word(40).checked_add(word(48)).ok_or(-22isize)?;
+                if word(48) < 16 {
+                    return Err(-22);
+                }
+                self.check(word(40), word(48).try_into().map_err(|_| -22isize)?, true)?;
+                Ok(SyscallOutcome::Vfork { stack })
+            }
+            59 => Ok(SyscallOutcome::Exec {
+                path: self.path(args[0])?,
+                arguments: self.strings(args[1])?,
+                environment: self.strings(args[2])?,
+            }),
+            61 => {
+                if args[2] & !1 != 0 {
+                    return Err(-22);
+                }
+                if args[1] != 0 {
+                    self.check(args[1], 4, true)?;
+                }
+                if args[3] != 0 {
+                    self.check(args[3], 144, true)?;
+                }
+                Ok(SyscallOutcome::Wait(WaitRequest {
+                    pid: args[0] as i64,
+                    output: args[1],
+                    usage: args[3],
+                    nonblocking: args[2] & 1 != 0,
+                    keep: false,
+                    information: false,
+                }))
+            }
+            247 => {
+                if args[0] > 1 || args[3] & !0x1000005 != 0 || args[3] & 4 == 0 {
+                    return Err(-22);
+                }
+                if args[2] != 0 {
+                    self.check(args[2], 128, true)?;
+                }
+                if args[4] != 0 {
+                    self.check(args[4], 144, true)?;
+                }
+                Ok(SyscallOutcome::Wait(WaitRequest {
+                    pid: if args[0] == 0 { -1 } else { args[1] as i64 },
+                    output: args[2],
+                    usage: args[4],
+                    nonblocking: args[3] & 1 != 0,
+                    keep: args[3] & 0x1000000 != 0,
+                    information: true,
+                }))
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn strings(&self, address: u64) -> Result<Vec<String>> {
+        let mut strings = Vec::new();
+        if address == 0 {
+            return Ok(strings);
+        }
+        let mut total = 0;
+        for i in 0..4096u64 {
+            let pointer = address.checked_add(i * 8).ok_or(-14isize)?;
+            let pointer = u64::from_le_bytes(self.bytes(pointer, 8)?.try_into().unwrap());
+            if pointer == 0 {
+                return Ok(strings);
+            }
+            let mut bytes = Vec::new();
+            for offset in 0..4096 {
+                let byte = self.bytes(pointer.checked_add(offset).ok_or(-14isize)?, 1)?[0];
+                total += 1;
+                if total > 1024 * 1024 {
+                    return Err(-7);
+                }
+                if byte == 0 {
+                    break;
+                }
+                bytes.push(byte);
+            }
+            if bytes.len() == 4096 {
+                return Err(-7);
+            }
+            strings.push(String::from_utf8(bytes).map_err(|_| -22isize)?);
+        }
+        Err(-7)
     }
 
     fn check(&self, address: u64, length: usize, write: bool) -> Result<()> {
@@ -207,7 +402,7 @@ impl<H: Host> LinuxProcess<H> {
         if !address.is_multiple_of(PAGE)
             || length == 0
             || protection & !7 != 0
-            || !(address >= HIGH && end < 0x8000_0000_0000 || address >= 0x400000 && end <= 0x4000000)
+            || !(address >= HIGH && end < 0x8000_0000_0000 || address >= LOW_EXECUTABLE_START && end <= LOW_EXECUTABLE_END)
         {
             return Err(-22);
         }
@@ -291,7 +486,9 @@ impl<H: Host> LinuxProcess<H> {
         if flags & 0x200 != 0 && exists {
             self.host.truncate(&path).map_err(errno)?;
         }
-        let fd = (3..4096).find(|fd| !self.files.contains_key(fd)).ok_or(-24isize)?;
+        let fd = (0..4096)
+            .find(|fd| !self.files.contains_key(fd) && !self.consoles.contains_key(fd))
+            .ok_or(-24isize)?;
         let handle = self.host.open(&path, options).map_err(errno)?;
         self.files.insert(fd, File { handle, path, flags });
         Ok(fd as isize)
@@ -324,7 +521,7 @@ impl<H: Host> LinuxProcess<H> {
 
     fn mmap(&mut self, a: [u64; 6]) -> Result<isize> {
         let [requested, length, protection, flags, fd, offset] = a;
-        if flags & !0x1833 != 0 || flags & 3 != 2 || offset % PAGE != 0 || length == 0 || protection & !7 != 0 {
+        if flags & !0x21833 != 0 || flags & 3 != 2 || offset % PAGE != 0 || length == 0 || protection & !7 != 0 {
             return Err(-22);
         }
         let size = page_up(length).ok_or(-12isize)?;
@@ -389,8 +586,11 @@ impl<H: Host> LinuxProcess<H> {
             }
             1 => {
                 let bytes = self.bytes(y, z.try_into().map_err(|_| -22isize)?)?;
-                if matches!(x, 1 | 2) {
-                    self.host.console_write(x, bytes).map(|n| n as isize)
+                if let Some(&console) = self.consoles.get(&x) {
+                    if console == 0 {
+                        return Err(-9);
+                    }
+                    self.host.console_write(console, bytes).map(|n| n as isize)
                 } else {
                     let file = self.file(x)?;
                     if file.flags & 3 == 0 {
@@ -423,12 +623,84 @@ impl<H: Host> LinuxProcess<H> {
             }
             2 => self.open(self.path(x)?, y),
             3 => {
+                if self.consoles.remove(&x).is_some() {
+                    return Ok(0);
+                }
                 let file = self.files.remove(&x).ok_or(-9isize)?;
                 self.host.close(file.handle).map_err(errno)?;
                 Ok(0)
             }
-            4 => self.stat(Some(&self.path(x)?), y),
-            5 => self.stat(if x <= 2 { None } else { Some(&self.file(x)?.path) }, y),
+            4 | 6 => self.stat(Some(&self.path(x)?), y),
+            5 => self.stat(if self.consoles.contains_key(&x) { None } else { Some(&self.file(x)?.path) }, y),
+            32 | 33 => {
+                if !self.files.contains_key(&x) && !self.consoles.contains_key(&x) {
+                    return Err(-9);
+                }
+                let target = if number == 33 {
+                    y
+                } else {
+                    (0..4096)
+                        .find(|fd| !self.files.contains_key(fd) && !self.consoles.contains_key(fd))
+                        .ok_or(-24isize)?
+                };
+                if target >= 4096 {
+                    return Err(-9);
+                }
+                if target == x {
+                    return Ok(target as isize);
+                }
+                let file = self
+                    .files
+                    .get(&x)
+                    .map(|file| -> Result<File> {
+                        Ok(File {
+                            handle: self.host.duplicate(file.handle).map_err(errno)?,
+                            path: file.path.clone(),
+                            flags: file.flags & !0x80000,
+                        })
+                    })
+                    .transpose()?;
+                let console = self.consoles.get(&x).copied();
+                if let Some(old) = self.files.remove(&target) {
+                    let _ = self.host.close(old.handle);
+                }
+                self.consoles.remove(&target);
+                if let Some(file) = file {
+                    self.files.insert(target, file);
+                }
+                if let Some(console) = console {
+                    self.consoles.insert(target, console);
+                }
+                Ok(target as isize)
+            }
+            87 => {
+                self.host.unlink(&self.path(x)?).map_err(errno)?;
+                Ok(0)
+            }
+            72 => {
+                if let Some(file) = self.files.get_mut(&x) {
+                    match y {
+                        1 => Ok(isize::from(file.flags & 0x80000 != 0)),
+                        2 => {
+                            if z & !1 != 0 {
+                                return Err(-22);
+                            }
+                            file.flags = (file.flags & !0x80000) | ((z & 1) << 19);
+                            Ok(0)
+                        }
+                        3 => Ok((file.flags & !0x80000) as isize),
+                        _ => Err(-22),
+                    }
+                } else if self.consoles.contains_key(&x) {
+                    match y {
+                        1 => Ok(0),
+                        3 => Ok(if x == 0 { 0 } else { 1 }),
+                        _ => Err(-95),
+                    }
+                } else {
+                    Err(-9)
+                }
+            }
             8 => {
                 let file = self.file(x)?;
                 let base = match z {
@@ -542,8 +814,85 @@ impl<H: Host> LinuxProcess<H> {
                 if y & !7 != 0 {
                     return Err(-22);
                 }
-                self.host.metadata(&self.path(x)?).map_err(errno)?;
+                let path = self.path(x)?;
+                if path != "/proc/self/exe" {
+                    self.host.metadata(&path).map_err(errno)?;
+                }
                 Ok(0)
+            }
+            89 | 267 => {
+                let (path, out, size) = if number == 89 {
+                    (x, y, z)
+                } else {
+                    if x as i32 != -100 {
+                        return Err(-9);
+                    }
+                    (y, z, w)
+                };
+                if size == 0 {
+                    return Err(-22);
+                }
+                let path = self.path(path)?;
+                if path != "/proc/self/exe" {
+                    self.host.metadata(&path).map_err(errno)?;
+                    return Err(-22);
+                }
+                let size = (size as usize).min(self.executable.len());
+                self.output(out, &self.executable.as_bytes()[..size])?;
+                Ok(size as isize)
+            }
+            97 => {
+                let limit = match x {
+                    3 => [STACK_SIZE as u64; 2],
+                    7 => [4096; 2],
+                    _ => return Err(-22),
+                };
+                self.output(y, &limit[0].to_le_bytes())?;
+                self.output(y + 8, &limit[1].to_le_bytes())?;
+                Ok(0)
+            }
+            98 => {
+                if !matches!(x as i64, -1..=1) {
+                    return Err(-22);
+                }
+                let mut usage = [0u8; 144];
+                let ms = self.host.cpu_time_ms();
+                usage[..8].copy_from_slice(&(ms / 1000).to_le_bytes());
+                usage[8..16].copy_from_slice(&((ms % 1000) * 1000).to_le_bytes());
+                self.output(y, &usage)?;
+                Ok(0)
+            }
+            131 => {
+                if x != 0 {
+                    let new = self.bytes(x, 24)?.to_vec();
+                    let flags = u32::from_le_bytes(new[8..12].try_into().unwrap());
+                    if flags & !0x80000002 != 0 {
+                        return Err(-22);
+                    }
+                    if flags & 2 == 0 {
+                        let size = u64::from_le_bytes(new[16..24].try_into().unwrap());
+                        if size < 2048 {
+                            return Err(-12);
+                        }
+                    }
+                    if y != 0 {
+                        self.output(y, &self.alternate_stack)?;
+                    }
+                    self.alternate_stack = new.try_into().unwrap();
+                } else if y != 0 {
+                    self.output(y, &self.alternate_stack)?;
+                }
+                Ok(0)
+            }
+            204 => {
+                if x != 0 && x != self.id as u64 {
+                    return Err(-3);
+                }
+                if y < 8 {
+                    return Err(-22);
+                }
+                self.output(z, &1u64.to_le_bytes())?;
+                Ok(8)
             }
             24 => {
                 self.host.yield_now();
@@ -610,7 +959,7 @@ impl<H: Host> LinuxProcess<H> {
             }
             257 => {
                 let path = self.path(y)?;
-                if x as i64 != -100 && self.bytes(y, 1)? != b"/" {
+                if x as i32 != -100 && self.bytes(y, 1)? != b"/" {
                     return Err(-9);
                 }
                 self.open(path, z)
@@ -620,9 +969,9 @@ impl<H: Host> LinuxProcess<H> {
                     return Err(-22);
                 }
                 if self.bytes(y, 1)? == [0] && w & 0x1000 != 0 {
-                    return self.stat(if x <= 2 { None } else { Some(&self.file(x)?.path) }, z);
+                    return self.stat(if self.consoles.contains_key(&x) { None } else { Some(&self.file(x)?.path) }, z);
                 }
-                if x as i64 != -100 && self.bytes(y, 1)? != b"/" {
+                if x as i32 != -100 && self.bytes(y, 1)? != b"/" {
                     return Err(-9);
                 }
                 self.stat(Some(&self.path(y)?), z)

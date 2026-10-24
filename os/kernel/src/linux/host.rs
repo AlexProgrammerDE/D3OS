@@ -113,6 +113,12 @@ unsafe impl Host for KernelHost {
     fn close(&self, handle: usize) -> SyscallResult {
         api::close(handle)
     }
+    fn duplicate(&self, handle: usize) -> SyscallResult {
+        api::duplicate(handle)
+    }
+    fn unlink(&self, path: &str) -> core::result::Result<(), Errno> {
+        api::unlink(path)
+    }
     fn truncate(&self, path: &str) -> core::result::Result<(), Errno> {
         api::truncate(path, 0)
     }

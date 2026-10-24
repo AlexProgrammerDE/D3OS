@@ -185,6 +185,12 @@ unsafe extern "sysv64" fn syscall_handler() {
     "push r9",
     "push r10",
     "push r11", // Contains rflags for returning to ring 3
+    "push rbx",
+    "push rbp",
+    "push r12",
+    "push r13",
+    "push r14",
+    "push r15",
     "push rax", // Save syscall number and maintain stack alignment
 
     "sti",
@@ -193,6 +199,12 @@ unsafe extern "sysv64" fn syscall_handler() {
 
     // Restore registers
     "pop r11", // Discard the saved syscall number
+    "pop r15",
+    "pop r14",
+    "pop r13",
+    "pop r12",
+    "pop rbp",
+    "pop rbx",
     "pop r11", // Contains rflags for returning to ring 3
     "pop r10",
     "pop r9",

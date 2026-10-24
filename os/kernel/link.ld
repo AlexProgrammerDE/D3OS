@@ -38,7 +38,7 @@ SECTIONS {
 	}
 	
     /* the rest of the kernel code and data */
-    . = 64M;
+    . = 128M;
 
     ___KERNEL_DATA_START__ = .;
 

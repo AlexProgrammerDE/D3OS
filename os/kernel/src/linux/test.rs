@@ -45,7 +45,7 @@ extern "sysv64" fn run() {
         let _ = scheduler().join(id);
         let status = STATUS.load(Ordering::Acquire);
         if launcher {
-            assert_eq!(super::read_file("/native-launch.tmp").expect("Native launch did not finish"), b"ok");
+            assert_eq!(super::read_file("/native-launch.tmp").expect("Native launch did not finish").as_ref(), b"ok");
             log::info!("D3OS_NATIVE_LAUNCH_OK");
         } else {
             assert_eq!(status, process.exit_status.load(Ordering::Acquire));
@@ -61,7 +61,7 @@ extern "sysv64" fn run() {
         let id = thread.id();
         scheduler().ready(thread);
         let _ = scheduler().join(id);
-        assert_eq!(super::read_file("/native-check.tmp").expect("Native probe did not finish"), b"ok");
+        assert_eq!(super::read_file("/native-check.tmp").expect("Native probe did not finish").as_ref(), b"ok");
         log::info!("D3OS_NATIVE_PROBE_OK");
     }
     stop(STATUS.load(Ordering::Acquire) as u8);
