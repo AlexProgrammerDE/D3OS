@@ -53,6 +53,51 @@ fn main() {
                 .replace("BURN_OP", &format!("{}u32", op as u32)),
         );
     }
+    println!("cargo:rerun-if-changed=src/burn-reduction.rs.in");
+    let reduction = fs::read_to_string("src/burn-reduction.rs.in").expect("read Burn reduction template");
+    let mut parameters: Vec<String> = ["count", "_rank", "_operation", "axis", "offset", "extent", "length", "_reserved"]
+        .map(str::to_owned)
+        .into();
+    parameters.extend((0..8).map(|axis| format!("dim{axis}")));
+    parameters.extend((0..8).map(|axis| format!("stride{axis}")));
+    let parameters = parameters.into_iter().map(|name| format!("{name}: u32")).collect::<Vec<_>>().join(", ");
+    let addresses = (0..8)
+        .rev()
+        .map(|axis| {
+            let advance = if axis == 0 { String::new() } else { String::from("linear = linear / dim;\n") };
+            format!(
+                "let dim = if axis == {axis}u32 {{ 1u32 }} else {{ dim{axis} }};\n\
+                 let coordinate = linear % dim;\n\
+                 {advance}\
+                 base = base + signed(coordinate) * signed(stride{axis});\n"
+            )
+        })
+        .collect::<String>();
+    let stride = (0..7).map(|axis| format!("if axis == {axis}u32 {{ stride{axis} }} else ")).collect::<String>() + "{ stride7 }";
+    for op in d3os_nvidia::compute::reduction::Reduction::ALL {
+        let minimum = matches!(
+            op,
+            d3os_nvidia::compute::reduction::Reduction::Min | d3os_nvidia::compute::reduction::Reduction::ArgMin
+        );
+        source.push_str(
+            &reduction
+                .replace("REDUCE_ENTRY", op.symbol())
+                .replace("REDUCE_PARAMETERS", &parameters)
+                .replace("REDUCE_ADDRESSES", &addresses)
+                .replace("REDUCE_STRIDE", &stride)
+                .replace(
+                    "REDUCE_IDENTITY",
+                    if minimum {
+                        "bits_f32(0x7f800000u32)"
+                    } else {
+                        "bits_f32(unsigned(-8388608i32))"
+                    },
+                )
+                .replace("REDUCE_COMPARE", if minimum { "lt_tile" } else { "gt_tile" })
+                .replace("REDUCE_EXTREME", if minimum { "reduce_min" } else { "reduce_max" })
+                .replace("REDUCE_OP", &format!("{}u32", op as u32)),
+        );
+    }
     println!("cargo:rerun-if-changed=src/quantized.rs.in");
     let quantized = fs::read_to_string("src/quantized.rs.in").expect("read quantized template");
     for width in [128, 512] {

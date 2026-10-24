@@ -1,0 +1,76 @@
+#[cutile::entry()]
+unsafe fn REDUCE_ENTRY(input: *const u32, output: *mut u32, REDUCE_PARAMETERS) {
+    let row = block_id();
+    let mut linear = row;
+    let mut base = signed(offset);
+    REDUCE_ADDRESSES
+    let step = REDUCE_STRIDE;
+    let lane = lanes::<128>();
+    let zero = broadcast_scalar(0f32, shape![128]);
+    let result: u32 = if REDUCE_OP < 3u32 {
+        let mut values: Tile<f32, { [128] }> = broadcast_scalar(if REDUCE_OP == 2u32 { 1f32 } else { 0f32 }, shape![128]);
+        let mut start = 0u32;
+        while start < length {
+            let col = lane + broadcast_scalar(start, shape![128]);
+            let mask = lt_tile(col, broadcast_scalar(length, shape![128]));
+            let signed_col: Tile<i32, { [128] }> = bitcast(col);
+            let address = broadcast_scalar(base, shape![128]) + signed_col * broadcast_scalar(signed(step), shape![128]);
+            let address: Tile<u32, { [128] }> = bitcast(address);
+            let bits = unsafe { read_tile(input, address, mask & lt_tile(address, broadcast_scalar(extent, shape![128])), 0u32) };
+            let x: Tile<f32, { [128] }> = bitcast(bits);
+            values = if REDUCE_OP == 2u32 {
+                values * select(mask, x, broadcast_scalar(1f32, shape![128]))
+            } else {
+                values + select(mask, x, zero)
+            };
+            start = start + 128u32;
+        }
+        let value: Tile<f32, { [] }> = if REDUCE_OP == 2u32 { reduce_prod(values, 0i32) } else { reduce_sum(values, 0i32) };
+        let value: f32 = tile_to_scalar(value);
+        let value = if REDUCE_OP == 1u32 { value / float_u32(length) } else { value };
+        let value: Tile<f32, { [] }> = scalar_to_tile(value);
+        let bits: Tile<u32, { [] }> = bitcast(value);
+        tile_to_scalar(bits)
+    } else {
+        let mut best: Tile<f32, { [128] }> = broadcast_scalar(REDUCE_IDENTITY, shape![128]);
+        let sentinel = broadcast_scalar(unsigned(-1i32), shape![128]);
+        let mut winner: Tile<u32, { [128] }> = sentinel;
+        let mut nan_index: Tile<u32, { [128] }> = sentinel;
+        let mut start = 0u32;
+        while start < length {
+            let col = lane + broadcast_scalar(start, shape![128]);
+            let mask = lt_tile(col, broadcast_scalar(length, shape![128]));
+            let signed_col: Tile<i32, { [128] }> = bitcast(col);
+            let address = broadcast_scalar(base, shape![128]) + signed_col * broadcast_scalar(signed(step), shape![128]);
+            let address: Tile<u32, { [128] }> = bitcast(address);
+            let bits = unsafe { read_tile(input, address, mask & lt_tile(address, broadcast_scalar(extent, shape![128])), 0u32) };
+            let x: Tile<f32, { [128] }> = bitcast(bits);
+            let valid = eq_tile(x, x);
+            nan_index = min_tile(nan_index, select(mask & eq_tile(valid, broadcast_scalar(false, shape![128])), col, sentinel));
+            let better: Tile<bool, { [128] }> = REDUCE_COMPARE(x, best);
+            let take = mask & valid & (better | (eq_tile(x, best) & lt_tile(col, winner)));
+            best = select(take, x, best);
+            winner = select(take, col, winner);
+            start = start + 128u32;
+        }
+        let extreme: Tile<f32, { [] }> = REDUCE_EXTREME(best, 0i32);
+        let extreme: f32 = tile_to_scalar(extreme);
+        let winners = select(eq_tile(broadcast_scalar(extreme, shape![128]), best), winner, sentinel);
+        let winner: Tile<u32, { [] }> = reduce_min(winners, 0i32);
+        let nan_index: Tile<u32, { [] }> = reduce_min(nan_index, 0i32);
+        let winner: u32 = tile_to_scalar(winner);
+        let nan_index: u32 = tile_to_scalar(nan_index);
+        let winner = if nan_index != unsigned(-1i32) { nan_index } else { winner };
+        if REDUCE_OP == 5u32 || REDUCE_OP == 6u32 {
+            winner
+        } else {
+            let address = base + signed(winner) * signed(step);
+            let value = unsafe {
+                read_tile(input, broadcast_scalar(unsigned(address), shape![1]), broadcast_scalar(true, shape![1]), 0u32)
+            };
+            let value: Tile<u32, { [] }> = value.reshape(shape![]);
+            tile_to_scalar(value)
+        }
+    };
+    unsafe { write_tile(output, broadcast_scalar(row, shape![1]), broadcast_scalar(result, shape![1]), broadcast_scalar(row < count, shape![1])) };
+}

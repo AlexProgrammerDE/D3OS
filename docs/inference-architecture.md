@@ -145,7 +145,7 @@ The CI workflow provides repeatable numerical tests and an optional pretrained Q
 The current target is the RTX 4090 Laptop GPU (`10de:2757`, AD103) with one serialized compute queue.
 The driver boots pinned signed firmware and allocates a private, virtually bound compute context.
 The process-owned syscall interface accepts built-in kernels and opaque buffer handles.
-Native compute protocol version 7 includes command scopes, queue profiles, and 45 built-in kernels.
+Native compute protocol version 8 includes command scopes, queue profiles, and 46 built-in kernels.
 Its expanded profile array requires the matching SDK.
 Rebuild compute applications with the matching SDK. The kernel rejects incompatible request versions.
 
@@ -156,6 +156,16 @@ The driver validates every reachable input address before dispatch and rejects o
 Every entry writes the complete output, so native allocation avoids a separate clear kernel.
 Empty logical results reuse resident storage without a GPU launch.
 Hardware checks cover partial tiles, neighboring guards, rejected addresses, exact floating-point copies, and chained resident operations.
+
+The reduction family provides sum, mean, product, minimum, maximum, and their two index operations for FP32 views.
+Each output retains the reduced dimension with size one. Input strides can be negative or zero.
+The 24 parameters describe the shape, reduction axis, operation, signed strides, and original storage extent.
+The driver validates the complete address range and rejects output aliasing before dispatch.
+Extrema propagate the first NaN and select the first logical index for ties, including signed zeros.
+Empty reduction axes produce zero for sum, one for product, and NaN for mean.
+Extrema reject empty reduction axes when the output is nonempty. Empty outputs require no launch.
+Hardware checks cover partial tiles, multiple passes per row, strided broadcasting, nonfinite inputs, exact extrema bits, guards, and resident execution.
+All 88 earlier GPU instruction sections remain byte-identical after the seven reduction entries are added.
 
 `Backend::upload_quantized()` accepts borrowed Q8_0, Q3_K, Q4_K, Q5_K, and Q6_K weight blocks.
 It checks block lengths and finite FP16 scales before allocating device storage.

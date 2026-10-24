@@ -1,6 +1,64 @@
 use d3os_nvidia::compute::Kernel;
 
 #[test]
+fn reductions_validate_strided_ranges_empty_axes_and_full_output_writes() {
+    use d3os_nvidia::compute::reduction::Reduction;
+    let mut p = [0u32; 24];
+    p[..8].copy_from_slice(&[3, 3, Reduction::Sum as u32, 1, 11, 12, 4, 0]);
+    p[8..16].fill(1);
+    p[8..11].copy_from_slice(&[3, 4, 1]);
+    p[16..19].copy_from_slice(&[(-4i32) as u32, (-1i32) as u32, 0]);
+    for op in Reduction::ALL {
+        p[2] = op as u32;
+        let work = Kernel::TensorReduction.work(&p).unwrap();
+        assert_eq!(work.extents[..2], [12, 3]);
+        assert_eq!((work.threads, work.blocks, work.pointers, work.output), (128, 3, 2, 1));
+        assert!(Kernel::TensorReduction.allocates_output());
+        assert!(work.validate_aliases(&[0x1000, 0x2000]).is_ok());
+        assert!(work.validate_aliases(&[0x1000, 0x1004]).is_err());
+    }
+    for (index, value) in [
+        (0, 0),
+        (0, 4),
+        (1, 0),
+        (1, 9),
+        (2, 7),
+        (3, 3),
+        (4, 10),
+        (4, 12),
+        (5, 0),
+        (5, 11),
+        (5, u32::MAX),
+        (6, 3),
+        (7, 1),
+        (8, 0),
+        (8, u32::MAX),
+        (11, 2),
+        (19, 1),
+        (16, i32::MIN as u32),
+    ] {
+        let mut invalid = p;
+        invalid[index] = value;
+        assert!(Kernel::TensorReduction.work(&invalid).is_err());
+    }
+    assert!(Kernel::TensorReduction.work(&p[..23]).is_err());
+    p[4] = 0;
+    p[5] = 1;
+    p[6] = 0;
+    p[9] = 0;
+    p[16..24].fill(0);
+    for op in Reduction::ALL {
+        p[2] = op as u32;
+        assert_eq!(Kernel::TensorReduction.work(&p).is_ok(), op.allows_empty());
+    }
+    // Even broadcast storage cannot request a wrapped dispatch grid.
+    p[..8].copy_from_slice(&[i32::MAX as u32, 2, 0, 1, 0, 1, 1, 0]);
+    p[8] = i32::MAX as u32;
+    p[9] = 1;
+    assert!(Kernel::TensorReduction.work(&p).is_err());
+}
+
+#[test]
 fn strided_elementwise_validates_every_reachable_address_before_dispatch() {
     use d3os_nvidia::compute::elementwise::{Elementwise, SCALAR_RHS};
     let mut p = [0u32; 32];

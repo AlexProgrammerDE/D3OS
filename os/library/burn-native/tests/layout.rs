@@ -132,3 +132,28 @@ fn matrix_outputs_broadcast_batches_without_confusing_matrix_dimensions() {
         assert!(matmul_shape(&Shape::from(lhs), &Shape::from(rhs)).is_err());
     }
 }
+
+#[test]
+fn reduction_metadata_preserves_rank_signed_strides_and_original_storage() {
+    use d3os_nvidia::compute::reduction::Reduction;
+    let view = Layout::contiguous(Shape::new([3, 4, 5]))
+        .unwrap()
+        .permute(&[2, 0, 1])
+        .unwrap()
+        .flip(&[2])
+        .unwrap();
+    for (axis, expected) in [(0, [1, 3, 4]), (1, [5, 1, 4]), (2, [5, 3, 1])] {
+        assert_eq!(view.reduction_shape(axis).unwrap().as_slice(), expected);
+        let p = view.reduction_parameters(axis, Reduction::Sum).unwrap();
+        assert_eq!(p[..8], [expected.into_iter().product(), 3, 0, axis, 15, 60, [5, 3, 4][axis], 0]);
+        assert_eq!(p[8..11], [5, 3, 4]);
+        assert_eq!(p[16..19], [1, 20, (-5i32) as u32 as usize]);
+    }
+    assert!(view.reduction_shape(3).is_err());
+    let empty = Layout::contiguous(Shape::new([3, 0, 4])).unwrap();
+    assert_eq!(empty.reduction_shape(1).unwrap().as_slice(), [3, 1, 4]);
+    assert!(empty.reduction_parameters(1, Reduction::Sum).is_ok());
+    assert!(empty.reduction_parameters(1, Reduction::Max).is_err());
+    assert_eq!(empty.reduction_shape(0).unwrap().as_slice(), [1, 0, 4]);
+    assert!(empty.reduction_parameters(0, Reduction::Sum).is_err());
+}

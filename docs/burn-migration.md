@@ -115,6 +115,11 @@ The tensor primitive also uses the existing Tensor Core kernel for FP32 matrix p
 GPU checks pass broadcast batches, transposed inputs, reversed rows, subviews, empty outputs, and zero inner dimensions.
 Matrix execution keeps inputs and outputs resident. Noncontiguous matrices use an explicit GPU copy before batch expansion.
 The CI operator suite includes the portable AI library and native tensor package.
+Seven additional cuTile entries provide strided sum, mean, product, extrema, and extrema indices.
+GPU checks pass every axis of a reversed transposed tensor, broadcast input, nonfinite values, empty dimensions, and neighboring guards.
+Extrema preserve the first logical index for ties and NaNs, including exact signed-zero and NaN payload bits.
+Execution uses resident storage without activation transfers or a separate output clear.
+All 88 earlier GPU instruction sections remain byte-identical. The native compute protocol is now version 8.
 These checks validate native primitives. Burn device dispatch and autodiff integration still need implementation.
 The native Burn GPU backend, full dataset training, and workload migration remain incomplete.
 The retained Linux and D3OS measurements are in [Native NVIDIA performance](nvidia-performance.md).

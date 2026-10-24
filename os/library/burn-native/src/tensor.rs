@@ -5,7 +5,7 @@ use d3os_compute::{
     Error, Result,
     nvidia::{GpuBuffer, Nvidia},
 };
-use d3os_nvidia::compute::{Kernel, elementwise::Elementwise};
+use d3os_nvidia::compute::{Kernel, elementwise::Elementwise, reduction::Reduction};
 
 /// A Burn tensor primitive backed by shared, process-owned GPU storage.
 #[derive(Clone, Debug)]
@@ -213,6 +213,30 @@ impl NativeTensor {
             buffer: Arc::new(buffer),
             layout,
             dtype: DType::F32,
+        })
+    }
+
+    /// Reduce one dimension, preserving its rank. Extrema propagate the first
+    /// NaN and use the first logical index for equal values, including zeros.
+    pub fn reduce(&self, axis: usize, operation: Reduction) -> Result<Self> {
+        if self.dtype != DType::F32 {
+            return Err(Error::InvalidParameter);
+        }
+        let layout = Layout::contiguous(self.layout.reduction_shape(axis)?)?;
+        let dtype = if operation.index() { DType::I32 } else { DType::F32 };
+        if layout.is_empty() {
+            return Ok(Self {
+                buffer: self.buffer.clone(),
+                layout,
+                dtype,
+            });
+        }
+        let parameters = self.layout.reduction_parameters(axis, operation)?;
+        let buffer = Nvidia.produce_words(layout.len(), Kernel::TensorReduction, &[(&self.buffer, 0)], &parameters)?;
+        Ok(Self {
+            buffer: Arc::new(buffer),
+            layout,
+            dtype,
         })
     }
 

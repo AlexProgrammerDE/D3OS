@@ -3,6 +3,7 @@ use alloc::{vec, vec::Vec};
 use burn_backend::{Shape, Slice};
 use d3os_compute::{Error, Result};
 use d3os_nvidia::compute::elementwise::{self, Elementwise};
+use d3os_nvidia::compute::reduction::{self, Reduction};
 
 /// Native kernels use signed 32-bit element indices, including reversed views.
 const INDEX_MAX: usize = i32::MAX as usize;
@@ -265,6 +266,36 @@ impl Layout {
             parameters[24 + axis] = rhs.strides[axis] as i32 as u32;
         }
         elementwise::validate(&parameters).map_err(|_| Error::InvalidParameter)?;
+        Ok(parameters.map(|value| value as usize))
+    }
+
+    pub fn reduction_shape(&self, axis: usize) -> Result<Shape> {
+        let mut shape = self.shape.to_vec();
+        *shape.get_mut(axis).ok_or(Error::InvalidParameter)? = 1;
+        count(&shape)?;
+        Ok(Shape::from(shape))
+    }
+
+    /// Encode one-axis reductions without materializing strided input views.
+    pub fn reduction_parameters(&self, axis: usize, op: Reduction) -> Result<[usize; 24]> {
+        let shape = self.reduction_shape(axis)?;
+        let mut parameters = [0u32; 24];
+        parameters[..8].copy_from_slice(&[
+            count(shape.as_slice())? as u32,
+            self.shape.num_dims() as u32,
+            op as u32,
+            axis as u32,
+            self.offset as u32,
+            self.storage_elements.max(1) as u32,
+            self.shape[axis] as u32,
+            0,
+        ]);
+        parameters[8..16].fill(1);
+        for (axis, &dim) in self.shape.iter().enumerate() {
+            parameters[8 + axis] = dim as u32;
+            parameters[16 + axis] = self.strides[axis] as i32 as u32;
+        }
+        reduction::validate(&parameters).map_err(|_| Error::InvalidParameter)?;
         Ok(parameters.map(|value| value as usize))
     }
 }

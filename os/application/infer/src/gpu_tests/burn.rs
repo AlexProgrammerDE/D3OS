@@ -1,5 +1,6 @@
 //! Check Burn tensor ownership and views on real native GPU allocations.
 use abi::elementwise::Elementwise;
+use abi::reduction::Reduction;
 use alloc::{format, string::String, vec::Vec};
 use d3os_ai::{
     burn::backend::{BoolStore, DType, Shape, Slice, TensorData, TensorMetadata},
@@ -87,6 +88,178 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     crate::report(format_args!(
         "NVIDIA_BURN_MATRIX_OK cases=5 batched=ok subviews=ok empty=ok tensor_cores=true backend=nvidia"
     ));
+    verify_reductions(backend).map_err(|e| format!("Burn native reductions: {e}"))?;
+    verify_reduction_edges(backend).map_err(|e| format!("Burn native reduction edges: {e}"))?;
+    crate::report(format_args!(
+        "NVIDIA_BURN_REDUCTION_OK operations=7 views=strided_broadcast nan=first ties=first empty=ok guards=ok resident=ok backend=nvidia"
+    ));
+    Ok(())
+}
+
+fn reduction_reference(values: &[f32], dimensions: &[usize], axis: usize, op: Reduction) -> Vec<u32> {
+    let width = dimensions[axis];
+    let suffix: usize = dimensions[axis + 1..].iter().product();
+    let rows: usize = dimensions.iter().enumerate().filter(|&(a, _)| a != axis).map(|(_, &d)| d).product();
+    (0..rows)
+        .map(|row| {
+            let base = (row / suffix) * width * suffix + row % suffix;
+            let value = |k: usize| values[base + k * suffix];
+            match op {
+                Reduction::Sum | Reduction::Mean => {
+                    let sum: f64 = (0..width).map(|k| f64::from(value(k))).sum();
+                    (if op == Reduction::Mean { sum / width as f64 } else { sum } as f32).to_bits()
+                }
+                Reduction::Product => ((0..width).map(|k| f64::from(value(k))).product::<f64>() as f32).to_bits(),
+                _ => {
+                    let minimum = matches!(op, Reduction::Min | Reduction::ArgMin);
+                    let mut winner = 0;
+                    for k in 0..width {
+                        if value(k).is_nan() {
+                            winner = k;
+                            break;
+                        }
+                        if (minimum && value(k) < value(winner)) || (!minimum && value(k) > value(winner)) {
+                            winner = k;
+                        }
+                    }
+                    if op.index() { winner as u32 } else { value(winner).to_bits() }
+                }
+            }
+        })
+        .collect()
+}
+
+fn check_reduction(tensor: &NativeTensor, expected: &[u32], op: Reduction) -> Result<(), Error> {
+    let data = tensor.read()?;
+    let actual: Vec<u32> = data.as_bytes().chunks_exact(4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
+    if actual.len() != expected.len()
+        || actual.iter().zip(expected).any(|(&a, &b)| {
+            if op.index() || !op.allows_empty() {
+                a != b
+            } else {
+                let (a, b) = (f32::from_bits(a), f32::from_bits(b));
+                !(a == b || (a.is_nan() && b.is_nan()) || (a.is_finite() && b.is_finite() && (a - b).abs() <= 2e-5 * (1.0 + b.abs())))
+            }
+        })
+    {
+        return Err(Error::DeviceFault);
+    }
+    Ok(())
+}
+
+fn verify_reductions(backend: &Nvidia) -> Result<(), Error> {
+    let values: Vec<f32> = (0..3 * 257 * 5).map(|i| 1.0 + ((i % 17) as f32 - 8.0) / 1024.0).collect();
+    let original = NativeTensor::from_data(TensorData::new(values.clone(), [3, 257, 5]))?;
+    let input = original.clone().permute(&[2, 0, 1])?.flip(&[0, 2])?;
+    let ordered: Vec<f32> = (0..5)
+        .flat_map(|x| (0..3).flat_map(move |n| (0..257).map(move |c| (n * 257 + 256 - c) * 5 + 4 - x)))
+        .map(|index| values[index])
+        .collect();
+    let before = backend.service_profile()?;
+    let mut outputs = Vec::new();
+    for axis in 0..3 {
+        for op in Reduction::ALL {
+            outputs.push((axis, op, input.reduce(axis, op)?));
+        }
+    }
+    let after = backend.service_profile()?;
+    if [abi::UPLOAD, abi::DOWNLOAD, abi::ALLOCATE]
+        .iter()
+        .any(|&op| before[op as usize].calls != after[op as usize].calls)
+        || after[abi::LAUNCH_ALLOCATE as usize].calls - before[abi::LAUNCH_ALLOCATE as usize].calls != 21
+    {
+        return Err(Error::DeviceFault);
+    }
+    for (axis, op, output) in outputs {
+        let mut shape = [5, 3, 257];
+        shape[axis] = 1;
+        if output.shape().as_slice() != shape || output.dtype() != if op.index() { DType::I32 } else { DType::F32 } {
+            return Err(Error::DeviceFault);
+        }
+        check_reduction(&output, &reduction_reference(&ordered, &[5, 3, 257], axis, op), op)?;
+    }
+    check_values(&original, &values)?;
+    let input = NativeTensor::from_data(TensorData::new(alloc::vec![1.25f32, 0.75], [2, 1]))?.expand(Shape::new([2, 257]))?;
+    for op in Reduction::ALL {
+        let values: Vec<_> = alloc::vec![1.25f32; 257].into_iter().chain(alloc::vec![0.75f32; 257]).collect();
+        check_reduction(&input.reduce(1, op)?, &reduction_reference(&values, &[2, 257], 1, op), op)?;
+    }
+    Ok(())
+}
+
+fn verify_reduction_edges(backend: &Nvidia) -> Result<(), Error> {
+    let mut values = alloc::vec![1.0f32; 6*257];
+    values[..257].fill(f32::INFINITY);
+    values[257..514].fill(f32::NEG_INFINITY);
+    values[514..771].fill(0.0);
+    values[514] = -0.0;
+    values[771 + 3] = f32::from_bits(0x7fc0_1234);
+    values[771 + 131] = f32::from_bits(0x7fc0_5678);
+    values[1028 + 1] = -7.0;
+    values[1028 + 129] = -7.0;
+    values[1028 + 2] = 9.0;
+    values[1028 + 130] = 9.0;
+    values[1285..].fill(f32::from_bits(0x7fc0_9999));
+    let input = NativeTensor::from_data(TensorData::new(values.clone(), [6, 257]))?;
+    for reversed in [false, true] {
+        let view = if reversed { input.clone().flip(&[1])? } else { input.clone() };
+        let ordered: Vec<_> = values
+            .chunks_exact(257)
+            .flat_map(|row| (0..257).map(move |k| row[if reversed { 256 - k } else { k }]))
+            .collect();
+        for op in Reduction::ALL {
+            check_reduction(&view.reduce(1, op)?, &reduction_reference(&ordered, &[6, 257], 1, op), op)?;
+        }
+    }
+    let empty = NativeTensor::from_data(TensorData::new(Vec::<f32>::new(), [3, 0, 4]))?;
+    for op in [Reduction::Sum, Reduction::Mean, Reduction::Product] {
+        check_reduction(&empty.reduce(1, op)?, &reduction_reference(&[], &[3, 0, 4], 1, op), op)?;
+    }
+    let before = backend.queue_profile()?;
+    for op in [Reduction::Min, Reduction::Max, Reduction::ArgMin, Reduction::ArgMax] {
+        if !matches!(empty.reduce(1, op), Err(Error::InvalidParameter)) {
+            return Err(Error::DeviceFault);
+        }
+    }
+    let result = empty.reduce(0, Reduction::Sum)?;
+    if !result.layout().is_empty() || !result.read()?.as_bytes().is_empty() || before.launches != backend.queue_profile()?.launches {
+        return Err(Error::DeviceFault);
+    }
+    use d3os_ai::native::layout::Layout;
+    let mut guarded = alloc::vec![0x6bad_beefu32];
+    guarded.extend((0..3 * 257).map(|i| (i as f32 / 8.0).to_bits()));
+    guarded.push(0x6bad_beef);
+    let input = backend.upload_words(&guarded)?;
+    let output = backend.upload_words(&[0x6bad_beef; 5])?;
+    let layout = Layout::contiguous(Shape::new([3, 257]))?.flip(&[1])?;
+    let parameters = layout.reduction_parameters(1, Reduction::Max)?;
+    backend.dispatch_words(abi::Kernel::TensorReduction, &[(&input, 1), (&output, 1)], &parameters)?;
+    let mut actual = [0; 5];
+    backend.read_words_into(&output, 0, &mut actual)?;
+    let expected = [
+        0x6bad_beef,
+        (256.0f32 / 8.0).to_bits(),
+        (513.0f32 / 8.0).to_bits(),
+        (770.0f32 / 8.0).to_bits(),
+        0x6bad_beef,
+    ];
+    if actual != expected {
+        return Err(Error::DeviceFault);
+    }
+    let mut malformed = parameters;
+    malformed[4] += 257;
+    if backend.dispatch_words(abi::Kernel::TensorReduction, &[(&input, 1), (&output, 1)], &malformed) != Err(Error::InvalidParameter) {
+        return Err(Error::DeviceFault);
+    }
+    backend.read_words_into(&output, 0, &mut actual)?;
+    if actual != expected {
+        return Err(Error::DeviceFault);
+    }
+    let mut unchanged = alloc::vec![0; guarded.len()];
+    backend.read_words_into(&input, 0, &mut unchanged)?;
+    if unchanged != guarded {
+        return Err(Error::DeviceFault);
+    }
     Ok(())
 }
 

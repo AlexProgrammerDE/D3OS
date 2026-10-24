@@ -3,8 +3,9 @@
 use crate::{Error, Result};
 
 pub mod elementwise;
+pub mod reduction;
 
-pub const VERSION: u32 = 7;
+pub const VERSION: u32 = 8;
 pub const INFO: u32 = 0;
 pub const ALLOCATE: u32 = 1;
 pub const FREE: u32 = 2;
@@ -24,7 +25,7 @@ pub const END_COMMANDS: u32 = 10;
 pub const QUEUE_PROFILE: u32 = 11;
 pub const SERVICE_PROFILE: u32 = 12;
 pub const SERVICE_OPERATIONS: usize = 13;
-pub const KERNEL_COUNT: usize = 45;
+pub const KERNEL_COUNT: usize = 46;
 
 /// CPU service costs by request operation, including queue work within it.
 #[derive(Clone, Copy, Debug, Default)]
@@ -124,9 +125,10 @@ pub enum Kernel {
     Dequantize = 42,
     EmbeddingQuantized = 43,
     TensorElementwise = 44,
+    TensorReduction = 45,
 }
 
-const _: () = assert!(Kernel::TensorElementwise as usize + 1 == KERNEL_COUNT);
+const _: () = assert!(Kernel::TensorReduction as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -171,6 +173,7 @@ impl Kernel {
         matches!(
             self,
             Self::TensorElementwise
+                | Self::TensorReduction
                 | Self::Matmul
                 | Self::Im2col
                 | Self::MaxPool
@@ -247,6 +250,7 @@ impl Kernel {
             42 => Self::Dequantize,
             43 => Self::EmbeddingQuantized,
             44 => Self::TensorElementwise,
+            45 => Self::TensorReduction,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -298,12 +302,14 @@ impl Kernel {
             Self::Dequantize => "dequantize_weights",
             Self::EmbeddingQuantized => "embedding_quantized",
             Self::TensorElementwise => "burn_strided_copy",
+            Self::TensorReduction => "burn_sum",
         }
     }
 
     /// Select the cuTile specialization without changing the public request ABI.
     pub fn entry(self, parameters: &[u32]) -> &'static str {
         match (self, parameters) {
+            (Self::TensorReduction, p) if p.len() == reduction::PARAMETERS => reduction::Reduction::from_raw(p[2]).map_or(self.symbol(), |op| op.symbol()),
             (Self::TensorElementwise, p) if p.len() == elementwise::PARAMETERS => {
                 elementwise::Elementwise::from_raw(p[2] & 0xff).map_or(self.symbol(), |op| op.symbol())
             }
@@ -347,6 +353,10 @@ impl Kernel {
         let mut mutated = 0;
         let mut threads = 128;
         let (count, pointers, output, in_place) = match (self, p) {
+            (Self::TensorReduction, p) => {
+                extents[..2].copy_from_slice(&reduction::validate(p)?);
+                (product(&[p[0], 128])?, 2, 1, false)
+            }
             (Self::TensorElementwise, p) => {
                 extents[..3].copy_from_slice(&elementwise::validate(p)?);
                 (p[0], 3, 2, false)

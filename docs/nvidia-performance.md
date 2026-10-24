@@ -49,10 +49,18 @@ GPU checks cover signed strides, broadcasting, scalars, comparisons, mask fillin
 Chained arithmetic uses resident buffers without host activation transfers or separate output clears.
 Invalid view metadata fails before dispatch. All 77 pre-existing device instruction sections remain byte-identical.
 
+The next primitive checks add Tensor Core matrix products and seven strided reduction entries.
+Matrix checks cover broadcast batches, noncontiguous inputs, subviews, empty outputs, and zero inner dimensions.
+Reduction checks cover every tensor axis, repeated tiles, broadcasting, nonfinite values, first-index ties, empty axes, and neighboring guards.
+Both operations keep tensors resident. All 88 earlier instruction sections remain byte-identical after the reductions are added.
+The matching SDK and driver use native compute protocol version 8.
+
 The accompanying regression passes AlexNet's eight layer references, Qwen's layer and cache references, and all 600 DOOM views.
 AlexNet averages 0.950 ms across 100 passes.
-Qwen's two warm 64-token samples reach 262.295 and 243.346 tokens/s, with the existing checksum unchanged.
-DOOM reaches 1,576.55 uncapped FPS. Regular gameplay remains capped around 70 FPS.
+Qwen's two warm 64-token samples reach 264.463 and 252.964 tokens/s, with the existing checksum unchanged.
+DOOM reaches 1,556.84 uncapped FPS. Regular gameplay remains capped around 70 FPS.
+These samples remain within the recent run-to-run variation and do not establish a throughput improvement.
+The primitive checks and regression logs are under `target/nvidia/burn/reduction-*`.
 These are regression measurements of the existing workloads. Their migration to Burn remains pending.
 The first Burn training check runs on the explicit CPU device inside D3OS and validates gradients and Adam checkpoint resume.
 Full native Burn training and matched performance comparisons remain open.
