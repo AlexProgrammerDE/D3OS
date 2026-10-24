@@ -32,10 +32,15 @@ pub fn run(panic_on_complete: bool) {
             };
             let bit = index * 2 + state;
             EVENTS.fetch_or(1 << bit, Ordering::AcqRel);
+            // Input must remain queued while the application handles an event.
+            thread::sleep(40);
         }
     })
     .expect("start raw input worker");
     while !STARTED.load(Ordering::Acquire) {
+        thread::switch();
+    }
+    while syscall::syscall(syscall::SystemCall::TerminalCheckInputState, &[]).expect("check raw input mode") != terminal::TerminalInputState::Raw as usize {
         thread::switch();
     }
     log::info!("RAW_INPUT_READY");

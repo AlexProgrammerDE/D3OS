@@ -73,11 +73,11 @@ pub extern "sysv64" fn sys_terminal_read_input(address: *mut u8, length: usize, 
 }
 
 /// SystemCall implementation for SystemCall::TerminalCheckInputState.
-/// Used by terminal to check if an applications is waiting for input.
+/// Used by the terminal to query the active input encoding.
 ///
 /// Author: Sebastian Keller
 pub extern "sysv64" fn sys_terminal_check_input_state() -> isize {
-    match tty_input().waiting_mode() {
+    match tty_input().input_mode() {
         Some(TerminalMode::Canonical) => TerminalInputState::Canonical as isize,
         Some(TerminalMode::Fluid) => TerminalInputState::Fluid as isize,
         Some(TerminalMode::Raw) => TerminalInputState::Raw as isize,

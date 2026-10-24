@@ -133,12 +133,32 @@ def main():
                 mode = "--raw-input" if run % 2 else "--raw-input-panic"
                 qmp.type_command(f"proctest {mode}")
                 wait_for("RAW_INPUT_READY", run)
-                for key in ("up", "left", "spc", "f5", "tab", "esc"):
-                    qmp.execute(
-                        "human-monitor-command",
-                        {"command-line": f"sendkey {key} 300"},
-                    )
-                    time.sleep(0.4)
+                keys = ("up", "left", "spc", "f5", "tab", "esc")
+                if run % 2:
+                    for key in keys:
+                        qmp.execute(
+                            "human-monitor-command",
+                            {"command-line": f"sendkey {key} 300"},
+                        )
+                        time.sleep(0.4)
+                else:
+                    for down in (True, False):
+                        qmp.execute(
+                            "input-send-event",
+                            {
+                                "events": [
+                                    {
+                                        "type": "key",
+                                        "data": {
+                                            "down": down,
+                                            "key": {"type": "qcode", "data": key},
+                                        },
+                                    }
+                                    for key in keys
+                                ]
+                            },
+                        )
+                        time.sleep(0.3)
                 wait_for("RAW_INPUT_OK", run)
                 time.sleep(0.2)
                 qmp.type_command("infer")

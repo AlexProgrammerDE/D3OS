@@ -3,7 +3,7 @@
    ╟─────────────────────────────────────────────────────────────────────────╢
    ║ TTY-Input device (Workaround for missing pipes).                        ║
    ║ Buffers input from the terminal when an application is reading.         ║
-   ║ Depending on the chosen TerminalMode, the application will block until  ║ 
+   ║ Depending on the chosen TerminalMode, the application will block until  ║
    ║ terminal has written some input. Just a Workaround. Parallel reads      ║
    ║ where not considered and might cause problems.                          ║
    ╟─────────────────────────────────────────────────────────────────────────╢
@@ -12,17 +12,15 @@
 */
 
 use alloc::collections::vec_deque::VecDeque;
-use num_enum::{FromPrimitive, IntoPrimitive};
 use spin::Mutex;
 use terminal::TerminalMode;
 
 use crate::process::core_local_storage::scheduler;
 
-/// TTY-Input device (Workaround for missing pipes).
-/// Buffers input from the terminal when an application is reading.
-/// Depending on the chosen TerminalMode, the application will block until terminal has written some input.
-///
-/// NOTE: Just a Workaround. Parallel reads where not considered and might cause problems.
+/// Shared terminal input queue.
+/// A read selects the encoding for subsequent input, including between calls.
+/// Changing the encoding discards bytes from the previous mode.
+/// Readers that use different modes must coordinate their access.
 ///
 /// Author: Sebastian Keller
 #[derive(Debug)]
@@ -33,8 +31,7 @@ pub struct TtyInput {
 #[derive(Debug)]
 struct Input {
     buffer: VecDeque<u8>,
-    state: TtyInputState,
-    mode: TerminalMode,
+    mode: Option<TerminalMode>,
 }
 
 /// TTY-Output device (Workaround for missing pipes).
@@ -52,46 +49,37 @@ pub struct TtyOutput {
     buffer: Mutex<VecDeque<u8>>,
 }
 
-#[derive(Debug, PartialEq, IntoPrimitive, FromPrimitive, Clone, Copy)]
-#[repr(usize)]
-pub enum TtyInputState {
-    #[num_enum(default)]
-    Idle = 0,
-    Waiting = 1,
-    Ready = 2,
-}
-
 impl TtyInput {
     pub const fn new() -> Self {
         TtyInput {
             input: Mutex::new(Input {
                 buffer: VecDeque::new(),
-                state: TtyInputState::Idle,
-                mode: TerminalMode::Canonical,
+                mode: None,
             }),
         }
     }
 
     pub fn read(&self, buffer: &mut [u8], mode: TerminalMode) -> usize {
+        if buffer.is_empty() {
+            return 0;
+        }
         {
             let mut input = self.input.lock();
             // A terminated reader can leave an undecoded key in the buffer.
             // Its bytes have no meaning in the next reader's terminal mode.
-            if input.mode != mode {
+            if input.mode != Some(mode) {
                 input.buffer.clear();
             }
-            input.mode = mode;
-            input.state = TtyInputState::Waiting;
+            input.mode = Some(mode);
         }
 
         loop {
             let mut input = self.input.lock();
-            if input.state == TtyInputState::Ready {
+            if !input.buffer.is_empty() {
                 let count = buffer.len().min(input.buffer.len());
                 for byte in &mut buffer[..count] {
                     *byte = input.buffer.pop_front().unwrap();
                 }
-                input.state = TtyInputState::Idle;
                 return count;
             }
             drop(input);
@@ -101,21 +89,17 @@ impl TtyInput {
 
     pub fn write(&self, bytes: &[u8], mode: TerminalMode) -> usize {
         let mut input = self.input.lock();
-        if input.state != TtyInputState::Waiting {
-            return 0; // Abort, no more readers
-        }
-        if input.mode != mode {
+        if input.mode != Some(mode) {
             return 0; //Abort, mismatched mode
         }
 
         input.buffer.extend(bytes);
-        input.state = TtyInputState::Ready;
         bytes.len()
     }
 
-    pub fn waiting_mode(&self) -> Option<TerminalMode> {
-        let input = self.input.lock();
-        (input.state == TtyInputState::Waiting).then_some(input.mode)
+    /// Keep the input encoding active while the application handles earlier input.
+    pub fn input_mode(&self) -> Option<TerminalMode> {
+        self.input.lock().mode
     }
 }
 
@@ -134,7 +118,7 @@ impl TtyOutput {
             count += 1;
         }
         if output_buffer.len() > 4096 {
-//            info!("tty write, yield now, buffer size: {}", output_buffer.len());
+            //            info!("tty write, yield now, buffer size: {}", output_buffer.len());
             scheduler().sleep(100);
         }
         count
