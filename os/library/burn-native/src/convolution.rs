@@ -72,6 +72,27 @@ impl Conv2d {
         Shape::new([p[0] as usize, p[14] as usize, (p[1] / p[14] * p[4] * p[5]) as usize, (p[6] * p[7]) as usize])
     }
 
+    fn explicit_columns(&self, input: &Layout, weights: &Layout) -> bool {
+        let p = self.geometry;
+        let inner = self.weights[1] * self.weights[2] * self.weights[3];
+        let spatial = self.output[2] * self.output[3];
+        // Large dense filters reuse the same image windows across output
+        // channels. Bound the workspace so other convolutions keep the direct
+        // path, including small MNIST filters and grouped or dilated inputs.
+        p[0] == 1
+            && p[14] == 1
+            && p[12] == 1
+            && p[13] == 1
+            && p[10] == p[15]
+            && p[11] == p[16]
+            && inner >= 256
+            && p[17] >= 32
+            && spatial >= 32
+            && inner.checked_mul(spatial).is_some_and(|words| words <= 2 * 1024 * 1024)
+            && input.is_contiguous()
+            && weights.is_contiguous()
+    }
+
     pub fn windows_parameters(&self, input: &Layout) -> Result<[usize; abi::WINDOW_PARAMETERS]> {
         if input.shape() != &self.input {
             return Err(Error::ShapeMismatch);
@@ -133,6 +154,31 @@ impl NativeTensor {
         }
         Nvidia.with_commands(|| {
             let bias = bias.map(dense).transpose()?;
+            if plan.explicit_columns(&self.layout, &weights.layout) {
+                let p = plan.geometry.map(|v| v as usize);
+                let inner = p[1] * p[4] * p[5];
+                let spatial = p[6] * p[7];
+                let window_parameters = [p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8], p[9], p[10], p[11]];
+                let columns = Nvidia.produce_words(inner * spatial, Kernel::Im2col, &[(&self.buffer, self.layout.offset())], &window_parameters)?;
+                let buffer = Nvidia.produce_words(
+                    layout.len(),
+                    Kernel::Matmul,
+                    &[(&weights.buffer, weights.layout.offset()), (&columns, 0)],
+                    &[p[17], inner, spatial],
+                )?;
+                if let Some(bias) = bias {
+                    Nvidia.dispatch_words(
+                        Kernel::BiasChannel,
+                        &[(&buffer, 0), (&bias.buffer, bias.layout.offset()), (&buffer, 0)],
+                        &[layout.len(), spatial, p[17]],
+                    )?;
+                }
+                return Ok(Self {
+                    buffer: Arc::new(buffer),
+                    layout,
+                    dtype: DType::F32,
+                });
+            }
             let bias_buffer = bias.as_ref().map_or((self.buffer.as_ref(), 0), |b| (b.buffer.as_ref(), b.layout.offset()));
             let buffer = Nvidia.produce_words(
                 layout.len(),
@@ -209,5 +255,37 @@ impl NativeTensor {
             };
             Ok((input_gradient, weight_gradient, bias_gradient))
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explicit_windows_require_reuse_dense_views_and_a_bounded_workspace() {
+        let input = Layout::contiguous(Shape::new([1, 32, 7, 9])).unwrap();
+        let weights = Layout::contiguous(Shape::new([33, 32, 3, 3])).unwrap();
+        let options = ConvOptions::new([2, 1], [1, 2], [1, 1], 1);
+        let plan = Conv2d::new(input.shape().clone(), weights.shape().clone(), None, &options).unwrap();
+        assert!(plan.explicit_columns(&input, &weights));
+        assert!(!plan.explicit_columns(&input.clone().flip(&[3]).unwrap(), &weights));
+        assert!(!plan.explicit_columns(&input, &weights.clone().flip(&[0]).unwrap()));
+        for (shape, filter, options) in [
+            ([2, 32, 7, 9], [33, 32, 3, 3], options.clone()),
+            ([1, 1, 7, 9], [5, 1, 3, 3], options.clone()),
+            ([1, 32, 1024, 1024], [33, 32, 3, 3], ConvOptions::new([1, 1], [1, 1], [1, 1], 1)),
+            ([1, 32, 7, 9], [33, 32, 3, 3], ConvOptions::new([2, 1], [1, 2], [2, 1], 1)),
+            (
+                [1, 32, 7, 9],
+                [33, 32, 3, 3],
+                ConvOptions::new_with_padding([2, 1], [(1, 2), (2, 2)], [1, 1], 1),
+            ),
+        ] {
+            let input = Layout::contiguous(Shape::new(shape)).unwrap();
+            let weights = Layout::contiguous(Shape::new(filter)).unwrap();
+            let plan = Conv2d::new(input.shape().clone(), weights.shape().clone(), None, &options).unwrap();
+            assert!(!plan.explicit_columns(&input, &weights));
+        }
     }
 }

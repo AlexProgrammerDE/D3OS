@@ -16,7 +16,7 @@ struct Fixture {
 
 fn fixture(shape: [usize; 4], strided: bool, seed: usize) -> Result<Fixture, Error> {
     let [n, c, h, w] = shape;
-    let storage = if strided { [n + 2, c, w, h] } else { shape };
+    let storage = if strided { [n + 2, c, w, h] } else { [n + 2, c, h, w] };
     let physical: Vec<_> = (0..storage.into_iter().product())
         .map(|i| (((i * 13 + seed * 7) % 37) as f32 - 18.0) / 37.0)
         .collect();
@@ -28,7 +28,7 @@ fn fixture(shape: [usize; 4], strided: bool, seed: usize) -> Result<Fixture, Err
             .permute(&[0, 1, 3, 2])?
             .flip(&[0, 1, 3])?
     } else {
-        backing.clone()
+        backing.clone().slice(&[Slice::new(1, Some((n + 1) as isize), 1)])?
     };
     let logical = (0..n * c * h * w)
         .map(|i| {
@@ -39,7 +39,7 @@ fn fixture(shape: [usize; 4], strided: bool, seed: usize) -> Result<Fixture, Err
             let at = if strided {
                 (((n - batch) * c + c - 1 - ch) * w + w - 1 - x) * h + y
             } else {
-                i
+                i + c * h * w
             };
             f64::from(physical[at])
         })
@@ -124,7 +124,9 @@ fn reference(input: &[f64], weights: &[f64], bias: Option<&[f64]>, dy: &[f64], s
     r
 }
 
-fn case(backend: &Nvidia, shape: [usize; 4], filter: [usize; 4], options: ConvOptions<2>, strided: bool, biased: bool) -> Result<(), Error> {
+fn case(
+    backend: &Nvidia, shape: [usize; 4], filter: [usize; 4], options: ConvOptions<2>, strided: bool, biased: bool, forward: abi::Kernel,
+) -> Result<(), Error> {
     let input = fixture(shape, strided, 1)?;
     let weights = fixture(filter, strided, 2)?;
     let plan = Conv2d::new(Shape::new(shape), Shape::new(filter), None, &options)?;
@@ -145,8 +147,11 @@ fn case(backend: &Nvidia, shape: [usize; 4], filter: [usize; 4], options: ConvOp
     let profiles = backend.profile()?;
     let output = input.tensor.conv2d(&weights.tensor, biased.then_some(&bias), &options)?;
     let after = backend.profile()?;
-    if after[abi::Kernel::Conv2d as usize].calls - profiles[abi::Kernel::Conv2d as usize].calls != u64::from(shape[0] != 0)
+    if after[abi::Kernel::Conv2d as usize].calls - profiles[abi::Kernel::Conv2d as usize].calls != u64::from(shape[0] != 0 && forward == abi::Kernel::Conv2d)
+        || after[abi::Kernel::Im2col as usize].calls - profiles[abi::Kernel::Im2col as usize].calls
+            != u64::from(shape[0] != 0 && forward == abi::Kernel::Im2col)
         || after[abi::Kernel::Conv2dWindows as usize].calls != profiles[abi::Kernel::Conv2dWindows as usize].calls
+        || (forward == abi::Kernel::Im2col && after[abi::Kernel::Matmul as usize].calls - profiles[abi::Kernel::Matmul as usize].calls != 1)
     {
         return Err(Error::DeviceFault);
     }
@@ -346,13 +351,27 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
         ([1, 3, 8, 9], [17, 3, 3, 3], ConvOptions::new([1, 1], [1, 1], [1, 1], 1), true, true),
         ([0, 3, 5, 5], [4, 3, 3, 3], ConvOptions::new([1, 1], [0, 0], [1, 1], 1), true, true),
     ] {
-        case(backend, shape, filter, options, strided, bias).map_err(|e| format!("convolution {shape:?} {filter:?}: {e}"))?;
+        case(backend, shape, filter, options, strided, bias, abi::Kernel::Conv2d).map_err(|e| format!("convolution {shape:?} {filter:?}: {e}"))?;
+    }
+    for biased in [false, true] {
+        for strided in [false, true] {
+            case(
+                backend,
+                [1, 32, 7, 9],
+                [33, 32, 3, 3],
+                ConvOptions::new([2, 1], [1, 2], [1, 1], 1),
+                strided,
+                biased,
+                if strided { abi::Kernel::Conv2d } else { abi::Kernel::Im2col },
+            )
+            .map_err(|e| format!("dense convolution strided={strided} bias={biased}: {e}"))?;
+        }
     }
     finite_difference().map_err(|e| format!("convolution finite differences: {e}"))?;
     guards(backend).map_err(|e| format!("convolution guards: {e}"))?;
     rejected(backend).map_err(|e| format!("convolution invalid metadata: {e}"))?;
     crate::report(format_args!(
-        "NVIDIA_BURN_CONVOLUTION_OK forward=implicit-tensor-core gradients=input,weights,bias reference=fp64 finite-difference=ok groups=ok strides=ok guards=ok backend=nvidia"
+        "NVIDIA_BURN_CONVOLUTION_OK forward=implicit,explicit-tensor-core gradients=input,weights,bias reference=fp64 finite-difference=ok groups=ok strides=ok guards=ok backend=nvidia"
     ));
     Ok(())
 }

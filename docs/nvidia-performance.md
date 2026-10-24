@@ -228,6 +228,31 @@ D3OS DOOM measures 1617.5 uncapped timedemo FPS and retains its 70 FPS gameplay 
 All 600 verification frames, input controls, cache purges, cleanup, and post-exit GPU inference checks pass.
 The GPU kernel bundle remains unchanged.
 
+## Burn convolution algorithm selection
+
+The next D3OS GPU change selects explicit image windows and Tensor Core matrix products for large dense inference convolutions.
+It requires one image, ungrouped unit dilation, symmetric padding, contiguous views, and enough matrix work for reuse.
+The window workspace is limited to 8 MiB.
+Other geometries retain the direct convolution algorithm. Backward operations retain their independently validated implementation.
+
+Fresh 100-pass D3OS GPU averages improve from 2.320 ms to 1.300 ms for AlexNet, a 43.97 percent reduction.
+Fresh Linux GPU cuDNN/cuBLAS warm averages are 0.742077 and 0.732881 ms.
+Both guests use four CPUs, affinity `8,10,12,14`, 4096 MiB of RAM, and the original FP32 weights and input.
+The original eight layer references retain their `2e-4` absolute and relative tolerances.
+The larger speed gap remains open.
+
+The five D3OS convolution matrix products total about 0.327 ms of instrumented device time.
+The earlier direct convolution kernels total about 1.427 ms.
+Explicit window extraction and channel bias kernels add separate work, so these totals are not complete forward times.
+Classifier matrix products and generic activation dispatch remain visible costs.
+
+Physical GPU checks validate explicit and direct paths against independent FP64 forward and gradient references.
+Cases cover optional bias, nonzero contiguous offsets, shared storage, and signed views.
+Existing grouped, dilated, asymmetric, empty, finite-difference, residency, and guard checks pass.
+The selector also has metadata tests for workspace limits and unsupported fast-path geometries.
+The kernel bundle remains unchanged.
+Evidence is under `target/nvidia/burn/alexnet-optimization/`.
+
 ## Earlier Burn primitive measurements
 
 The following measurements describe earlier implementation stages. Current model migration results are above.
