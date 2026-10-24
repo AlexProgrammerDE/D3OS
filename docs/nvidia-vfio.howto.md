@@ -8,7 +8,7 @@ The Hybrid-mode and VFIO steps below were verified on this machine on October 22
 The hardware-free implementation already runs pretrained AlexNet inside D3OS on the CPU.
 The native Rust NVIDIA driver boots FWSEC and GSP firmware on the physical GPU.
 The driver also creates a compute channel and verifies GPU writes through its submission queue.
-Shader execution and GPU model execution remain in development.
+AlexNet, Qwen, and DOOM run through the native GPU driver. Kernel inputs compile inside D3OS during device load.
 Read [the inference guide](inference.howto.md) to run the existing tests.
 
 ## Hardware this guide targets
@@ -227,10 +227,12 @@ Host tests reject malformed image headers and verify that relocation preserves u
 The native userspace backend runs AlexNet on this GPU.
 Qwen also passes its complete numerical fixture through the native GPU backend.
 
-Rust cuTile kernels compile to Tile IR, then native `sm_89` SASS.
-The pinned host toolchain uses cuTile Rust and CUDA 13.4.92 `tileiras`.
+The host build exports portable Tile IR from Rust cuTile kernels.
+Inside D3OS, CUDA 13.4.92 `tileiras` and its `ptxas` subprocess compile that IR for the detected GPU.
+The current Ada driver selects `sm_89` from the GPU register identity.
 D3OS retains its Rust loader, GPU page tables, QMD descriptors, and GPFIFO submissions.
-The guest requires no NVIDIA runtime library.
+The compiler uses the Linux execution personality and its interpreter libraries inside D3OS.
+GPU execution uses the native Rust driver without `libcuda` or a Linux NVIDIA driver.
 
 Build the kernels and run the boot checks:
 
@@ -241,7 +243,12 @@ python3 tools/nvidia/run-qemu.py --firmware target/nvidia/firmware \
     --kernels target/nvidia/kernels --memory-mib 4096 --boot-check
 ```
 
-The build downloads checksum-pinned host tools and headers without installing a GPU driver.
+The build downloads checksum-pinned compiler tools and headers without installing a GPU driver.
+The launcher stages `.tilebc` inputs and the compiler runtime. It does not stage `.cubin` files.
+The compiler and generated modules remain inside D3OS. The module cache lasts until the VM stops.
+The boot log reports compilation and validation as separate load phases.
+The launcher waits for `NVIDIA_COMPILE_READY` before it starts a workload or its timeout.
+Use `--compile-timeout` for the separate compilation budget (600 seconds by default).
 Install libclang before the first build.
 Use `--toolkit /path/to/cuda-13.4` to supply an existing matching toolkit.
 
@@ -267,10 +274,13 @@ Run the host checks:
 python3 tools/inference/test-cutile-kernels.py
 ```
 
-The build produces `tensor-matmul.cubin` with `tensor_matmul_f16` and `tensor_matmul_bf16` entry points.
+The build produces `tensor-matmul.tilebc` with `tensor_matmul_f16` and `tensor_matmul_bf16` entry points.
+D3OS generates the executable module from that input.
+The host validation command uses `--audit` and keeps its comparison binaries in `host-audit/`.
+These audit binaries do not enter the boot image.
 SASS audits require `HMMA.16816.F32` and `HMMA.16816.F32.BF16` instructions.
 The inference audit also requires TF32 Tensor Core instructions.
-Every entry records its required thread count and register usage.
+The portable entry manifest records required thread counts. The assembled module supplies register usage and other launch metadata.
 The manifest always records `hardware_validated: false` until separate hardware evidence exists.
 
 D3OS binds compiler constant banks and selects a 32, 64, or 100 KiB Ada shared-memory partition.
@@ -318,14 +328,14 @@ Both commands passed with four vCPUs and the passed-through RTX 4090 Laptop GPU.
 The AlexNet dog fixture selected class 258 with probability approximately 0.72448.
 
 The shell commands are `infer gpu-self-test` and `infer gpu-alexnet [MODEL FIXTURE]`.
-Applications select `d3os_compute::nvidia::Nvidia::new()` with the compute crate's `nvidia` feature.
-The existing `Tensor` and `Backend` APIs then allocate storage and run operators on the GPU.
+AI applications select the GPU with `d3os_ai::native_device()`.
+They use Burn tensors and modules through that device. The native backend allocates storage and dispatches GPU operations.
 The backend returns a device error when native compute is unavailable.
 It never falls back to CPU execution.
 
-The `inference.cubin` module contains TF32 matrix kernels and FP32 elementwise operators.
+The portable `inference.tilebc` module contains TF32 matrix kernels and FP32 elementwise operators.
 Each matrix tile combines three `HMMA.1688.F32.TF32` products with compensated FP32 accumulation.
-The build verifies tensor instructions in both matrix entry points when `--nvdisasm` is present.
+The optional host `--audit` verifies Tensor Core instructions in both matrix entry points.
 Convolution uses GPU `im2col` followed by tensor matrix multiplication.
 Fully connected layers use a tensor kernel that reads transposed weights directly.
 ReLU, bias, pooling, and softmax also run on the GPU.
@@ -368,7 +378,7 @@ python3 tools/nvidia/prepare-doom.py
 The tool downloads Freedoom 0.13.0 and preserves its license in `target/doom/COPYING.txt`.
 The launcher stages Phase 1 as `/usr/doom.wad` and includes the license in the VM image.
 The normal image build includes the `doom` executable.
-The kernel build from section 7 also includes the raster, fuzz, and palette kernels in `inference.cubin`.
+The kernel build from section 7 also includes the raster, fuzz, and palette kernels in `inference.tilebc`.
 
 Run the comparison with the CPU renderer:
 

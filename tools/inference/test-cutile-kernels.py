@@ -49,6 +49,7 @@ def main():
             str(ROOT / "tools/nvidia/prepare-kernels.py"),
             "--toolkit",
             str(toolkit),
+            "--audit",
         ],
         cwd=ROOT,
         check=True,

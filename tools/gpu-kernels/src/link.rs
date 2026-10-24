@@ -5,6 +5,37 @@ use cutile_ir::{
 };
 use std::collections::HashMap;
 
+/// Apply the fixed CTA contract to every architecture understood by the pinned
+/// Tile IR assembler. The guest chooses machine code; the IR retains its shape.
+pub fn portable_hints(module: &mut Module) -> Result<(), Box<dyn std::error::Error>> {
+    for function in module.functions.clone() {
+        let hints = module
+            .op_mut(function)
+            .attributes
+            .iter_mut()
+            .find_map(|(_, value)| match value {
+                Attribute::OptimizationHints(hints) => Some(hints),
+                _ => None,
+            })
+            .ok_or("entry has no launch hints")?;
+        let baseline = hints
+            .entries
+            .iter()
+            .find(|(target, _)| target == "sm_89")
+            .ok_or("entry has no baseline CTA contract")?
+            .1
+            .clone();
+        for target in [
+            "sm_80", "sm_86", "sm_87", "sm_88", "sm_89", "sm_90", "sm_100", "sm_103", "sm_107", "sm_110", "sm_120", "sm_121",
+        ] {
+            if !hints.entries.iter().any(|(existing, _)| existing == target) {
+                hints.entries.push((target.into(), baseline.clone()));
+            }
+        }
+    }
+    Ok(())
+}
+
 struct Import<'a> {
     source: &'a Module,
     target: &'a mut Module,
@@ -116,6 +147,7 @@ mod tests {
     fn program(name: &str) -> Module {
         KernelCompiler::new(crate::kernels::__module_ast_self, "kernels", name)
             .target("sm_89")
+            .options(cutile::tile_kernel::CompileOptions::default().num_worker_warps_per_cta(4))
             .bytecode_version(BytecodeVersion::V13_4)
             .compile()
             .unwrap()
@@ -139,6 +171,26 @@ mod tests {
         decode_bytecode(&bytes).unwrap();
         assert_eq!(vector.functions.len(), 1);
         assert_eq!(softmax.functions.len(), 1);
+    }
+
+    #[test]
+    fn portable_hints_preserve_geometry_without_duplicates() {
+        let mut module = program("vector_add");
+        portable_hints(&mut module).unwrap();
+        portable_hints(&mut module).unwrap();
+        let entry = module.op(module.functions[0]);
+        let hints = entry
+            .attributes
+            .iter()
+            .find_map(|(_, value)| match value {
+                Attribute::OptimizationHints(hints) => Some(hints),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(hints.entries.len(), 12);
+        assert!(hints.entries.iter().all(|(_, value)| *value == hints.entries[0].1));
+        let bytes = write_bytecode_version(&module, BytecodeVersion::V13_4).unwrap();
+        decode_bytecode(&bytes).unwrap();
     }
 
     #[test]

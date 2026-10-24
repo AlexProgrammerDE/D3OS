@@ -40,8 +40,70 @@ def executable(root, name):
         copy_file(root, library)
 
 
+def stage_compiler(root):
+    spec = importlib.util.spec_from_file_location(
+        "guest_compiler", Path(__file__).with_name("guest-compiler.py")
+    )
+    compiler = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(compiler)
+    inputs = ROOT / "target/nvidia/kernels"
+    assets = compiler.prepare(
+        inputs,
+        ROOT / "target/nvidia/cutile-toolkit/packages/nvidia/cu13",
+        root.parent / "compiler",
+        execution_os="linux",
+    )
+    for source, relative in assets:
+        copy_file(root, source, relative)
+    return compiler
+
+
+def compiler_benchmark(root, repeats):
+    stage_compiler(root)
+    for name in ("date", "taskset", "sha256sum", "cp"):
+        executable(root, name)
+    benchmark = root / "benchmark"
+    benchmark.write_text(
+        f"#!/bin/bash\nrepeats={repeats}\n"
+        + """
+set -eux
+capability=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader,nounits)
+target=sm_${capability/./}
+mkdir -p /tmp/cuda /tmp/kernels
+cp -r /usr/cuda/. /tmp/cuda/
+for input in /usr/share/nvidia/*.tilebc /usr/share/nvidia/*.ptx; do
+    if [ -f "$input" ]; then cp "$input" /tmp/kernels/; fi
+done
+for cpus in 0 0-3; do
+    for ((run=0; run<repeats; run++)); do
+        total_ms=0
+        for family in vector-add tensor-matmul inference; do
+            if [ -f "/tmp/kernels/$family.tilebc" ]; then
+                tool=tileiras
+                input="/tmp/kernels/$family.tilebc"
+            else
+                tool=ptxas
+                input="/tmp/kernels/$family.ptx"
+            fi
+            start=$(date +%s%N)
+            taskset -c "$cpus" "/tmp/cuda/bin/$tool" --gpu-name="$target" --opt-level=3 "$input" -o /tmp/output.cubin
+            end=$(date +%s%N)
+            elapsed_ms=$(((end-start)/1000000))
+            total_ms=$((total_ms+elapsed_ms))
+            hash=$(sha256sum /tmp/output.cubin)
+            echo "LINUX_COMPILE_MODULE os=linux cpus=$cpus run=$run family=$family target=$target compile_ms=$elapsed_ms sha256=${hash%% *} phase=load"
+        done
+        echo "LINUX_COMPILE_BENCH os=linux cpus=$cpus run=$run modules=3 compile_ms=$total_ms source=tmpfs phase=load"
+    done
+done
+echo LINUX_COMPILER_BENCH_OK
+"""
+    )
+    benchmark.chmod(0o755)
+
+
 def kernel_benchmark(root):
-    destination = root / "benchmark"
+    destination = root / "kernel-benchmark"
     subprocess.run(
         [
             "gcc",
@@ -67,15 +129,33 @@ def kernel_benchmark(root):
         dependencies = subprocess.check_output(["ldd", str(source)], text=True)
         for library in re.findall(r"/[^\s()]+", dependencies):
             copy_file(root, library)
-    copy_file(root, ROOT / "target/nvidia/kernels/inference.cubin", "/inference.cubin")
+    compiler = stage_compiler(root)
+    inputs = ROOT / "target/nvidia/kernels"
+    portable = next(
+        path
+        for path in (inputs / "inference.tilebc", inputs / "inference.ptx")
+        if path.is_file()
+    )
+    tool = "tileiras" if portable.suffix == ".tilebc" else "ptxas"
+    benchmark = root / "benchmark"
+    benchmark.write_text(f"""#!/bin/bash
+set -eux
+capability=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader,nounits)
+target=sm_${{capability/./}}
+SECONDS=0
+/usr/cuda/bin/{tool} --gpu-name="$target" --opt-level=3 /usr/share/nvidia/{portable.name} -o /inference.cubin
+echo "LINUX_COMPILE_READY target=$target compile_seconds=$SECONDS phase=load"
+exec /kernel-benchmark
+""")
+    benchmark.chmod(0o755)
     manifest = {
         "source_sha256": hashlib.sha256(
             (ROOT / "tools/nvidia/linux-kernel-bench.c").read_bytes()
         ).hexdigest(),
         "binary_sha256": hashlib.sha256(destination.read_bytes()).hexdigest(),
-        "cubin_sha256": hashlib.sha256(
-            (root / "inference.cubin").read_bytes()
-        ).hexdigest(),
+        "input": portable.name,
+        "input_sha256": compiler.digest(portable),
+        "code_generation_os": "linux",
     }
     (root.parent / "kernel-benchmark-manifest.json").write_text(
         json.dumps(manifest, indent=2) + "\n"
@@ -796,6 +876,8 @@ def main():
     parser.add_argument("--kernel", default=platform.release())
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--kernel-benchmark", action="store_true")
+    parser.add_argument("--compiler-benchmark", action="store_true")
+    parser.add_argument("--compiler-repeats", type=int, default=3)
     parser.add_argument("--llama-directory", type=Path)
     parser.add_argument("--large-qwen", choices=("9b", "27b"))
     parser.add_argument("--matched-qwen-input", type=Path)
@@ -824,6 +906,7 @@ def main():
         sum(
             (
                 args.kernel_benchmark,
+                args.compiler_benchmark,
                 bool(args.llama_directory),
                 args.doom_benchmark,
                 args.alexnet_benchmark,
@@ -846,6 +929,8 @@ def main():
         parser.error("--memory-mib must be positive")
     if args.timeout <= 0:
         parser.error("--timeout must be positive")
+    if not 1 <= args.compiler_repeats <= 100:
+        parser.error("--compiler-repeats must be from 1 to 100")
     args.directory = args.directory.resolve()
     args.directory.mkdir(parents=True, exist_ok=True)
     lock = (args.directory / "guest.lock").open("w")
@@ -854,7 +939,9 @@ def main():
     except BlockingIOError:
         parser.error("this Linux guest directory is already in use")
     prepare(args.directory, args.kernel)
-    if args.kernel_benchmark:
+    if args.compiler_benchmark:
+        compiler_benchmark(args.directory / "root", args.compiler_repeats)
+    elif args.kernel_benchmark:
         kernel_benchmark(args.directory / "root")
     elif args.llama_directory:
         if args.large_qwen:
@@ -952,6 +1039,8 @@ def main():
         )
     if args.kernel_benchmark and "LINUX_KERNEL_BENCH_OK" not in text:
         raise RuntimeError("Linux kernel benchmark did not pass")
+    if args.compiler_benchmark and "LINUX_COMPILER_BENCH_OK" not in text:
+        raise RuntimeError("Linux compiler benchmark did not pass")
     if args.alexnet_benchmark:
         validate_alexnet(text)
     if args.llama_directory:

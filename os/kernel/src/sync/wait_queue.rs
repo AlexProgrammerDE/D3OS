@@ -28,38 +28,43 @@ impl WaitQueue {
         }
     }
 
+    /// Register one wait atomically with the predicate check. A wake completes
+    /// this wait even if the predicate is unchanged, as required by futexes.
+    pub fn wait_once<F>(&self, mut ready: F) -> bool
+    where
+        F: FnMut() -> bool,
+    {
+        let ids;
+        {
+            let mut guard = self.queue.lock();
+            if ready() {
+                return false;
+            }
+            ids = scheduler().park_current();
+            guard.push_back(ids);
+        }
+        scheduler().block_if_parking(|| !ready());
+        let mut guard = self.queue.lock();
+        if let Some(index) = guard.iter().position(|&waiter| waiter == ids) {
+            guard.remove(index);
+        }
+        true
+    }
+
     /// Block until `pred()` becomes true.
     pub fn wait<F>(&self, mut pred: F, _message: &str)
     where
         F: FnMut() -> bool,
     {
-        let ids = scheduler().current_ids();
-
-        loop {
-            if pred() {
-                return;
-            }
-
-            {
-                let mut guard = self.queue.lock();
-
-                // re-check under lock
-                if pred() {
-                    return;
-                }
-
-                // register current thread with the WaitQueue
-                guard.push_back(ids);
-            }
-
-            scheduler().block();
+        while !pred() {
+            self.wait_once(&mut pred);
         }
     }
 
     /// Wake up exactly one waiter (if any). Returns true if someone was woken up.
     pub fn notify_one(&self) -> bool {
         let mut guard = self.queue.lock();
-        
+
         let mut unblocked_success_idx = None;
 
         // check queue until one thread is successfully unblocked
@@ -72,7 +77,7 @@ impl WaitQueue {
 
         match unblocked_success_idx {
             Some(idx) => guard.remove(idx).is_some(),
-            None => false
+            None => false,
         }
     }
 
@@ -80,7 +85,7 @@ impl WaitQueue {
     /// Returns the number of threads actually unblocked (stale entries are ignored).
     pub fn notify_all(&self) -> usize {
         let mut guard = self.queue.lock();
-        
+
         let mut unblocked_success_idxs = Vec::new();
 
         // check queue until one thread is successfully unblocked
@@ -92,7 +97,7 @@ impl WaitQueue {
 
         let mut woke = 0;
 
-        for idx in unblocked_success_idxs {
+        for idx in unblocked_success_idxs.into_iter().rev() {
             if guard.remove(idx as usize).is_some() {
                 woke += 1;
             }

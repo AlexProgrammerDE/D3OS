@@ -396,18 +396,20 @@ pub extern "C" fn start(multiboot2_magic: u32, multiboot2_addr: *const BootInfor
     //Initialize tty buffer (Workaround for missing pipes)
     init_tty();
 
+    crate::device::nvidia::schedule_compiler();
+
     #[cfg(feature = "linux_test")]
     crate::linux::test::schedule();
     #[cfg(not(feature = "linux_test"))]
     if BOOT_TO_GUI {
         // Create and register the 'window_manager' thread in the scheduler
         scheduler().ready(Thread::load_application(
-            "bin/window_manager", "window_manager", &[].to_vec(),
+            "/bin/window_manager", "window_manager", &[].to_vec(),
         ).expect("failed to load window_manager"));
     } else {
         // Create and register the 'terminal_emulator' thread (from app image in ramdisk) in the scheduler
         scheduler().ready(Thread::load_application(
-            "bin/terminal_emulator", "terminal_emulator", &[].to_vec(),
+            "/bin/terminal_emulator", "terminal_emulator", &[].to_vec(),
         ).expect("failed to load terminal_emulator"));
     }
 

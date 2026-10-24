@@ -639,8 +639,10 @@ impl Scheduler {
             }
 
         // 2b) Check if the thread to be woken up is in the ready queue
-            if state.ready_queue.iter().any(|t| t.id() == tid && t.process().id() == pid) {
-                // Already runnable (e.g. a previous wakeup raced in); nothing to do
+            if let Some(thread) = state.ready_queue.iter().find(|t| t.id() == tid && t.process().id() == pid) {
+                // A waiter can be preempted after registration. Cancel its
+                // parking state even though it is already runnable.
+                thread.set_state(ThreadState::Ready);
                 return true;
             }
         }
@@ -985,6 +987,13 @@ impl Scheduler {
                     let thread = blocked_list.remove(pos);
                     state.ready_queue.push_front(thread);
                     inc_rq_len();
+                } else if let Some(thread) = state.current_thread.as_ref().filter(|thread| thread.id() == tid && thread.process().id() == pid) {
+                    // A remote wake can arrive after waiter registration but
+                    // before block_if_parking adds the thread to blocked_list.
+                    // Preserve that wake instead of discarding the message.
+                    thread.set_state(ThreadState::Running);
+                } else if let Some(thread) = state.ready_queue.iter().find(|thread| thread.id() == tid && thread.process().id() == pid) {
+                    thread.set_state(ThreadState::Ready);
                 }
             }
             // if you have this thread, kill it

@@ -200,6 +200,12 @@ pub extern "C" fn setup_ap_idt() {
 }
 
 fn handle_exception(frame: InterruptStackFrame, index: u8, error: Option<u64>) {
+    if index == 13 && frame.code_segment.rpl() == x86_64::PrivilegeLevel::Ring3 {
+        let linux = crate::process_manager().read().current_process().linux_state.lock().is_some();
+        if linux {
+            crate::linux::user_fault(0, frame.instruction_pointer.as_u64());
+        }
+    }
     panic!(
         "CPU Exception: [{} - {:?}]\nError code: [{:?}]\n{:?}",
         index,
@@ -223,6 +229,7 @@ fn handle_page_fault(frame: InterruptStackFrame, _index: u8, error: Option<u64>)
     if frame.code_segment.rpl() == x86_64::PrivilegeLevel::Ring3 {
         let is_linux = thread.process().linux_state.lock().is_some();
         if is_linux {
+            log::error!("Linux user page fault: {frame:?} error={error:?}");
             drop(thread);
             crate::linux::user_fault(fault_addr.as_u64(), frame.instruction_pointer.as_u64());
         }

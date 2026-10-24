@@ -87,7 +87,9 @@ It borrows immutable ramdisk files directly, avoiding a second heap copy of larg
 Linux `exit` and `exit_group` release descriptors and use normal D3OS process cleanup.
 The kernel records the exit status. The existing shell still assumes success after joining external applications.
 
-The `clone3` spawn path suspends the parent while the child uses its shared address space.
+The `clone3` subprocess path suspends the parent while the child uses its shared address space.
+Shared-process worker threads retain their parent's memory, descriptors, and signal disposition.
+Each thread has independent TLS, registers, thread identity, and clear-on-exit metadata.
 At `execve`, the kernel creates an independent D3OS process and restores the parent's registers and TLS.
 `wait4` and `waitid` collect the child's exit status.
 Descriptor duplication shares the underlying file position. Close-on-exec descriptors stay out of the new image.
@@ -126,8 +128,10 @@ It also checks repeated compilation in one VM and native application launch with
 The verified workloads include CUDA 12.9.86 `ptxas` and CUDA 13.4.92 `tileiras` with matching `ptxas` and `libnvvm`.
 Other executables can run when their Linux interfaces fit the implemented subset.
 
-- Each Linux process has one thread and sees one logical CPU. Compiler worker threads and general `fork` are not implemented.
-- Child creation supports the shared-address-space `clone3` flags used by glibc `posix_spawn`. Direct process replacement and other clone modes are not implemented.
+- Linux processes see the online guest CPUs through `sched_getaffinity`. Shared-process compiler worker threads use `clone` or `clone3`, separate TLS, and thread IDs.
+- Futex support covers untimed waits, full-bitset waits, wakes, and clear-on-exit thread IDs. Timed waits and robust-futex recovery remain unsupported.
+- General `fork` and independent process cloning remain unsupported.
+- Subprocess creation supports the shared-address-space `clone3` flags used by glibc `posix_spawn`. Direct process replacement remains unsupported.
 - Signal masks and actions can be stored, but asynchronous signal delivery is not implemented.
 - Private file mappings use eager allocation. Shared mappings and file writeback are not implemented.
 - Linux standard input, sockets, and device interfaces are not implemented.

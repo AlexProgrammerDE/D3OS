@@ -2,7 +2,7 @@
 
 Burn provides the public AI framework for D3OS.
 The migration covers tensor operations, model definitions, training, and inference.
-The native D3OS driver and precompiled cuTile kernels remain the GPU execution stack.
+The native D3OS driver executes cuTile kernels compiled from portable Tile IR inside D3OS.
 DOOM keeps its native renderer and remains part of the separate Linux performance comparison.
 
 This work extends the [native NVIDIA performance goal](nvidia-performance.md).
@@ -15,7 +15,10 @@ Correctness alone does not complete the goal. Matched Linux performance comparis
 Applications use Burn tensors and modules through the D3OS AI library.
 The D3OS backend owns tensor storage, native operation dispatch, synchronization, and GPU profiling.
 The kernel driver owns GPU allocation, execution channels, and process isolation.
-The host build compiles Rust cuTile kernels into GPU binaries before the VM starts.
+The host build exports portable Tile IR from Rust cuTile kernels.
+D3OS runs the pinned NVIDIA compiler in userspace and selects machine code for the detected GPU.
+The native driver retains the generated modules for the lifetime of the VM.
+Compilation and validation are load phases outside model throughput measurements.
 Training decisions, backward passes, optimizer steps, and model export run inside the VM.
 
 The backend must keep model weights and activations in GPU memory during GPU execution.
@@ -68,7 +71,7 @@ The low-level NVIDIA interfaces remain available to the native DOOM renderer.
 ## MNIST acceptance criteria
 
 The first training workload uses the full MNIST training set and the separate test set.
-The host can stage the dataset and compile kernels. It cannot train the guest model.
+The host can stage the dataset and export portable kernel input. It cannot train the guest model.
 The guest reports the seed, model configuration, batch size, optimizer, learning rate, and epoch count.
 It also reports training loss, test accuracy, throughput, elapsed time, and GPU memory use.
 The test accuracy target is at least 99 percent.

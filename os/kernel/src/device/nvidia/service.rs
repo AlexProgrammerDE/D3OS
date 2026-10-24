@@ -100,6 +100,9 @@ pub(crate) fn request(owner: Uuid, request: &Request) -> SyscallResult {
     if request.version != abi::VERSION {
         return Err(Errno::ENOTSUP);
     }
+    // In-guest compilation belongs to device load time, before any service
+    // timing, preemption guard, or GPU spinlock acquisition.
+    super::compiler::wait()?;
     // Keep the spinlock owner runnable until its synchronous GPU transaction
     // completes. Interrupts remain enabled for timers and cross-core work.
     let start = unsafe { core::arch::x86_64::_rdtsc() };
@@ -370,7 +373,7 @@ fn inference_module(compute: &mut super::rm::Compute) -> Result<&'static [u8], E
     if let Some(module) = compute.inference_module {
         return Ok(module);
     }
-    let module = super::gsp::asset("usr/share/nvidia/inference.cubin").map_err(|_| Errno::ENOTSUP)?;
+    let module = super::compiler::inference().ok_or(Errno::ENOTSUP)?;
     compute.inference_module = Some(module);
     Ok(module)
 }

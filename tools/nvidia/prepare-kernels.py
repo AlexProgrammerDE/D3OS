@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile native D3OS cuTile programs and audit their launch and SASS contracts."""
+"""Export portable cuTile input for D3OS, with optional host SASS audits."""
 
 import argparse
 import hashlib
@@ -88,6 +88,11 @@ def main():
     parser.add_argument(
         "--nvdisasm", type=Path, help="override the toolkit disassembler"
     )
+    parser.add_argument(
+        "--audit",
+        action="store_true",
+        help="also assemble sm_89 code on the host and audit its instructions",
+    )
     parser.add_argument("--output", type=Path, default=ROOT / "target/nvidia/kernels")
     args = parser.parse_args()
     if args.toolkit:
@@ -123,6 +128,7 @@ def main():
                 "--release",
                 "--",
                 str(staging),
+                *(["--audit"] if args.audit else []),
             ],
             cwd=ROOT,
             env=env,
@@ -130,7 +136,9 @@ def main():
             timeout=900,
         )
         manifest = {
-            "architecture": "sm_89",
+            "architecture": None,
+            "format": "tile-ir",
+            "code_generation_os": "d3os",
             "compiler": "NVIDIA cuTile Rust",
             "tile_ir": "13.4",
             "cuda_rust_revision": tomllib.loads((crate / "Cargo.toml").read_text())[
@@ -140,6 +148,16 @@ def main():
             "kernels": {},
         }
         for family in FAMILIES:
+            ir = staging / f"{family}.tilebc"
+            entries = json.loads((staging / f"{family}.json").read_text())
+            manifest["kernels"][family] = {
+                "input": ir.name,
+                "sha256": hashlib.sha256(ir.read_bytes()).hexdigest(),
+                "bytes": ir.stat().st_size,
+                "entries": entries,
+            }
+            if not args.audit:
+                continue
             cubin = staging / f"{family}.cubin"
             sass = subprocess.run(
                 [str(disassembler), str(cubin)],
@@ -150,28 +168,33 @@ def main():
             ).stdout
             bodies = audit(family, sass)
             (staging / f"{family}.sass").write_text(sass)
-            entries = json.loads((staging / f"{family}.json").read_text())
             if any(entry["entry"] not in bodies for entry in entries):
                 raise RuntimeError(f"{family}: an entry has no disassembled code")
-            manifest["kernels"][family] = {
+            manifest["kernels"][family]["host_audit"] = {
+                "architecture": "sm_89",
                 "sha256": hashlib.sha256(cubin.read_bytes()).hexdigest(),
                 "bytes": cubin.stat().st_size,
-                "entries": entries,
                 "sass_verified": True,
             }
         (staging / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
         args.output.mkdir(parents=True, exist_ok=True)
         for artifact in staging.iterdir():
             shutil.copyfile(artifact, args.output / artifact.name)
-        # Remove obsolete artifacts from the previous NVPTX pipeline.
+        # Remove machine code left by older builds. Optional audit artifacts
+        # stay in a separate directory and never enter the guest boot image.
+        audit_directory = args.output / "host-audit"
+        if args.audit:
+            audit_directory.mkdir(exist_ok=True)
         for artifact in args.output.iterdir():
-            if artifact.suffix == ".ptx" or (
-                artifact.stem in ("relu", "matmul")
-                and artifact.suffix in (".cubin", ".sass")
-            ):
+            if artifact.suffix in (".cubin", ".sass"):
+                if args.audit and (staging / artifact.name).is_file():
+                    shutil.move(artifact, audit_directory / artifact.name)
+                else:
+                    artifact.unlink()
+            elif artifact.suffix == ".ptx":
                 artifact.unlink()
     print(
-        f"CUTILE_BUILD_OK architecture=sm_89 families={len(FAMILIES)} output={args.output}"
+        f"CUTILE_BUILD_OK format=tile-ir code_generation_os=d3os host_audit={args.audit} families={len(FAMILIES)} output={args.output}"
     )
 
 

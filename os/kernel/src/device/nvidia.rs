@@ -8,6 +8,7 @@ use core::ptr::NonNull;
 use d3os_nvidia::firmware;
 
 mod compute;
+mod compiler;
 mod flcn;
 mod gsp;
 mod mmu;
@@ -15,6 +16,7 @@ mod rm;
 mod service;
 mod transfer;
 pub(crate) use service::{release_process, request as compute_request};
+pub(crate) use compiler::schedule as schedule_compiler;
 
 #[derive(Debug)]
 enum Error {
@@ -271,20 +273,6 @@ pub fn bootstrap() {
         let result = compute.initialize(&mut device).and_then(|()| {
             compute.prepare_submission(&device)?;
             compute.queue_test(&device)?;
-            if let Ok(cubin) = gsp::asset("usr/share/nvidia/vector-add.cubin") {
-                compute.vector_add_test(&device, cubin)?;
-            }
-            if let Ok(cubin) = gsp::asset("usr/share/nvidia/tensor-matmul.cubin") {
-                compute.tensor_test(&device, cubin)?;
-            }
-            if let Ok(cubin) = gsp::asset("usr/share/nvidia/inference.cubin") {
-                compute.inference_module = Some(cubin);
-                compute.timestamp_test(&device, cubin)?;
-                compute.log_clocks(&mut device)?;
-                compute.local_stack_test(&device, cubin)?;
-                compute.prepare_staging(&device)?;
-                compute.transfer_test(&device)?;
-            }
             Ok(())
         });
         compute.healthy = result.is_ok();

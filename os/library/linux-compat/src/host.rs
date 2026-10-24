@@ -38,5 +38,6 @@ pub unsafe trait Host {
     fn realtime_ms(&self) -> Result<u64>;
     fn monotonic_ms(&self) -> u64;
     fn cpu_time_ms(&self) -> u64;
+    fn cpu_count(&self) -> usize;
     fn yield_now(&self);
 }

@@ -171,6 +171,10 @@ unsafe impl Host for KernelHost {
             .map(|p| (p.utime.load(Ordering::Relaxed) + p.stime.load(Ordering::Relaxed)) * 10)
             .unwrap_or(0)
     }
+
+    fn cpu_count(&self) -> usize {
+        crate::process::scheduler::cpu_count() as usize
+    }
     fn yield_now(&self) {
         crate::process::core_local_storage::scheduler().yield_now();
     }

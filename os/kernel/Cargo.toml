@@ -13,7 +13,7 @@ doctest = false
 bench = false
 
 [features]
-linux_test = ["dep:sha2"]
+linux_test = []
 virtio_tests = []
 default = ["frame_alloc_lockfree"]
 frame_alloc_lockfree = []
@@ -21,7 +21,7 @@ frame_alloc_locking = []
 
 [dependencies]
 linux-compat = { path = "../library/linux-compat" }
-sha2 = { version = "0.10", default-features = false, optional = true }
+sha2 = { version = "0.10", default-features = false }
 # Local dependencies
 d3os-nvidia = { path = "../library/nvidia" }
 graphic = { path = "../library/graphic" }

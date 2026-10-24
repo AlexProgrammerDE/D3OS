@@ -24,6 +24,8 @@ def wait_for(serial, process, expected, deadline):
             marker in text
             for marker in (
                 "NVIDIA initialization failed:",
+                "NVIDIA_COMPILE_FAIL",
+                "Linux process fault",
                 "NVIDIA_DOOM_FAIL",
                 "INFERENCE_FAIL",
                 "panicked at",
@@ -195,7 +197,7 @@ def main():
         "--kernels",
         str(ROOT / "target/nvidia/kernels"),
         "--memory-mib",
-        "12288" if args.workload == "qwen" else "2048",
+        "12288" if args.workload == "qwen" else "4096",
         "--inference",
         f"gpu-{args.workload}",
     ]
@@ -207,7 +209,7 @@ def main():
         )
         qmp = None
         try:
-            deadline = time.monotonic() + 300
+            deadline = time.monotonic() + 600
             # Wait for this invocation's serial file, not the previous VM log.
             while True:
                 log.flush()
@@ -221,6 +223,8 @@ def main():
                 time.sleep(0.1)
             qmp = harness.Qmp(directory / "qmp.sock", process, deadline)
             text = wait_for(serial, process, "name = shell", deadline)
+            text = wait_for(serial, process, "NVIDIA_COMPILE_READY os=d3os", deadline)
+            deadline = time.monotonic() + 300
             for marker in (
                 "NVIDIA_KERNEL_OK",
                 "NVIDIA_TENSOR_OK kernel=tensor_matmul_f16",

@@ -1,7 +1,8 @@
 # Train MNIST inside D3OS
 
 Use this procedure to train a convolutional classifier with Burn on the native NVIDIA backend.
-The host stages the dataset and precompiled kernels. D3OS performs training, evaluation, checkpoint creation, and inference export.
+The host stages the dataset, portable Tile IR, and compiler tools.
+D3OS compiles the GPU code, then performs training, evaluation, checkpoint creation, and inference export.
 
 The model uses two convolutions, max pooling, and two dense layers with ten output logits.
 Its eight parameter tensors use FP32 storage. Matrix products use compensated TF32 Tensor Core operations.

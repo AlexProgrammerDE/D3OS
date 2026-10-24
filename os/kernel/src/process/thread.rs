@@ -96,6 +96,7 @@ struct Stacks {
 ///   can safely return.
 pub struct Thread {
     initial_stack_pointer: Option<VirtAddr>,
+    linux_frame: Option<(linux_compat::SyscallFrame, u64)>,
     id: usize,
     stacks: Mutex<Stacks>,
     process: Arc<Process>, // reference to my process
@@ -135,6 +136,7 @@ impl Thread {
         // Create the thread struct
         let thread = Thread {
             initial_stack_pointer: None,
+            linux_frame: None,
             id: tid,
             stacks: Mutex::new(Stacks::new(kernel_stack, user_stack)),
             process: process_manager()
@@ -212,6 +214,7 @@ impl Thread {
         // create user thread and prepare the stack for starting it later
         let thread = Thread {
             initial_stack_pointer,
+            linux_frame: None,
             id: tid,
             stacks: Mutex::new(Stacks::new(kernel_stack, user_stack)),
             process: parent,
@@ -226,19 +229,32 @@ impl Thread {
         Arc::new(thread)
     }
 
+    pub(crate) fn new_linux_thread(parent: Arc<Process>, mut frame: linux_compat::SyscallFrame, stack: u64, tls: u64) -> Arc<Thread> {
+        frame.number = 0;
+        frame.rsp = stack;
+        let entry: extern "sysv64" fn() = unsafe { core::mem::transmute(frame.rcx as usize) };
+        let mut thread = Self::new_user_thread_with_stack(parent, VirtAddr::new(frame.rcx), entry, Some(VirtAddr::new(stack)));
+        Arc::get_mut(&mut thread).expect("new thread is private").linux_frame = Some((frame, tls));
+        thread
+    }
+
     /// Called first for both a new kernel and a new user thread
     fn kickoff_kernel_thread() -> ! {
-        let scheduler = scheduler();
-        scheduler.set_init(); // scheduler initialized
-
-        let thread = scheduler.current_thread();
-        tss().lock().privilege_stack_table[0] = thread.kernel_stack_addr(); // get stack pointer for kernel stack
+        let thread = x86_64::instructions::interrupts::without_interrupts(|| {
+            scheduler().set_init();
+            let thread = scheduler().current_thread();
+            tss().lock().privilege_stack_table[0] = thread.kernel_stack_addr();
+            thread
+        });
 
         if thread.is_kernel_thread() {
             assert!(thread.user_kickoff.is_null());
             (thread.entry)(); // Directly call the entry function of kernel thread
             drop(thread); // Manually decrease reference count, because exit() will never return
-            scheduler.exit();
+            // The entry may block and migrate. Select the current CPU's
+            // scheduler again, and keep that lookup valid until switching out.
+            x86_64::instructions::interrupts::disable();
+            scheduler().exit();
         } else {
             assert!(!thread.user_kickoff.is_null());
             let thread_ptr = ptr::from_ref(thread.as_ref());
@@ -364,6 +380,15 @@ impl Thread {
 
     /// Switch a thread to user mode by preparing a fake stackframe
     fn switch_to_user_mode(&self) -> ! {
+        if let Some((frame, tls)) = self.linux_frame {
+            let values = [frame.r15, frame.r14, frame.r13, frame.r12, frame.rbp, frame.rbx,
+                frame.r11, frame.r10, frame.r9, frame.r8, frame.rsi, frame.rdi,
+                frame.rdx, frame.rcx, 0, frame.rcx, SegmentSelector::new(4, Ring3).0 as u64,
+                (frame.r11 & 0x240dd5) | 0x202, frame.rsp, SegmentSelector::new(3, Ring3).0 as u64];
+            // Keep the frame below the live Rust callers. Writing a longer
+            // register frame at the stack's top can overwrite their spills.
+            unsafe { thread_linux_start(values.as_ptr() as u64, tls) }
+        }
         let old_rsp0: u64;
 
         {
@@ -574,6 +599,17 @@ impl Thread {
         // no wake pending -> block is allowed
         true
     }
+}
+
+/// Resume a cloned Linux syscall with the parent's registers and a zero result.
+#[unsafe(naked)]
+unsafe extern "C" fn thread_linux_start(stack: u64, tls: u64) -> ! {
+    naked_asm!(
+        "mov rsp, rdi", "wrfsbase rsi",
+        "pop r15", "pop r14", "pop r13", "pop r12", "pop rbp", "pop rbx",
+        "pop r11", "pop r10", "pop r9", "pop r8", "pop rsi", "pop rdi",
+        "pop rdx", "pop rcx", "pop rax", "iretq"
+    )
 }
 
 /// Low-level function for starting a thread in kernel mode

@@ -21,7 +21,8 @@ These measurements use the same physical GPU through VFIO, with four KVM virtual
 Only one guest owns the GPU at a time.
 D3OS uses its Rust driver, signed 570.144 firmware, and native Rust kernels.
 The Linux reference guest uses driver 615.78.08 and CUDA libraries installed on the host.
-Those libraries remain inside the reference guest. D3OS does not link or load them.
+The Linux GPU driver and execution libraries remain inside the reference guest.
+D3OS uses the NVIDIA compiler tools through its Linux execution personality, with its native Rust driver handling GPU execution.
 
 The resident-model benchmarks separate file access, model upload, session allocation, prompt processing, and generation.
 Reference comparisons run after the timed work.
@@ -40,6 +41,88 @@ The boot check calibrates a cuTile kernel to run for at least 10 ms and compares
 `device_mean_us` includes device scheduling and completion work, while `instrumented_mean_us` also includes CPU submission and waiting.
 The first `mean_us` pass runs without timestamp instrumentation.
 These measurements separate end-to-end overhead from device throughput. They are not interchangeable timers.
+
+## Compile portable kernels inside D3OS
+
+The host now exports Tile IR instead of injecting GPU machine code.
+The D3OS worker runs CUDA 13.4.92 `tileiras` and its `ptxas` subprocess inside the guest.
+PTX inputs use `ptxas` directly. Each kernel family accepts exactly one input format.
+The driver selects `sm_89` from the current Ada GPU's register identity.
+Generated modules remain immutable in a cache for the lifetime of the VM.
+
+The audited boot image contains three Tile IR modules and the compiler runtime, with no cubin files.
+The generated vector, tensor, and 174-entry inference modules match the retained host binaries byte for byte.
+The same final inputs, compiler executables, and runtime libraries also produce identical outputs inside Linux.
+The final comparison uses four KVM CPUs, 4 GiB of guest RAM, and host CPUs `8,10,12,14`.
+Linux copies compiler files and inputs into guest tmpfs before starting its timer.
+
+| Execution OS | Compiler CPU availability | Cold compilation of all three modules |
+| --- | --- | --- |
+| Linux VM | Restricted to CPU 0 | 72.094 s |
+| Linux VM | CPUs 0 through 3 | 72.141 s |
+| D3OS VM, early GPU request | Four online CPUs | 153.175 s |
+| D3OS VM, DOOM boot | Four online CPUs | 83.027 s |
+
+These are individual final-input trials. D3OS ranges from 1.15 to 2.12 times the four-CPU Linux sample.
+The DOOM image uses identical compiler assets and inputs and produces identical binaries.
+The large variation needs scheduler and CPU-time profiling before attributing a fixed slowdown to compilation itself.
+D3OS separately spends 0.634 and 0.635 seconds validating the compiled code on the GPU.
+Compilation and validation are load phases, excluded from warm model throughput.
+The earlier Linux bundle also completed three trials per CPU mask, averaging 72.637 and 72.044 seconds respectively.
+Its architecture hints differ from the final input, while its generated binaries are identical.
+
+An early GPU request blocks without holding the GPU lock, then resumes after compilation and validation.
+That path passes the native GPU operator suite and all eight AlexNet layer references.
+The following AlexNet sample reports 1.090 ms per forward pass over 100 repetitions.
+The preceding D3OS samples were 0.970 and 1.060 ms. This migration establishes no throughput improvement.
+The kernel context-switch interrupt test and three repeated native CPU inference runs also pass.
+
+Qwen 0.8B passes all 29 reference positions, 24 layers, batched execution, final cache comparisons, and 105 tokenizer cases.
+Its two uninstrumented warm D3OS samples measure 239.700 and 258.065 tokens per second, with 9 ms prompt processing.
+DOOM passes 600 pixel-reference frames, controls, cache purges, atlas rollover, and GPU inference after exit.
+Its subsequent D3OS GPU timedemo measures 1,617.50 FPS for 7,117 game ticks and 154 real ticks.
+The preceding D3OS GPU result was 1,607.06 FPS. The one-tick difference does not establish an optimization.
+The retained Linux headless software samples remain 1,845.15 and 2,306.44 FPS, with different presentation costs.
+
+The early request exposed a kernel-thread exit bug: startup retained a CPU-local scheduler across a migratable entry function.
+Thread return now selects the current CPU's scheduler with interrupts masked until the switch.
+Wait queues also register parking before releasing their queue lock, and remote wakes preserve that parking transition.
+These changes prevent discarded wakes and exiting through a scheduler from another CPU.
+The final waiter fix also cancels parking when the target has already entered a local ready queue.
+The final image repeats the context-switch, early-request, GPU operator, and AlexNet checks successfully.
+That early-request compilation takes 155.565 seconds, with a separate 0.632-second validation phase.
+
+Reproduce the compiler comparison with:
+
+```bash
+taskset -c 8,10,12,14 python3 tools/nvidia/linux-reference.py \
+  --directory target/nvidia/large-qwen/guest --compiler-benchmark \
+  --compiler-repeats 1 --memory-mib 4096 --timeout 600
+```
+
+The default repeat count is three per CPU mask.
+Evidence is under `target/nvidia/guest-compile/`, including `matched-compiler-results.json`, input manifests, and serial logs.
+
+The cache does not survive reboot, and startup still compiles the complete bundle.
+Persistent caching and smaller, demand-loaded modules remain required startup improvements.
+NVIDIA's [compute cache](https://docs.nvidia.com/cuda/cuda-programming-guide/01-introduction/cuda-platform.html) avoids repeated PTX compilation.
+PyTorch also [caches generated kernels across processes](https://docs.pytorch.org/tutorials/recipes/torch_compile_caching_tutorial.html).
+
+Portable hints preserve the CTA contract for all twelve targets supported by the pinned assembler.
+The vector input also assembles for `sm_80` and `sm_120` on the host, without claiming execution on those GPUs.
+The native GPU driver still targets the RTX 4090 Laptop GPU. Portable input does not implement drivers for other architectures.
+
+The 9B regression uses `tools/nvidia/fixtures/vector-add.ptx` in place of the vector Tile IR input.
+The other two families retain their normal Tile IR inputs. The boot passes vector and Tensor Core execution checks.
+All 32,033,280 independent FP32 reference logits pass with zero tolerance failures.
+Warm D3OS generation measures 31.715 and 31.667 tokens per second; the preceding samples were 32.611 and 32.454.
+One greedy selection differs from the retained Linux CUDA trace, while the benchmark uses the same teacher-forced inputs.
+The retained Linux CUDA 9B baseline is 58.3715 tokens per second. The throughput gap remains open.
+
+The 27B regression also passes all 32,033,280 independent FP32 reference logits with zero tolerance failures.
+Warm D3OS generation measures 5.339 and 5.118 tokens per second, compared with the preceding 5.461 and 5.224 samples.
+Two greedy selections differ from the retained Linux CUDA trace; the same teacher-forced inputs remain enforced.
+The retained Linux CUDA 27B baseline is 34.4025 tokens per second. Comparable throughput is not established.
 
 ## Native Burn integer coverage
 

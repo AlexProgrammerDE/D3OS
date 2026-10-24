@@ -3,6 +3,7 @@
 
 import argparse
 import importlib.util
+import json
 import os
 import re
 import resource
@@ -53,7 +54,17 @@ def main():
     parser.add_argument(
         "--firmware", type=Path, help="stage pinned NVIDIA firmware from this directory"
     )
-    parser.add_argument("--kernels", type=Path, help="stage native GPU kernel binaries")
+    parser.add_argument(
+        "--kernels",
+        type=Path,
+        help="stage portable Tile IR or PTX kernels for compilation inside D3OS",
+    )
+    parser.add_argument(
+        "--compiler-toolkit",
+        type=Path,
+        default=ROOT / "target/nvidia/cutile-toolkit/packages/nvidia/cu13",
+        help="pinned CUDA compiler tools to run inside D3OS",
+    )
     parser.add_argument(
         "--inference",
         choices=(
@@ -110,6 +121,12 @@ def main():
         help="verify native device boot and the selected inference command, then stop",
     )
     parser.add_argument("--timeout", type=float, default=180)
+    parser.add_argument(
+        "--compile-timeout",
+        type=float,
+        default=600,
+        help="separate boot and GPU compilation budget in seconds",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
         "--gdb-port", type=int, help="pause at reset for a local GDB connection"
@@ -183,6 +200,7 @@ def main():
         not 512 <= args.memory_mib <= 32768
         or not 1 <= args.cpus <= 64
         or args.timeout <= 0
+        or args.compile_timeout <= 0
     ):
         parser.error("use 512 to 32768 MiB, 1 to 64 CPUs, and a positive timeout")
     devices = vfio_devices(args.gpu)
@@ -192,8 +210,16 @@ def main():
         "cpu-self-test",
         "fwcfg-self-test",
         "burn-self-test",
-    ) and (not args.kernels or not (args.kernels / "inference.cubin").is_file()):
-        parser.error("GPU inference requires --kernels with inference.cubin")
+    ) and (
+        not args.kernels
+        or not any(
+            (args.kernels / f"inference.{suffix}").is_file()
+            for suffix in ("tilebc", "ptx")
+        )
+    ):
+        parser.error(
+            "GPU inference requires --kernels with inference.tilebc or inference.ptx"
+        )
     if args.image and args.firmware:
         parser.error("use either --image or --firmware")
     if not args.firmware:
@@ -221,9 +247,15 @@ def main():
             (args.firmware / name, Path("usr/share/nvidia") / name) for name in names
         ]
         if args.kernels:
+            spec = importlib.util.spec_from_file_location(
+                "guest_compiler", Path(__file__).with_name("guest-compiler.py")
+            )
+            compiler = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(compiler)
             assets.extend(
-                (source, Path("usr/share/nvidia") / source.name)
-                for source in args.kernels.glob("*.cubin")
+                compiler.prepare(
+                    args.kernels.resolve(), args.compiler_toolkit.resolve(), directory
+                )
             )
         if args.inference.startswith("gpu-doom"):
             assets.extend(
@@ -338,21 +370,40 @@ def main():
                 if process.returncode:
                     raise RuntimeError((directory / "qemu.log").read_text())
                 return
-            deadline = time.monotonic() + args.timeout
+            compilation_deadline = time.monotonic() + args.compile_timeout
+            deadline = (
+                time.monotonic()
+                + args.timeout
+                + (args.compile_timeout if args.kernels else 0)
+            )
             qmp = harness.Qmp(monitor, process, deadline)
             started = False
             controls = False
             while time.monotonic() < deadline:
                 text = serial.read_text(errors="replace") if serial.is_file() else ""
                 if (
+                    args.kernels
+                    and not started
+                    and time.monotonic() > compilation_deadline
+                ):
+                    raise TimeoutError(f"D3OS GPU compilation timed out: {serial}")
+                if (
                     "panicked at" in text
                     or "INFERENCE_FAIL" in text
                     or "NVIDIA initialization failed:" in text
+                    or "NVIDIA_COMPILE_FAIL" in text
+                    or "Linux process fault" in text
                     or "NVIDIA_DOOM_FAIL" in text
                     or "NVIDIA_DOOM_MISMATCH" in text
                 ):
                     raise RuntimeError(f"guest failed: {serial}")
-                if "name = shell" in text and not started:
+                if (
+                    "name = shell" in text
+                    and not started
+                    and (not args.kernels or "NVIDIA_COMPILE_READY os=d3os" in text)
+                ):
+                    # Compile and validate before starting the workload budget.
+                    deadline = time.monotonic() + args.timeout
                     time.sleep(1)
                     if args.inference.startswith("gpu-doom"):
                         flag = (
@@ -504,7 +555,6 @@ def main():
                         )
                     if (
                         args.kernels
-                        and (args.kernels / "inference.cubin").is_file()
                         and "NVIDIA_TRANSFER_OK cases=6 guards=ok bits=exact"
                         not in text
                     ):
@@ -513,17 +563,12 @@ def main():
                         )
                     if (
                         args.kernels
-                        and (args.kernels / "inference.cubin").is_file()
                         and "NVIDIA_LOCAL_STACK_OK count=257 backend=nvidia" not in text
                     ):
                         raise RuntimeError(
                             "native GPU local-stack verification did not succeed"
                         )
-                    if (
-                        args.kernels
-                        and (args.kernels / "inference.cubin").is_file()
-                        and "NVIDIA_DEVICE_TIMER_OK" not in text
-                    ):
+                    if args.kernels and "NVIDIA_DEVICE_TIMER_OK" not in text:
                         raise RuntimeError(
                             "native GPU timestamp verification did not succeed"
                         )
@@ -549,14 +594,33 @@ def main():
                         )
                     if args.firmware and "NVIDIA_GSP_BOOT_OK" not in text:
                         raise RuntimeError("native GSP firmware boot did not succeed")
+                    if args.kernels and "NVIDIA_COMPILE_READY os=d3os" not in text:
+                        raise RuntimeError("in-guest GPU compilation did not succeed")
+                    if args.kernels:
+                        manifest = json.loads(
+                            (directory / "guest-compiler-manifest.json").read_text()
+                        )
+                        for family in compiler.FAMILIES:
+                            record = re.search(
+                                rf"NVIDIA_COMPILE_MODULE os=d3os family={re.escape(family)} input=(tile_ir|ptx) input_sha256=([0-9a-f]{{64}}) target=(sm_[0-9]+) compile_ms=([0-9]+) bytes=([0-9]+) sha256=([0-9a-f]{{64}}) exit=0",
+                                text,
+                            )
+                            suffix = (
+                                "tilebc" if record and record[1] == "tile_ir" else "ptx"
+                            )
+                            asset = f"usr/share/nvidia/{family}.{suffix}"
+                            if (
+                                not record
+                                or record[2] != manifest["assets"][asset]["sha256"]
+                            ):
+                                raise RuntimeError(
+                                    f"guest did not compile the staged input: {family}"
+                                )
                     if args.kernels and "NVIDIA_KERNEL_OK" not in text:
                         raise RuntimeError(
                             "native GPU kernel verification did not succeed"
                         )
-                    if (
-                        args.kernels
-                        and (args.kernels / "tensor-matmul.cubin").is_file()
-                    ):
+                    if args.kernels:
                         for symbol in ("tensor_matmul_f16", "tensor_matmul_bf16"):
                             if f"NVIDIA_TENSOR_OK kernel={symbol} cases=5" not in text:
                                 raise RuntimeError(

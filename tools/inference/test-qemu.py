@@ -200,9 +200,8 @@ def prepare(directory, mode, qwen_assets, extra_assets=()):
     with tarfile.open(
         stage / "initrd.tar", "w", format=tarfile.USTAR_FORMAT
     ) as archive:
-        archive.add(initrd / "bin", arcname="bin")
-        if mode != "self-test" or extra_assets:
-            archive.add(initrd / "usr", arcname="usr")
+        for child in sorted(initrd.iterdir()):
+            archive.add(child, arcname=child.name)
     shutil.copyfile(ROOT / "loader/kernel.elf", stage / "kernel.elf")
     shutil.copyfile(ROOT / "loader/towboot.toml", stage / "towboot.toml")
     image = directory / "d3os.img"

@@ -1,4 +1,4 @@
-//! Compile Rust tile programs ahead of time for the native D3OS driver.
+//! Export portable Rust Tile IR, with optional host assembly for compiler audits.
 use cutile::compile_api::KernelCompiler;
 use cutile_ir::{
     Module,
@@ -20,7 +20,7 @@ fn threads(name: &str) -> u32 {
     }
 }
 
-fn compile(output: &Path, family: &str, names: &[&str], toolkit: &Path) -> Result<(), Box<dyn std::error::Error>> {
+fn compile(output: &Path, family: &str, names: &[&str], toolkit: Option<&Path>) -> Result<(), Box<dyn std::error::Error>> {
     let mut module = Module::new(family);
     for name in names {
         eprintln!("Compiling cuTile {name}");
@@ -29,12 +29,19 @@ fn compile(output: &Path, family: &str, names: &[&str], toolkit: &Path) -> Resul
             .options(cutile::tile_kernel::CompileOptions::default().num_worker_warps_per_cta((threads(name) / 32).max(4) as i32))
             .bytecode_version(BytecodeVersion::V13_4)
             .compile()?;
-        link::append(&mut module, artifact.module(), name)?;
+        let mut portable = artifact.into_module();
+        link::portable_hints(&mut portable)?;
+        link::append(&mut module, &portable, name)?;
     }
     let ir = output.join(format!("{family}.tilebc"));
     let cubin = output.join(format!("{family}.cubin"));
     std::fs::write(output.join(format!("{family}.mlir")), module.to_mlir_text())?;
     std::fs::write(&ir, write_bytecode_version(&module, BytecodeVersion::V13_4)?)?;
+    let Some(toolkit) = toolkit else {
+        let metadata: Vec<_> = names.iter().map(|name| serde_json::json!({"entry": name, "threads": threads(name)})).collect();
+        std::fs::write(output.join(format!("{family}.json")), serde_json::to_vec_pretty(&metadata)?)?;
+        return Ok(());
+    };
     let status = Command::new(toolkit.join("bin/tileiras"))
         .args(["--gpu-name", "sm_89", "--opt-level", "3", "-o"])
         .arg(&cubin)
@@ -76,12 +83,19 @@ fn compile(output: &Path, family: &str, names: &[&str], toolkit: &Path) -> Resul
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let output = PathBuf::from(std::env::args().nth(1).ok_or("usage: d3os-gpu-kernels OUTPUT_DIRECTORY [ENTRY ...]")?);
-    let toolkit = PathBuf::from(std::env::var_os("CUDA_TOOLKIT_PATH").ok_or("CUDA_TOOLKIT_PATH must point to the host compiler toolkit")?);
+    let audit = std::env::args().skip(2).any(|arg| arg == "--audit");
+    let toolkit = if audit {
+        Some(PathBuf::from(
+            std::env::var_os("CUDA_TOOLKIT_PATH").ok_or("CUDA_TOOLKIT_PATH must point to the audit compiler toolkit")?,
+        ))
+    } else {
+        None
+    };
     std::fs::create_dir_all(&output)?;
-    let names: Vec<String> = std::env::args().skip(2).collect();
+    let names: Vec<String> = std::env::args().skip(2).filter(|arg| arg != "--audit").collect();
     if names.is_empty() {
-        compile(&output, "vector-add", &["vector_add"], &toolkit)?;
-        compile(&output, "tensor-matmul", &["tensor_matmul_f16", "tensor_matmul_bf16"], &toolkit)?;
+        compile(&output, "vector-add", &["vector_add"], toolkit.as_deref())?;
+        compile(&output, "tensor-matmul", &["tensor_matmul_f16", "tensor_matmul_bf16"], toolkit.as_deref())?;
         let mut inference: Vec<&str> = (0..KERNEL_COUNT).map(|id| Kernel::from_raw(id as u32).expect("kernel ID").symbol()).collect();
         inference.extend([
             "vector_project_tf32x3",
@@ -125,10 +139,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         inference.extend(d3os_nvidia::compute::words::WordOp::ALL.iter().skip(1).map(|op| op.symbol()));
         inference.extend(d3os_nvidia::compute::indexing::Scatter::ALL.iter().skip(1).map(|op| op.symbol()));
         inference.extend(["burn_avg_pool", "burn_adaptive_avg_pool", "burn_adaptive_avg_pool_backward"]);
-        compile(&output, "inference", &inference, &toolkit)?;
+        compile(&output, "inference", &inference, toolkit.as_deref())?;
     } else {
         let names: Vec<&str> = names.iter().map(String::as_str).collect();
-        compile(&output, "kernels", &names, &toolkit)?;
+        compile(&output, "kernels", &names, toolkit.as_deref())?;
     }
     Ok(())
 }

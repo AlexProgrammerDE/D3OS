@@ -13,6 +13,7 @@ pub struct StartContext {
 pub enum SyscallOutcome {
     Return(isize),
     Exit(u8),
+    CloneThread(CloneThread),
     Vfork {
         stack: u64,
     },
@@ -22,6 +23,36 @@ pub enum SyscallOutcome {
         environment: Vec<String>,
     },
     Wait(WaitRequest),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CloneThread {
+    pub stack: u64,
+    pub tls: Option<u64>,
+    pub parent_tid: Option<u64>,
+    pub child_tid: Option<u64>,
+    pub clear_tid: Option<u64>,
+}
+
+impl CloneThread {
+    fn new(flags: u64, stack: u64, parent_tid: u64, child_tid: u64, tls: u64) -> Result<Self> {
+        const REQUIRED: u64 = 0x100 | 0x200 | 0x400 | 0x800 | 0x10000 | 0x40000;
+        const SET_TLS: u64 = 0x80000;
+        const PARENT_TID: u64 = 0x100000;
+        const CLEAR_TID: u64 = 0x200000;
+        const CHILD_TID: u64 = 0x1000000;
+        if flags & REQUIRED != REQUIRED || flags & !(REQUIRED | SET_TLS | PARENT_TID | CLEAR_TID | CHILD_TID) != 0 {
+            return Err(-38);
+        }
+        stack.checked_sub(16).ok_or(-22isize)?;
+        Ok(Self {
+            stack,
+            tls: (flags & SET_TLS != 0).then_some(tls),
+            parent_tid: (flags & PARENT_TID != 0).then_some(parent_tid),
+            child_tid: (flags & CHILD_TID != 0).then_some(child_tid),
+            clear_tid: (flags & CLEAR_TID != 0).then_some(child_tid),
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -173,6 +204,11 @@ impl<H: Host> LinuxProcess<H> {
         self.output(address, data)
     }
 
+    /// Validate a user-memory range before a host operation accesses it.
+    pub fn check_memory(&self, address: u64, length: usize, write: bool) -> Result<()> {
+        self.check(address, length, write)
+    }
+
     /// Execute a Linux syscall in the process's active address space.
     ///
     /// # Safety
@@ -185,7 +221,7 @@ impl<H: Host> LinuxProcess<H> {
             }
             self.close_files();
             SyscallOutcome::Exit(args[0] as u8)
-        } else if matches!(number, 59 | 61 | 247 | 435) {
+        } else if matches!(number, 56 | 59 | 61 | 247 | 435) {
             self.process_call(number, args).unwrap_or_else(SyscallOutcome::Return)
         } else {
             SyscallOutcome::Return(self.call(number, args).unwrap_or_else(|e| e))
@@ -253,12 +289,23 @@ impl<H: Host> LinuxProcess<H> {
 
     fn process_call(&self, number: u64, args: [u64; 6]) -> Result<SyscallOutcome> {
         match number {
+            56 => self.clone_thread(args[0], args[1], args[2], args[3], args[4]),
             435 => {
                 if args[1] < 64 || args[1] > 88 {
                     return Err(-22);
                 }
                 let data = self.bytes(args[0], args[1] as usize)?;
                 let word = |offset| u64::from_le_bytes(data[offset..offset + 8].try_into().unwrap());
+                if word(0) & 0x10000 != 0 {
+                    if word(32) != 0 || data[64..].iter().any(|&byte| byte != 0) {
+                        return Err(-38);
+                    }
+                    let stack = word(40).checked_add(word(48)).ok_or(-22isize)?;
+                    if word(48) < 16 {
+                        return Err(-22);
+                    }
+                    return self.clone_thread(word(0), stack, word(24), word(16), word(56));
+                }
                 // Serialized, shared-address-space spawn with cleared signal handlers.
                 if word(0) != 0x100004100 || word(32) != 17 || [8, 16, 24, 56].iter().any(|&at| word(at) != 0) || data[64..].iter().any(|&byte| byte != 0) {
                     return Err(-38);
@@ -315,6 +362,21 @@ impl<H: Host> LinuxProcess<H> {
             }
             _ => unreachable!(),
         }
+    }
+
+    fn clone_thread(&self, flags: u64, stack: u64, parent_tid: u64, child_tid: u64, tls: u64) -> Result<SyscallOutcome> {
+        let request = CloneThread::new(flags, stack, parent_tid, child_tid, tls)?;
+        self.check(stack - 16, 16, true)?;
+        if request.tls.is_some() {
+            self.check(tls, 8, true)?;
+        }
+        if request.parent_tid.is_some() {
+            self.check(parent_tid, 4, true)?;
+        }
+        if request.clear_tid.is_some() || request.child_tid.is_some() {
+            self.check(child_tid, 4, true)?;
+        }
+        Ok(SyscallOutcome::CloneThread(request))
     }
 
     fn strings(&self, address: u64) -> Result<Vec<String>> {
@@ -891,7 +953,9 @@ impl<H: Host> LinuxProcess<H> {
                 if y < 8 {
                     return Err(-22);
                 }
-                self.output(z, &1u64.to_le_bytes())?;
+                let cpus = self.host.cpu_count().clamp(1, 64);
+                let mask = u64::MAX >> (64 - cpus);
+                self.output(z, &mask.to_le_bytes())?;
                 Ok(8)
             }
             24 => {
@@ -1052,5 +1116,36 @@ pub fn normalize(path: &str, cwd: &str) -> Result<String> {
 impl<H: Host> Drop for LinuxProcess<H> {
     fn drop(&mut self) {
         self.close_files();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CloneThread;
+
+    #[test]
+    fn thread_requests_select_only_flagged_tid_and_tls_actions() {
+        let request = CloneThread::new(0x3d0f00, 0x8000, 0x1000, 0x2000, 0x3000).unwrap();
+        assert_eq!(request.stack, 0x8000);
+        assert_eq!(request.parent_tid, Some(0x1000));
+        assert_eq!(request.clear_tid, Some(0x2000));
+        assert_eq!(request.child_tid, None);
+        assert_eq!(request.tls, Some(0x3000));
+        let inherited = CloneThread::new(0x50f00, 0x8000, 1, 2, 3).unwrap();
+        assert_eq!(
+            (inherited.parent_tid, inherited.child_tid, inherited.clear_tid, inherited.tls),
+            (None, None, None, None)
+        );
+    }
+
+    #[test]
+    fn thread_requests_reject_unshared_state_and_unsupported_clone_modes() {
+        for required in [0x100, 0x200, 0x400, 0x800, 0x10000, 0x40000] {
+            assert_eq!(CloneThread::new(0x3d0f00 & !required, 0x8000, 0, 0, 0), Err(-38));
+        }
+        for unsupported in [17, 0x4000, 0x1000, 0x200000000] {
+            assert_eq!(CloneThread::new(0x3d0f00 | unsupported, 0x8000, 0, 0, 0), Err(-38));
+        }
+        assert_eq!(CloneThread::new(0x3d0f00, 15, 0, 0, 0), Err(-22));
     }
 }

@@ -21,8 +21,15 @@ pub struct ExecutionState {
     program: LinuxProcess<KernelHost>,
     suspended: Option<Box<VforkParent>>,
     children: BTreeMap<u32, Child>,
+    threads: BTreeMap<usize, LinuxThread>,
+    futexes: BTreeMap<u64, Arc<crate::sync::wait_queue::WaitQueue>>,
     #[cfg(feature = "linux_test")]
     report_exit: bool,
+}
+
+struct LinuxThread {
+    id: u32,
+    clear_tid: u64,
 }
 
 struct VforkParent {
@@ -143,6 +150,8 @@ fn prepare(process: &Arc<Process>, launch: Launch<'_>, inherited: Option<&Execut
         program: state,
         suspended: None,
         children: BTreeMap::new(),
+        threads: [(thread.id(), LinuxThread { id: launch.id, clear_tid: 0 })].into(),
+        futexes: BTreeMap::new(),
         #[cfg(feature = "linux_test")]
         report_exit: inherited.is_none(),
     });
@@ -150,13 +159,103 @@ fn prepare(process: &Arc<Process>, launch: Launch<'_>, inherited: Option<&Execut
 }
 
 pub extern "sysv64" fn dispatch(frame: &mut SyscallFrame) -> isize {
+    let native_tid = crate::process::core_local_storage::scheduler().current_thread().id();
     let process = crate::process_manager().read().current_process();
     let mut guard = process.linux_state.lock();
     if let Some(state) = guard.as_mut() {
+        let tid = state.threads.get(&native_tid).map(|thread| thread.id).unwrap_or(state.id());
+        if frame.number == 186 {
+            return if state.suspended.is_some() { state.id() } else { tid } as isize;
+        }
+        if frame.number == 218 {
+            if frame.rdi != 0 && state.check_memory(frame.rdi, 4, true).is_err() {
+                return -14;
+            }
+            if let Some(thread) = state.threads.get_mut(&native_tid) {
+                thread.clear_tid = frame.rdi;
+            }
+            return tid as isize;
+        }
+        if frame.number == 202 {
+            let [address, operation, value, timeout, _, bitset] = frame.arguments();
+            if address & 3 != 0 || state.check_memory(address, 4, false).is_err() {
+                return -22;
+            }
+            let operation = operation & !(0x80 | 0x100);
+            if !matches!(operation, 0 | 1 | 9) || (operation == 9 && bitset != u32::MAX as u64) || (operation != 1 && timeout != 0) {
+                return -38;
+            }
+            let queue = Arc::clone(
+                state
+                    .futexes
+                    .entry(address)
+                    .or_insert_with(|| Arc::new(crate::sync::wait_queue::WaitQueue::new())),
+            );
+            if operation == 1 {
+                let mut count = 0;
+                while count < value && queue.notify_one() {
+                    count += 1;
+                }
+                return count as isize;
+            }
+            drop(guard);
+            let changed = || unsafe { (&*(address as *const core::sync::atomic::AtomicU32)).load(Ordering::Acquire) != value as u32 };
+            let waited = queue.wait_once(changed);
+            drop(process);
+            return if waited { 0 } else { -11 };
+        }
+        if frame.number == 60 && state.suspended.is_none() {
+            if let Some(thread) = state.threads.get(&native_tid) {
+                let address = thread.clear_tid;
+                if address != 0 {
+                    if address & 3 == 0 && state.check_memory(address, 4, true).is_ok() {
+                        unsafe { (&*(address as *const core::sync::atomic::AtomicU32)).store(0, Ordering::Release) };
+                    }
+                    if let Some(queue) = state.futexes.get(&address) {
+                        queue.notify_one();
+                    }
+                }
+            }
+            if state.threads.len() > 1 {
+                state.threads.remove(&native_tid);
+                drop(guard);
+                drop(process);
+                crate::process::core_local_storage::scheduler().exit();
+            }
+        }
         #[cfg(feature = "linux_test")]
         log::info!("LINUX_SYSCALL {} args={:x?}", frame.number, frame.arguments());
         // The scheduler activated this process's page tables before syscall entry.
         match unsafe { state.dispatch(frame.number, frame.arguments()) } {
+            SyscallOutcome::CloneThread(request) => {
+                if state.suspended.is_some() {
+                    return -38;
+                }
+                let id = NEXT_PID.fetch_add(1, Ordering::Relaxed);
+                for address in [request.parent_tid, request.child_tid].into_iter().flatten() {
+                    if let Err(error) = unsafe { state.write_memory(address, &id.to_le_bytes()) } {
+                        return error;
+                    }
+                }
+                let tls = request.tls.unwrap_or_else(|| state.host().thread_pointer());
+                log::info!(
+                    "LINUX_THREAD_CREATE tid={id} rip={:#x} stack={:#x} tls={tls:#x} rdx={:#x} r8={:#x}",
+                    frame.rcx,
+                    request.stack,
+                    frame.rdx,
+                    frame.r8
+                );
+                let thread = Thread::new_linux_thread(Arc::clone(&process), *frame, request.stack, tls);
+                state.threads.insert(
+                    thread.id(),
+                    LinuxThread {
+                        id,
+                        clear_tid: request.clear_tid.unwrap_or(0),
+                    },
+                );
+                crate::process::core_local_storage::scheduler().ready(thread);
+                id as isize
+            }
             SyscallOutcome::Return(value) => {
                 #[cfg(feature = "linux_test")]
                 log::info!("LINUX_RESULT {} => {value}", frame.number);
