@@ -155,6 +155,12 @@ pub extern "C" fn start(multiboot2_magic: u32, multiboot2_addr: *const BootInfor
     );
 
     // Remove all reserved regions from the free regions in 'dram'
+    // Linux ET_EXEC images occupy the reserved low window. Kernel data and page tables must
+    // never use physical frames whose identity mappings a process can replace.
+    dram::insert_reserved(PhysFrameRange {
+        start: PhysFrame::containing_address(PhysAddr::new(linux_compat::LOW_EXECUTABLE_START)),
+        end: PhysFrame::containing_address(PhysAddr::new(linux_compat::LOW_EXECUTABLE_END)),
+    });
     dram::finalize();
     // Dump information about available and reserved memory regions
     dram::dump();
@@ -390,6 +396,9 @@ pub extern "C" fn start(multiboot2_magic: u32, multiboot2_addr: *const BootInfor
     //Initialize tty buffer (Workaround for missing pipes)
     init_tty();
 
+    #[cfg(feature = "linux_test")]
+    crate::linux::test::schedule();
+    #[cfg(not(feature = "linux_test"))]
     if BOOT_TO_GUI {
         // Create and register the 'window_manager' thread in the scheduler
         scheduler().ready(Thread::load_application(

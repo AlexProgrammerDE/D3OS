@@ -74,6 +74,7 @@ pub mod network;
 pub mod process;
 pub mod storage;
 pub mod syscall;
+pub mod linux;
 pub mod sync;
 pub mod boot_ap;
 pub mod ipi;
@@ -340,7 +341,18 @@ pub fn init_initrd(module: &ModuleTag) {
             )
         };
 
-        TarArchiveRef::new(initrd_bytes)
+        TarArchiveRef::new(if (module.start_address() as u64) < linux_compat::LOW_EXECUTABLE_END && (module.end_address() as u64) > linux_compat::LOW_EXECUTABLE_START {
+            // Keep large archives out of the kernel heap. These frames remain
+            // allocated for the lifetime of the immutable ramdisk.
+            let frames = memory::alloc_frames(initrd_bytes.len().div_ceil(PAGE_SIZE));
+            let destination = frames.start.start_address().as_u64() as *mut u8;
+            unsafe {
+                core::ptr::copy_nonoverlapping(initrd_bytes.as_ptr(), destination, initrd_bytes.len());
+                core::slice::from_raw_parts(destination, initrd_bytes.len())
+            }
+        } else {
+            initrd_bytes
+        })
             .expect("Failed to create TarArchiveRef from Multiboot2 module")
     });
 }

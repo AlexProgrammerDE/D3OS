@@ -28,6 +28,11 @@ pub trait FileSystem: Send + Sync {
 
 /// File object operations
 pub trait FileObject: Debug + Send + Sync {
+    /// Borrow immutable file storage when it remains valid for the kernel's lifetime.
+    fn immutable_data(&self) -> Option<&'static [u8]> { None }
+    fn truncate(&self, _size: usize) -> Result<(), Errno> {
+        Err(Errno::ENOTSUP)
+    }
     fn stat(&self) -> Result<Stat, Errno>;
     fn read(&self, _buf: &mut [u8], _offset: usize, _options: OpenOptions) -> Result<usize, Errno>;
     fn write(&self, _buf: &[u8], _offset: usize, _options: OpenOptions) -> Result<usize, Errno>;
@@ -45,6 +50,9 @@ pub trait PipeObject: Debug + Send + Sync {
 
 /// Directory object operations
 pub trait DirectoryObject: Debug + Send + Sync {
+    fn unlink(&self, _name: &str) -> Result<(), Errno> {
+        Err(Errno::ENOTSUP)
+    }
     fn lookup(&self, name: &str) -> Result<NamedObject, Errno>;
     fn create_file(&self, _name: &str, _mode: Mode) -> Result<NamedObject, Errno>;
     fn create_dir(&self, _name: &str, _mode: Mode) -> Result<NamedObject, Errno>;

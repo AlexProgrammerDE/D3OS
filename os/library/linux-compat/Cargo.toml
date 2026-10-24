@@ -1,0 +1,10 @@
+[package]
+name = "linux-compat"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+
+[dependencies]
+naming = { path = "../naming", default-features = false }
+syscall = { path = "../syscall", default-features = false }
+log = "0.4.26"

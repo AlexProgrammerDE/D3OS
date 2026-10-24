@@ -38,7 +38,6 @@ use alloc::alloc::alloc;
 use crate::consts::MAIN_USER_STACK_START;
 use crate::consts::MAX_USER_STACK_SIZE;
 use crate::consts::USER_SPACE_ENV_START;
-use crate::initrd;
 use crate::memory::PAGE_SIZE;
 use crate::process::core_local_storage::scheduler;
 use crate::memory::stack;
@@ -96,6 +95,7 @@ struct Stacks {
 ///   This is needed so that the actual `entry` function of the application
 ///   can safely return.
 pub struct Thread {
+    initial_stack_pointer: Option<VirtAddr>,
     id: usize,
     stacks: Mutex<Stacks>,
     process: Arc<Process>, // reference to my process
@@ -134,6 +134,7 @@ impl Thread {
 
         // Create the thread struct
         let thread = Thread {
+            initial_stack_pointer: None,
             id: tid,
             stacks: Mutex::new(Stacks::new(kernel_stack, user_stack)),
             process: process_manager()
@@ -155,10 +156,14 @@ impl Thread {
     /// `name` is the name of the application, `args` are the arguments passed to the application. \
     /// Returns the main thread of the application which is not yet registered in the scheduler.
     pub fn load_application(path: &str, name: &str, args: &Vec<&str>) -> Result<Arc<Thread>, ProcessLoadError> {
-        let elf_buffer = match initrd().entries().find(|entry| entry.filename().as_str().unwrap() == path) {
-            Some(app) => app.data(),
-            None => return Err(ProcessLoadError::NotFound),
-        };
+        let elf_buffer = crate::linux::read_file(path).map_err(ProcessLoadError::Linux)?;
+        let elf = Elf::parse(&elf_buffer).map_err(|_| ProcessLoadError::ElfInvalid)?;
+        let is_linux = elf.interpreter.is_some() || elf.program_headers.iter().any(|header| {
+            header.p_type == elf64::program_header::PT_LOAD && header.p_memsz != 0 && header.p_vaddr < crate::consts::USER_SPACE_START as u64
+        });
+        if is_linux {
+            return crate::linux::load(path, name, &elf_buffer, args).map_err(ProcessLoadError::Linux);
+        }
 
         let current_process = process_manager().read().current_process();
         let new_process = process_manager().write().create_process(name.into());
@@ -167,7 +172,7 @@ impl Thread {
         info!("load_application: pid = {pid}, name = {name}");
 
         // parse elf file headers and map and copy code if successful
-        let entry = Thread::parse_and_map_elf_bin(&current_process, &new_process, elf_buffer, name)?;
+        let entry = Thread::parse_and_map_elf_bin(&current_process, &new_process, &elf_buffer, name)?;
 
         // create environment for the application and copy arguments
         Thread::copy_args(&new_process, name, args);
@@ -175,10 +180,7 @@ impl Thread {
         // create thread
         // this first thread is special in that there is not really a kickoff;
         // we just jump to the ELF's entry point
-        // TODO: this leaks a kernel address to user space
-        extern "sysv64" fn entry_fn() {
-            unreachable!()
-        }
+        let entry_fn: extern "sysv64" fn() = unsafe { core::mem::transmute(entry as usize) };
         Ok(Self::new_user_thread(new_process, VirtAddr::new(entry), entry_fn))
     }
 
@@ -188,6 +190,10 @@ impl Thread {
     /// with the `entry` function is the parameter. \
     /// This indirection ensures that the thread calls exit when it is done, see `library::concurrent::thread`.
     pub fn new_user_thread(parent: Arc<Process>, kickoff_addr: VirtAddr, entry: extern "sysv64" fn()) -> Arc<Thread> {
+        Self::new_user_thread_with_stack(parent, kickoff_addr, entry, None)
+    }
+
+    pub(crate) fn new_user_thread_with_stack(parent: Arc<Process>, kickoff_addr: VirtAddr, entry: extern "sysv64" fn(), initial_stack_pointer: Option<VirtAddr>) -> Arc<Thread> {
         let pid = parent.id();
         let tid = scheduler::next_thread_id(); // get id for new thread
 
@@ -205,6 +211,7 @@ impl Thread {
 
         // create user thread and prepare the stack for starting it later
         let thread = Thread {
+            initial_stack_pointer,
             id: tid,
             stacks: Mutex::new(Stacks::new(kernel_stack, user_stack)),
             process: parent,
@@ -370,7 +377,7 @@ impl Thread {
 
             stacks.kernel_stack[capacity - 5] = SegmentSelector::new(4, Ring3).0 as u64; // cs = user code segment
             stacks.kernel_stack[capacity - 4] = 0x202; // rflags (Interrupts enabled)
-            stacks.kernel_stack[capacity - 3] = user_stack_addr + (stacks.user_stack.capacity() - 1) as u64 * 8; // rsp for user stack
+            stacks.kernel_stack[capacity - 3] = self.initial_stack_pointer.map(|p| p.as_u64()).unwrap_or(user_stack_addr + (stacks.user_stack.capacity() - 1) as u64 * 8); // rsp for user stack
             stacks.kernel_stack[capacity - 2] = SegmentSelector::new(3, Ring3).0 as u64; // ss = user data segment
 
             stacks.kernel_stack[capacity - 1] = 0x00DEAD00u64; // Dummy return address
@@ -702,7 +709,7 @@ unsafe extern "C" fn thread_switch(current_rsp0: *mut u64, next_rsp0: u64, next_
 
 #[derive(Debug)]
 pub enum ProcessLoadError {
-    NotFound,
+    Linux(isize),
     ElfInvalid,
 }
 

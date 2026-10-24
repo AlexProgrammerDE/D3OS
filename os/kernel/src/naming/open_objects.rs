@@ -169,6 +169,14 @@ pub(super) fn close(fh: usize) -> Result<usize, Errno> {
     get_open_object_table().free_handle(fh)
 }
 
+pub(super) fn duplicate(handle: usize) -> SyscallResult {
+    let table = get_open_object_table();
+    let object = table.lookup_opened_object(handle)?;
+    // Pipe endpoint lifetimes need their own reference accounting.
+    if object.named_object.is_pipe() { return Err(Errno::ENOTSUP); }
+    table.allocate_handle(object)
+}
+
 /*pub(super) fn dump() {
     get_open_object_table().lock().dump();
 }*/

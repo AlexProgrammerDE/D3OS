@@ -86,14 +86,19 @@ pub extern "sysv64" fn sys_thread_count() -> isize {
 
 pub unsafe extern "sysv64" fn sys_process_execute_binary(name_buffer: *const u8, name_length: usize, args: *const Vec<&str>) -> isize {
     let app_name = from_utf8(unsafe { slice_from_raw_parts(name_buffer, name_length).as_ref().unwrap() }).unwrap();
-    let path = format!("bin/{}", app_name);
+    let path = if app_name.contains('/') { app_name.into() } else { format!("/bin/{app_name}") };
 
     match Thread::load_application(&path, app_name, unsafe { args.as_ref().unwrap() }) {
         Ok(thread) => {
             scheduler().ready(Arc::clone(&thread));
             thread.id() as isize
         }
-        Err(ProcessLoadError::NotFound) => Errno::ENOENT.into(),
         Err(ProcessLoadError::ElfInvalid) => Errno::EBADF.into(),
+        Err(ProcessLoadError::Linux(code)) => match code {
+            -2 => Errno::ENOENT.into(),
+            -12 => Errno::ENOMEM.into(),
+            -8 => Errno::EBADF.into(),
+            _ => Errno::EINVAL.into(),
+        },
     }
 }

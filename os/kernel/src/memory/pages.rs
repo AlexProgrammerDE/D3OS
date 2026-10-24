@@ -245,6 +245,9 @@ impl Paging {
                     next_level_table = unsafe { (entry.addr().as_u64() as *mut PageTable).as_mut().unwrap() };
                     next_level_table.zero();
                 } else {
+                    if space == MemorySpace::User {
+                        entry.set_flags(entry.flags() | PageTableFlags::USER_ACCESSIBLE | PageTableFlags::WRITABLE);
+                    }
                     next_level_table = unsafe { (entry.addr().as_u64() as *mut PageTable).as_mut().unwrap() };
                 }
 
