@@ -8,6 +8,7 @@ fn main() {
         "burn-random-common.rs",
         "burn-pooling-common.rs",
         "quantized.rs",
+        "quantized-vector.rs",
         "quad.rs",
         "elementwise.rs",
         "matrix.rs",
@@ -334,7 +335,13 @@ fn main() {
         );
     }
     for (format, name) in [(8, "q8_0"), (11, "q3k"), (12, "q4k"), (13, "q5k"), (14, "q6k")] {
-        source.push_str(&format!("#[cutile::entry()] unsafe fn vector_project_{name}(a:*const f32,b:*const f32,out:*mut f32,_m:u32,k:u32,n:u32,_format:u32){{unsafe{{ vector_project_4::<false,false,{format}>(a,b,b,out,k,n) }} }}\n"));
+        let vector = if format == 8 {
+            "vector_project_4::<false,false,8>".to_owned()
+        } else {
+            format!("vector_project_k::<{format}>")
+        };
+        let args = if format == 8 { "a,b,b,out,k,n" } else { "a,b,out,k,n" };
+        source.push_str(&format!("#[cutile::entry()] unsafe fn vector_project_{name}(a:*const f32,b:*const f32,out:*mut f32,_m:u32,k:u32,n:u32,_format:u32){{unsafe{{ {vector}({args}) }} }}\n"));
         for (prefix, base, arguments, body) in [
             (
                 "project",

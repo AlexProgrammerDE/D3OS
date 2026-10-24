@@ -53,6 +53,7 @@ fn verify(backend: &Nvidia, format: Quantization, bytes: &[u8], expected: &[f32]
     for (rows, inner, outputs) in [
         (1, format.block_elements(), 1),
         (1, format.block_elements() * 3, 5),
+        (1, format.block_elements() * 32, 13),
         (3, format.block_elements(), 5),
         (17, format.block_elements() * 2, 33),
     ] {

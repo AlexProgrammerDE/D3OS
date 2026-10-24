@@ -99,7 +99,7 @@ def main():
     parser.add_argument(
         "--qwen-device-timing",
         action="store_true",
-        help="serialize Qwen benchmark run 1 for per-kernel GPU timestamps",
+        help="collect per-kernel GPU timestamps in a separate large-model pass or small-model run 1",
     )
     parser.add_argument(
         "--qwen-long-bench",
@@ -190,8 +190,11 @@ def main():
                 "firmware filenames must be unique and files must be smaller than 4 GiB"
             )
         firmware_files[name] = path
-    if args.qwen_device_timing and args.inference != "gpu-qwen-bench":
-        parser.error("--qwen-device-timing requires --inference gpu-qwen-bench")
+    if args.qwen_device_timing and args.inference not in (
+        "gpu-qwen-bench",
+        "gpu-qwen-gguf-bench",
+    ):
+        parser.error("--qwen-device-timing requires a Qwen benchmark")
     if args.qwen_long_bench and args.inference != "gpu-qwen-bench":
         parser.error("--qwen-long-bench requires --inference gpu-qwen-bench")
     affinity = ",".join(str(cpu) for cpu in sorted(os.sched_getaffinity(0)))

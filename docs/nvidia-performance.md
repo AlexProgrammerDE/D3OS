@@ -151,6 +151,59 @@ Warm D3OS generation measures 5.339 and 5.118 tokens per second, compared with t
 Two greedy selections differ from the retained Linux CUDA trace; the same teacher-forced inputs remain enforced.
 The retained Linux CUDA 27B baseline is 34.4025 tokens per second. Comparable throughput is not established.
 
+## Packed-block quantized projections
+
+The large-model benchmark now accepts `device-timing` and records separate prefill and decode profiles.
+It preserves three ordinary samples and adds a fourth sample with serialized GPU timestamps.
+Instrumented throughput remains separate from ordinary warm throughput.
+
+The initial 27B profile attributes 96.34 percent of measured GPU execution time to quantized projections.
+Those projections consume 188.392 ms per token, out of 195.559 ms of instrumented GPU execution.
+The new Q3_K, Q4_K, Q5_K, and Q6_K vector kernels decode complete 256-weight blocks.
+They reuse packed payload and scale bytes across eight groups, with four independent accumulators.
+Q8_0 and the batched Tensor Core projection paths retain their existing implementations.
+Activations remain FP32, and the dequantization multiplication order remains unchanged.
+
+The following before/after runs use D3OS, Burn, the native NVIDIA backend, and the same physical GPU.
+They use four guest CPUs, affinity `8,10,12,14`, 15360 MiB of RAM, and a 2048-token FP32 cache.
+Both runs process the same 37 prompt tokens and 128 teacher-forced decode steps.
+The host performs no concurrent builds or numerical verification during these GPU runs.
+
+| 27B measurement | Before | Packed-block kernels |
+| --- | ---: | ---: |
+| Ordinary warm generation, sample 1 | 5.338 tokens/s | 14.481 tokens/s |
+| Ordinary warm generation, sample 2 | 5.121 tokens/s | 14.343 tokens/s |
+| Quantized projection device time | 188.392 ms/token | 59.410 ms/token |
+| Total instrumented GPU execution | 195.559 ms/token | 66.134 ms/token |
+
+Mean warm throughput improves by 2.76 times in these samples.
+The retained Linux llama.cpp CUDA baseline is 34.4025 tokens/s, so the large execution gap remains open.
+All 32,033,280 independent FP32 logit comparisons pass with the original tolerances.
+The maximum absolute error remains `0.00003552437`, with the same two greedy differences from the Linux CUDA trace.
+The complete native selection checksum remains unchanged.
+The GPU operator suite also passes all five quantized formats, including longer reductions and partial output tiles.
+
+The four audited vector kernels have no local register spills.
+Q3_K uses 64 registers instead of 80, Q4_K uses 64 instead of 66, and Q5_K uses 70 instead of 85.
+Q6_K uses 84 registers instead of 88.
+This D3OS boot compiles all three portable modules in 82.223 seconds, followed by 0.632 seconds of GPU validation.
+The earlier compiler variation prevents attributing this load-time difference to the kernel change.
+
+The regression VM also passes all 0.8B model, cache, batch, and tokenizer references.
+Its warm D3OS samples measure 248.062 and 222.222 tokens/s, showing continued timing variation.
+The 9B regression passes all 32,033,280 FP32 logits, with warm samples of 31.644 and 31.558 tokens/s.
+Its maximum absolute error remains `0.000030636787`, with one greedy difference from Linux CUDA.
+AlexNet passes all eight layer references and measures 0.980 ms per forward over 100 repetitions.
+DOOM passes all 600 pixel references, controls, cache purges, atlas rollover, and post-exit GPU inference.
+The following D3OS GPU timedemo reports 1,607.06 FPS, with 7,117 game ticks and 155 real ticks.
+These control workloads establish no performance improvement from the quantized kernel change.
+The regression and AlexNet VMs compile the same bundle in 82.527 and 149.398 seconds respectively.
+This spread confirms that compilation variance remains unresolved.
+
+Evidence is under `target/nvidia/large-profile/`.
+The `27b-serial.log` and `block-27b-serial.log` files retain both complete sessions.
+The `block-comparison.json` file separates ordinary samples from device measurements.
+
 ## Native Burn integer coverage
 
 The I32 backend adds exact wrapping reductions and GPU-generated index ranges.

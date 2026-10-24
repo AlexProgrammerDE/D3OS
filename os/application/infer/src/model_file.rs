@@ -79,7 +79,7 @@ pub(super) fn verify(device: &Device) -> core::result::Result<(), String> {
     Ok(())
 }
 
-pub(super) fn benchmark(device: &Device, backend: &d3os_compute::nvidia::Nvidia) -> core::result::Result<(), String> {
+pub(super) fn benchmark(device: &Device, backend: &d3os_compute::nvidia::Nvidia, device_timing: bool) -> core::result::Result<(), String> {
     let bytes = read_file("/fwcfg/model.reference")?;
     if bytes.len() < 64 || &bytes[..8] != b"D3QLOG\0\0" {
         return Err(String::from("invalid GGUF logit reference"));
@@ -119,15 +119,40 @@ pub(super) fn benchmark(device: &Device, backend: &d3os_compute::nvidia::Nvidia)
         memory.device_cached_bytes,
         memory.device_retired_bytes
     ));
-    for run in 0..3 {
+    // Preserve all three ordinary samples. An optional fourth pass isolates
+    // serialized device timings without presenting them as warm throughput.
+    for run in 0..3 + usize::from(device_timing) {
+        let instrumented = run == 3;
+        let timing = if instrumented {
+            Some(super::benchmark::DeviceTiming::start(backend).map_err(|e| format!("{e}"))?)
+        } else {
+            None
+        };
         let state_start = time::systime().num_milliseconds();
         let mut session = model.session(2048).map_err(|e| format!("{e}"))?;
         let state_ms = time::systime().num_milliseconds() - state_start;
         let prefill_before = backend.service_profile().map_err(|e| format!("{e}"))?;
+        let profile = run == 1 || instrumented;
+        let prefill_profile = if profile {
+            Some((
+                backend.profile().map_err(|e| format!("{e}"))?,
+                backend.queue_profile().map_err(|e| format!("{e}"))?,
+            ))
+        } else {
+            None
+        };
         let start = time::systime().num_milliseconds();
         let mut logits = session.prefill(prompt).map_err(|e| format!("{e}"))?;
         let prefill_ms = time::systime().num_milliseconds() - start;
         let decode_before = backend.service_profile().map_err(|e| format!("{e}"))?;
+        let decode_profile = if profile {
+            Some((
+                backend.profile().map_err(|e| format!("{e}"))?,
+                backend.queue_profile().map_err(|e| format!("{e}"))?,
+            ))
+        } else {
+            None
+        };
         let start = time::systime().num_milliseconds();
         let mut generated = Vec::with_capacity(decode_count);
         let mut checksum = 0u64;
@@ -139,6 +164,22 @@ pub(super) fn benchmark(device: &Device, backend: &d3os_compute::nvidia::Nvidia)
         }
         let decode_ms = time::systime().num_milliseconds() - start;
         let decode_after = backend.service_profile().map_err(|e| format!("{e}"))?;
+        if let Some((kernels, queue)) = decode_profile {
+            let after = backend.profile().map_err(|e| format!("{e}"))?;
+            let queue_after = backend.queue_profile().map_err(|e| format!("{e}"))?;
+            let prefill_phase = if instrumented { "large_prefill_device" } else { "large_prefill" };
+            let decode_phase = if instrumented { "large_decode_device" } else { "large_decode" };
+            let (prefill_kernels, prefill_queue) = prefill_profile.expect("profile snapshots are paired");
+            super::benchmark::profile(&prefill_kernels, &kernels, prefill_phase);
+            super::benchmark::queue_profile(prefill_queue, queue, prefill_phase);
+            super::benchmark::service_profile(&prefill_before, &decode_before, prefill_phase);
+            super::benchmark::profile(&kernels, &after, decode_phase);
+            super::benchmark::queue_profile(queue, queue_after, decode_phase);
+            super::benchmark::service_profile(&decode_before, &decode_after, decode_phase);
+        }
+        if let Some(timing) = timing {
+            timing.finish().map_err(|e| format!("{e}"))?;
+        }
         let upload = d3os_nvidia::compute::UPLOAD as usize;
         let download = d3os_nvidia::compute::DOWNLOAD as usize;
         let prompt_uploads = decode_before[upload].calls.wrapping_sub(prefill_before[upload].calls);
@@ -157,7 +198,7 @@ pub(super) fn benchmark(device: &Device, backend: &d3os_compute::nvidia::Nvidia)
         ));
         let matching_prefix = generated.iter().zip(reference).take_while(|(actual, expected)| actual == expected).count();
         super::report(format_args!(
-            "NATIVE_LARGE_QWEN_BENCH os=d3os framework=burn backend=nvidia run={run} warm={} state_ms={state_ms} prompt_tokens={prompt_count} prefill_ms={prefill_ms} decode_tokens={decode_count} decode_ms={decode_ms} decode_tps={:.3} checksum={checksum} cache=f32 n_ctx=2048 reference_prefix={matching_prefix} inputs=linux_reference eos=continue_for_benchmark",
+            "NATIVE_LARGE_QWEN_BENCH os=d3os framework=burn backend=nvidia run={run} warm={} instrumented={instrumented} state_ms={state_ms} prompt_tokens={prompt_count} prefill_ms={prefill_ms} decode_tokens={decode_count} decode_ms={decode_ms} decode_tps={:.3} checksum={checksum} cache=f32 n_ctx=2048 reference_prefix={matching_prefix} inputs=linux_reference eos=continue_for_benchmark",
             run > 0,
             decode_count as f64 * 1000. / decode_ms.max(1) as f64
         ));

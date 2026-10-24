@@ -11,7 +11,7 @@ fn now() -> i64 {
     time::systime().num_milliseconds()
 }
 
-fn profile(before: &[d3os_nvidia::compute::ProfileEntry], after: &[d3os_nvidia::compute::ProfileEntry], phase: &str) {
+pub(super) fn profile(before: &[d3os_nvidia::compute::ProfileEntry], after: &[d3os_nvidia::compute::ProfileEntry], phase: &str) {
     let total: u64 = before.iter().zip(after).map(|(a, b)| b.cycles.wrapping_sub(a.cycles)).sum();
     for (index, (a, b)) in before.iter().zip(after).enumerate() {
         let calls = b.calls.wrapping_sub(a.calls);
@@ -30,7 +30,7 @@ fn profile(before: &[d3os_nvidia::compute::ProfileEntry], after: &[d3os_nvidia::
     }
 }
 
-fn queue_profile(before: d3os_nvidia::compute::QueueProfile, after: d3os_nvidia::compute::QueueProfile, phase: &str) {
+pub(super) fn queue_profile(before: d3os_nvidia::compute::QueueProfile, after: d3os_nvidia::compute::QueueProfile, phase: &str) {
     report(format_args!(
         "NATIVE_QUEUE_PROFILE phase={phase} batches={} launches={} submit_cycles={} wait_cycles={}",
         after.batches.wrapping_sub(before.batches),
@@ -40,7 +40,7 @@ fn queue_profile(before: d3os_nvidia::compute::QueueProfile, after: d3os_nvidia:
     ));
 }
 
-fn service_profile(before: &[d3os_nvidia::compute::ServiceEntry], after: &[d3os_nvidia::compute::ServiceEntry], phase: &str) {
+pub(super) fn service_profile(before: &[d3os_nvidia::compute::ServiceEntry], after: &[d3os_nvidia::compute::ServiceEntry], phase: &str) {
     for (operation, (before, after)) in before.iter().zip(after).enumerate() {
         let calls = after.calls.wrapping_sub(before.calls);
         if calls == 0 {
@@ -299,8 +299,7 @@ pub(super) fn alexnet(backend: &Nvidia) -> Result<(), String> {
             Ok(())
         }
     }
-    backend.set_device_timing(true).map_err(|e| format!("{e}"))?;
-    let timing = DeviceTiming(Some(backend));
+    let timing = DeviceTiming::start(backend).map_err(|e| format!("{e}"))?;
     let input = BurnTensor::<4>::from_data(TensorData::new(values, record.shape()), &device);
     let mut layers = LayerTiming {
         backend,
@@ -318,10 +317,15 @@ pub(super) fn alexnet(backend: &Nvidia) -> Result<(), String> {
     Ok(())
 }
 
-struct DeviceTiming<'a>(Option<&'a Nvidia>);
+pub(super) struct DeviceTiming<'a>(Option<&'a Nvidia>);
 
-impl DeviceTiming<'_> {
-    fn finish(mut self) -> d3os_compute::Result<()> {
+impl<'a> DeviceTiming<'a> {
+    pub(super) fn start(backend: &'a Nvidia) -> d3os_compute::Result<Self> {
+        backend.set_device_timing(true)?;
+        Ok(Self(Some(backend)))
+    }
+
+    pub(super) fn finish(mut self) -> d3os_compute::Result<()> {
         if let Some(backend) = self.0 {
             backend.set_device_timing(false)?;
             self.0 = None;
@@ -367,8 +371,7 @@ pub(super) fn qwen<const DECODE: usize>(backend: &Nvidia, device_timing: bool) -
     for run in 0..3 {
         let instrumented = device_timing && run == 1;
         let timing = if instrumented {
-            backend.set_device_timing(true).map_err(|error| format!("{error}"))?;
-            Some(DeviceTiming(Some(backend)))
+            Some(DeviceTiming::start(backend).map_err(|error| format!("{error}"))?)
         } else {
             None
         };
