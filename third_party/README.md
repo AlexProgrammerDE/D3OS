@@ -13,7 +13,26 @@ The logging dependency remains available without its `std` feature.
 The optimizer algorithms and checkpoint format remain unchanged.
 
 The workspace uses this source through `[patch.crates-io]`.
-Other Burn crates come from the pinned release in `Cargo.lock`.
+The remaining Burn crates come from the pinned release in `Cargo.lock`.
 The patch must remain until an upstream release supplies equivalent portable optimizer support.
 Host and D3OS target checks cover the dependency graph.
 Runtime validation checks analytic gradients, tensor aliasing, and Adam checkpoint resume.
+
+## burn-dispatch and burn-backend-extension 0.22.1
+
+Sources: [burn-dispatch 0.22.1](https://crates.io/crates/burn-dispatch/0.22.1) and [burn-backend-extension 0.22.1](https://crates.io/crates/burn-backend-extension/0.22.1).
+The original archive SHA-256 values are:
+
+- `burn-dispatch`: `64d255d7609901f7aaf2138b394a6fe8dd8c7b526d1ed2736ba2c643944028fa`.
+- `burn-backend-extension`: `44e9f488bc7c4754f007d1885f72314dc5b91848b05a892b29cd522d083e1d71`.
+
+Burn uses a closed catalog of execution backends. These patches register the D3OS native backend through the optional `d3os-native` feature.
+The extension catalog recognizes `Native`. The dispatcher adds its device, tensor, graph, enumeration, transfer, and autodiff paths.
+Existing backend identifiers retain their values. The native backend uses identifier 12.
+The default device order retains the existing backends and uses Native when no other execution backend is enabled.
+D3OS applications select the native device explicitly through `d3os_ai::native_device()`.
+
+The runtime patch remains compatible with `no_std` and `alloc`. The extension compiler runs on the build host.
+Both packages include the upstream MIT and Apache 2.0 licenses.
+The workspace uses these sources through `[patch.crates-io]`.
+These patches do not replace Burn's optimizer or autodiff algorithms.

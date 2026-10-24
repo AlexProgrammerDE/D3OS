@@ -3,6 +3,7 @@
 
 extern crate alloc;
 
+pub mod backend;
 pub mod convolution;
 mod device;
 pub mod layout;
@@ -13,3 +14,7 @@ mod updates;
 
 pub use device::NativeDevice;
 pub use tensor::NativeTensor;
+
+pub use backend::Native;
+
+pub use d3os_compute::Error as NativeError;

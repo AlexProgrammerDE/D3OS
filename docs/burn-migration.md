@@ -200,9 +200,28 @@ Service counters show no host upload or download during generation. All 161 earl
 Host tests also pass concurrent reservations, aborted submissions, malformed checkpoints, and counter exhaustion.
 AlexNet, Qwen, and DOOM functional regressions pass with the expanded bundle.
 
-These checks validate native primitives. Burn device dispatch and autodiff integration still need implementation.
-Integer division, remainder, and additional training primitives also remain incomplete.
-Full native Burn training, dataset handling, checkpoint export, and workload migration remain incomplete.
+The native backend now registers with Burn's public device dispatch and autodiff.
+Applications open it through `d3os_ai::native_device()` and enable gradients with `device.autodiff()`.
+The backend uses a [local registration patch](../third_party/README.md) for Burn's closed backend catalog.
+CPU execution remains an explicit device choice. Native operations do not silently execute on the CPU.
+
+A ready tensor owns real GPU storage. A failed tensor contains metadata and its original error, with no placeholder allocation.
+Dependent operations propagate that error without allocating or launching GPU work.
+Native readback and synchronization report failures. Recoverable errors leave later valid native operations usable.
+A fatal device error remains poisoned and requires a process restart.
+
+Physical D3OS checks pass public tensor views, matrix products, native error propagation, and convolution derivatives for inputs, weights, and bias.
+They also pass analytic SGD and Adam checkpoint resume through Burn's public module and optimizer APIs.
+The convolutional MNIST model produces gradients for all eight parameter tensors on synthetic inputs.
+One SGD step decreases its loss and preserves a retained model clone.
+The training step uploads no activations and downloads only the two four-byte bounds flags for max-pool gradients.
+Batched gradient products use initialized GPU allocations because individual matrix launches write only one batch.
+
+Operator coverage remains incomplete. Unsupported native operations return execution errors instead of CPU results.
+The gaps include integer division and reductions, scans, some FP32 math, GPU index generation, compaction, and sorting.
+Generic Burn quantization, non-additive indexed updates, three-dimensional convolutions, transposed convolutions, and interpolation also remain incomplete.
+Qwen's packed-weight extensions still need public Burn integration.
+Full MNIST dataset training, complete checkpoint export, and AI workload migration remain incomplete.
 The retained Linux and D3OS measurements are in [Native NVIDIA performance](nvidia-performance.md).
 
 ## Portable runtime validation

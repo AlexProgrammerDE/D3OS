@@ -7,9 +7,10 @@ edition = "2024"
 default = []
 cpu = ["burn/flex"]
 training = ["burn/optim"]
-native = ["dep:d3os-burn-native"]
+native = ["dep:d3os-burn-native", "dep:burn-dispatch", "burn-dispatch/d3os-native"]
 
 [dependencies]
+burn-dispatch = { version = "=0.22.1", default-features = false, optional = true }
 burn = { version = "=0.22.1", default-features = false, features = ["extension"] }
 d3os-burn-native = { path = "../burn-native", optional = true }
 

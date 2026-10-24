@@ -145,6 +145,18 @@ The CI workflow provides repeatable numerical tests and an optional pretrained Q
 The current target is the RTX 4090 Laptop GPU (`10de:2757`, AD103) with one serialized compute queue.
 The driver boots pinned signed firmware and allocates a private, virtually bound compute context.
 The process-owned syscall interface accepts built-in kernels and opaque buffer handles.
+The public Burn backend selects this GPU through `d3os_ai::native_device()`.
+The dispatcher registers native devices, tensors, and autodiff through the [pinned source patches](../third_party/README.md).
+FP32 uses native tensor arithmetic, reductions, Tensor Core products, convolutions, and pooling.
+I32 and boolean tensors support resident views, indexing, exact word operations, and conversions.
+I32 currently advertises storage support while its remaining arithmetic operations are incomplete.
+
+Burn's operation traits return tensors directly. The native adapter therefore carries failures as tensor states without device storage.
+Dependent operations retain the original failure and perform no GPU work. Native readback and synchronization return the execution error.
+Acknowledging an error through synchronization does not make failed tensor clones readable.
+Recoverable failures do not poison later valid work. Fatal GPU errors persist until the process restarts.
+Unsupported operations also use this error path, including operations whose upstream defaults sort or compact data on the CPU.
+
 Native compute protocol version 16 includes command scopes, queue profiles, and 58 built-in kernels.
 Its expanded profile array requires the matching SDK.
 Rebuild compute applications with the matching SDK. The kernel rejects incompatible request versions.

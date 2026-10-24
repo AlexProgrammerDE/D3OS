@@ -375,8 +375,6 @@ dependencies = [
 [[package]]
 name = "burn-backend-extension"
 version = "0.22.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44e9f488bc7c4754f007d1885f72314dc5b91848b05a892b29cd522d083e1d71"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -423,13 +421,12 @@ dependencies = [
 [[package]]
 name = "burn-dispatch"
 version = "0.22.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64d255d7609901f7aaf2138b394a6fe8dd8c7b526d1ed2736ba2c643944028fa"
 dependencies = [
  "burn-autodiff",
  "burn-backend",
  "burn-backend-extension",
  "burn-flex",
+ "d3os-burn-native",
  "paste",
  "portable-atomic",
 ]
@@ -894,6 +891,7 @@ name = "d3os-ai"
 version = "0.1.0"
 dependencies = [
  "burn",
+ "burn-dispatch",
  "concurrent",
  "d3os-burn-native",
  "embassy-time-driver",

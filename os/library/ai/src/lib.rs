@@ -14,3 +14,9 @@ mod platform;
 mod timer_queue;
 #[cfg(feature = "training")]
 pub mod validation;
+
+/// Open the native D3OS GPU for Burn tensors and modules.
+#[cfg(feature = "native")]
+pub fn native_device() -> Result<burn::tensor::Device, native::NativeError> {
+    Ok(burn::tensor::Device::new(native::NativeDevice::open()?))
+}

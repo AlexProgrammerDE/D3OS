@@ -130,6 +130,15 @@ All 161 previous GPU instruction sections remain byte-identical. AlexNet, Qwen, 
 This step adds training support, with no new D3OS or Linux performance measurement.
 Its validation evidence is under `target/nvidia/burn/random/`.
 
+The public backend step registers native GPU tensors and autodiff with Burn's device dispatcher.
+Physical D3OS checks pass public matrix products, convolution gradients, analytic SGD, and Adam checkpoint resume.
+The convolutional MNIST model also passes a synthetic SGD step, with gradients for all eight parameter tensors and preserved shared weights.
+That step uploads no activations and reads only two four-byte bounds flags from max-pool gradients.
+Batched gradient products retain initialized allocations for their partial writes.
+Native failed tensors propagate execution errors without placeholder storage or CPU computation.
+Operator coverage, complete MNIST training, and AI workload migration remain incomplete.
+This step adds no D3OS or Linux performance comparison. Its evidence is under `target/nvidia/burn/dispatch/`.
+
 ### Grouped recurrent attention
 
 The recurrent operator now accepts separate query/key and value head counts.
