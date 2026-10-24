@@ -17,8 +17,6 @@ CARGO_BUILD_OPTION = "--release"
 [env]
 CARGO_MAKE_EXTEND_WORKSPACE_MAKEFILE = true
 RUST_TARGET_PATH = "${CARGO_MAKE_WORKING_DIRECTORY}"
-SOURCE_DIRECTORY = "${CARGO_MAKE_WORKING_DIRECTORY}/src"
-LIBRARY_DIRECTORY = "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/os/library"
 LINKER_FILE = "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/os/application/link.ld"
 RUST_OBJECT = "${BUILD_DIRECTORY}/lib${CARGO_MAKE_PROJECT_NAME}.a"
 APPLICATION = "${INITRD_DIRECTORY}/bin/${CARGO_MAKE_PROJECT_NAME}"
@@ -32,23 +30,6 @@ alias = "link"
 [tasks.compile]
 command = "cargo"
 args = [ "build", "-Z", "build-std=core,alloc", "-Z", "build-std-features=compiler-builtins-mem", "-Z", "json-target-spec", "--target", "${CARGO_CFG_TARGET_FAMILY}", "${CARGO_BUILD_OPTION}" ]
-condition = { files_modified = { input = [
-    "${CARGO_MAKE_WORKING_DIRECTORY}/Cargo.toml", "${SOURCE_DIRECTORY}/**/*.rs",
-    "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/Cargo.lock",
-    "${LIBRARY_DIRECTORY}/ai/Cargo.toml", "${LIBRARY_DIRECTORY}/ai/src/**/*.rs",
-    "${LIBRARY_DIRECTORY}/burn-native/Cargo.toml", "${LIBRARY_DIRECTORY}/burn-native/src/**/*.rs",
-    "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/third_party/burn-optim/Cargo.toml",
-    "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/third_party/burn-optim/src/**/*.rs",
-    "${LIBRARY_DIRECTORY}/compute/Cargo.toml", "${LIBRARY_DIRECTORY}/compute/src/**/*.rs",
-    "${LIBRARY_DIRECTORY}/nvidia/Cargo.toml", "${LIBRARY_DIRECTORY}/nvidia/src/**/*.rs",
-    "${LIBRARY_DIRECTORY}/inference/Cargo.toml", "${LIBRARY_DIRECTORY}/inference/src/**/*.rs",
-    "${LIBRARY_DIRECTORY}/naming/Cargo.toml", "${LIBRARY_DIRECTORY}/naming/src/**/*.rs",
-    "${LIBRARY_DIRECTORY}/logger/Cargo.toml", "${LIBRARY_DIRECTORY}/logger/src/**/*.rs",
-    "${LIBRARY_DIRECTORY}/time/Cargo.toml", "${LIBRARY_DIRECTORY}/time/src/**/*.rs",
-    "${LIBRARY_DIRECTORY}/runtime/Cargo.toml", "${LIBRARY_DIRECTORY}/runtime/src/**/*.rs",
-    "${LIBRARY_DIRECTORY}/terminal/Cargo.toml", "${LIBRARY_DIRECTORY}/terminal/src/**/*.rs",
-    "${LIBRARY_DIRECTORY}/concurrent/Cargo.toml", "${LIBRARY_DIRECTORY}/concurrent/src/**/*.rs",
-    "${LIBRARY_DIRECTORY}/syscall/Cargo.toml", "${LIBRARY_DIRECTORY}/syscall/src/**/*.rs" ], output = [ "${BUILD_DIRECTORY}/lib${CARGO_MAKE_PROJECT_NAME}*" ] } }
 
 [tasks.link]
 command = "${LINKER}"
