@@ -25,6 +25,9 @@ def main():
     parser.add_argument("--timeout", type=int, default=180)
     parser.add_argument("--bios", type=Path)
     parser.add_argument(
+        "--directory", type=Path, help="preserve this run in a separate directory"
+    )
+    parser.add_argument(
         "--doom-timedemo",
         action="store_true",
         help="also verify DOOM timedemo exit; requires tools/nvidia/prepare-doom.py assets",
@@ -47,7 +50,9 @@ def main():
     )
     if bios is None or not bios.is_file():
         parser.error("provide --bios with an OVMF firmware image")
-    directory = ROOT / f"target/terminal-input-{args.accel}-{args.cpus}"
+    directory = (
+        args.directory or ROOT / f"target/terminal-input-{args.accel}-{args.cpus}"
+    ).resolve()
     directory.mkdir(parents=True, exist_ok=True)
     extra_assets = [(ROOT / "loader/initrd/bin/proctest", Path("bin/proctest"))]
     if args.doom_timedemo:
