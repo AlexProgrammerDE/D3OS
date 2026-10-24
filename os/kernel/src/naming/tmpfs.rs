@@ -227,6 +227,12 @@ impl File {
 }
 
 impl FileObject for File {
+    fn truncate(&self, size: usize) -> Result<(), Errno> {
+        let mut data = self.data.write();
+        data.resize(size, 0);
+        self.stat.write().size = size;
+        Ok(())
+    }
     fn stat(&self) -> Result<Stat, Errno> {
         Ok(*self.stat.read())
     }

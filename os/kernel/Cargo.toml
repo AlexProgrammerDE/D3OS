@@ -13,12 +13,15 @@ doctest = false
 bench = false
 
 [features]
+linux_test = ["dep:sha2"]
 virtio_tests = []
 default = ["frame_alloc_lockfree"]
 frame_alloc_lockfree = []
 frame_alloc_locking = []
 
 [dependencies]
+linux-compat = { path = "../library/linux-compat" }
+sha2 = { version = "0.10", default-features = false, optional = true }
 # Local dependencies
 graphic = { path = "../library/graphic" }
 stream = { path = "../library/stream" }

@@ -28,6 +28,8 @@ pub struct Process {
     id: Uuid,
     name: String,
     pub virtual_address_space: VirtualAddressSpace,
+    pub linux_state: Mutex<Option<crate::linux::ExecutionState>>,
+    pub exit_status: core::sync::atomic::AtomicUsize,
     pub utime: AtomicU64,
     pub stime: AtomicU64,
     pub rss_user_pages: AtomicU64, // only userpages, because kernel mapping 1:1
@@ -44,7 +46,7 @@ impl Process {
     }
     
     fn new_with_id(page_tables: Arc<Paging>, id: Uuid, name: String) -> Self {
-        Self { id, name,
+        Self { id, name, linux_state: Mutex::new(None), exit_status: core::sync::atomic::AtomicUsize::new(0),
             virtual_address_space: VirtualAddressSpace::new(page_tables), 
             utime: AtomicU64::new(0), // track the time spent in User-Mode
             stime: AtomicU64::new(0), // track the time spent in Kernel-Mode 

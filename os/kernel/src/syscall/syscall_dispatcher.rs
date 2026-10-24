@@ -53,7 +53,7 @@ pub fn init() {
     info!("Initializing system calls");
 
     // Enable system call extensions
-    unsafe { Efer::update(|flags| flags.set(EferFlags::SYSTEM_CALL_EXTENSIONS, true)) }
+    unsafe { Efer::update(|flags| flags.insert(EferFlags::SYSTEM_CALL_EXTENSIONS | EferFlags::NO_EXECUTE_ENABLE)) }
 
     // Set code and stack segments for syscall
     let cs_syscall = SegmentSelector::new(1, PrivilegeLevel::Ring0);
@@ -185,23 +185,14 @@ unsafe extern "sysv64" fn syscall_handler() {
     "push r9",
     "push r10",
     "push r11", // Contains rflags for returning to ring 3
-    "push 0", // Push another value so that the stack pointer is 16-byte aligned (needed for u128)
+    "push rax", // Save syscall number and maintain stack alignment
 
-    // copy 4th argument to rcx to adhere System V AMD64 ABI
-    "mov rcx, r10",
-
-    // Enable interrupts (we are now on the kernel stack and can handle them properly)
     "sti",
-
-    // Check if system call ID is in bounds
-    "cmp rax, {NUM_SYSCALLS}",
-    "jge syscall_abort", // Panics and does not return
-
-    // Call system call handler, corresponding to ID (in rax)
-    "call [{SYSCALL_TABLE} + 8 * rax]",
+    "mov rdi, rsp",
+    "call {DISPATCH}",
 
     // Restore registers
-    "pop r11", // Pop the alignment 0
+    "pop r11", // Discard the saved syscall number
     "pop r11", // Contains rflags for returning to ring 3
     "pop r10",
     "pop r9",
@@ -218,23 +209,33 @@ unsafe extern "sysv64" fn syscall_handler() {
     // Return to Ring 3
     // Interrupts will be enabled automatically, because rflags is restored from r11
     "sysretq",
-    NUM_SYSCALLS = const NUM_SYSCALLS,
+    DISPATCH = sym crate::linux::dispatch,
     CORE_LOCAL_STORAGE_TSS_RSP0_PTR_INDEX = const CORE_LOCAL_STORAGE_TSS_RSP0_PTR_INDEX,
     CORE_LOCAL_STORAGE_USER_RSP_INDEX = const CORE_LOCAL_STORAGE_USER_RSP_INDEX,
-    SYSCALL_TABLE = sym SYSCALL_TABLE
+
     );
 }
 
-#[unsafe(no_mangle)]
-#[unsafe(naked)]
-unsafe extern "C" fn syscall_abort() {
-    naked_asm!(
-        "mov rdi, rax", // Move syscall number to first argument (rdi)
-        "call syscall_abort_panic"
-    )
+pub(crate) fn native_dispatch(number: u64, args: [u64; 6]) -> isize {
+    if number >= NUM_SYSCALLS as u64 {
+        return syscall::return_vals::Errno::ENOTSUP as isize;
+    }
+    // Native handlers have different signatures. Keep the indirect call in
+    // assembly rather than invoking them through an incompatible Rust fn type.
+    unsafe { invoke_native(SYSCALL_TABLE.handle[number as usize], args.as_ptr()) }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn syscall_abort_panic(syscall_number: u64) {
-    panic!("System call with id [{}] does not exist!", syscall_number);
+#[unsafe(naked)]
+unsafe extern "sysv64" fn invoke_native(handler: *const usize, args: *const u64) -> isize {
+    naked_asm!(
+        "mov rax, rdi",
+        "mov r11, rsi",
+        "mov rdi, [r11]",
+        "mov rsi, [r11 + 8]",
+        "mov rdx, [r11 + 16]",
+        "mov rcx, [r11 + 24]",
+        "mov r8, [r11 + 32]",
+        "mov r9, [r11 + 40]",
+        "jmp rax",
+    );
 }

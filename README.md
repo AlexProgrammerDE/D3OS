@@ -58,6 +58,9 @@ To only build the bootable image _d3os.img_, run:
 cargo make --no-workspace image
 ```
 
+D3OS can also load supported Linux x86-64 executables through its Linux compatibility crate.
+See [Linux application support](docs/linux-compat.md) for setup, verification, and current limits.
+
 ## Debugging 
 
 ### In a terminal with gdb

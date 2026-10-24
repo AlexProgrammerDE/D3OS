@@ -220,6 +220,14 @@ fn handle_page_fault(frame: InterruptStackFrame, _index: u8, error: Option<u64>)
     }
 
     let thread = thread.unwrap();
+    if frame.code_segment.rpl() == x86_64::PrivilegeLevel::Ring3 {
+        let is_linux = thread.process().linux_state.lock().is_some();
+        if is_linux {
+            drop(thread);
+            crate::linux::user_fault(fault_addr.as_u64(), frame.instruction_pointer.as_u64());
+        }
+    }
+
 
     // Was the page fault caused by a user thread?
     if !thread.is_kernel_thread() {

@@ -226,7 +226,7 @@ impl VirtualAddressSpace {
         // Enforce space bounds using half-open intervals.
         match vma_space {
             MemorySpace::User => {
-                if new_vma_start_addr < self.first_usable_user_addr {
+                if new_vma_start_addr < self.first_usable_user_addr && !(new_vma_start_addr.as_u64() >= 0x400000 && new_vma_end_u64 <= 0x4000000) {
                     return None;
                 }
                 if new_vma_end_addr > self.last_usable_user_addr {

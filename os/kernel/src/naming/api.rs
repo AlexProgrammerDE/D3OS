@@ -124,6 +124,18 @@ pub fn close(object_handle: usize) -> Result<usize, Errno> {
     open_objects::close(object_handle)
 }
 
+pub fn stat(path: &str) -> Result<super::stat::Stat, Errno> {
+    match lookup::lookup_named_object(path)? {
+        super::traits::NamedObject::FileObject(file) => file.stat(),
+        super::traits::NamedObject::DirectoryObject(directory) => directory.stat(),
+        super::traits::NamedObject::PipeObject(pipe) => pipe.stat(),
+    }
+}
+
+pub fn truncate(path: &str, size: usize) -> Result<(), Errno> {
+    lookup::lookup_named_object(path)?.as_file()?.truncate(size)
+}
+
 /// Create a directory for the given `path`. \
 /// Returns `Ok(0)` or `Err(errno)`
 pub fn mkdir(path: &str) -> Result<usize, Errno> {

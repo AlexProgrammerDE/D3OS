@@ -28,6 +28,9 @@ pub trait FileSystem: Send + Sync {
 
 /// File object operations
 pub trait FileObject: Debug + Send + Sync {
+    fn truncate(&self, _size: usize) -> Result<(), Errno> {
+        Err(Errno::ENOTSUP)
+    }
     fn stat(&self) -> Result<Stat, Errno>;
     fn read(&self, _buf: &mut [u8], _offset: usize, _options: OpenOptions) -> Result<usize, Errno>;
     fn write(&self, _buf: &[u8], _offset: usize, _options: OpenOptions) -> Result<usize, Errno>;

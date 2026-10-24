@@ -3,6 +3,7 @@ resolver = "2"
 
 members = [
     "os/kernel",
+    "os/library/linux-compat",
     "os/application/about",
     "os/application/hello",
     "os/application/helloc",

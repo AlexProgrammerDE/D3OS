@@ -74,6 +74,7 @@ pub mod network;
 pub mod process;
 pub mod storage;
 pub mod syscall;
+pub mod linux;
 pub mod sync;
 pub mod boot_ap;
 pub mod ipi;
@@ -340,7 +341,11 @@ pub fn init_initrd(module: &ModuleTag) {
             )
         };
 
-        TarArchiveRef::new(initrd_bytes)
+        TarArchiveRef::new(if module.start_address() < 64 * 1024 * 1024 && module.end_address() > 4 * 1024 * 1024 {
+            Box::leak(initrd_bytes.to_vec().into_boxed_slice())
+        } else {
+            initrd_bytes
+        })
             .expect("Failed to create TarArchiveRef from Multiboot2 module")
     });
 }
