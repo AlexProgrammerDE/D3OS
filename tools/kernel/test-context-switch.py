@@ -31,6 +31,8 @@ def gdb_script(kernel, port):
     entry, size = table["kernel::process::thread::thread_switch"]
     panic, _ = table["__rustc::rust_begin_unwind"]
     unlock, _ = table["unlock_scheduler"]
+    allocate, _ = table["<linked_list_allocator::Heap>::allocate_first_fit"]
+    deallocate, _ = table["<linked_list_allocator::Heap>::deallocate"]
     output = subprocess.check_output(
         [
             "objdump",
@@ -63,7 +65,7 @@ def gdb_script(kernel, port):
         return f'if !({expression})\n  printf "CONTEXT_SWITCH_FAIL {message}\\n"\n  quit 1\nend\n'
 
     # Hardware breakpoints survive the bootloader loading the kernel over low RAM.
-    # Stop a cooperative switch on the boot CPU, where keyboard IRQs are routed.
+    # Stop a switch on the boot CPU, where keyboard IRQs are routed.
     script = f"""set pagination off
 set confirm off
 set tcp auto-retry on
@@ -71,10 +73,10 @@ set tcp connect-timeout 30
 set remotetimeout 10
 target remote 127.0.0.1:{port}
 hbreak *{panic}
-hbreak *{entry} if $_thread == 1 && ($eflags & 0x200) != 0
+hbreak *{entry} if $_thread == 1
 continue
 """
-    script += check(f"$pc == {entry}", "cooperative switch did not start")
+    script += check(f"$pc == {entry}", "context switch did not start")
     script += f"""delete 2
 hbreak *{swapped} if $_thread == 1
 continue
@@ -110,9 +112,18 @@ continue
     script += check("$gs_base != $kernel_cls", "kernel GS was not exchanged back")
     script += """printf "CONTEXT_SWITCH_OK irq_queued=true context_restored=true callback_aligned=true\\n"
 delete breakpoints
-detach
-quit
 """
+    # Continue into normal runtime work after the switch. Both heap mutation
+    # paths must hold an IRQ-save guard, so neither can lose its lock owner to
+    # timer preemption or recursively allocate from an interrupt handler.
+    for address, operation in ((allocate, "allocate"), (deallocate, "deallocate")):
+        script += f"hbreak *{address}\ncontinue\n"
+        script += check(f"$pc == {address}", f"heap {operation} did not run")
+        script += check(
+            "($eflags & 0x200) == 0", f"interrupts enabled during heap {operation}"
+        )
+        script += "delete breakpoints\n"
+    script += 'printf "HEAP_PREEMPTION_OK allocate_masked=true deallocate_masked=true\\n"\ndetach\nquit\n'
     return script
 
 

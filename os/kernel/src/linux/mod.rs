@@ -406,6 +406,9 @@ pub extern "sysv64" fn dispatch(frame: &mut SyscallFrame) -> isize {
         }
     } else {
         drop(guard);
+        // Native exit handlers never return, and blocked native calls can be
+        // cancelled. Do not pin their process on an abandoned kernel stack.
+        drop(process);
         crate::syscall::syscall_dispatcher::native_dispatch(frame.number, frame.arguments())
     }
 }

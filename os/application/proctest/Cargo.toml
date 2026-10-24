@@ -16,3 +16,7 @@ bench = false
 terminal = { path = "../../library/terminal" }
 runtime = { path = "../../library/runtime" }
 naming = { path = "../../library/naming" }
+concurrent = { path = "../../library/concurrent" }
+syscall = { path = "../../library/syscall" }
+time = { path = "../../library/time" }
+log = "0.4"

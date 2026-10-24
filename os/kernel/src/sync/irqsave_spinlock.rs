@@ -40,6 +40,10 @@ impl<T> IrqSaveSpinlock<T> {
         }
     }
 
+    pub fn is_locked(&self) -> bool {
+        self.locked.load(Ordering::Relaxed)
+    }
+
 
     /// Acquire the lock, disabling local IRQs until the guard is dropped.
     #[inline]

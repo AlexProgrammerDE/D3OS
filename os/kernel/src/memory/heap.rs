@@ -8,13 +8,14 @@
 */
 use core::alloc::{AllocError, Allocator, GlobalAlloc, Layout};
 use core::ptr::NonNull;
-use linked_list_allocator::LockedHeap;
+use linked_list_allocator::Heap;
 use x86_64::structures::paging::frame::PhysFrameRange;
 use crate::memory::PAGE_SIZE;
 use core::sync::atomic::{AtomicBool, AtomicUsize};
+use crate::sync::irqsave_spinlock::IrqSaveSpinlock;
 
 pub struct KernelAllocator {
-    pub heap: LockedHeap,
+    heap: IrqSaveSpinlock<Heap>,
     initialized: AtomicBool,
 }
 
@@ -26,7 +27,7 @@ pub fn get_free_bytes() -> usize {
 
 impl KernelAllocator {
     pub const fn new() -> Self {
-        Self { heap: LockedHeap::empty(), initialized: AtomicBool::new(false) }
+        Self { heap: IrqSaveSpinlock::new(Heap::empty()), initialized: AtomicBool::new(false) }
     }
 
     pub unsafe fn init(&self, frames: &PhysFrameRange) {

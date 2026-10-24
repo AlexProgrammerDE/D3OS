@@ -2962,9 +2962,13 @@ dependencies = [
 name = "proctest"
 version = "0.1.0"
 dependencies = [
+ "concurrent",
+ "log",
  "naming",
  "runtime",
+ "syscall",
  "terminal",
+ "time",
 ]
 
 [[package]]

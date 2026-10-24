@@ -374,11 +374,33 @@ pub fn init_gdt_for_this_core() {
 /// Manages the execution of threads and switches between them.
 /// Allows to access active threads, put threads to sleep, exit/kill threads and creates new ones.
 #[inline(always)]
-pub fn scheduler() -> &'static Scheduler {
-    // SAFETY: cls_ptr() points to a per-core CLS that is Box::leak'ed,
-    // so its fields are stable for the kernel lifetime.
-    // Caller must secure that preemption is disabled or temporarily impossible
-    unsafe { &(&*cls_ptr()).scheduler }
+pub fn scheduler() -> SchedulerGuard {
+    let interrupts_enabled = crate::device::cpu::disable_int_nested();
+    // Pin the CPU before selecting its scheduler. A blocking operation can
+    // resume on another CPU; restoring IF does not touch the previous CPU's CLS.
+    let scheduler = unsafe { &(*cls_ptr()).scheduler };
+    SchedulerGuard { scheduler, interrupts_enabled, _thread: core::marker::PhantomData }
+}
+
+/// Restore interrupt state after a scheduler operation, including a blocking switch.
+pub struct SchedulerGuard {
+    scheduler: &'static Scheduler,
+    interrupts_enabled: bool,
+    _thread: core::marker::PhantomData<*mut ()>,
+}
+
+impl Deref for SchedulerGuard {
+    type Target = Scheduler;
+
+    fn deref(&self) -> &Scheduler {
+        self.scheduler
+    }
+}
+
+impl Drop for SchedulerGuard {
+    fn drop(&mut self) {
+        crate::device::cpu::enable_int_nested(self.interrupts_enabled);
+    }
 }
 
 /// returns without starting if scheduler is already running

@@ -25,7 +25,7 @@
    ╚═════════════════════════════════════════════════════════════════════════╝
 */
 use crate::process::thread::{Thread, ThreadState};
-use crate::{allocator, apic, per_cpu_ref, timer, tss};
+use crate::{apic, per_cpu_ref, timer, tss};
 use alloc::collections::VecDeque;
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -41,42 +41,49 @@ use core::sync::atomic::AtomicU32;
 use core::sync::atomic::Ordering::{Relaxed};
 use log::{debug, info};
 use smallmap::Map;
-use spin::{Mutex, MutexGuard, Once};
+use spin::{Mutex, Once};
+use spin::mutex::{SpinMutex, SpinMutexGuard};
 use thingbuf::mpsc::{Sender};
 use x86_64::registers::control::{Cr0, Cr0Flags};
 use crate::device::apic::get_apic_id;
 use crate::device::cpu::{disable_int_nested, enable_int_nested};
 use crate::ipi::send_fixed_to_apic;
 use crate::process::core_local_storage::{cls, current_core_id, preempt_is_disabled, scheduler, tss_static};
+use crate::sync::irqsave_spinlock::IrqSaveSpinlock;
 
 // thread IDs
 pub static THREAD_ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
 static ACTIVE_CPUS: AtomicU32 = AtomicU32::new(1);  //BP automatically
 
-/// Global set of "alive" thread IDs (across all cores).
-/// Presence means: joining on this tid should block (unless it exits concurrently).
-static ACTIVE_TIDS: Once<Mutex<Map<usize, ()>>> = Once::new();
+/// Live thread ownership across running, ready, sleeping, and blocked states.
+/// Presence also means that joining this thread must wait for its exit.
+static ACTIVE_THREADS: Once<IrqSaveSpinlock<Map<usize, Uuid>>> = Once::new();
 
 #[inline]
-pub fn active_tids() -> &'static Mutex<Map<usize, ()>> {
-    ACTIVE_TIDS.call_once(|| Mutex::new(Map::new()))
+fn active_threads() -> &'static IrqSaveSpinlock<Map<usize, Uuid>> {
+    ACTIVE_THREADS.call_once(|| IrqSaveSpinlock::new(Map::new()))
 }
 
 #[inline]
-fn mark_thread_alive(tid: usize) {
-    let mut set = active_tids().lock();
-    set.insert(tid, ());
+fn mark_thread_alive(thread: &Thread) {
+    let mut threads = active_threads().lock();
+    threads.insert(thread.id(), thread.process().id());
 }
 
 #[inline]
 fn mark_thread_dead(tid: usize) {
-    let mut set = active_tids().lock();
-    set.remove(&tid);
+    active_threads().lock().remove(&tid);
 }
 
 #[inline]
 pub fn is_thread_alive(tid: usize) -> bool {
-    active_tids().lock().contains_key(&tid)
+    active_threads().lock().contains_key(&tid)
+}
+
+pub fn process_thread_ids(pid: Uuid) -> Vec<usize> {
+    active_threads().lock().iter()
+        .filter_map(|(tid, owner)| (*owner == pid).then_some(*tid))
+        .collect()
 }
 
 #[inline]
@@ -99,7 +106,9 @@ pub struct ReadyState {
     initialized: bool,
     last_fpu_thread: Option<Arc<Thread>>,
     current_thread: Option<Arc<Thread>>,
+    retired_thread: Option<Arc<Thread>>,
     ready_queue: VecDeque<Arc<Thread>>,
+    kill_pending: bool,
     idle_thread: Arc<Thread>
 }
 
@@ -115,7 +124,9 @@ impl ReadyState {
             initialized,
             last_fpu_thread: None,
             current_thread,
+            retired_thread: None,
             ready_queue,
+            kill_pending: false,
             idle_thread,
         }
     }
@@ -123,7 +134,7 @@ impl ReadyState {
 
 /// Main struct of the scheduler
 pub struct Scheduler {
-    ready_state: Mutex<ReadyState>,
+    ready_state: SpinMutex<ReadyState>,
     sleep_list: Mutex<Vec<(Arc<Thread>, usize)>>,
     blocked_list: Mutex<Vec<Arc<Thread>>>,
     join_map: Mutex<Map<usize, Vec<Arc<Thread>>>>, // manage which threads are waiting for a thread-id to terminate
@@ -136,7 +147,13 @@ unsafe impl Sync for Scheduler {}
 /// Called from assembly code, after the thread has been switched
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn unlock_scheduler() {
-    unsafe { scheduler().ready_state.force_unlock(); }
+    let scheduler = scheduler();
+    // Assembly calls this on the incoming stack with interrupts masked. The
+    // outgoing Rust guard transferred its lock ownership to this callback.
+    let retired = unsafe { (&mut *scheduler.ready_state.as_mut_ptr()).retired_thread.take() };
+    unsafe { scheduler.ready_state.force_unlock(); }
+    // The outgoing stack and Thread object are no longer in use by the switch.
+    drop(retired);
 }
 
 impl Scheduler {
@@ -147,7 +164,7 @@ impl Scheduler {
         let vec = Vec::new();
         let rs = ReadyState::new();
 
-        let ready_state = Mutex::new(rs);
+        let ready_state = SpinMutex::new(rs);
         let sleep_list = Mutex::new(vec);
         let blocked_list = Mutex::new(Vec::new());
         let join_map = Mutex::new(Map::new());
@@ -196,7 +213,7 @@ impl Scheduler {
 
     /// Get all active thread IDs
     pub fn active_thread_ids(&self) -> Vec<usize> {
-        Vec::from_iter(active_tids().lock().iter().cloned().map(|t | t.0))
+        active_threads().lock().iter().map(|(tid, _)| *tid).collect()
     }
 
     /// Return reference to current thread
@@ -213,14 +230,7 @@ impl Scheduler {
 
     /// Try to return reference to current thread (called from interrupt dispatcher)
     pub fn try_get_current_thread(&self) -> Option<Arc<Thread>> {
-        if self.ready_state.is_locked() {
-            return None;
-        }
-        if allocator().is_locked() {
-            return None;
-        }
-        let state = self.get_ready_state();
-        Some(Scheduler::current(&state))
+        self.ready_state.try_lock().and_then(|state| Scheduler::try_current(&state))
     }
 
     /// Return reference to thread identified by `thread_id`
@@ -251,37 +261,19 @@ impl Scheduler {
             state.current_thread = Some(Arc::clone(&state.idle_thread));
         }
 
-        unsafe { Thread::start_first(state
+        let thread = ptr::from_ref(state
             .current_thread.as_ref()
-            .expect("Failed to dequeue first thread!").as_ref()
-        ); }
+            .expect("Failed to dequeue first thread!").as_ref());
+        core::mem::forget(state);
+        unsafe { Thread::start_first(thread); }
     }
 
     /// Insert `thread` into the ready queue of the scheduler
     pub fn ready(&self, thread: Arc<Thread>) {
-        let id = thread.id();
-        mark_thread_alive(id);
-
-        // If we get the lock on 'self.state' but not on 'self.join_map' the system hangs.
-        // The scheduler is not able to switch threads anymore, because of 'self.state' is locked,
-        // and we will never be able to get the lock on 'self.join_map'.
-        // To solve this, we need to release the lock on 'self.state' in case we do not get
-        // the lock on 'self.join_map' and let the scheduler switch threads until we get both locks.
-        let (mut state, mut join_map) = loop {
-            let state = self.get_ready_state();
-            if let Some(join_map) = self.join_map.try_lock() {
-                break (state, join_map);
-            }
-            self.switch_thread_no_interrupt();
-        };
-
+        mark_thread_alive(&thread);
+        let mut state = self.get_ready_state();
         inc_rq_len();
         state.ready_queue.push_front(thread);
-
-        // Don't override value if key present
-        if !join_map.contains_key(&id){
-            join_map.insert(id, Vec::new());
-        }
     }
 
     /// Put calling thread to sleep for `ms` milliseconds
@@ -430,53 +422,38 @@ impl Scheduler {
     /// returns true if a thread with the given id was found
     fn kill_locally(&self, thread_id: usize, state: &mut ReadyState) -> bool {
         if is_thread_alive(thread_id) == false { return true; }
-        let mut changed = false;
-
-        // check ready_queue
-        let mut before = state.ready_queue.len();
+        let ready_before = state.ready_queue.len();
         state.ready_queue.retain(|thread| thread.id() != thread_id);
-        let mut after = state.ready_queue.len();
-        if before != after {
-            changed = true;
+        let was_runnable = state.ready_queue.len() != ready_before;
+        let mut removed = was_runnable;
+        if !removed {
+            let mut sleepers = self.sleep_list.lock();
+            let before = sleepers.len();
+            sleepers.retain(|(thread, _)| thread.id() != thread_id);
+            removed = sleepers.len() != before;
         }
-        if !changed {
-            {   // check sleep_list
-                let mut sleep_list = self.sleep_list.lock();
-                before = sleep_list.len();
-                sleep_list.retain(|(thread, _)| thread.id() != thread_id);
-                after = state.ready_queue.len() + sleep_list.len();
-            }
-            if before != after {
-                changed = true;
-            }
-            if!changed {
-                {   // check Block List
-                    let mut blocked_list = self.blocked_list.lock();
-                    let before = blocked_list.len();
-                    blocked_list.retain(|t| t.id() != thread_id);
-                    if blocked_list.len() != before {
-                        changed = true;
-                    }
-                }
-                if !changed {
-                    // check all join_map's
-                    let mut join_map = self.join_map.lock();
-                    for (_target, wait_list) in join_map.iter_mut() {
-                        let before = wait_list.len();
-                        wait_list.retain(|t| t.id() != thread_id);
-                        if wait_list.len() != before {
-                            changed = true;
-                        }
-                    }
-                }
+        if !removed {
+            let mut blocked = self.blocked_list.lock();
+            let before = blocked.len();
+            blocked.retain(|thread| thread.id() != thread_id);
+            removed = blocked.len() != before;
+        }
+        if !removed {
+            let mut joins = self.join_map.lock();
+            for (_, waiters) in joins.iter_mut() {
+                let before = waiters.len();
+                waiters.retain(|thread| thread.id() != thread_id);
+                removed |= waiters.len() != before;
             }
         }
-        if changed {
+        if removed {
             mark_thread_dead(thread_id);
             self.unjoin(thread_id, state);
-            dec_rq_len();
+            if was_runnable {
+                dec_rq_len();
+            }
         }
-        changed
+        removed
     }
 
     /// Gives out current thread id, then calls other debug methods
@@ -528,7 +505,7 @@ impl Scheduler {
     }
 
     /// Block calling thread and switch to next ready thread.
-    fn block_and_switch(&self, mut state: MutexGuard<ReadyState>) {
+    fn block_and_switch(&self, mut state: SpinMutexGuard<'_, ReadyState>) {
         let mut next_thread = state.ready_queue.pop_back();
 
         if next_thread.is_none() {
@@ -555,7 +532,9 @@ impl Scheduler {
         let next_ptr = ptr::from_ref(next.as_ref());
 
         state.current_thread = Some(next);
-        drop(current); // Decrease Rc manually, because Thread::switch does not return
+        state.kill_pending = false;
+        state.retired_thread = Some(current);
+        core::mem::forget(state);
 
         unsafe {
             Thread::switch(current_ptr, next_ptr);
@@ -601,6 +580,7 @@ impl Scheduler {
             block_list.push(Arc::clone(&thread));
         }
         dec_rq_len();
+        drop(thread);
         self.block_and_switch(state);
     }
 
@@ -705,14 +685,16 @@ impl Scheduler {
             let next = match state.ready_queue.pop_back() {
                 Some(thread) => thread,
                 None => {
-                    if interrupt {
-                        apic().end_of_interrupt();
-                    }
-                    //no new thread & idle thread already active => nothing to do
-                    if current_was_idle {
+                    if current_was_idle || (interrupt && !state.kill_pending) {
+                        if interrupt {
+                            apic().end_of_interrupt();
+                        }
+                        // Timer preemption must not give idle a timeslice
+                        // while the current thread is still runnable.
                         return;
                     }
-                    //no new thread & last!=idle => switch to idle
+                    // An explicit cooperative yield can wait for an interrupt.
+                    // A kill request also needs the current thread off the CPU.
                     Arc::clone(&state.idle_thread)
                 },
             };
@@ -721,6 +703,7 @@ impl Scheduler {
             let next_ptr = ptr::from_ref(next.as_ref());
 
             state.current_thread = Some(next);
+            state.kill_pending = false;
 
             // last!=idle => we need to enqueue it back in the readyQueue
             if current_was_idle == false {
@@ -731,6 +714,7 @@ impl Scheduler {
                 apic().end_of_interrupt();
             }
 
+            core::mem::forget(state);
             unsafe {
                 Thread::switch(current_ptr, next_ptr);
             }
@@ -892,36 +876,11 @@ impl Scheduler {
     }
 
     /// Helper function returning `ReadyState` of scheduler in a MutexGuard
-    fn get_ready_state(&self) -> MutexGuard<'_, ReadyState> {
-        let state;
-
-        // We need to make sure, that both the kernel memory manager and the ready queue are currently not locked.
-        // Otherwise, a deadlock may occur: Since we are holding the ready queue lock,
-        // the scheduler won't switch threads anymore, and none of the locks will ever be released
-        loop {
-            let state_tmp = self.ready_state.lock();
-            if allocator().is_locked() {    //allocator can be locked again, but only on other cores -> no deadlock, but bottleneck
-                continue;
-            }
-
-            state = state_tmp;
-            break;
-        }
-
-        state
-    }
-
-    /// Description: Helper function returning `ReadyState` and `Map` of scheduler, each in a MutexGuard
-    /// switches Thread on fail, loops back after
-    fn get_ready_state_and_join_map(&self) -> (MutexGuard<'_, ReadyState>, MutexGuard<'_, Map<usize, Vec<Arc<Thread>>>>) {
-        loop {
-            let ready_state = self.get_ready_state();
-            if let Some(join_map) = self.join_map.try_lock() {
-                return (ready_state, join_map);
-            } else {
-                self.switch_thread_no_interrupt();
-            }
-        }
+    fn get_ready_state(&self) -> SpinMutexGuard<'_, ReadyState> {
+        // The heap lock disables local interrupts until it is released, so its
+        // owner cannot be switched out. Other CPUs can finish allocations
+        // independently while this CPU acquires its scheduler state.
+        self.ready_state.lock()
     }
 
     /// For ps command - get all processes & threads
@@ -1000,9 +959,11 @@ impl Scheduler {
             MessageCmd::Kill { tid } => {
                 if is_thread_alive(tid) == false { return; }
                 let thread = state.current_thread.as_ref().expect("Trying to kill current thread before initialization!");
-                if thread.id() == tid { //cant kill itself, reschedule for other thread
+                if thread.id() == tid {
+                    // Move the target into the ready queue before retrying its
+                    // removal. This also handles a CPU-bound thread with no peer.
+                    state.kill_pending = true;
                     let _ = schedule_on(current_core_id() as usize, MessageItem::Cmd(MessageCmd::Kill { tid }));
-                    let _ = schedule_on_all_others(MessageItem::Cmd(MessageCmd::Kill { tid }));    //if target migrates until then
                     return;
                 }
                 self.kill_locally(tid, state);
@@ -1062,13 +1023,15 @@ impl Scheduler {
         // Switch to next
         next.set_state(ThreadState::Running);
         state.current_thread = Some(Arc::clone(&next));
+        state.kill_pending = false;
 
         let current_ptr = core::ptr::from_ref(current.as_ref());
         let next_ptr = core::ptr::from_ref(next.as_ref());
 
-        // ready_state is unlocked in your asm trampoline via unlock_scheduler()
-        // (Thread::switch ultimately calls unlock_scheduler after switch)
+        // The incoming stack's callback releases this CPU's scheduler lock.
         drop(current);
+        drop(next);
+        core::mem::forget(state);
 
         unsafe {
             Thread::switch(current_ptr, next_ptr);

@@ -2,10 +2,12 @@
 
 extern crate alloc;
 
+mod lifecycle;
+
 use naming::shared_types::{OpenOptions};
 #[allow(unused_imports)]
 use runtime::*;
-use terminal::{print, println};
+use terminal::println;
 
 use alloc::format;
 
@@ -46,7 +48,7 @@ fn read_proc_status(pid: usize) {
 fn read_proc_ps() {
     println!("NOW READING PROC_PS");
     let path = "/proc/ps";
-    let fd = naming::open(&path, OpenOptions::READONLY).expect("open failed");
+    let fd = naming::open(path, OpenOptions::READONLY).expect("open failed");
 
     let mut buf = [0u8; 256];
     let n = naming::read(fd, &mut buf).expect("read failed");
@@ -62,7 +64,7 @@ fn read_proc_ps() {
 fn read_proc_ticks() {
     println!("NOW READING PROC_TICKS");
     let path = "/proc/ticks";
-    let fd = naming::open(&path, OpenOptions::READONLY).expect("open failed");
+    let fd = naming::open(path, OpenOptions::READONLY).expect("open failed");
 
     let mut buf = [0u8; 256];
     let n = naming::read(fd, &mut buf).expect("read failed");
@@ -78,7 +80,7 @@ fn read_proc_ticks() {
 fn read_proc_meminfo() {
     println!("NOW READING PROC_MEMINFO");
     let path = "/proc/meminfo";
-    let fd = naming::open(&path, OpenOptions::READONLY).expect("open failed");
+    let fd = naming::open(path, OpenOptions::READONLY).expect("open failed");
 
     let mut buf = [0u8; 256];
     let n = naming::read(fd, &mut buf).expect("read failed");
@@ -92,6 +94,22 @@ fn read_proc_meminfo() {
 
 #[unsafe(no_mangle)]
 pub fn main() {
+    let mut args = runtime::env::args().skip(1);
+    match args.next().as_deref() {
+        Some("--lifecycle") => {
+            terminal::init_logger();
+            match lifecycle::parent() {
+                Ok(()) => log::info!("PROCESS_LIFECYCLE_OK workers=4"),
+                Err(error) => log::error!("PROCESS_LIFECYCLE_FAIL {error}"),
+            }
+            return;
+        }
+        Some("--lifecycle-child") => {
+            lifecycle::child(&args.next().expect("missing lifecycle memory name"));
+            return;
+        }
+        _ => {}
+    }
     println!("PROC TESTS");
     test_proc_root();
     test_proc_pid(1);

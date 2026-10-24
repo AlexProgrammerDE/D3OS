@@ -37,6 +37,8 @@ jobs:
         run: cargo make --no-workspace --profile production image
       - name: Inject an interrupt during a multicore context switch
         run: python3 tools/kernel/test-context-switch.py --accel tcg
+      - name: Verify process exit stops workers on other cores
+        run: python3 tools/kernel/test-process-exit.py --accel tcg --cpus 2 --repeat 30
       - name: Verify PCI BAR enumeration with a virtual 16 GiB device
         run: python3 tools/inference/test-qemu.py --accel tcg --large-pci-bar --repeat 3
       - name: Upload kernel verification logs
@@ -48,6 +50,7 @@ jobs:
           path: |
             target/context-switch/*.log
             target/context-switch/check.gdb
+            target/process-exit-tcg-2/*.log
             target/inference-qemu-self-test/serial.log
             target/inference-qemu-self-test/qemu.log
             target/inference-qemu-self-test/failure.gdb.log

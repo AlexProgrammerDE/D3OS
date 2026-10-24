@@ -102,16 +102,16 @@ impl Process {
 
     /// Return the ids of all threads of the process
     pub fn thread_ids(&self) -> Vec<usize> {
-        scheduler().active_thread_ids().iter()
-            .filter(|&&thread_id| {
-                scheduler().thread(thread_id).is_some_and(|thread| thread.process().id() == self.id)
-            }).copied().collect()
+        crate::process::scheduler::process_thread_ids(self.id)
     }
 
     pub fn kill_all_threads_but_current(&self) {
-        self.thread_ids().iter()
-            .filter(|&&thread_id| thread_id != scheduler().current_thread().id())
-            .for_each(|&thread_id| scheduler().kill(thread_id));
+        let current = scheduler().current_thread().id();
+        for thread_id in self.thread_ids() {
+            if thread_id != current {
+                scheduler().kill(thread_id);
+            }
+        }
     }
 
     pub fn dump(&self) {

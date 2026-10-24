@@ -26,7 +26,9 @@ pub extern "sysv64" fn sys_process_id(destination: *mut u128) -> isize {
 }
 
 pub extern "sysv64" fn sys_process_exit() -> ! {
-    scheduler().current_thread().process().exit();
+    let process = scheduler().current_thread().process();
+    process.exit();
+    drop(process);
     scheduler().exit();
 }
 
