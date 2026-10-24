@@ -44,6 +44,10 @@ These measurements separate end-to-end overhead from device throughput. They are
 
 ### Burn primitive regression
 
+The measurements in this subsection are D3OS results from QEMU with the RTX 4090 Laptop GPU passed through via VFIO.
+This regression round does not include a fresh Linux measurement.
+Performance reports must label each result as D3OS or Linux and identify whether a comparison uses retained or fresh samples.
+
 The first native Burn primitives now support shared GPU storage, checked views, and eleven specialized cuTile elementwise entries.
 GPU checks cover signed strides, broadcasting, scalars, comparisons, mask filling, exact bit copies, partial tiles, and neighboring guards.
 Chained arithmetic uses resident buffers without host activation transfers or separate output clears.
