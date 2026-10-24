@@ -6,7 +6,6 @@ extern crate alloc;
 pub mod cpu;
 #[cfg(feature = "nvidia")]
 pub mod nvidia;
-pub mod quantized;
 pub mod raster;
 pub mod transformer;
 
@@ -43,6 +42,20 @@ impl fmt::Display for Error {
 impl core::error::Error for Error {}
 
 pub type Result<T> = core::result::Result<T, Error>;
+
+impl From<d3os_tensor_file::Error> for Error {
+    fn from(error: d3os_tensor_file::Error) -> Self {
+        use d3os_tensor_file::Error as FileError;
+        match error {
+            FileError::InvalidShape => Self::InvalidShape,
+            FileError::ShapeMismatch => Self::ShapeMismatch,
+            FileError::SizeOverflow => Self::SizeOverflow,
+            FileError::NonFinite => Self::NonFinite,
+            FileError::AllocationFailed => Self::AllocationFailed,
+            _ => Self::InvalidParameter,
+        }
+    }
+}
 
 pub fn element_count(shape: &[usize]) -> Result<usize> {
     if shape.is_empty() || shape.len() > 8 || shape.contains(&0) {
@@ -154,7 +167,7 @@ pub trait Backend: Sized {
 
     fn name(&self) -> &'static str;
     fn upload(&self, values: Vec<f32>) -> Result<Self::Buffer>;
-    fn upload_quantized(&self, format: quantized::Quantization, elements: usize, bytes: &[u8]) -> Result<Self::Buffer> {
+    fn upload_quantized(&self, format: d3os_tensor_file::quantized::Quantization, elements: usize, bytes: &[u8]) -> Result<Self::Buffer> {
         self.upload(format.decode(elements, bytes)?)
     }
     /// Upload finite, exact BF16 weights. Backends can keep packed storage for supported

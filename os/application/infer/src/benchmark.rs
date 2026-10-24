@@ -181,7 +181,7 @@ fn gated_projection(backend: &Nvidia) -> d3os_compute::Result<()> {
     let eviction = backend.allocate_words(128 * 1024 * 1024 / 4)?;
     const COLD_REPEATS: usize = 200;
     backend.set_device_timing(true)?;
-    let measured = (|| {
+    let measured: d3os_compute::Result<()> = (|| {
         for round in 0..3 {
             for fused in if round % 2 == 0 { [false, true] } else { [true, false] } {
                 let before = backend.profile()?;

@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+d3os-tensor-file = { path = "../tensor-file" }
 burn-backend = { version = "=0.22.1", default-features = false }
 d3os-compute = { path = "../compute", features = ["nvidia"] }
 d3os-nvidia = { path = "../nvidia" }

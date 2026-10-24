@@ -1,4 +1,5 @@
 //! Independent gradient and checkpoint checks that also run inside D3OS.
+pub mod qwen;
 use alloc::{format, string::String};
 use burn::{
     module::{Module, Param},

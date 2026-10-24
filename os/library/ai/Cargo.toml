@@ -6,10 +6,11 @@ edition = "2024"
 [features]
 default = []
 cpu = ["burn/flex"]
-training = ["burn/optim"]
+training = ["burn/optim", "dep:libm"]
 native = ["dep:d3os-burn-native", "dep:burn-dispatch", "burn-dispatch/d3os-native"]
 
 [dependencies]
+libm = { version = "0.2", optional = true }
 d3os-tensor-file = { path = "../tensor-file" }
 crc32fast = { version = "=1.5.3", default-features = false }
 burn-dispatch = { version = "=0.22.1", default-features = false, optional = true }

@@ -39,6 +39,9 @@ impl From<d3os_tensor_file::Error> for Error {
         use d3os_tensor_file::Error as FileError;
         match value {
             FileError::InvalidArchive => Self::InvalidArchive,
+            FileError::InvalidShape => Self::Compute(d3os_compute::Error::InvalidShape),
+            FileError::ShapeMismatch => Self::Compute(d3os_compute::Error::ShapeMismatch),
+            FileError::SizeOverflow => Self::Compute(d3os_compute::Error::SizeOverflow),
             FileError::MissingTensor(name) => Self::MissingTensor(name),
             FileError::UnexpectedTensor => Self::UnexpectedTensor,
             FileError::NonFinite => Self::Compute(d3os_compute::Error::NonFinite),

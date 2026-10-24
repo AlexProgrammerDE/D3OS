@@ -5,6 +5,7 @@ mod float;
 mod integer;
 mod modules;
 mod quantized;
+mod qwen;
 
 use crate::{
     NativeDevice, NativeTensor,

@@ -10,7 +10,7 @@ use d3os_ai::{
 use d3os_compute::nvidia::Nvidia;
 use d3os_nvidia::compute as abi;
 
-fn resident(backend: &Nvidia, before: &[abi::ServiceEntry; abi::SERVICE_OPERATIONS], status_reads: u64) -> Result<(), String> {
+pub(super) fn resident(backend: &Nvidia, before: &[abi::ServiceEntry; abi::SERVICE_OPERATIONS], status_reads: u64) -> Result<(), String> {
     let after = backend.service_profile().map_err(|e| format!("Burn service profile: {e}"))?;
     if [abi::UPLOAD].iter().any(|&op| before[op as usize].calls != after[op as usize].calls)
         || after[abi::DOWNLOAD as usize].calls - before[abi::DOWNLOAD as usize].calls != status_reads

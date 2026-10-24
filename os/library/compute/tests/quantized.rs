@@ -1,4 +1,5 @@
-use d3os_compute::{Backend, Error, Tensor, cpu::Cpu, quantized::Quantization};
+use d3os_compute::{Backend, Tensor, cpu::Cpu};
+use d3os_tensor_file::{Error, quantized::Quantization};
 
 #[test]
 fn checkpoint_blocks_match_independent_gguf_reference_bits() {

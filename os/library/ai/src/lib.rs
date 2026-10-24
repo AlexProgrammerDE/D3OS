@@ -11,6 +11,7 @@ pub mod alexnet;
 pub mod mnist;
 #[cfg(target_os = "none")]
 mod platform;
+pub mod qwen;
 #[cfg(any(test, target_os = "none"))]
 mod timer_queue;
 #[cfg(feature = "training")]

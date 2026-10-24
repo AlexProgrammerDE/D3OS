@@ -897,6 +897,7 @@ dependencies = [
  "d3os-burn-native",
  "d3os-tensor-file",
  "embassy-time-driver",
+ "libm",
  "spin 0.10.0",
  "time",
 ]
@@ -908,6 +909,7 @@ dependencies = [
  "burn-backend",
  "d3os-compute",
  "d3os-nvidia",
+ "d3os-tensor-file",
  "spin 0.10.0",
 ]
 
@@ -916,6 +918,7 @@ name = "d3os-compute"
 version = "0.1.0"
 dependencies = [
  "d3os-nvidia",
+ "d3os-tensor-file",
  "hashbrown 0.17.1",
  "libm",
  "syscall",

@@ -7,6 +7,7 @@ edition = "2024"
 nvidia = ["dep:d3os-nvidia", "dep:syscall"]
 
 [dependencies]
+d3os-tensor-file = { path = "../tensor-file" }
 libm = "0.2"
 d3os-nvidia = { path = "../nvidia", optional = true }
 syscall = { path = "../syscall", optional = true }

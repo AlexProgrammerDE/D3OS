@@ -41,7 +41,7 @@ enum Storage {
     F32,
     Bf16,
     Words,
-    Quantized(crate::quantized::Quantization),
+    Quantized(d3os_tensor_file::quantized::Quantization),
 }
 
 #[derive(Debug)]
@@ -220,7 +220,7 @@ impl Nvidia {
                 _ => None,
             };
             if let Some(format) = quantized {
-                if buffer.storage != Storage::Words && buffer.storage != Storage::Quantized(crate::quantized::Quantization::from_raw(format)?) {
+                if buffer.storage != Storage::Words && buffer.storage != Storage::Quantized(d3os_tensor_file::quantized::Quantization::from_raw(format)?) {
                     return Err(Error::InvalidParameter);
                 }
             } else if matches!(buffer.storage, Storage::Quantized(_)) || (buffer.storage != Storage::Words && (buffer.storage == Storage::Bf16) != packed) {
@@ -469,7 +469,7 @@ impl Backend for Nvidia {
         Ok(buffer)
     }
 
-    fn upload_quantized(&self, format: crate::quantized::Quantization, elements: usize, bytes: &[u8]) -> Result<GpuBuffer> {
+    fn upload_quantized(&self, format: d3os_tensor_file::quantized::Quantization, elements: usize, bytes: &[u8]) -> Result<GpuBuffer> {
         format.validate(elements, bytes)?;
         dimension(elements)?;
         self.upload_packed(elements, bytes, Storage::Quantized(format))

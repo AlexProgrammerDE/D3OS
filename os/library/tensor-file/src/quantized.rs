@@ -22,7 +22,7 @@ impl Quantization {
             12 => Ok(Self::Q4K),
             13 => Ok(Self::Q5K),
             14 => Ok(Self::Q6K),
-            _ => Err(Error::InvalidParameter),
+            _ => Err(Error::InvalidArchive),
         }
     }
 

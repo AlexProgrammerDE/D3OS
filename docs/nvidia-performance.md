@@ -87,6 +87,19 @@ No device kernel binary changes in this migration.
 The retained logs, Linux provenance, and comparison report are under `target/nvidia/burn/alexnet/`.
 The Burn CPU reference, Qwen references, native Burn training/checkpoints, and all 600 DOOM views also pass.
 
+## Qwen packed-weight Burn extensions
+
+Fresh correctness checks pass on the physical NVIDIA GPU inside D3OS and on the explicit host Burn CPU device.
+They cover F32, BF16, and five GGUF encodings, including independent packed-block reference values.
+Projection, split projection, embeddings, fused gates, and zero-centered RMS normalization use public Burn tensors.
+Burn module records preserve packed words. Residual fusion preserves cloned inputs and row views.
+Native forward checks report zero activation uploads and downloads.
+The device kernel bundle and compute protocol remain unchanged.
+
+The complete Qwen model, attention caches, recurrent state, loading, and generation still need migration.
+These checks add no D3OS throughput result and no Linux measurement.
+Logs are under `target/nvidia/burn/qwen-packed/`.
+
 ## Latest retained measurements
 
 ### Burn primitive regression

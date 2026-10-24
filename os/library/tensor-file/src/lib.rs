@@ -3,6 +3,9 @@
 #![no_std]
 
 extern crate alloc;
+
+pub mod matrix;
+pub mod quantized;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -11,6 +14,9 @@ use core::fmt;
 #[derive(Debug, PartialEq, Eq)]
 pub enum Error {
     InvalidArchive,
+    InvalidShape,
+    ShapeMismatch,
+    SizeOverflow,
     MissingTensor(String),
     UnexpectedTensor,
     NonFinite,
@@ -19,6 +25,9 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidShape => f.write_str("invalid tensor shape"),
+            Self::ShapeMismatch => f.write_str("tensor storage does not match its shape"),
+            Self::SizeOverflow => f.write_str("tensor size exceeds the address space"),
             Self::InvalidArchive => f.write_str("invalid or unsupported tensor file"),
             Self::MissingTensor(name) => write!(f, "missing tensor {name}"),
             Self::UnexpectedTensor => f.write_str("tensor file contains unexpected records"),
@@ -36,12 +45,12 @@ pub enum DType {
     Bf16,
 }
 
-fn element_count(shape: &[usize]) -> Result<usize> {
+pub fn element_count(shape: &[usize]) -> Result<usize> {
     if shape.is_empty() || shape.len() > 8 || shape.contains(&0) {
-        return Err(Error::InvalidArchive);
+        return Err(Error::InvalidShape);
     }
     shape.iter().try_fold(1usize, |count, &dim| {
-        count.checked_mul(dim).filter(|&n| n <= isize::MAX as usize / 4).ok_or(Error::InvalidArchive)
+        count.checked_mul(dim).filter(|&n| n <= isize::MAX as usize / 4).ok_or(Error::SizeOverflow)
     })
 }
 

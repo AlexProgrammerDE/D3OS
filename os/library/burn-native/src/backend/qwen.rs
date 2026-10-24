@@ -1,0 +1,230 @@
+//! Packed transformer operations over Burn-owned storage.
+use super::{BackendTensor, Native};
+use crate::{NativeTensor, layout::Layout};
+use alloc::sync::Arc;
+use burn_backend::{DType, Shape, TensorMetadata};
+use d3os_compute::{Error, Result, nvidia::Nvidia};
+use d3os_nvidia::compute::{Kernel, elementwise::Elementwise};
+use d3os_tensor_file::matrix::MatrixFormat;
+
+fn dense(input: &NativeTensor, dtype: DType) -> Result<NativeTensor> {
+    if input.dtype() != dtype {
+        return Err(Error::InvalidParameter);
+    }
+    if input.layout.is_contiguous() { Ok(input.clone()) } else { input.copy() }
+}
+
+fn weights(input: &NativeTensor, shape: [usize; 2], format: MatrixFormat) -> Result<NativeTensor> {
+    let words = format.byte_len(shape)?.div_ceil(4);
+    if input.shape().as_slice() != [words] {
+        return Err(Error::ShapeMismatch);
+    }
+    dense(input, DType::I32)
+}
+
+fn output(shape: [usize; 2], kernel: Kernel, inputs: &[(&NativeTensor, usize)], parameters: &[usize]) -> Result<NativeTensor> {
+    let layout = Layout::contiguous(Shape::new(shape))?;
+    let pointers: alloc::vec::Vec<_> = inputs.iter().map(|(t, offset)| (&*t.buffer, t.layout.offset() + offset)).collect();
+    let buffer = Nvidia.produce_words(layout.len(), kernel, &pointers, parameters)?;
+    Ok(NativeTensor {
+        buffer: Arc::new(buffer),
+        layout,
+        dtype: DType::F32,
+    })
+}
+
+fn projection(input: &NativeTensor, packed: &NativeTensor, shape: [usize; 2], format: MatrixFormat) -> Result<NativeTensor> {
+    let [batch, width] = *input.shape().as_slice() else {
+        return Err(Error::ShapeMismatch);
+    };
+    let [outputs, inner] = shape;
+    if batch == 0 || width != inner {
+        return Err(Error::ShapeMismatch);
+    }
+    let input = dense(input, DType::F32)?;
+    let packed = weights(packed, shape, format)?;
+    if format == MatrixFormat::Bf16 && (2..=32).contains(&batch) && (256..=2048).contains(&outputs) && width >= 512 {
+        let partials = output(
+            [16 * batch, outputs],
+            Kernel::ProjectBf16Split,
+            &[(&input, 0), (&packed, 0)],
+            &[batch, width, outputs, 16],
+        )?;
+        return output([batch, outputs], Kernel::SumProjectionPartials, &[(&partials, 0)], &[batch, outputs, 16]);
+    }
+    let (kernel, code) = match format {
+        MatrixFormat::F32 => (Kernel::Project, 0),
+        MatrixFormat::Bf16 => (Kernel::ProjectBf16, 0),
+        MatrixFormat::Quantized(format) => (Kernel::ProjectQuantized, format as usize),
+    };
+    let parameters = [batch, width, outputs, code];
+    output(
+        [batch, outputs],
+        kernel,
+        &[(&input, 0), (&packed, 0)],
+        &parameters[..if code == 0 { 3 } else { 4 }],
+    )
+}
+
+impl Native {
+    pub fn qwen_project(input: BackendTensor, packed: BackendTensor, shape: [usize; 2], format: MatrixFormat) -> BackendTensor {
+        let batch = input.shape().first().copied().unwrap_or(0);
+        BackendTensor::apply("packed projection", Shape::new([batch, shape[0]]), DType::F32, &[&input, &packed], |v| {
+            projection(v[0], v[1], shape, format)
+        })
+    }
+
+    pub fn qwen_embedding(packed: BackendTensor, shape: [usize; 2], format: MatrixFormat, tokens: alloc::vec::Vec<u32>) -> BackendTensor {
+        let [vocab, width] = shape;
+        BackendTensor::apply("packed embedding", Shape::new([tokens.len(), width]), DType::F32, &[&packed], |v| {
+            if tokens.is_empty() || tokens.iter().any(|&id| id as usize >= vocab) {
+                return Err(Error::InvalidParameter);
+            }
+            let packed = weights(v[0], shape, format)?;
+            let ids = Nvidia.upload_words(&tokens)?;
+            let ids = NativeTensor {
+                buffer: Arc::new(ids),
+                layout: Layout::contiguous(Shape::new([tokens.len()]))?,
+                dtype: DType::I32,
+            };
+            let (kernel, code) = match format {
+                MatrixFormat::Quantized(format) => (Kernel::EmbeddingQuantized, format as usize),
+                _ => (Kernel::Embedding, usize::from(format == MatrixFormat::Bf16)),
+            };
+            output([tokens.len(), width], kernel, &[(&packed, 0), (&ids, 0)], &[vocab, width, tokens.len(), code])
+        })
+    }
+
+    pub fn qwen_gated_project(
+        input: BackendTensor, gate: BackendTensor, up: BackendTensor, shape: [usize; 2], gate_format: MatrixFormat, up_format: MatrixFormat,
+    ) -> BackendTensor {
+        let batch = input.shape().first().copied().unwrap_or(0);
+        BackendTensor::apply(
+            "gated packed projection",
+            Shape::new([batch, shape[0]]),
+            DType::F32,
+            &[&input, &gate, &up],
+            |v| {
+                if batch == 1 && gate_format == MatrixFormat::Bf16 && up_format == MatrixFormat::Bf16 {
+                    if v[0].shape().as_slice() != [1, shape[1]] {
+                        return Err(Error::ShapeMismatch);
+                    }
+                    let input = dense(v[0], DType::F32)?;
+                    let gate = weights(v[1], shape, gate_format)?;
+                    let up = weights(v[2], shape, up_format)?;
+                    return output(
+                        [1, shape[0]],
+                        Kernel::GatedProjectBf16,
+                        &[(&input, 0), (&gate, 0), (&up, 0)],
+                        &[shape[1], shape[0]],
+                    );
+                }
+                let gate = projection(v[0], v[1], shape, gate_format)?;
+                let up = projection(v[0], v[2], shape, up_format)?;
+                Nvidia.dispatch_words(Kernel::SiluMul, &[(&gate.buffer, 0), (&up.buffer, 0), (&gate.buffer, 0)], &[batch * shape[0]])?;
+                Ok(gate)
+            },
+        )
+    }
+
+    pub fn qwen_project_add(input: BackendTensor, packed: BackendTensor, residual: BackendTensor, shape: [usize; 2], format: MatrixFormat) -> BackendTensor {
+        let result_shape = residual.shape();
+        // Check before creating any temporary storage aliases. In-place dispatch is
+        // valid only when no other Burn tensor can observe the residual allocation.
+        let unique = residual.can_mut();
+        BackendTensor::apply("packed residual projection", result_shape, DType::F32, &[&input, &packed, &residual], |v| {
+            let [batch, width] = *v[0].shape().as_slice() else {
+                return Err(Error::ShapeMismatch);
+            };
+            if width != shape[1] || v[2].shape().as_slice() != [batch, shape[0]] {
+                return Err(Error::ShapeMismatch);
+            }
+            if batch == 1 && width.is_multiple_of(2) && shape[0] <= 8192 && format == MatrixFormat::Bf16 {
+                let input = dense(v[0], DType::F32)?;
+                let packed = weights(v[1], shape, format)?;
+                let residual = if unique { dense(v[2], DType::F32)? } else { v[2].copy()? };
+                if residual.dtype() != DType::F32 {
+                    return Err(Error::InvalidParameter);
+                }
+                Nvidia.dispatch_words(
+                    Kernel::ProjectResidualBf16,
+                    &[
+                        (&residual.buffer, residual.layout.offset()),
+                        (&input.buffer, input.layout.offset()),
+                        (&packed.buffer, packed.layout.offset()),
+                        (&residual.buffer, residual.layout.offset()),
+                    ],
+                    &[width, shape[0]],
+                )?;
+                return Ok(residual);
+            }
+            projection(v[0], v[1], shape, format)?.binary(v[2], Elementwise::Add)
+        })
+    }
+
+    pub fn qwen_rms_norm(input: BackendTensor, weight: BackendTensor, epsilon: f32) -> BackendTensor {
+        BackendTensor::apply("zero-centered RMS normalization", input.shape(), DType::F32, &[&input, &weight], |v| {
+            let [rows, width] = *v[0].shape().as_slice() else {
+                return Err(Error::ShapeMismatch);
+            };
+            if rows == 0 || width == 0 || v[1].shape().as_slice() != [width] || !epsilon.is_finite() || epsilon <= 0. {
+                return Err(Error::InvalidParameter);
+            }
+            let input = dense(v[0], DType::F32)?;
+            let weight = dense(v[1], DType::F32)?;
+            output(
+                [rows, width],
+                Kernel::RmsNorm,
+                &[(&input, 0), (&weight, 0)],
+                &[rows, width, epsilon.to_bits() as usize, 1f32.to_bits() as usize],
+            )
+        })
+    }
+
+    pub fn qwen_residual_norm(input: BackendTensor, residual: BackendTensor, weight: BackendTensor, epsilon: f32) -> (BackendTensor, BackendTensor) {
+        let shape = input.shape();
+        let unique = input.can_mut();
+        BackendTensor::pair(
+            "residual RMS normalization",
+            [shape.clone(), shape],
+            [DType::F32; 2],
+            &[&input, &residual, &weight],
+            |v| {
+                let [rows, width] = *v[0].shape().as_slice() else {
+                    return Err(Error::ShapeMismatch);
+                };
+                if rows == 0
+                    || width == 0
+                    || v[1].shape() != v[0].shape()
+                    || v[2].shape().as_slice() != [width]
+                    || !epsilon.is_finite()
+                    || epsilon <= 0.
+                    || v.iter().any(|t| t.dtype() != DType::F32)
+                {
+                    return Err(Error::InvalidParameter);
+                }
+                let residual = dense(v[1], DType::F32)?;
+                let weight = dense(v[2], DType::F32)?;
+                if width <= 1024 {
+                    let sum = if unique { dense(v[0], DType::F32)? } else { v[0].copy()? };
+                    let normalized = output(
+                        [rows, width],
+                        Kernel::ResidualNorm,
+                        &[(&sum, 0), (&residual, 0), (&weight, 0)],
+                        &[rows, width, epsilon.to_bits() as usize],
+                    )?;
+                    Ok((sum, normalized))
+                } else {
+                    let sum = v[0].binary(&residual, Elementwise::Add)?;
+                    let normalized = output(
+                        [rows, width],
+                        Kernel::RmsNorm,
+                        &[(&sum, 0), (&weight, 0)],
+                        &[rows, width, epsilon.to_bits() as usize, 1f32.to_bits() as usize],
+                    )?;
+                    Ok((sum, normalized))
+                }
+            },
+        )
+    }
+}

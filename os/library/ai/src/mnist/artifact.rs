@@ -11,6 +11,7 @@ const TAG: &[u8; 8] = b"D3MNIST1";
 const HEADER: usize = 32;
 const MAX_BYTES: usize = 16 << 20;
 const CONFIG: [u32; 9] = [1, 28, 28, 16, 32, 64, 10, 0.1307f32.to_bits(), 0.3081f32.to_bits()];
+#[cfg(all(feature = "training", feature = "native"))]
 pub(super) const CHECKPOINT: u32 = 1;
 const INFERENCE: u32 = 2;
 

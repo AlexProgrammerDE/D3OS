@@ -6,6 +6,7 @@ mod integers;
 mod math;
 mod memory;
 mod pooling;
+mod qwen;
 mod random;
 mod scatter;
 mod updates;
@@ -114,6 +115,7 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     pooling::run(backend).map_err(|e| format!("Burn native pooling: {e}"))?;
     updates::run(backend).map_err(|e| format!("Burn native updates: {e}"))?;
     random::run(backend).map_err(|e| format!("Burn native random: {e}"))?;
+    qwen::run(backend).map_err(|e| format!("Burn Qwen extensions: {e}"))?;
     dispatch::run(backend).map_err(|e| format!("Burn public dispatch: {e}"))?;
     Ok(())
 }

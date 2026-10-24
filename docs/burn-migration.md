@@ -236,7 +236,8 @@ AlexNet, Qwen, and all 600 DOOM reference views pass with the matching SDK and k
 Operator coverage remains incomplete. Unsupported native operations return execution errors instead of CPU results.
 The gaps include integer division, integer matrix products, scans, some FP32 math, compaction, and sorting.
 Generic Burn quantization, non-additive indexed updates, three-dimensional convolutions, transposed convolutions, and interpolation also remain incomplete.
-Qwen's packed-weight extensions still need public Burn integration.
+Qwen now has public Burn extensions for packed projections, embeddings, gates, and normalization.
+Attention caches, recurrent state, model loading, and generation still need migration.
 The native MNIST runner now accepts all 60,000 training images and the separate 10,000-image test split.
 It supports complete Adam checkpoints, deterministic sample order, native random state, and inference export.
 A physical D3OS run completes seven epochs and reaches 99.26 percent test accuracy.
@@ -253,6 +254,22 @@ Tensor-file parsing now lives in the independent `d3os-tensor-file` package, wit
 Fresh 100-pass measurements report 0.930 ms for legacy D3OS and 2.420 ms for Burn on D3OS.
 Fresh Linux cuDNN/cuBLAS runs report 0.731 to 0.735 ms.
 The 2.60-fold D3OS regression remains open. Burn remains the model API while Qwen migration proceeds before optimization.
+
+The Qwen extension layer stores packed weights in immutable Burn integer parameters.
+Its separate matrix metadata describes F32, BF16, Q8_0, Q3_K, Q4_K, Q5_K, or Q6_K rows.
+Burn module records preserve the packed words and their execution device.
+The matrix configuration supplies the logical shape and encoding when a record loads.
+The shared format decoder now lives in `d3os-tensor-file`, without an execution dependency.
+
+Native extensions retain the cuTile projection, split projection, embedding, gate, and normalization kernels.
+Residual fusion copies shared storage before mutation. Other Burn tensors retain their original values.
+Physical D3OS tests and explicit host CPU tests pass independent scalar and GGUF references.
+Native forward checks report zero activation uploads and downloads. Host token IDs remain explicit embedding inputs.
+Malformed weights fail before GPU allocation. Failed Burn inputs retain their original execution error.
+These inference extensions reject autodiff devices because they do not implement backward passes.
+The full Qwen model and sessions still use the earlier implementation until their remaining operations migrate.
+This step adds no Linux or D3OS throughput measurement.
+Evidence is under `target/nvidia/burn/qwen-packed/`.
 
 The retained Linux and D3OS measurements are in [Native NVIDIA performance](nvidia-performance.md).
 

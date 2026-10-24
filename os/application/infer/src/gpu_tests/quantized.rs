@@ -1,5 +1,6 @@
 use alloc::{format, string::String, vec::Vec};
-use d3os_compute::{Backend, Tensor, cpu::Cpu, nvidia::Nvidia, quantized::Quantization, transformer::TransformerBackend};
+use d3os_compute::{Backend, Tensor, cpu::Cpu, nvidia::Nvidia, transformer::TransformerBackend};
+use d3os_tensor_file::quantized::Quantization;
 
 pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     let mut fixture = &include_bytes!("../../../../library/compute/tests/fixtures/quantized.bin")[8..];
