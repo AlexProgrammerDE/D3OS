@@ -4,6 +4,7 @@ fn main() {
     for file in [
         "common.rs",
         "burn-math.rs",
+        "burn-random-common.rs",
         "burn-pooling-common.rs",
         "quantized.rs",
         "quad.rs",
@@ -19,6 +20,15 @@ fn main() {
         println!("cargo:rerun-if-changed=src/{file}");
         source.push_str(&fs::read_to_string(format!("src/{file}")).expect("read tile source"));
         source.push('\n');
+    }
+    println!("cargo:rerun-if-changed=src/burn-random.rs.in");
+    let random = fs::read_to_string("src/burn-random.rs.in").expect("read random source");
+    for mode in d3os_nvidia::compute::random::Mode::ALL {
+        source.push_str(
+            &random
+                .replace("RANDOM_ENTRY", mode.symbol())
+                .replace("RANDOM_MODE", &format!("{}u32", mode as u32)),
+        );
     }
     println!("cargo:rerun-if-changed=src/burn-elementwise.rs.in");
     let pool_names = [

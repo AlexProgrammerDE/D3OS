@@ -3,6 +3,7 @@ mod convolution;
 mod indexing;
 mod math;
 mod pooling;
+mod random;
 mod scatter;
 mod updates;
 mod words;
@@ -107,6 +108,7 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     convolution::run(backend).map_err(|e| format!("Burn native convolution: {e}"))?;
     pooling::run(backend).map_err(|e| format!("Burn native pooling: {e}"))?;
     updates::run(backend).map_err(|e| format!("Burn native updates: {e}"))?;
+    random::run(backend).map_err(|e| format!("Burn native random: {e}"))?;
     Ok(())
 }
 

@@ -145,7 +145,7 @@ The CI workflow provides repeatable numerical tests and an optional pretrained Q
 The current target is the RTX 4090 Laptop GPU (`10de:2757`, AD103) with one serialized compute queue.
 The driver boots pinned signed firmware and allocates a private, virtually bound compute context.
 The process-owned syscall interface accepts built-in kernels and opaque buffer handles.
-Native compute protocol version 15 includes command scopes, queue profiles, and 57 built-in kernels.
+Native compute protocol version 16 includes command scopes, queue profiles, and 58 built-in kernels.
 Its expanded profile array requires the matching SDK.
 Rebuild compute applications with the matching SDK. The kernel rejects incompatible request versions.
 
@@ -167,6 +167,20 @@ This includes overlapping windows and broadcast writes. Sources can overlap logi
 The API creates a private GPU copy before slice assignment, so shared tensors retain their original values.
 Concatenation starts from zeroed storage. Padding starts from an exact full fill, then assigns the interior view.
 Neither operation permits partial writers to expose uninitialized allocations.
+
+Random generation uses one output pointer and nine parameters: element count, two key words, two block-counter words, mode, and three arguments.
+Five cuTile entries implement Philox4x32-10 words, FP32 uniform values, normal values, Bernoulli samples, and bounded integers.
+The [Random123 specification and known-answer vectors](https://github.com/DEShawResearch/random123) provide independent algorithm references.
+The normal entry uses Box-Muller pairs. Uniform inputs use 24 random bits, with an open lower endpoint for the normal radius.
+FP32 uniform output clamps to the representable interval `[lower, upper)`, including subnormal and adjacent endpoints.
+Bounded integers reject the incomplete modulo interval, avoiding modulo bias.
+
+The user-space generator owns the seed and a checked 64-bit block counter. Each block provides four logical output positions.
+Rejection retries use the upper half of the 128-bit Philox counter, so they cannot overlap another reserved block.
+A mutex keeps reservation, GPU submission, and state updates in one transaction. Failed submissions retain the previous state.
+The device exposes one process-local stream, initially seeded with zero. Callers can also own separate `RandomGenerator` streams.
+The 24-byte checkpoint records a format tag, seed, and next block. Restore occurs after stream users stop submitting work.
+The driver validates distributions and counter exhaustion before dispatch. Every random entry is a full writer.
 
 The gather entry supports FP32, I32, and boolean values with I32 indices.
 Its 32 parameters describe both views, the selected axis, and the output shape.

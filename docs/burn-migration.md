@@ -116,7 +116,7 @@ The GPU operations include FP32 arithmetic and math, reductions, exact tensor fi
 Another 29 entries implement I32 arithmetic, signed comparisons, bitwise operations, boolean logic, masks, and conversions.
 These operations support strided views and broadcasting. Input tensors remain shared and immutable.
 Full writers avoid a separate output clear. Empty logical outputs require no element work.
-The matching SDK and driver use native compute protocol version 15.
+The matching SDK and driver use native compute protocol version 16.
 
 The D3OS GPU self-test passes reversed and transposed views, overlapping windows, broadcast batches, subviews, empty dimensions, and neighboring guards.
 Matrix references use independent FP64 accumulation. Math references use independent libm functions and include 2,816 FP32 edge values.
@@ -180,6 +180,24 @@ The driver proves that writable views contain distinct addresses and rejects ove
 Physical D3OS GPU checks pass all three data types, signed views, broadcasting, overlapping-source snapshots, and concatenation across every axis.
 They also pass exact NaN payloads, signed zeros, empty tensors, guarded partial tiles, and rejected invalid writes inside command scopes.
 Service counters show no activation upload or download. All 159 earlier GPU instruction sections remain byte-identical.
+AlexNet, Qwen, and DOOM functional regressions pass with the expanded bundle.
+
+Native random generation uses Philox4x32-10 for raw I32 words, FP32 uniform and normal values, Bernoulli samples, and unbiased bounded integers.
+The generator accepts Burn distribution types and supports FP32, I32, and boolean tensors.
+Integer normal samples use the resident FP32 normal generator and a checked native cast.
+FP32 Bernoulli samples use a resident I32-to-FP32 cast. No random tensor values originate on the host.
+
+Each stream owns a seed and a checked 64-bit block counter. A mutex serializes reservation, submission, and state updates.
+Each request reserves `ceil(elements / 4)` blocks. Partial final blocks discard their unused words.
+Integer rejection retries use the counter's upper 64 bits and do not consume another request's reserved blocks.
+Invalid requests and failed submissions leave the stream state unchanged. Empty tensors reserve no blocks and launch no element work.
+A versioned, 24-byte checkpoint stores the seed and next block in little-endian form.
+Checkpoint restore requires a training boundary with no concurrent stream users.
+
+Physical D3OS GPU checks pass anchored Philox words, 64-bit counter carries, partial tiles, exact checkpoint replay, and guarded writes.
+FP64 references validate normal samples. Scalar integer references validate rejection retries and all supported data types.
+Service counters show no host upload or download during generation. All 161 earlier GPU instruction sections remain byte-identical.
+Host tests also pass concurrent reservations, aborted submissions, malformed checkpoints, and counter exhaustion.
 AlexNet, Qwen, and DOOM functional regressions pass with the expanded bundle.
 
 These checks validate native primitives. Burn device dispatch and autodiff integration still need implementation.

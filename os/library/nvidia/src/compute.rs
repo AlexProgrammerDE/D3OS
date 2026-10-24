@@ -6,11 +6,12 @@ pub mod convolution;
 pub mod elementwise;
 pub mod indexing;
 pub mod pooling;
+pub mod random;
 pub mod reduction;
 pub mod updates;
 pub mod words;
 
-pub const VERSION: u32 = 15;
+pub const VERSION: u32 = 16;
 pub const INFO: u32 = 0;
 pub const ALLOCATE: u32 = 1;
 pub const FREE: u32 = 2;
@@ -30,7 +31,7 @@ pub const END_COMMANDS: u32 = 10;
 pub const QUEUE_PROFILE: u32 = 11;
 pub const SERVICE_PROFILE: u32 = 12;
 pub const SERVICE_OPERATIONS: usize = 13;
-pub const KERNEL_COUNT: usize = 57;
+pub const KERNEL_COUNT: usize = 58;
 
 /// CPU service costs by request operation, including queue work within it.
 #[derive(Clone, Copy, Debug, Default)]
@@ -142,9 +143,10 @@ pub enum Kernel {
     PoolBackward = 54,
     MaskWhere = 55,
     ViewAssign = 56,
+    Random = 57,
 }
 
-const _: () = assert!(Kernel::ViewAssign as usize + 1 == KERNEL_COUNT);
+const _: () = assert!(Kernel::Random as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -190,6 +192,7 @@ impl Kernel {
             self,
             Self::TensorElementwise
                 | Self::MaskWhere
+                | Self::Random
                 | Self::Conv2d
                 | Self::Conv2dWindows
                 | Self::Conv2dFold
@@ -287,6 +290,7 @@ impl Kernel {
             54 => Self::PoolBackward,
             55 => Self::MaskWhere,
             56 => Self::ViewAssign,
+            57 => Self::Random,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -350,12 +354,14 @@ impl Kernel {
             Self::PoolBackward => "burn_avg_pool_backward",
             Self::MaskWhere => "burn_mask_where",
             Self::ViewAssign => "burn_view_assign",
+            Self::Random => "burn_random_words",
         }
     }
 
     /// Select the cuTile specialization without changing the public request ABI.
     pub fn entry(self, parameters: &[u32]) -> &'static str {
         match (self, parameters) {
+            (Self::Random, p) if p.len() == random::PARAMETERS => random::Mode::from_raw(p[5]).map_or(self.symbol(), |op| op.symbol()),
             (Self::Pool | Self::PoolBackward, p) if p.len() == pooling::PARAMETERS => {
                 pooling::Mode::from_raw(p[31]).map_or(self.symbol(), |op| op.symbol(self == Self::PoolBackward))
             }
@@ -405,6 +411,10 @@ impl Kernel {
         let mut mutated = 0;
         let mut threads = 128;
         let (count, pointers, output, in_place) = match (self, p) {
+            (Self::Random, p) => {
+                extents[..1].copy_from_slice(&random::validate(p)?);
+                (p[0], 1, 0, false)
+            }
             (Self::MaskWhere, p) => {
                 extents[..4].copy_from_slice(&updates::validate_mask(p)?);
                 (p[0], 4, 3, false)

@@ -60,7 +60,7 @@ Both operations keep tensors resident. All 88 earlier instruction sections remai
 The latest primitive checks add 21 unary math operations, broadcast power, and exact tensor fill.
 Independent libm references cover 2,816 FP32 edge values, including rounding boundaries, zeros, infinities, and NaNs.
 Fill performs no host upload and requires no separate clear. All 95 earlier GPU instruction sections remain byte-identical.
-The matching SDK and driver use native compute protocol version 15.
+The matching SDK and driver use native compute protocol version 16.
 
 The accompanying regression passes AlexNet's eight layer references, Qwen's layer and cache references, and all 600 DOOM views.
 D3OS AlexNet averages 0.960 ms across 100 passes.
@@ -121,6 +121,14 @@ Physical D3OS GPU checks pass exact words, signed views, overlapping-source snap
 All 159 previous GPU instruction sections remain byte-identical. AlexNet, Qwen, and DOOM functional regressions also pass.
 This step adds operation coverage, with no new D3OS or Linux performance measurement.
 Its validation evidence is under `target/nvidia/burn/updates/`.
+
+The random-generation step adds seeded Philox4x32-10 streams and portable checkpoints for Burn initialization and training.
+Five cuTile entries provide raw words, FP32 uniform and normal values, Bernoulli samples, and unbiased bounded integers.
+Values remain on the GPU. Stream reservations are serialized and checked for counter exhaustion.
+Physical D3OS GPU checks pass anchored Philox words, exact checkpoint replay, scalar integer references, FP64 normal references, and guarded writes.
+All 161 previous GPU instruction sections remain byte-identical. AlexNet, Qwen, and DOOM functional regressions also pass.
+This step adds training support, with no new D3OS or Linux performance measurement.
+Its validation evidence is under `target/nvidia/burn/random/`.
 
 ### Grouped recurrent attention
 

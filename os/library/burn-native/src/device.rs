@@ -6,6 +6,18 @@ use d3os_compute::{Result, nvidia::Nvidia};
 pub struct NativeDevice;
 
 impl NativeDevice {
+    pub fn seed(&self, seed: u64) {
+        crate::random::DEVICE_RANDOM.seed(seed);
+    }
+
+    pub fn random_state(&self) -> crate::random::RandomState {
+        crate::random::DEVICE_RANDOM.state()
+    }
+
+    pub fn restore_random_state(&self, state: crate::random::RandomState) {
+        crate::random::DEVICE_RANDOM.restore(state);
+    }
+
     pub fn open() -> Result<Self> {
         Nvidia::new()?;
         Ok(Self)

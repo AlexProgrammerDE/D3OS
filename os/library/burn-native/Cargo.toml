@@ -7,3 +7,4 @@ edition = "2024"
 burn-backend = { version = "=0.22.1", default-features = false }
 d3os-compute = { path = "../compute", features = ["nvidia"] }
 d3os-nvidia = { path = "../nvidia" }
+spin = { version = "0.10", default-features = false, features = ["mutex", "spin_mutex"] }

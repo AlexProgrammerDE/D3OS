@@ -1,0 +1,57 @@
+#[cutile::entry()]
+unsafe fn RANDOM_ENTRY(output: *mut u32, count: u32, seed_low: u32, seed_high: u32, counter_low: u32, counter_high: u32, _mode: u32, arg_a: u32, arg_b: u32, arg_c: u32) {
+    let i = indices();
+    let mask = lt_tile(i, broadcast_scalar(count, shape![128]));
+    // Clamp inactive lanes before forming the 64-bit block counter.
+    let safe = select(mask, i, broadcast_scalar(0u32, shape![128]));
+    let low = broadcast_scalar(counter_low, shape![128]) + (safe >> broadcast_scalar(2u32, shape![128]));
+    let carry = select(lt_tile(low, broadcast_scalar(counter_low, shape![128])), broadcast_scalar(1u32, shape![128]), broadcast_scalar(0u32, shape![128]));
+    let high = broadcast_scalar(counter_high, shape![128]) + carry;
+    let lane = safe & broadcast_scalar(3u32, shape![128]);
+    let attempt = broadcast_scalar(0u64, shape![128]);
+    let (a,b,c,d) = burn_philox(low, high, attempt, seed_low, seed_high);
+    let raw = burn_random_lane(a,b,c,d,lane);
+    let result: Tile<u32, { [128] }> = if RANDOM_MODE == 0u32 {
+        raw
+    } else if RANDOM_MODE == 1u32 {
+        let unit = burn_random_unit(raw, false);
+        let complement = subf(broadcast_scalar(1f32, shape![128]), unit, rounding::NearestEven, ftz::Disabled);
+        let lower = broadcast_scalar(bits_f32(arg_a), shape![128]);
+        let upper = broadcast_scalar(bits_f32(arg_b), shape![128]);
+        let limit = broadcast_scalar(bits_f32(arg_c), shape![128]);
+        let mixed = addf(mulf(lower, complement, rounding::NearestEven, ftz::Disabled), mulf(upper, unit, rounding::NearestEven, ftz::Disabled), rounding::NearestEven, ftz::Disabled);
+        bitcast(select(lt_tile(mixed, lower), lower, select(gt_tile(mixed, limit), limit, mixed)))
+    } else if RANDOM_MODE == 2u32 {
+        let first_pair = lt_tile(lane, broadcast_scalar(2u32, shape![128]));
+        let u1 = burn_random_unit(select(first_pair, a, c), true);
+        let u2 = burn_random_unit(select(first_pair, b, d), false);
+        let radius = sqrt(mulf(broadcast_scalar(-2f32, shape![128]), log(u1), rounding::NearestEven, ftz::Disabled), rounding::NearestEven, ftz::Disabled);
+        let angle = mulf(broadcast_scalar(6.2831853071795864769f32, shape![128]), u2, rounding::NearestEven, ftz::Disabled);
+        let odd = eq_tile(lane & broadcast_scalar(1u32, shape![128]), broadcast_scalar(1u32, shape![128]));
+        let z = mulf(radius, select(odd, sin(angle), cos(angle)), rounding::NearestEven, ftz::Disabled);
+        let scaled = mulf(z, broadcast_scalar(bits_f32(arg_b), shape![128]), rounding::NearestEven, ftz::Disabled);
+        let value = addf(broadcast_scalar(bits_f32(arg_a), shape![128]), scaled, rounding::NearestEven, ftz::Disabled);
+        if arg_b & 0x7fffffffu32 == 0u32 { broadcast_scalar(arg_a, shape![128]) } else { bitcast(value) }
+    } else if RANDOM_MODE == 3u32 {
+        let chosen = lt_tile(raw, broadcast_scalar(arg_a, shape![128])) | broadcast_scalar(arg_b == 1u32, shape![128]);
+        select(chosen, broadcast_scalar(1u32, shape![128]), broadcast_scalar(0u32, shape![128]))
+    } else {
+        let mut sampled = raw;
+        let mut pending = mask & lt_tile(sampled, broadcast_scalar(arg_c, shape![128]));
+        let mut retry = attempt;
+        let mut active: Tile<u32, { [128] }> = select(pending, broadcast_scalar(1u32, shape![128]), broadcast_scalar(0u32, shape![128]));
+        let mut remaining: Tile<u32, { [] }> = reduce_max(active, 0i32);
+        let mut alive: u32 = tile_to_scalar(remaining);
+        while alive != 0u32 {
+            retry = retry + broadcast_scalar(1u64, shape![128]);
+            let (ra,rb,rc,rd) = burn_philox(low, high, retry, seed_low, seed_high);
+            sampled = select(pending, burn_random_lane(ra,rb,rc,rd,lane), sampled);
+            pending = mask & lt_tile(sampled, broadcast_scalar(arg_c, shape![128]));
+            active = select(pending, broadcast_scalar(1u32, shape![128]), broadcast_scalar(0u32, shape![128]));
+            remaining = reduce_max(active, 0i32);
+            alive = tile_to_scalar(remaining);
+        }
+        broadcast_scalar(arg_a, shape![128]) + sampled % broadcast_scalar(arg_b, shape![128])
+    };
+    unsafe { write_tile(output, i, result, mask) };
+}

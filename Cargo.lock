@@ -908,6 +908,7 @@ dependencies = [
  "burn-backend",
  "d3os-compute",
  "d3os-nvidia",
+ "spin 0.10.0",
 ]
 
 [[package]]

@@ -7,6 +7,7 @@ pub mod convolution;
 mod device;
 pub mod layout;
 pub mod pooling;
+pub mod random;
 mod tensor;
 mod updates;
 
