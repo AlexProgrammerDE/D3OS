@@ -2,6 +2,7 @@
 
 extern crate alloc;
 
+mod input;
 mod lifecycle;
 
 use naming::shared_types::{OpenOptions};
@@ -96,6 +97,11 @@ fn read_proc_meminfo() {
 pub fn main() {
     let mut args = runtime::env::args().skip(1);
     match args.next().as_deref() {
+        Some(mode @ ("--raw-input" | "--raw-input-panic")) => {
+            terminal::init_logger();
+            input::run(mode == "--raw-input-panic");
+            return;
+        }
         Some("--lifecycle") => {
             terminal::init_logger();
             match lifecycle::parent() {

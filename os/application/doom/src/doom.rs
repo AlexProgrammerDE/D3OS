@@ -144,6 +144,8 @@ pub fn main() {
     }
     let mut arguments = alloc::vec![
         CString::new("doom").unwrap(),
+        // D3OS reports engine errors in its terminal, including timedemo results.
+        CString::new("-nogui").unwrap(),
         CString::new("-iwad").unwrap(),
         CString::new("/usr/doom.wad").unwrap()
     ];

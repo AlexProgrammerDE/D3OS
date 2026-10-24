@@ -31,8 +31,9 @@ pub fn current() -> Process {
     Process::new(Uuid::from_u128(id))
 }
 
-pub fn exit() {
+pub fn exit() -> ! {
     syscall(SystemCall::ProcessExit, &[]).expect("Failed to exit process");
+    panic!("System call 'ProcessExit' has returned!")
 }
 
 pub fn count() -> usize {

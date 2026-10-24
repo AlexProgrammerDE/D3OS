@@ -2965,6 +2965,7 @@ dependencies = [
  "concurrent",
  "log",
  "naming",
+ "pc-keyboard",
  "runtime",
  "syscall",
  "terminal",

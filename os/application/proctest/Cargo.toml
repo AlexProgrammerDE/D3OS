@@ -20,3 +20,4 @@ concurrent = { path = "../../library/concurrent" }
 syscall = { path = "../../library/syscall" }
 time = { path = "../../library/time" }
 log = "0.4"
+pc-keyboard = "0.8"

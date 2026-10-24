@@ -10,8 +10,7 @@ impl BuiltIn for ExitBuiltIn {
     }
 
     fn run(&mut self, _args: &[&str]) -> usize {
-        process::exit();
-        0
+        process::exit()
     }
 }
 
