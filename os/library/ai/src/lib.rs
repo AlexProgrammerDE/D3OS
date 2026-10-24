@@ -7,6 +7,8 @@ pub use burn;
 #[cfg(feature = "native")]
 pub use d3os_burn_native as native;
 
+mod inference;
+pub use inference::{self_test, top_k};
 pub mod alexnet;
 pub mod mnist;
 #[cfg(target_os = "none")]

@@ -1,5 +1,5 @@
 //! Qwen3.5 NFC normalization, Unicode pre-tokenization, byte BPE, and chat framing.
-use crate::{Error, Result};
+use super::model::{Error, Result};
 use alloc::{
     collections::{BTreeMap, BinaryHeap},
     format,

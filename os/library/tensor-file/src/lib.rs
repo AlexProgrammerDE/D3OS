@@ -64,7 +64,12 @@ pub struct Record<'a> {
     width: usize,
 }
 
-impl Record<'_> {
+impl<'a> Record<'a> {
+    pub fn into_parts(self) -> (Vec<usize>, DType, &'a [u8]) {
+        let dtype = self.dtype();
+        (self.shape, dtype, self.bytes)
+    }
+
     pub fn shape(&self) -> &[usize] {
         &self.shape
     }

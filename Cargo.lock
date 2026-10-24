@@ -900,6 +900,8 @@ dependencies = [
  "libm",
  "spin 0.10.0",
  "time",
+ "unicode-general-category",
+ "unicode-normalization",
 ]
 
 [[package]]
@@ -922,17 +924,6 @@ dependencies = [
  "hashbrown 0.17.1",
  "libm",
  "syscall",
-]
-
-[[package]]
-name = "d3os-inference"
-version = "0.1.0"
-dependencies = [
- "d3os-ai",
- "d3os-compute",
- "d3os-tensor-file",
- "unicode-general-category",
- "unicode-normalization",
 ]
 
 [[package]]
@@ -2010,7 +2001,6 @@ dependencies = [
  "crc32fast",
  "d3os-ai",
  "d3os-compute",
- "d3os-inference",
  "d3os-nvidia",
  "d3os-tensor-file",
  "libm",

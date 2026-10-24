@@ -17,9 +17,9 @@ For hardware setup and repeatable GPU checks, follow [the NVIDIA VFIO guide](nvi
 From the repository root, run:
 
 ```bash
-cargo test --locked -p d3os-compute -p d3os-inference
-cargo clippy --locked -p d3os-compute -p d3os-inference --all-targets -- -D warnings
-cargo run --locked -p d3os-inference --example infer-host --release -- self-test
+cargo test --locked -p d3os-ai --features cpu,training,native
+cargo clippy --locked -p d3os-ai --features cpu,training,native --all-targets -- -D warnings
+cargo run --locked -p d3os-ai --features cpu --example infer-host --release -- self-test
 ```
 
 The tests cover convolution, matrix multiplication, pooling, activation, softmax, archive validation, and a small convolutional network.
@@ -83,7 +83,7 @@ The manifest records the actual image checksum.
 Verify the model on the host:
 
 ```bash
-cargo run --locked -p d3os-inference --example infer-host --release -- \
+cargo run --locked -p d3os-ai --features cpu --example infer-host --release -- \
   alexnet target/inference/alexnet.d3t target/inference/dog.d3t
 ```
 
@@ -151,55 +151,36 @@ infer alexnet
 To use different archive paths, enter `infer alexnet MODEL FIXTURE`.
 Generated weights and fixtures are excluded from Git.
 
-## Write a compute application
+## Write an AI application
 
-Add a dependency on `os/library/compute` to a D3OS application.
-This example multiplies two matrices through the public backend interface:
+Add `os/library/ai` as a path dependency with the `native` feature.
+Use public Burn tensors and modules:
 
 ```rust
-extern crate alloc;
+use d3os_ai::burn::tensor::{Device, Tensor};
 
-use alloc::vec;
-use d3os_compute::{Backend, Tensor, cpu::Cpu};
-
-fn multiply() -> d3os_compute::Result<Tensor<Cpu>> {
-    let backend = Cpu;
-    let a = Tensor::from_vec(&backend, &[2, 3], vec![1., 2., 3., 4., 5., 6.])?;
-    let b = Tensor::from_vec(&backend, &[3, 1], vec![1., 0., -1.])?;
-    backend.matmul(&a, &b)
+fn multiply(device: &Device) -> Tensor<2> {
+    let a = Tensor::<2>::from_floats([[1., 2., 3.], [4., 5., 6.]], device);
+    let b = Tensor::<2>::from_floats([[1.], [0.], [-1.]], device);
+    a.matmul(b)
 }
 ```
 
-`Tensor` uses contiguous row-major storage.
-Convolution uses NCHW input and OIHW weights.
-Linear layers use weights with shape `[output_features, input_features]`.
-Outside command scopes, backend operations complete before they return.
+Select `d3os_ai::native_device()?` for GPU execution.
+With the `cpu` feature, select `Device::flex()` for explicit CPU execution.
+Native operations never fall back to the CPU.
+Call `device.sync()` or a checked tensor read to observe deferred execution errors.
 
-For dependent operations, use a command scope:
+Use `d3os_ai::alexnet::AlexNet` for the pretrained classifier and `d3os_ai::qwen::Qwen` for text generation.
+Qwen creates native command scopes automatically and reports failures before returning model outputs.
+Burn modules support device moves and parameter records. Model configuration must match the record.
+BF16 and GGUF projection weights remain packed in GPU memory.
+See [the Qwen guide](qwen.howto.md) for sessions, tokenization, and streaming replies.
 
-```rust
-let result = backend.with_commands(|| -> d3os_compute::Result<_> {
-    let product = backend.matmul(&a, &b)?;
-    backend.relu(product)
-})?;
-```
-
-The CPU backend runs the closure directly.
-The NVIDIA backend preserves GPU operation order and waits when the scope completes.
-Downloads inside the scope also wait. Temporary buffers remain owned until their queued users finish.
-Nested scopes wait before returning, and closure errors still close their scopes.
-NVIDIA scopes apply to the process, including calls from its other threads.
-Qwen uses scopes automatically for transformer execution.
-
-Protocol version 6 adds quantized weight operators and expands the kernel profile array to 44 entries.
-Version 5 adds grouped projections.
-It retains the residual fusions from version 4 and the command scopes and queue profiles from version 3.
-Rebuild the kernel and compute applications together. Incompatible versions return an error.
-
-For model execution, add `os/library/inference`.
-Load weights with `AlexNet::load`, supply a normalized input tensor, and call `AlexNet::forward`.
-Use `|_, _| Ok(())` as the observer when reference-layer comparisons are unnecessary.
-Apply `Backend::softmax` and `top_k` to the resulting logits.
+The compute crate remains the low-level driver interface and an independent operator reference for diagnostics.
+DOOM uses its native renderer without Burn.
+The current compute protocol is version 18, with 59 kernel families and 174 compiled entries.
+Rebuild the OS, applications, and kernel bundle together when that protocol changes.
 
 Write device kernels in the cuTile module assembled by `tools/gpu-kernels/build.rs`.
 The host compiler uses 64-bit device pointers and 32-bit dimensions for the native launch ABI.

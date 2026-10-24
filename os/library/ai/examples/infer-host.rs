@@ -1,10 +1,35 @@
-use d3os_inference::{
-    qwen::{self, Qwen},
+use d3os_ai::qwen::{
+    self, Qwen,
     tokenizer::{self, Tokenizer},
 };
 use std::{env, fs, path::Path, process, time::Instant};
 
-use d3os_compute::cpu::Cpu;
+use d3os_ai::burn::tensor::Device;
+use d3os_ai::qwen::gguf::{Gguf, ReadAt};
+use std::io::{Read, Seek, SeekFrom};
+
+struct ModelFile {
+    file: fs::File,
+    length: u64,
+}
+
+impl ModelFile {
+    fn open(path: &str) -> std::io::Result<Self> {
+        let file = fs::File::open(path)?;
+        let length = file.metadata()?.len();
+        Ok(Self { file, length })
+    }
+}
+
+impl ReadAt for ModelFile {
+    fn len(&self) -> u64 {
+        self.length
+    }
+    fn read_at(&mut self, offset: u64, output: &mut [u8]) -> core::result::Result<(), qwen::Error> {
+        self.file.seek(SeekFrom::Start(offset)).map_err(|_| qwen::Error::SourceRead)?;
+        self.file.read_exact(output).map_err(|_| qwen::Error::SourceRead)
+    }
+}
 
 fn main() {
     if let Err(error) = run() {
@@ -17,8 +42,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = env::args().skip(1).collect();
     let start = Instant::now();
     match args.first().map(String::as_str) {
+        Some("gguf-info") if args.len() == 2 => {
+            let model = Gguf::parse(ModelFile::open(&args[1])?)?;
+            println!("GGUF_METADATA_OK config={:?}", model.config());
+        }
+        Some("gguf-verify") if args.len() == 3 => {
+            let model = Gguf::parse(ModelFile::open(&args[1])?)?.load(&Device::flex())?;
+            let fixture = fs::read(Path::new(&args[2]).join("qwen-fixture.d3t"))?;
+            let positions = qwen::verify_fixture(&model, &fixture)?;
+            println!("INFERENCE_OK gguf-verify backend=cpu positions={positions} layers={}", model.config().layers);
+        }
         Some("self-test") if args.len() == 1 => {
-            d3os_inference::self_test(&Cpu)?;
+            d3os_ai::self_test(&Device::flex())?;
             println!("INFERENCE_OK self-test backend=cpu");
         }
         Some("alexnet") if args.len() == 3 => {
@@ -37,9 +72,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let cases = tokenizer::verify_fixture(&tokenizer, &fs::read(directory.join("tokenizer-fixture.bin"))?)?;
             println!("QWEN_TOKENIZER_OK cases={cases}");
             let bytes = fs::read(directory.join("qwen3.5-0.8b.d3t"))?;
-            let model = Qwen::load(&Cpu, &bytes)?;
+            let model = Qwen::load(&Device::flex(), &bytes)?;
             drop(bytes);
-            let positions = qwen::verify_fixture(&model, &Cpu, &fs::read(directory.join("qwen-fixture.d3t"))?)?;
+            let positions = qwen::verify_fixture(&model, &fs::read(directory.join("qwen-fixture.d3t"))?)?;
             println!(
                 "INFERENCE_OK qwen-verify backend=cpu positions={positions} layers={} elapsed_ms={}",
                 model.config().layers,
@@ -54,9 +89,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let tokenizer = Tokenizer::parse(&data)?;
             let tokens = tokenizer.encode_chat(&prompt)?;
             let bytes = fs::read(directory.join("qwen3.5-0.8b.d3t"))?;
-            let model = Qwen::load(&Cpu, &bytes)?;
+            let model = Qwen::load(&Device::flex(), &bytes)?;
             drop(bytes);
-            let generated = model.generate(&Cpu, &tokens, limit)?;
+            let generated = model.generate( &tokens, limit)?;
             println!("{}", tokenizer.decode(&generated.tokens, true)?);
             println!(
                 "INFERENCE_OK qwen backend=cpu tokens={} stop={:?} elapsed_ms={}",
@@ -65,7 +100,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 start.elapsed().as_millis()
             );
         }
-        _ => return Err("usage: infer-host self-test | alexnet MODEL FIXTURE | qwen DIRECTORY MAX_TOKENS PROMPT... | qwen-verify DIRECTORY".into()),
+        _ => return Err("usage: infer-host self-test | alexnet MODEL FIXTURE | qwen DIRECTORY MAX_TOKENS PROMPT... | qwen-verify DIRECTORY | gguf-info MODEL | gguf-verify MODEL FIXTURE_DIRECTORY".into()),
     }
     Ok(())
 }

@@ -1,5 +1,5 @@
 use burn_backend::{BoolStore, DType, Device, DeviceId, DeviceOps, DeviceSettings};
-use d3os_compute::{Result, nvidia::Nvidia};
+use d3os_compute::{Backend as _, Result, nvidia::Nvidia};
 
 /// The process-owned GPU exposed by D3OS. No host CUDA runtime is involved.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -16,6 +16,17 @@ impl NativeDevice {
 
     pub fn restore_random_state(&self, state: crate::random::RandomState) {
         crate::random::DEVICE_RANDOM.restore(state);
+    }
+
+    /// Queue native Burn operations and wait for completion. The scope reports
+    /// deferred tensor errors; callback errors still close the transaction.
+    pub fn with_commands<T, E>(&self, work: impl FnOnce() -> core::result::Result<T, E>) -> core::result::Result<T, E>
+    where
+        E: From<crate::NativeError> + From<burn_backend::ExecutionError>,
+    {
+        let value = Nvidia.with_commands(work)?;
+        crate::backend::check_errors().map_err(E::from)?;
+        Ok(value)
     }
 
     pub fn open() -> Result<Self> {

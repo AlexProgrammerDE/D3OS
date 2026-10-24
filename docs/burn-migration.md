@@ -100,7 +100,9 @@ Burn is not a dependency of the renderer.
 
 AlexNet now uses Burn modules and public tensors on the native GPU and the explicit Flex CPU device.
 Its legacy model implementation and execution API have been removed.
-Qwen3.5-0.8B still uses the existing native inference stack and awaits Burn migration.
+Qwen3.5-0.8B now uses Burn modules, packed parameters, sessions, and generation.
+Its original layer, logit, cache, and tokenizer references pass on the physical GPU.
+The previous inference crate is removed.
 DOOM keeps its separate native renderer.
 Native Qwen 9B and 27B model integration remains in progress.
 Packed quantized GPU operations and grouped recurrent heads are validated independently.
@@ -238,7 +240,7 @@ The gaps include integer division, integer matrix products, scans, some FP32 mat
 Generic Burn quantization, non-additive indexed updates, three-dimensional convolutions, transposed convolutions, and interpolation also remain incomplete.
 Qwen now has public Burn extensions for packed projections, embeddings, gates, and normalization.
 Attention caches and recurrent state now use public Burn tensors.
-The full model, loading, and generation still need migration.
+The full model, loading, and generation now use these Burn extensions.
 The native MNIST runner now accepts all 60,000 training images and the separate 10,000-image test split.
 It supports complete Adam checkpoints, deterministic sample order, native random state, and inference export.
 A physical D3OS run completes seven epochs and reaches 99.26 percent test accuracy.
@@ -254,7 +256,7 @@ Tensor-file parsing now lives in the independent `d3os-tensor-file` package, wit
 
 Fresh 100-pass measurements report 0.930 ms for legacy D3OS and 2.420 ms for Burn on D3OS.
 Fresh Linux cuDNN/cuBLAS runs report 0.731 to 0.735 ms.
-The 2.60-fold D3OS regression remains open. Burn remains the model API while Qwen migration proceeds before optimization.
+The 2.60-fold AlexNet regression remains open. Both model families now use Burn before further optimization.
 
 The Qwen extension layer stores packed weights in immutable Burn integer parameters.
 Its separate matrix metadata describes F32, BF16, Q8_0, Q3_K, Q4_K, Q5_K, or Q6_K rows.
@@ -268,7 +270,7 @@ Physical D3OS tests and explicit host CPU tests pass independent scalar and GGUF
 Native forward checks report zero activation uploads and downloads. Host token IDs remain explicit embedding inputs.
 Malformed weights fail before GPU allocation. Failed Burn inputs retain their original execution error.
 These inference extensions reject autodiff devices because they do not implement backward passes.
-The full Qwen model and sessions still use the earlier implementation until their remaining operations migrate.
+The Qwen model and sessions now use Burn. The legacy model implementation and inference crate are removed.
 This step adds no Linux or D3OS throughput measurement.
 Evidence is under `target/nvidia/burn/qwen-packed/`.
 
@@ -287,7 +289,24 @@ The fixture generator uses Python math and rounded FP32 inputs and cache writes.
 Regenerate its data with `python3 tools/inference/prepare-burn-state-fixture.py`.
 The fixture and provenance manifest live under `os/library/ai/tests/fixtures/`.
 Logs and the fresh legacy Qwen baseline are under `target/nvidia/burn/qwen-state/`.
-This completes the state extensions, not the full model migration or the Linux performance goal.
+The subsequent model migration uses these state extensions. The Linux performance goal remains open.
+
+The complete Qwen model, streaming weight interface, tokenizer, sessions, and generation now live in `d3os-ai`.
+The old inference crate and its model execution API are removed. The host example and application callers use Burn.
+Packed weights remain integer parameters in Burn module records, while normalization and convolution parameters use floating tensors.
+The same model definition supports the explicit Flex CPU device and native NVIDIA device.
+A session owns its caches and rejects further work after execution or observer errors.
+Model outputs are resident Burn tensors. Greedy selection reads only a finite-value flag and the selected token index.
+
+Physical D3OS verification passes every original 29-position, 24-layer reference and the complete final cache comparisons.
+The original `2e-3` absolute and `5e-4` relative tolerances remain unchanged.
+All 105 tokenizer cases pass, and streaming generation returns `4` for the default arithmetic prompt.
+Burn module-record tests preserve packed parameters and identical predictions.
+Synthetic CPU batch comparisons use `3e-5` absolute and relative tolerance because Flex matrix operations can use different accumulation orders.
+
+The fresh D3OS comparison records 238.806 warm decode tokens/s after migration, versus 251.969 before migration.
+Model preparation increases from 615 ms to 21880 ms. Both regressions need fixes in the maintained Burn stack.
+Large-model native integration and matched Linux parity remain open.
 
 The retained Linux and D3OS measurements are in [Native NVIDIA performance](nvidia-performance.md).
 
@@ -319,3 +338,7 @@ taskset -c 8,10,12,14 python3 tools/nvidia/run-qemu.py \
 
 The success marker starts with `INFERENCE_OK burn-self-test backend=cpu`.
 This check establishes portable runtime behavior. It does not measure native Burn GPU training or inference performance.
+
+The full pretrained reference also passes on the Linux host with Burn Flex CPU.
+The D3OS software CPU emulation run exceeds its 900-second limit without completing the reference check.
+That run remains unresolved. GPU correctness results do not establish CPU emulation success.

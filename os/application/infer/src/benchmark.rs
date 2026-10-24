@@ -1,11 +1,8 @@
 //! Resident-model measurements. Reference comparisons remain outside timed work.
 use alloc::{format, string::String, vec::Vec};
+use d3os_ai::qwen::{self, Qwen, tokenizer::Tokenizer};
 use d3os_compute::transformer::TransformerBackend;
 use d3os_compute::{Backend, Buffer, Tensor, nvidia::Nvidia};
-use d3os_inference::{
-    qwen::{self, Qwen},
-    tokenizer::Tokenizer,
-};
 use d3os_nvidia::compute::Kernel;
 
 use super::{read_file, report};
@@ -351,7 +348,8 @@ pub(super) fn qwen<const DECODE: usize>(backend: &Nvidia, device_timing: bool) -
     let load_profile = backend.service_profile().map_err(|error| format!("{error}"))?;
     let start = now();
     let load_cycles = unsafe { core::arch::x86_64::_rdtsc() };
-    let model = Qwen::load(backend, &weights).map_err(|error| format!("{error}"))?;
+    let device = d3os_ai::native_device().map_err(|e| format!("{e}"))?;
+    let model = Qwen::load(&device, &weights).map_err(|error| format!("{error}"))?;
     let load_cycles = unsafe { core::arch::x86_64::_rdtsc() }.wrapping_sub(load_cycles);
     let load_ms = now() - start;
     let loaded_profile = backend.service_profile().map_err(|error| format!("{error}"))?;
@@ -373,7 +371,7 @@ pub(super) fn qwen<const DECODE: usize>(backend: &Nvidia, device_timing: bool) -
             None
         };
         let start = now();
-        let mut session = model.session(backend, capacity).map_err(|error| format!("{error}"))?;
+        let mut session = model.session(capacity).map_err(|error| format!("{error}"))?;
         let state_ms = now() - start;
         let prefill_profile = if run == 1 {
             Some((
@@ -400,7 +398,7 @@ pub(super) fn qwen<const DECODE: usize>(backend: &Nvidia, device_timing: bool) -
         // Fixed-length synthetic decode measures work after EOS too, like a
         // throughput benchmark. This is not a generated conversational answer.
         for _ in 0..DECODE {
-            let token = qwen::greedy(backend, &logits).map_err(|error| format!("{error}"))?;
+            let token = qwen::greedy(&logits).map_err(|error| format!("{error}"))?;
             checksum = checksum.wrapping_mul(31).wrapping_add(u64::from(token));
             tokens.push(token);
             logits = session.step(token).map_err(|error| format!("{error}"))?;
@@ -411,6 +409,21 @@ pub(super) fn qwen<const DECODE: usize>(backend: &Nvidia, device_timing: bool) -
             let queue_after = backend.queue_profile().map_err(|error| format!("{error}"))?;
             let service_after = backend.service_profile().map_err(|error| format!("{error}"))?;
             if let Some((prefill_before, queue_prefill, service_prefill)) = prefill_profile {
+                let prefill_after = service_before.as_ref().expect("warm profile");
+                let upload = d3os_nvidia::compute::UPLOAD as usize;
+                let download = d3os_nvidia::compute::DOWNLOAD as usize;
+                let prompt_uploads = prompt.len().div_ceil(32) as u64;
+                if prefill_after[upload].calls - service_prefill[upload].calls != prompt_uploads
+                    || prefill_after[download].calls != service_prefill[download].calls
+                    || service_after[upload].calls - prefill_after[upload].calls != DECODE as u64
+                    || service_after[download].calls - prefill_after[download].calls != 2 * DECODE as u64
+                {
+                    return Err(String::from("Burn Qwen performed an unexpected host tensor transfer"));
+                }
+                report(format_args!(
+                    "NVIDIA_BURN_QWEN_RESIDENT_OK prompt_id_uploads={prompt_uploads} decode_id_uploads={DECODE} selection_scalar_reads={} activation_uploads=0 activation_downloads=0 backend=nvidia",
+                    2 * DECODE
+                ));
                 profile(&prefill_before, &before, "prefill");
                 queue_profile(queue_prefill, queue_before, "prefill");
                 service_profile(&service_prefill, service_before.as_ref().expect("warm profile"), "prefill");
@@ -423,7 +436,7 @@ pub(super) fn qwen<const DECODE: usize>(backend: &Nvidia, device_timing: bool) -
             timing.finish().map_err(|error| format!("{error}"))?;
         }
         report(format_args!(
-            "INFERENCE_BENCH qwen backend=nvidia run={run} warm={} instrumented={instrumented} file_ms={file_ms} load_ms={load_ms} state_ms={state_ms} session_capacity={capacity} prompt_tokens={} prefill_ms={prefill_ms} prefill_tps={:.3} decode_tokens={DECODE} decode_ms={decode_ms} decode_tps={:.3} checksum={checksum}",
+            "INFERENCE_BENCH qwen backend=nvidia run={run} warm={} instrumented={instrumented} file_ms={file_ms} load_ms={load_ms} state_ms={state_ms} session_capacity={capacity} prompt_tokens={} prefill_ms={prefill_ms} prefill_tps={:.3} decode_tokens={DECODE} decode_ms={decode_ms} decode_tps={:.3} checksum={checksum} framework=burn os=d3os",
             run != 0,
             prompt.len(),
             prompt.len() as f64 * 1000. / prefill_ms.max(1) as f64,
@@ -433,10 +446,13 @@ pub(super) fn qwen<const DECODE: usize>(backend: &Nvidia, device_timing: bool) -
         // through the interactive terminal can fill its output queue.
         log::info!("INFERENCE_BENCH_TOKENS phase=decode run={run} ids={tokens:?}");
     }
+    let tokenizer_fixture = read_file("/usr/share/inference/tokenizer-fixture.bin")?;
+    let tokenizer_cases = d3os_ai::qwen::tokenizer::verify_fixture(&tokenizer, &tokenizer_fixture).map_err(|e| format!("{e}"))?;
+    report(format_args!("QWEN_TOKENIZER_OK cases={tokenizer_cases}"));
     let fixture = read_file("/usr/share/inference/qwen-fixture.d3t")?;
-    let positions = qwen::verify_fixture(&model, backend, &fixture).map_err(|error| format!("{error}"))?;
+    let positions = qwen::verify_fixture(&model, &fixture).map_err(|error| format!("{error}"))?;
     report(format_args!(
-        "INFERENCE_BENCH_OK qwen backend=nvidia reference_positions={positions} reference_layers=24 batch_reference_positions={positions} cache_comparison=ok"
+        "INFERENCE_BENCH_OK qwen backend=nvidia reference_positions={positions} reference_layers=24 batch_reference_positions={positions} cache_comparison=ok framework=burn"
     ));
     Ok(())
 }

@@ -66,12 +66,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Verify CPU operators and model loading
         run: >-
-          cargo test --locked -p d3os-compute -p d3os-inference -p d3os-nvidia
+          cargo test --locked -p d3os-compute -p d3os-nvidia
           -p d3os-ai -p d3os-burn-native -p d3os-tensor-file
           --features d3os-compute/nvidia,d3os-ai/cpu,d3os-ai/training,d3os-ai/native
       - name: Check compute and inference code
         run: >-
-          cargo clippy --locked -p d3os-compute -p d3os-inference -p d3os-nvidia
+          cargo clippy --locked -p d3os-compute -p d3os-nvidia
           -p d3os-ai -p d3os-burn-native -p d3os-tensor-file
           --features d3os-compute/nvidia,d3os-ai/cpu,d3os-ai/training,d3os-ai/native
           --all-targets -- -D warnings
@@ -96,7 +96,7 @@ jobs:
         run: OPENBLAS_NUM_THREADS=2 python3 tools/inference/prepare-alexnet.py
       - name: Verify pretrained AlexNet on the host
         if: inputs.pretrained
-        run: cargo run --locked -p d3os-inference --example infer-host --release -- alexnet target/inference/alexnet.d3t target/inference/dog.d3t
+        run: cargo run --locked -p d3os-ai --features cpu --example infer-host --release -- alexnet target/inference/alexnet.d3t target/inference/dog.d3t
       - name: Build D3OS
         if: inputs.pretrained
         run: cargo make --no-workspace --profile production image
@@ -142,7 +142,7 @@ jobs:
       - name: Export Qwen text weights and independent Transformers fixtures
         run: target/qwen-venv/bin/python tools/inference/prepare-qwen.py
       - name: Verify native model and tokenizer against Transformers
-        run: cargo run --locked -p d3os-inference --example infer-host --release -- qwen-verify target/qwen
+        run: cargo run --locked -p d3os-ai --features cpu --example infer-host --release -- qwen-verify target/qwen
       - name: Build D3OS
         run: cargo make --no-workspace --profile production image
       - name: Verify Qwen inside D3OS with software CPU emulation

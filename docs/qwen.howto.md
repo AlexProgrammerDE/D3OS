@@ -60,8 +60,8 @@ Reference verification requires the fixture files, so omit that flag for the ste
 Run the numerical and tokenizer checks:
 
 ```bash
-cargo test --locked -p d3os-compute -p d3os-inference
-cargo run --locked -p d3os-inference --example infer-host --release -- \
+cargo test --locked -p d3os-ai --features cpu,training,native
+cargo run --locked -p d3os-ai --features cpu --example infer-host --release -- \
   qwen-verify target/qwen
 ```
 
@@ -73,7 +73,7 @@ All 105 tokenizer cases must produce exactly the upstream token IDs.
 Generate a reply with a limit of 32 new tokens:
 
 ```bash
-cargo run --locked -p d3os-inference --example infer-host --release -- \
+cargo run --locked -p d3os-ai --features cpu --example infer-host --release -- \
   qwen target/qwen 32 'What is 2 + 2? Answer briefly.'
 ```
 
@@ -210,32 +210,33 @@ No transformer operation downloads activations to compute its result on the CPU.
 
 ## Call the native API
 
-Add `d3os-inference` and `d3os-compute` as path dependencies in your D3OS application.
-This function accepts asset bytes from any file or storage interface:
+Add `d3os-ai` as a path dependency, with its `native` feature for the D3OS GPU.
+Use its `cpu` feature for the explicit Flex CPU device.
+This function accepts asset bytes from any storage interface:
 
 ```rust
 extern crate alloc;
 
 use alloc::string::String;
-use d3os_compute::transformer::TransformerBackend;
-use d3os_inference::{qwen::Qwen, tokenizer::Tokenizer};
+use d3os_ai::{burn::tensor::Device, qwen::{self, Qwen, tokenizer::Tokenizer}};
 
-fn reply<B: TransformerBackend>(
-    backend: &B,
+fn reply(
+    device: &Device,
     weights: &[u8],
     vocabulary: &[u8],
     prompt: &str,
-) -> d3os_inference::Result<String> {
+) -> qwen::Result<String> {
     let tokenizer = Tokenizer::parse(vocabulary)?;
-    let model = Qwen::load(backend, weights)?;
+    let model = Qwen::load(device, weights)?;
     let input = tokenizer.encode_chat(prompt)?;
-    let output = model.generate(backend, &input, 32)?;
+    let output = model.generate(&input, 32)?;
     tokenizer.decode(&output.tokens, true)
 }
 ```
 
+Open the GPU with `d3os_ai::native_device()`.
 Keep the loaded `Qwen` instance to reuse its weights between requests.
-Each `model.session(backend, capacity)` creates independent convolution, recurrent, and KV caches.
+Each `model.session(capacity)` creates independent convolution, recurrent, and KV caches as Burn tensors.
 `session.prefill(&tokens)` processes the prompt and returns its final logits.
 `session.step(token)` appends one token and returns the next-token logits.
 These methods support custom sampling and multi-turn histories supplied as token IDs.
@@ -250,9 +251,12 @@ A backend or observer error invalidates that session; create a new session befor
 The implementation includes all 24 text layers: 18 gated-delta layers and six grouped attention layers.
 It supports the depthwise causal convolution, normalized delta rule, gated RMSNorm, partial RoPE, SwiGLU, and tied output embeddings.
 The backend performs all numerical operations and owns cache tensors.
-The model runner downloads only final logits or explicit verification observations.
-The NVIDIA backend implements both `TransformerBackend` and `Backend`.
-To select it, enable the compute crate's `nvidia` feature and pass `d3os_compute::nvidia::Nvidia::new()?` as the backend.
+The model returns resident Burn logits. Greedy selection reads a finite-value flag and the selected token ID.
+Full tensor reads occur only when the caller requests them or runs reference checks.
+Burn modules own the model parameters, including packed integer tensors for BF16 and GGUF matrices.
+`Qwen::load_weights` accepts one encoded `WeightData` record at a time, including borrowed or owned bytes.
+`qwen::gguf::Gguf` supplies the streaming GGUF reader through the same loader.
+The previous inference crate and generic model execution API are removed.
 The same model code and tokenizer work with either backend.
 
 The supported checkpoint profile uses equal key and value head counts in its gated-delta layers.

@@ -176,11 +176,5 @@ pub fn verify_model(model: &AlexNet, device: &Device, fixture: &[u8]) -> Result<
     let probabilities = softmax(logits, 1)
         .try_into_vec_as::<f32>()
         .map_err(|e| format!("AlexNet probabilities: {e:?}"))?;
-    if probabilities.iter().any(|v| !v.is_finite()) {
-        return Err(String::from("AlexNet probabilities are not finite"));
-    }
-    let mut ranked: Vec<_> = probabilities.into_iter().enumerate().collect();
-    ranked.sort_by(|a, b| b.1.total_cmp(&a.1));
-    ranked.truncate(5);
-    Ok(ranked)
+    crate::top_k(&probabilities, 5)
 }

@@ -4,7 +4,7 @@ The native driver runs AlexNet, Qwen3.5-0.8B, and DOOM correctly on the RTX 4090
 The Linux performance target remains open. Correct output does not imply comparable throughput.
 
 The goal now includes [Burn-based AI APIs and native training](burn-migration.md).
-AlexNet and all Qwen targets will use Burn with a native D3OS/cuTile backend.
+AlexNet and Qwen now use Burn with a native D3OS/cuTile backend.
 DOOM keeps its native renderer. Its correctness and Linux performance requirements remain unchanged.
 
 The optimization goal also includes Qwen3.5-9B at Q8_0 and Qwen3.6-27B at Q3_K_M.
@@ -79,7 +79,7 @@ Linux uses cuDNN FMA and default cuBLAS FP32 math. D3OS uses the native compensa
 Burn currently regresses D3OS warm forward time by 2.60 times.
 The model remains on Burn. Kernel dispatch and allocation improvements follow the remaining workload migrations.
 The forward residency check confirms zero activation uploads and downloads.
-The legacy model implementation has been removed; Qwen temporarily retains its earlier execution path.
+At this AlexNet milestone, Qwen retained its earlier execution path. Its later migration is described below.
 
 A separate instrumented GPU pass records 1.437 ms across the five generic convolution entries and 0.570 ms across the three classifier matrix entries.
 Those serialized device observations identify costs; they are not the uninstrumented forward measurement.
@@ -96,7 +96,7 @@ Burn module records preserve packed words. Residual fusion preserves cloned inpu
 Native forward checks report zero activation uploads and downloads.
 The device kernel bundle and compute protocol remain unchanged.
 
-The complete Qwen model, attention caches, recurrent state, loading, and generation still need migration.
+At this packed-weight milestone, the full model and state migration remained pending.
 These checks add no D3OS throughput result and no Linux measurement.
 Logs are under `target/nvidia/burn/qwen-packed/`.
 
@@ -108,7 +108,7 @@ Native state updates perform zero activation uploads or downloads.
 Split attention, grouped heads, wider fallback dimensions, and error propagation also pass.
 The kernel bundle and compute protocol remain unchanged.
 
-The complete Qwen model still uses the legacy execution API.
+These baseline samples use the legacy execution API before the Burn model migration.
 The following fresh D3OS baseline measures that path before the model migration, with the passed-through RTX 4090 Laptop GPU.
 Each session has capacity for 256 tokens, a 22-token prompt, and 64 decode steps.
 The host affinity remains `8,10,12,14`, with four guest CPUs.
@@ -128,6 +128,40 @@ No fresh Linux sample or complete Burn Qwen model result accompanies this baseli
 Fresh AlexNet references and all 600 DOOM views also pass.
 DOOM reports 69 to 70 FPS after startup under its gameplay cap; this is not an uncapped rendering benchmark.
 Evidence is under `target/nvidia/burn/qwen-state/`.
+
+## Complete Qwen Burn model migration
+
+Qwen3.5-0.8B now runs through Burn modules, packed parameters, public tensors, owned session state, and generation.
+The tokenizer and streaming GGUF reader live in the AI library. The previous inference crate is removed.
+Physical D3OS checks pass every original layer and logit reference at 29 positions, with all 105 tokenizer cases unchanged.
+The original absolute and relative reference tolerances remain `2e-3` and `5e-4`.
+Sequential and batched execution also pass the final cache comparisons.
+Streaming generation answers the default arithmetic prompt with `4` and stops at EOS.
+
+These are fresh D3OS before-and-after measurements on the same passed-through GPU, with four guest CPUs and affinity `8,10,12,14`.
+Each session uses a 22-token prompt, 64 decode steps, and capacity for 256 tokens.
+Timers include CPU submission and synchronized completion.
+
+| D3OS execution path | Model preparation | First decode | Warm decode 1 | Warm decode 2 |
+| --- | ---: | ---: | ---: | ---: |
+| Legacy native model | 615 ms | 258.065 tokens/s | 251.969 tokens/s | 251.969 tokens/s |
+| Burn native model | 21880 ms | 221.453 tokens/s | 242.424 tokens/s | 235.294 tokens/s |
+
+The combined warm decode rate falls from 251.969 to 238.806 tokens/s, a 5.22 percent regression.
+Warm prompt processing measures 9 ms before migration and 9 to 10 ms afterward.
+The single file-read observations are 1543 ms before migration and 2666 ms afterward; they do not establish a matched I/O comparison.
+State creation measures 21 ms initially and 6 ms warm before migration, versus 5 ms initially and below one timer tick warm afterward.
+Model preparation regresses by 35.58 times. Service counters place almost all preparation time in guest application code.
+These regressions remain open. Burn remains the model API.
+
+All six decode traces share checksum `11137929795425568356`.
+The resident-model check permits only explicit token-ID uploads and scalar selection reads, with no activation tensor transfer.
+For the measured warm session, prefill uploads one token-ID batch and downloads no tensors.
+Decode uploads 64 token IDs and reads 128 selection scalars: one finite-value flag and one selected index per step.
+The kernel bundle and compute protocol remain unchanged.
+No fresh Linux sample accompanies this migration comparison.
+Fresh AlexNet references and all 600 DOOM views also pass; DOOM stays outside Burn and reaches its 70 FPS gameplay cap.
+Evidence and the before-and-after report are under `target/nvidia/burn/qwen-model/`.
 
 ## Latest retained measurements
 

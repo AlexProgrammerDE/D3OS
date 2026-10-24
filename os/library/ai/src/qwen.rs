@@ -1,9 +1,15 @@
 //! Qwen inference operations over public Burn tensors.
+mod config;
 #[cfg(feature = "cpu")]
 mod cpu;
 #[cfg(feature = "cpu")]
 mod cpu_state;
+pub mod gguf;
+mod model;
 mod ops;
+pub mod tokenizer;
+pub use config::Config;
+pub use model::{Error, Generation, Qwen, Session, StopReason, WeightData, greedy, is_stop, verify, verify_fixture};
 mod state;
 pub use state::{AttentionConfig, AttentionInputs, AttentionState, DeltaConfig, DeltaInputs, DeltaParameters, DeltaState, DeltaWeights};
 
@@ -15,11 +21,11 @@ use burn::{
 use d3os_tensor_file::element_count;
 pub use d3os_tensor_file::{matrix::MatrixFormat, quantized::Quantization};
 
-pub type Result<T> = core::result::Result<T, String>;
+pub type Result<T> = core::result::Result<T, Error>;
 
 pub(crate) fn device_supported(device: &Device) -> Result<()> {
     if device.is_autodiff() {
-        return Err(String::from("packed Qwen operations support inference devices only"));
+        return Err(Error::from("packed Qwen operations support inference devices only"));
     }
     match device.as_dispatch() {
         #[cfg(feature = "native")]
@@ -27,7 +33,7 @@ pub(crate) fn device_supported(device: &Device) -> Result<()> {
         #[cfg(feature = "cpu")]
         burn::backend::DispatchDevice::Flex(_) => Ok(()),
         #[allow(unreachable_patterns)]
-        _ => Err(String::from("Qwen requires the native NVIDIA or Flex CPU backend")),
+        _ => Err(Error::from("Qwen requires the native NVIDIA or Flex CPU backend")),
     }
 }
 
@@ -90,7 +96,7 @@ impl PackedMatrix {
         let [batch, _] = input.dims();
         if residual.dims() != [batch, self.shape[0]] || residual.device() != input.device() || residual.dtype() != DType::F32 || residual.device().is_autodiff()
         {
-            return Err(String::from("Qwen residual projection shape, dtype, or device differs"));
+            return Err(Error::from("Qwen residual projection shape, dtype, or device differs"));
         }
         Ok(Tensor::from_dispatch(<burn::backend::Dispatch as ops::QwenOps>::project_add(
             input.into_dispatch(),
@@ -103,7 +109,7 @@ impl PackedMatrix {
     pub fn gated_project(&self, up: &Self, input: Tensor<2>) -> Result<Tensor<2>> {
         self.check_input(&input)?;
         if up.shape != self.shape || up.device() != self.device() {
-            return Err(String::from("Qwen gated projection matrices differ"));
+            return Err(Error::from("Qwen gated projection matrices differ"));
         }
         Ok(Tensor::from_dispatch(<burn::backend::Dispatch as ops::QwenOps>::gated_project(
             input.into_dispatch(),
@@ -115,7 +121,7 @@ impl PackedMatrix {
     pub fn embedding(&self, tokens: &[u32]) -> Result<Tensor<2>> {
         device_supported(&self.device())?;
         if tokens.is_empty() || tokens.iter().any(|&id| id as usize >= self.shape[0]) {
-            return Err(String::from("Qwen embedding token is outside the vocabulary"));
+            return Err(Error::from("Qwen embedding token is outside the vocabulary"));
         }
         element_count(&[tokens.len(), self.shape[1]]).map_err(|e| format!("Qwen embedding: {e}"))?;
         Ok(Tensor::from_dispatch(<burn::backend::Dispatch as ops::QwenOps>::embedding(
@@ -129,7 +135,7 @@ impl PackedMatrix {
         device_supported(&self.device())?;
         let [batch, width] = input.dims();
         if batch == 0 || width != self.shape[1] || input.dtype() != DType::F32 || input.device() != self.device() {
-            return Err(String::from("Qwen projection input shape, dtype, or device differs"));
+            return Err(Error::from("Qwen projection input shape, dtype, or device differs"));
         }
         element_count(&[batch, self.shape[0]]).map_err(|e| format!("Qwen projection: {e}"))?;
         Ok(())
@@ -158,7 +164,7 @@ pub fn rms_norm(input: Tensor<2>, weight: Tensor<1>, epsilon: f32) -> Result<Ten
 pub fn residual_norm(input: Tensor<2>, residual: Tensor<2>, weight: Tensor<1>, epsilon: f32) -> Result<(Tensor<2>, Tensor<2>)> {
     check_norm(&input, &weight, epsilon)?;
     if residual.dims() != input.dims() || residual.device() != input.device() || residual.dtype() != DType::F32 || residual.device().is_autodiff() {
-        return Err(String::from("Qwen normalization residual shape, dtype, or device differs"));
+        return Err(Error::from("Qwen normalization residual shape, dtype, or device differs"));
     }
     let (sum, normalized) =
         <burn::backend::Dispatch as ops::QwenOps>::residual_norm(input.into_dispatch(), residual.into_dispatch(), weight.into_dispatch(), epsilon);
@@ -177,7 +183,7 @@ fn check_norm(input: &Tensor<2>, weight: &Tensor<1>, epsilon: f32) -> Result<()>
         || !epsilon.is_finite()
         || epsilon <= 0.
     {
-        return Err(String::from("invalid Qwen RMS normalization input"));
+        return Err(Error::from("invalid Qwen RMS normalization input"));
     }
     Ok(())
 }

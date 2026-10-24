@@ -1,6 +1,6 @@
 //! Owned session tensors. Clones are snapshots, including after fused cache updates.
-use super::{Result, device_supported, ops};
-use alloc::{format, string::String};
+use super::{Error, Result, device_supported, ops};
+use alloc::format;
 use burn::{
     backend::Dispatch,
     tensor::{DType, Device, Tensor},
@@ -8,14 +8,14 @@ use burn::{
 use d3os_tensor_file::element_count;
 
 fn count(shape: &[usize]) -> Result<usize> {
-    element_count(shape).map_err(|e| format!("Qwen state geometry: {e}"))
+    element_count(shape).map_err(|e| Error::from(format!("Qwen state geometry: {e}")))
 }
 fn positive(value: f32) -> bool {
     value.is_finite() && value > 0.
 }
 fn tensor<const D: usize>(value: &Tensor<D>, shape: [usize; D], device: &Device) -> Result<()> {
     if value.dims() != shape || value.dtype() != DType::F32 || value.device() != *device || value.device().is_autodiff() {
-        return Err(String::from("Qwen state input shape, dtype, or device differs"));
+        return Err(Error::from("Qwen state input shape, dtype, or device differs"));
     }
     Ok(())
 }
@@ -41,7 +41,7 @@ impl AttentionConfig {
             || !positive(self.rope_theta)
             || !positive(self.epsilon)
         {
-            return Err(String::from("invalid Qwen attention configuration"));
+            return Err(Error::from("invalid Qwen attention configuration"));
         }
         Ok((query, key))
     }
@@ -84,7 +84,7 @@ impl AttentionState {
         tensor(&keys, [capacity, config.kv_heads, config.head_dim], &device)?;
         tensor(&values, keys.dims(), &device)?;
         if position > capacity {
-            return Err(String::from("Qwen attention cache position exceeds capacity"));
+            return Err(Error::from("Qwen attention cache position exceeds capacity"));
         }
         Ok(Self { keys, values, position })
     }
@@ -159,7 +159,7 @@ impl DeltaConfig {
         count(&[channels, self.kernel])?;
         count(&[self.heads, self.key_dim, self.value_dim])?;
         if !self.heads.is_multiple_of(self.key_heads) || !positive(self.epsilon) {
-            return Err(String::from("invalid Qwen recurrent configuration"));
+            return Err(Error::from("invalid Qwen recurrent configuration"));
         }
         Ok((channels, values))
     }
@@ -256,7 +256,7 @@ impl DeltaState {
         ] {
             matrix.check_input(&input)?;
             if matrix.shape() != [outputs, width] || matrix.device() != device {
-                return Err(String::from("Qwen recurrent projection matrix differs"));
+                return Err(Error::from("Qwen recurrent projection matrix differs"));
             }
         }
         let result = <Dispatch as ops::QwenOps>::project_delta(

@@ -5,8 +5,8 @@ The CPU backend is a real userspace implementation with `no_std` and `alloc`.
 Host verification builds the same libraries for Linux.
 
 The [Burn migration](burn-migration.md) replaces the public AI framework while retaining the native driver and cuTile kernels.
-Its public native backend, convolutional training, checkpoint export, and AlexNet model are operational.
-Qwen migration and matched performance optimization remain in progress.
+Its native backend, convolutional training, checkpoint export, AlexNet, and Qwen model APIs are operational.
+Large Qwen validation and matched performance optimization remain in progress.
 DOOM keeps its separate native rendering API.
 
 The hardware-free phase delivers pretrained AlexNet and Qwen3.5-0.8B text inference inside D3OS.
@@ -20,26 +20,26 @@ The [renderer explanation](nvidia-rendering-design.md) describes command orderin
 
 ## Source layout
 
-- `os/library/ai`: public Burn models, AlexNet evaluation, MNIST training, and checkpoint export.
+- `os/library/ai`: public Burn models, Qwen sessions and tokenization, streaming weights, MNIST training, and checkpoint export.
 - `os/library/tensor-file`: backend-independent F32 and BF16 tensor-file parsing.
 - `os/library/burn-native`: Burn tensor primitives, checked views, and native GPU operations.
 - `os/library/compute`: tensor storage, command scopes, CPU operators, and the native NVIDIA backend.
-- `os/library/inference`: remaining Qwen execution, tokenization, and numerical references during migration.
 - `os/application/infer`: D3OS file access, shell commands, and serial reports.
-- `os/library/inference/examples/infer-host.rs`: host execution of the same model implementation.
+- `os/library/ai/examples/infer-host.rs`: host execution of the same model implementation.
 - `tools/gpu-kernels`: the host cuTile compiler and Rust tile programs.
 - `tools/inference`: asset preparation, cuTile compiler checks, and QEMU integration tests.
 - `os/kernel/src/device/nvidia.rs`: native firmware startup, compute submission, and process-owned GPU storage for the RTX 4090 Laptop GPU.
 - `tools/nvidia/run-qemu.py`: verified VFIO launch and passthrough boot checks.
 
-Burn models depend on Burn backend operations. The remaining Qwen implementation still uses the earlier compute contract.
-The NVIDIA backend implements the same contract through a D3OS compute syscall.
+Burn models use public Burn tensors and modules. Qwen uses native extensions for packed projections, attention, and recurrent updates.
+The native backend executes those operations through the D3OS compute syscall.
+The previous inference crate is removed.
 The model layer does not require Linux binary compatibility, a CUDA host runtime, or Python inside D3OS.
 
 ## Retained low-level CPU operators
 
-These operators support the remaining Qwen implementation and numerical references.
-AlexNet and training use Burn with an explicit Flex CPU or native NVIDIA device.
+These operators provide independent references for native kernel diagnostics.
+AlexNet, Qwen, and training use Burn with an explicit Flex CPU or native NVIDIA device.
 
 Each tensor owns its buffer and records its dimensions.
 Shape products use checked arithmetic before allocation or indexing.

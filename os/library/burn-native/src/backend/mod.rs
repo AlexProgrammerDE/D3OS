@@ -144,3 +144,7 @@ fn cat(op: &'static str, tensors: Vec<BackendTensor>, dim: usize) -> BackendTens
         NativeTensor::cat(&v.iter().map(|t| (*t).clone()).collect::<Vec<_>>(), dim)
     })
 }
+
+pub(crate) fn check_errors() -> Result<(), ExecutionError> {
+    CONTEXT.check()
+}

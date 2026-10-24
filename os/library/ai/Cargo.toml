@@ -5,12 +5,14 @@ edition = "2024"
 
 [features]
 default = []
-cpu = ["burn/flex", "dep:libm"]
-training = ["burn/optim", "dep:libm"]
+cpu = ["burn/flex"]
+training = ["burn/optim"]
 native = ["dep:d3os-burn-native", "dep:burn-dispatch", "burn-dispatch/d3os-native"]
 
 [dependencies]
-libm = { version = "0.2", optional = true }
+unicode-normalization = { version = "0.1", default-features = false }
+unicode-general-category = "1"
+libm = "0.2"
 d3os-tensor-file = { path = "../tensor-file" }
 crc32fast = { version = "=1.5.3", default-features = false }
 burn-dispatch = { version = "=0.22.1", default-features = false, optional = true }
@@ -22,3 +24,7 @@ concurrent = { path = "../concurrent" }
 time = { path = "../time" }
 embassy-time-driver = { version = "=0.2.2", features = ["tick-hz-1_000_000"] }
 spin = "0.10"
+
+[[example]]
+name = "infer-host"
+required-features = ["cpu"]
