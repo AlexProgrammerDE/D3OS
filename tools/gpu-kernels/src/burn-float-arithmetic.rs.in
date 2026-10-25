@@ -1,4 +1,4 @@
-// Each primitive retains its arithmetic type and rounds to nearest even.
+// Floating arithmetic and sqrt retain their type and round to nearest even.
 // Typed half division uses tileiras's documented F32 emulation internally.
 fn float_arithmetic_width(format: u32) -> u32 {
     if format == 0u32 { 3u32 } else if format <= 2u32 { 2u32 } else { 1u32 }
@@ -11,6 +11,92 @@ fn float_arithmetic_one(format: u32) -> u64 {
     else { 16256u64 }
 }
 
+// Round stored IEEE encodings without floating math or integer-value conversion.
+fn float_arithmetic_integral_u32(bits: Tile<u32, {[128]}>, op: u32, fraction: u32, bias: u32, sign_shift: u32) -> Tile<u32, {[128]}> {
+    let zero = broadcast_scalar(0u32, shape![128]);
+    let one = broadcast_scalar(1u32, shape![128]);
+    let f = broadcast_scalar(fraction, shape![128]);
+    let base = broadcast_scalar(bias, shape![128]);
+    let sign = one << broadcast_scalar(sign_shift, shape![128]);
+    // Ignore bits outside the stored format before classification or passthrough.
+    let bits = bits & (sign | (sign - one));
+    let sign_bits = bits & sign;
+    let magnitude_mask = sign - one;
+    let magnitude = bits & magnitude_mask;
+    let exponent = magnitude >> f;
+    let negative = ne_tile(sign_bits, zero);
+    let nonzero = ne_tile(magnitude, zero);
+    let one_bits = base << f;
+    let half_bits = (base - one) << f;
+    let max_exponent = base + f - one;
+    let bounded_low = select(lt_tile(exponent, base), base, exponent);
+    let bounded_exponent = select(gt_tile(bounded_low, max_exponent), max_exponent, bounded_low);
+    // Every lane has 1 <= k <= fraction, even zero, infinity, and NaN lanes.
+    let k = base + f - bounded_exponent;
+    let unit = one << k;
+    let mask = unit - one;
+    let remainder = magnitude & mask;
+    let whole = magnitude & (magnitude_mask ^ mask);
+    let significand = (one << f) | (magnitude & ((one << f) - one));
+    let odd = ne_tile((significand >> k) & one, zero);
+    let half = unit >> broadcast_scalar(1u32, shape![128]);
+    let remainder_nonzero = ne_tile(remainder, zero);
+    let increment = if op == 21u32 { negative & remainder_nonzero }
+        else if op == 22u32 { eq_tile(sign_bits, zero) & remainder_nonzero }
+        else if op == 23u32 { gt_tile(remainder, half) | (eq_tile(remainder, half) & odd) }
+        else { ne_tile(zero, zero) };
+    let middle = sign_bits | (whole + select(increment, unit, zero));
+    let small_increment = if op == 21u32 { negative & nonzero }
+        else if op == 22u32 { eq_tile(sign_bits, zero) & nonzero }
+        else if op == 23u32 { gt_tile(magnitude, half_bits) }
+        else { ne_tile(zero, zero) };
+    let small = sign_bits | select(small_increment, one_bits, zero);
+    select(lt_tile(exponent, base), small, select(ge_tile(exponent, base + f), bits, middle))
+}
+
+// Round stored IEEE encodings without floating math or integer-value conversion.
+fn float_arithmetic_integral_u64(bits: Tile<u64, {[128]}>, op: u32, fraction: u64, bias: u64, sign_shift: u64) -> Tile<u64, {[128]}> {
+    let zero = broadcast_scalar(0u64, shape![128]);
+    let one = broadcast_scalar(1u64, shape![128]);
+    let f = broadcast_scalar(fraction, shape![128]);
+    let base = broadcast_scalar(bias, shape![128]);
+    let sign = one << broadcast_scalar(sign_shift, shape![128]);
+    // Ignore bits outside the stored format before classification or passthrough.
+    let bits = bits & (sign | (sign - one));
+    let sign_bits = bits & sign;
+    let magnitude_mask = sign - one;
+    let magnitude = bits & magnitude_mask;
+    let exponent = magnitude >> f;
+    let negative = ne_tile(sign_bits, zero);
+    let nonzero = ne_tile(magnitude, zero);
+    let one_bits = base << f;
+    let half_bits = (base - one) << f;
+    let max_exponent = base + f - one;
+    let bounded_low = select(lt_tile(exponent, base), base, exponent);
+    let bounded_exponent = select(gt_tile(bounded_low, max_exponent), max_exponent, bounded_low);
+    // Every lane has 1 <= k <= fraction, even zero, infinity, and NaN lanes.
+    let k = base + f - bounded_exponent;
+    let unit = one << k;
+    let mask = unit - one;
+    let remainder = magnitude & mask;
+    let whole = magnitude & (magnitude_mask ^ mask);
+    let significand = (one << f) | (magnitude & ((one << f) - one));
+    let odd = ne_tile((significand >> k) & one, zero);
+    let half = unit >> broadcast_scalar(1u64, shape![128]);
+    let remainder_nonzero = ne_tile(remainder, zero);
+    let increment = if op == 21u32 { negative & remainder_nonzero }
+        else if op == 22u32 { eq_tile(sign_bits, zero) & remainder_nonzero }
+        else if op == 23u32 { gt_tile(remainder, half) | (eq_tile(remainder, half) & odd) }
+        else { ne_tile(zero, zero) };
+    let middle = sign_bits | (whole + select(increment, unit, zero));
+    let small_increment = if op == 21u32 { negative & nonzero }
+        else if op == 22u32 { eq_tile(sign_bits, zero) & nonzero }
+        else if op == 23u32 { gt_tile(magnitude, half_bits) }
+        else { ne_tile(zero, zero) };
+    let small = sign_bits | select(small_increment, one_bits, zero);
+    select(lt_tile(exponent, base), small, select(ge_tile(exponent, base + f), bits, middle))
+}
+
 fn float_arithmetic_f64(a: Tile<u64, {[128]}>, b: Tile<u64, {[128]}>, op: u32) -> Tile<u64, {[128]}> {
     let x: Tile<f64, {[128]}> = bitcast(a);
     let y: Tile<f64, {[128]}> = bitcast(b);
@@ -19,6 +105,7 @@ fn float_arithmetic_f64(a: Tile<u64, {[128]}>, b: Tile<u64, {[128]}>, op: u32) -
     else if op == 2u32 { bitcast(subf(x, y, rounding::NearestEven, ftz::Disabled)) }
     else if op == 3u32 { bitcast(mulf(x, y, rounding::NearestEven, ftz::Disabled)) }
     else if op == 4u32 { bitcast(divf(x, y, rounding::NearestEven, ftz::Disabled)) }
+    else if op == 14u32 { bitcast(sqrt(x, rounding::NearestEven, ftz::Disabled)) }
     else { bitcast(divf(one, x, rounding::NearestEven, ftz::Disabled)) }
 }
 
@@ -30,6 +117,7 @@ fn float_arithmetic_f32(a: Tile<u32, {[128]}>, b: Tile<u32, {[128]}>, op: u32) -
     else if op == 2u32 { bitcast(subf(x, y, rounding::NearestEven, ftz::Disabled)) }
     else if op == 3u32 { bitcast(mulf(x, y, rounding::NearestEven, ftz::Disabled)) }
     else if op == 4u32 { bitcast(divf(x, y, rounding::NearestEven, ftz::Disabled)) }
+    else if op == 14u32 { bitcast(sqrt(x, rounding::NearestEven, ftz::Disabled)) }
     else { bitcast(divf(one, x, rounding::NearestEven, ftz::Disabled)) }
 }
 
@@ -41,6 +129,7 @@ fn float_arithmetic_f16(a: Tile<u16, {[128]}>, b: Tile<u16, {[128]}>, op: u32) -
     else if op == 2u32 { bitcast(subf(x, y, rounding::NearestEven, ftz::Disabled)) }
     else if op == 3u32 { bitcast(mulf(x, y, rounding::NearestEven, ftz::Disabled)) }
     else if op == 4u32 { bitcast(divf(x, y, rounding::NearestEven, ftz::Disabled)) }
+    else if op == 14u32 { bitcast(sqrt(x, rounding::NearestEven, ftz::Disabled)) }
     else { bitcast(divf(one, x, rounding::NearestEven, ftz::Disabled)) }
 }
 
@@ -52,6 +141,7 @@ fn float_arithmetic_bf16(a: Tile<u16, {[128]}>, b: Tile<u16, {[128]}>, op: u32) 
     else if op == 2u32 { bitcast(subf(x, y, rounding::NearestEven, ftz::Disabled)) }
     else if op == 3u32 { bitcast(mulf(x, y, rounding::NearestEven, ftz::Disabled)) }
     else if op == 4u32 { bitcast(divf(x, y, rounding::NearestEven, ftz::Disabled)) }
+    else if op == 14u32 { bitcast(sqrt(x, rounding::NearestEven, ftz::Disabled)) }
     else { bitcast(divf(one, x, rounding::NearestEven, ftz::Disabled)) }
 }
 
@@ -69,6 +159,15 @@ fn float_arithmetic_value(left: Tile<u64, {[128]}>, right: Tile<u64, {[128]}>, f
             else if format == 3u32 { 31744u64 } else { 32640u64 }, shape![128]);
         let ordered_nonzero = ne_tile(magnitude, broadcast_scalar(0u64, shape![128])) & le_tile(magnitude, infinity);
         select(ordered_nonzero, (left & sign) | broadcast_scalar(float_arithmetic_one(format), shape![128]), broadcast_scalar(0u64, shape![128]))
+    }
+    else if op >= 21u32 && op <= 24u32 {
+        if format == 0u32 { float_arithmetic_integral_u64(left, op, 52u64, 1023u64, 63u64) }
+        else {
+            let fraction = if format <= 2u32 { 23u32 } else if format == 3u32 { 10u32 } else { 7u32 };
+            let bias = if format == 3u32 { 15u32 } else { 127u32 };
+            let sign_shift = if format <= 2u32 { 31u32 } else { 15u32 };
+            exti(float_arithmetic_integral_u32(packed_low(left), op, fraction, bias, sign_shift))
+        }
     }
     else if format == 0u32 { float_arithmetic_f64(left, right, op) }
     else if format <= 2u32 { exti(float_arithmetic_f32(packed_low(left), packed_low(right), op)) }
@@ -100,7 +199,7 @@ unsafe fn burn_float_arithmetic(a: *const u32, b: *const u32, output: *mut u32, 
     let format = (operation >> 8u32) & 255u32;
     let op = operation & 255u32;
     let scalar_rhs = operation & 16777216u32 != 0u32;
-    let unary = op == 11u32 || op == 12u32 || op == 13u32 || op == 25u32;
+    let unary = (op >= 11u32 && op <= 14u32) || (op >= 21u32 && op <= 25u32);
     let width = float_arithmetic_width(format);
     let per_word = if width == 3u32 { 1u32 } else { 4u32 >> width };
     let writers = (count + per_word - 1u32) / per_word;

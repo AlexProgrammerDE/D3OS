@@ -5,6 +5,7 @@ pub mod cross;
 pub mod deform;
 pub mod erf;
 pub mod float_arithmetic;
+pub mod float_rounding;
 pub mod integer;
 pub mod integer_arithmetic;
 pub mod integer_matrix;

@@ -730,7 +730,7 @@ fn native_validation(backend: &Nvidia, counts: &mut Counts) -> Result<()> {
                 }
                 counts.rejected += 1;
             }
-            for op in [Elementwise::Equal, Elementwise::Sqrt, Elementwise::Remainder] {
+            for op in [Elementwise::Equal, Elementwise::MaskFill, Elementwise::Remainder] {
                 if !matches!(a.float_binary(&a, op), Err(Error::InvalidParameter))
                     || !matches!(a.float_unary(op), Err(Error::InvalidParameter))
                     || !matches!(a.float_scalar(op, Scalar::Bool(true)), Err(Error::InvalidParameter))

@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "oracle": "Python exact Fraction; isqrt plus squared midpoint comparison; imported frozen IEEE RNE encoder",
+  "generator_dependencies_sha256": {
+    "tools/nvidia/float-rounding-generate.py": "56748c8856ba9b7f502b2b5aa0e1a17b95f54ecc368bab95a48887579e41455a",
+    "tools/nvidia/float-arithmetic-generate.py": "2b2009b431d8a9e5ec9465295aa99f77a4be881c7a8ca4c18f04ef93950f8ac2"
+  },
+  "fixture_sha256": "8658fd7143b2fa0deb86a2bcdd1219fee2c0bada884b970127e0bf49cf1b7ffc",
+  "fixture_bytes": 1579008,
+  "pool_values_per_format": 64,
+  "formats": [
+    "F64",
+    "F32",
+    "F16",
+    "BF16"
+  ],
+  "Flex32": "F32 encodings; separate dtype cases",
+  "operations": [
+    "Sqrt",
+    "Floor",
+    "Ceil",
+    "Round",
+    "Trunc"
+  ],
+  "layout": "native-width little endian; per format pool[64],expected[5][64]; then F16/BF16 expected[5][65536],staged_sqrt[65536]; offsets in generated Rust",
+  "half_ideal_vs_staged_exact_f32_sqrt": {
+    "F16": {
+      "all_codes": 65536,
+      "non_nan_exact_comparisons": 31746,
+      "differences": [],
+      "nan_policy": "classification"
+    },
+    "BF16": {
+      "all_codes": 65536,
+      "non_nan_exact_comparisons": 32642,
+      "differences": [],
+      "nan_policy": "classification"
+    }
+  },
+  "public_cases": 465,
+  "public_maximum_values": 257,
+  "full_half_expected_values": 655360,
+  "nan_policy": "public classification; separate raw integral payload preservation",
+  "linux_approximation_policy": "observed differences remain failures; exact/staged equality does not qualify Linux approximation",
+  "python_dependencies": "standard library only; optional local libmpfr via ctypes"
+}

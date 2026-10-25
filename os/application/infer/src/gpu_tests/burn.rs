@@ -7,6 +7,7 @@ mod cross;
 mod deform;
 mod dispatch;
 mod float_arithmetic;
+mod float_rounding;
 mod indexed;
 mod indexing;
 mod integer_arithmetic;
@@ -213,6 +214,20 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     }
     integers::run(backend).map_err(|e| format!("Burn native integer reductions: {e}"))?;
     words::run(backend).map_err(|e| format!("Burn native words: {e}"))?;
+    float_rounding::run(backend)?;
+    let rounding_options = d3os_ai::validation::float_rounding::Options::default();
+    let rounding_summary = d3os_ai::burn::tensor::try_read_sync(d3os_ai::validation::float_rounding::run(&device, &rounding_options))
+        .ok_or_else(|| String::from("native float rounding future did not complete"))??;
+    let expected_rounding = d3os_ai::validation::float_rounding::expected_summary(&rounding_options);
+    if rounding_summary != expected_rounding {
+        return Err(format!("float rounding totals: {rounding_summary:?}, expected {expected_rounding:?}"));
+    }
+    crate::report(format_args!(
+        "BURN_FLOAT_ROUNDING_OK os=d3os backend=native fusion=disabled corpus={} fixture_sha256={} totals={} reference=python_fraction_integer_sqrt_squared_midpoint_rne finite_inf_signed_zero=exact_bits arithmetic_nan=classification high_level_dtype=explicit chain=materialized_each_primitive poison=retained_allocation physical_padding=raw_verified no_flex32=false skip_rank_zero=false finite=false",
+        d3os_ai::validation::float_rounding::CORPUS_VERSION,
+        d3os_ai::validation::float_rounding::FIXTURE_SHA256,
+        serde_json::json!({"dtypes":rounding_summary.dtypes,"operations":rounding_summary.operations,"cases":rounding_summary.cases(),"unary_cases":rounding_summary.unary_cases,"high_level_cases":rounding_summary.high_level_cases,"chain_cases":rounding_summary.chain_cases,"chain_steps":rounding_summary.chain_steps,"source_checks":rounding_summary.source_checks,"alias_checks":rounding_summary.alias_checks,"poison_checks":rounding_summary.poison_checks,"values":rounding_summary.values,"exact_values":rounding_summary.exact_values,"nan_values":rounding_summary.nan_values})
+    ));
     float_arithmetic::run(backend)?;
     let float_options = d3os_ai::validation::float_arithmetic::Options::default();
     let float_summary = d3os_ai::burn::tensor::try_read_sync(d3os_ai::validation::float_arithmetic::run(&device, &float_options))

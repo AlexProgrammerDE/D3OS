@@ -172,7 +172,7 @@ The GPU operations include FP32 arithmetic and math, reductions, exact tensor fi
 Another 32 entries implement I32 arithmetic, signed comparisons, bitwise operations, boolean logic, masks, and conversions.
 These operations support strided views and broadcasting. Input tensors remain shared and immutable.
 Full writers avoid a separate output clear. Empty logical outputs require no element work.
-The matching SDK and driver use native compute protocol version 43 and the 247-entry portable inference bundle.
+The matching SDK and driver use native compute protocol version 44 and the 247-entry portable inference bundle.
 
 The D3OS GPU self-test passes reversed and transposed views, overlapping windows, broadcast batches, subviews, empty dimensions, and neighboring guards.
 Matrix references use independent FP64 accumulation. Math references use independent libm functions and include 2,816 FP32 edge values.
@@ -323,6 +323,12 @@ The four scalar arithmetic wrappers preserve F64 precision and the pinned Linux 
 D3OS passes all 900 public cases and the guarded float suite, plus every earlier regression gate.
 Linux passes the 680-case diagnostic with rank-zero results and direct Flex32 uploads excluded explicitly.
 The complete Linux attempt retains both upstream failures. These results do not establish full backend or performance parity.
+
+Square root, floor, ceil, ties-to-even round, and truncation now support all five ordinary floating formats.
+The typed integral routes preserve IEEE encodings directly, and F64 square root retains actual double operands and results.
+D3OS passes 465 public cases, 655,360 exhaustive half results, and the complete earlier regression suite.
+Linux passes 352 diagnostic cases with rank-zero results and direct Flex32 uploads excluded.
+The complete Linux records retain both upstream failures. These are correctness results, with no performance-parity claim.
 
 I32 tensor and generic scalar powers now use resident wrapping integer arithmetic without a floating-point intermediate.
 The exponent bits follow the same unsigned interpretation as the pinned Linux backend.

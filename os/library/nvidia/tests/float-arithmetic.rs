@@ -37,18 +37,22 @@ fn scalar(mut p: [u32; 32], bits: u64) -> [u32; 32] {
 }
 
 #[test]
-fn operation_registry_accepts_exactly_the_eight_float_primitives() {
+fn operation_registry_accepts_exactly_the_thirteen_float_primitives() {
     for elementwise in Elementwise::ALL {
-        let selected = matches!(elementwise as u32, 1..=4 | 11..=13 | 25);
+        let selected = matches!(elementwise as u32, 1..=4 | 11..=14 | 21..=25);
         let operation = Operation::from_elementwise(elementwise);
         assert_eq!(operation.is_ok(), selected);
         if let Ok(op) = operation {
             assert_eq!(op as u32, elementwise as u32);
-            assert_eq!(op.unary(), matches!(elementwise as u32, 11..=13 | 25));
+            assert_eq!(op.unary(), matches!(elementwise as u32, 11..=14 | 21..=25));
             assert_eq!(op.binary(), !op.unary());
         }
     }
-    assert!(Operation::from_raw(256).is_err());
+    assert_eq!(Operation::ALL.len(), 13);
+    for raw in 0..=256 {
+        let selected = matches!(raw, 1..=4 | 11..=14 | 21..=25);
+        assert_eq!(Operation::from_raw(raw).is_ok(), selected);
+    }
     for op in Operation::ALL {
         for format in Format::ALL {
             let supported = FORMATS.contains(&format);
@@ -180,12 +184,12 @@ fn unused_rhs_geometry_and_scalar_widths_are_canonical() {
 fn full_writers_count_packed_owners_and_forbid_every_output_overlap() {
     assert!(Kernel::FloatArithmetic.allocates_output());
     for format in FORMATS {
-        for count in [1, 2, 3, 4, 5, 127, 128, 129, 257] {
-            for p in [
-                parameters(Operation::Divide, format, count),
-                scalar(parameters(Operation::Multiply, format, count), 1),
-                parameters(Operation::Reciprocal, format, count),
-            ] {
+        for count in [1, 2, 3, 4, 5, 127, 128, 129, 255, 256, 257, 511, 512, 513] {
+            let parameters = Operation::ALL.into_iter().flat_map(|op| {
+                let p = parameters(op, format, count);
+                [Some(p), op.binary().then(|| scalar(p, 1))].into_iter().flatten()
+            });
+            for p in parameters {
                 let work = Kernel::FloatArithmetic.work(&p).unwrap();
                 let owners = if format.width() == Width::Eight {
                     count
@@ -284,4 +288,38 @@ fn malformed_fields_empty_launches_and_geometry_overflow_are_rejected() {
     assert!(float_arithmetic::validate(&p[..31]).is_err());
     assert!(float_arithmetic::work_items(&p[..31]).is_err());
     assert!(float_arithmetic::validate(&[0; 33]).is_err());
+}
+
+#[test]
+fn unary_boundaries_retain_signed_element_offsets_and_reject_empty_launches() {
+    for format in FORMATS {
+        for op in Operation::ALL.into_iter().filter(|op| op.unary()) {
+            assert!(float_arithmetic::validate(&parameters(op, format, 0)).is_err());
+            for count in [1, 2, 3, 127, 128, 129, 255, 256, 257] {
+                // An odd element offset also tests halfword input alignment.
+                let mut p = parameters(op, format, count);
+                p[4] = 1;
+                p[6] = 2 * count;
+                p[16] = 2;
+                let extents = [format.width().words(2 * count), 1, format.width().words(count)];
+                assert_eq!(float_arithmetic::validate(&p).unwrap(), extents);
+                p[4] = 2 * count - 1;
+                p[16] = (-2i32) as u32;
+                assert_eq!(float_arithmetic::validate(&p).unwrap(), extents);
+                p[4] = 0;
+                if count > 1 {
+                    assert!(float_arithmetic::validate(&p).is_err());
+                }
+            }
+            let mut p = parameters(op, format, 1);
+            p[4] = i32::MAX as u32 - 1;
+            p[6] = i32::MAX as u32;
+            assert_eq!(
+                float_arithmetic::validate(&p).unwrap(),
+                [format.width().words(i32::MAX as u32), 1, format.width().words(1)]
+            );
+            p[4] += 1;
+            assert!(float_arithmetic::validate(&p).is_err());
+        }
+    }
 }

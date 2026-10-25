@@ -372,6 +372,42 @@ Eight SDK tests, eight host reference tests, 24 Native unit tests, compiler audi
 These are correctness checks, with no performance-parity claim.
 Other floating math, typed reductions, scans, ordering, matrices, arithmetic updates, and broader quantized APIs remain incomplete.
 
+## Typed square root and integral rounding
+
+Protocol 44 extends the typed floating entry with square root, floor, ceil, ties-to-even round, and truncation.
+The bundle retains 247 inference entries and 82 compute profiles.
+All 246 other entries retain 532 identical instruction and constant sections.
+The new operations support F64, F32, Flex32, F16, and BF16 without changing the tensor dtype.
+Both systems use the passed-through RTX 4090 Laptop GPU.
+Native F32 retains its existing elementwise entry points.
+
+F64 square root uses actual F64 operands and results.
+Half square root uses the compiler's F32 refinement and destination rounding.
+The guarded GPU checks compare every F16 and BF16 input encoding against independently generated expected results.
+The four typed integral operations transform stored IEEE fields with integer arithmetic.
+They preserve signed zeros, infinities, and NaN payloads, including integral values beyond the integer-conversion range.
+Native F32 floor, ceil, and truncation retain their earlier NaN classification contract.
+Public arithmetic NaNs require classification. Raw typed integral results require exact input NaN bits.
+
+The fixture generator uses exact rational arithmetic and integer square root with a squared-midpoint comparison.
+It includes exhaustive half tables, F64 rounding boundaries, subnormal inputs, and separate primitive boundaries in materialized chains.
+The local MPFR comparison passes 579,958 checks.
+Ideal half square root and staged F32 square root agree wherever their results are non-NaN.
+
+D3OS passes all 465 public cases across five formats, covering 32,740 output values and 15 materialized chains.
+Guarded checks pass 255 raw dispatches, 270 fresh outputs, 565 Native results, 1,422 expected rejections, and 72 public results.
+Ten exhaustive GPU checks cover 655,360 half results.
+The checks retain guards, zero tails, signed views, broadcasting, resident execution, queued ownership, and recoverable errors.
+All earlier regression gates pass, including 900 basic float cases, 7,349 integer cases, and 52,306 indexing cases.
+All three guest compiler hashes match their host audits.
+
+Linux CUDA passes 352 diagnostic cases across F64, F32, F16, and BF16, covering 26,172 output values.
+The diagnostic excludes rank-zero results and direct Flex32 uploads, while retaining the full IEEE input domain.
+The complete Linux attempt stops at CubeCL's rank-zero readback panic.
+The diagnostic without rank-zero results stops at its direct Flex32 upload rejection.
+All three Linux records retain matching reference, fixture, executable, launcher, and dependency hashes.
+These are correctness checks. Full backend coverage, compile-time parity, and execution-performance parity remain incomplete.
+
 ## Typed integer elementwise arithmetic
 
 Protocol 42 adds 15 integer operations across I8, I16, I32, I64, U8, U16, U32, and U64.
@@ -1510,3 +1546,37 @@ python3 tools/nvidia/linux-reference.py \
 For the complete Linux attempt, omit both diagnostic flags and use a fresh directory.
 The additional `--burn-float-arithmetic-finite` option requires finite operands and finite expected results.
 The dtype and operation filters select smaller diagnostic groups. Each selection has its own exact expected summary.
+
+The typed rounding evidence lives under `target/nvidia/burn-backend-validation/float-rounding-first/`.
+The Linux records use the `target/nvidia/burn-backend-audit/linux-float-rounding-` prefix.
+The audit directory contains `float-rounding-comparison.json` and `float-rounding-section-comparison.json`.
+These records preserve the complete D3OS suite and the explicitly restricted Linux diagnostic.
+
+Build the typed rounding runner from its pinned toolchain directory:
+
+```bash
+cd tools/mnist-benchmark
+cargo build --release --locked --bin float_rounding
+cd ../..
+```
+
+Verify the deterministic fixtures and their independent local MPFR comparison:
+
+```bash
+python3 tools/nvidia/float-rounding-generate.py --check --mpfr
+```
+
+Run the supported Linux diagnostic in a fresh directory:
+
+```bash
+python3 tools/nvidia/linux-reference.py \
+  --directory target/nvidia/linux-burn-float-rounding \
+  --burn-float-rounding tools/mnist-benchmark/target/release/float_rounding \
+  --burn-float-rounding-skip-rank-zero --burn-float-rounding-no-flex32 \
+  --memory-mib 12288 --timeout 900
+```
+
+For the complete Linux attempt, omit both diagnostic flags and use a fresh directory.
+The `--burn-float-rounding-finite` option requires finite inputs and finite expected results.
+The `--burn-float-rounding-dtype` and `--burn-float-rounding-op` filters select smaller diagnostic groups.
+The runner's `--expected-summary` reports exact selected counts before device construction.
