@@ -304,6 +304,13 @@ fn main() {
                 .replace("BURN_OP", &format!("{}u32", op as u32)),
         );
     }
+    println!("cargo:rerun-if-changed=src/burn-integer-arithmetic.rs.in");
+    source.push_str(
+        &fs::read_to_string("src/burn-integer-arithmetic.rs.in")
+            .expect("read typed integer arithmetic")
+            .replace("INTEGER_PARAMETERS", &parameters)
+            .replace("INTEGER_ADDRESSES", &addresses),
+    );
     println!("cargo:rerun-if-changed=src/burn-words.rs.in");
     let words = fs::read_to_string("src/burn-words.rs.in").expect("read Burn word template");
     for op in d3os_nvidia::compute::words::WordOp::ALL {

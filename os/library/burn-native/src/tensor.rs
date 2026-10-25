@@ -210,6 +210,11 @@ impl NativeTensor {
     }
 
     pub fn word_binary(&self, rhs: &Self, operation: WordOp) -> Result<Self> {
+        if ((self.dtype.is_int() || self.dtype.is_uint()) && self.dtype != DType::I32)
+            || (self.dtype == DType::I32 && operation == WordOp::Power && rhs.dtype != DType::I32)
+        {
+            return self.integer_binary(rhs, operation);
+        }
         if !operation.binary() {
             return Err(Error::InvalidParameter);
         }
@@ -226,6 +231,9 @@ impl NativeTensor {
     }
 
     pub fn word_unary(&self, operation: WordOp) -> Result<Self> {
+        if (self.dtype.is_int() || self.dtype.is_uint()) && self.dtype != DType::I32 {
+            return self.integer_unary(operation);
+        }
         if !operation.unary() {
             return Err(Error::InvalidParameter);
         }

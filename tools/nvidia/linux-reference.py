@@ -73,7 +73,7 @@ def stage_burn_program(root, binary, destination):
     return libdevice
 
 
-def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_finite=False, sort_compile_log=False, compaction_aligned=False, quantized_empty_case=None, scatter_finite=False, select_updates=False, nd_unique=False, nd_nonempty=False, nd_scalar_grad=False, nd_no_scalar=False, storage_flex_direct=False, storage_no_flex32=False, conversions_no_flex32=False, remainder_finite=False, remainder_wide=False, inverse_finite=False, inverse_diagnostic=False, interpolate_case="normal", spatial_empty=False, spatial_case=None, spatial_exact=False, spatial_empty_backward=False, deform_empty=False, deform_exact=False, deform_case=None, deform_forward_only=False, predicate_no_flex32=False, predicate_finite=False, movement_no_flex32=False, movement_skip_empty_bool_scatter=False, movement_matching_bool_masks=False, indexed_no_flex32=False, indexed_skip_scalar_nd=False):
+def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_finite=False, sort_compile_log=False, compaction_aligned=False, quantized_empty_case=None, scatter_finite=False, select_updates=False, nd_unique=False, nd_nonempty=False, nd_scalar_grad=False, nd_no_scalar=False, storage_flex_direct=False, storage_no_flex32=False, conversions_no_flex32=False, remainder_finite=False, remainder_wide=False, inverse_finite=False, inverse_diagnostic=False, interpolate_case="normal", spatial_empty=False, spatial_case=None, spatial_exact=False, spatial_empty_backward=False, deform_empty=False, deform_exact=False, deform_case=None, deform_forward_only=False, predicate_no_flex32=False, predicate_finite=False, movement_no_flex32=False, movement_skip_empty_bool_scatter=False, movement_matching_bool_masks=False, indexed_no_flex32=False, indexed_skip_scalar_nd=False, integer_arithmetic_dtype=None, integer_arithmetic_op=None):
     purposes = {
         "quantization": "shared API conformance; no performance measurement",
         "quantized_empty": "empty quantized API diagnostic and record round trip; execution errors retained; no performance measurement",
@@ -83,6 +83,7 @@ def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_fi
         "integer_power": "public exact wrapping I32 powers; independent I128 reference; no performance measurement",
         "predicate": "ordinary numeric predicates and both boolean widths; independent decoded references; no performance measurement",
         "movement": "ordinary stored-value movement, packed masks and Boolean consumers; independent byte-record reference; no performance measurement",
+        "integer_arithmetic": "exact integer elementwise arithmetic across eight formats; independent U128/I128 reference; no performance measurement",
         "indexed": "ordinary ND reads, indexed assignment and requested index dtypes; exact byte records; no performance measurement",
         "integer_matrix": "public I32 matrix product conformance; no performance measurement",
         "scan": "public cumulative operations and gradients; no performance measurement",
@@ -102,6 +103,15 @@ def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_fi
     purpose = "erf error profile and GELU conformance; strict failures reported" if erf_profile else purposes[kind]
     program = f"/burn-{kind}"
     arguments = " --profile" if erf_profile else " --nonempty" if nonempty else ""
+    if kind == "integer_arithmetic":
+        summary_args = [str(binary), "--expected-summary"]
+        for flag, value in (("dtype", integer_arithmetic_dtype), ("op", integer_arithmetic_op)):
+            if value is not None:
+                argument = f"--{flag}={value}"
+                arguments += " " + argument
+                summary_args.append(argument)
+        expected_summary = json.loads(subprocess.check_output(summary_args, text=True, cwd=ROOT))
+        (root.parent / "burn-integer_arithmetic-expected.json").write_text(json.dumps(expected_summary, indent=2) + "\n")
     if kind == "indexed":
         if indexed_no_flex32: arguments += " --no-flex32"
         if indexed_skip_scalar_nd: arguments += " --skip-scalar-nd"
@@ -209,6 +219,8 @@ exec {program}{arguments}
         "cargo_lock": ROOT / "tools/mnist-benchmark/Cargo.lock",
         "libdevice": libdevice,
     }
+    if kind == "integer_arithmetic":
+        sources["expected_summary"] = root.parent / "burn-integer_arithmetic-expected.json"
     if kind == "indexed":
         sources["expected_summary"] = root.parent / "burn-indexed-expected.json"
     if kind == "movement":
@@ -1287,6 +1299,9 @@ def main():
     parser.add_argument("--burn-capabilities", type=Path, help="query Burn dtype usage declarations on the Linux CUDA device")
     parser.add_argument("--burn-erf", type=Path, help="run public erf and GELU conformance on Linux CUDA")
     parser.add_argument("--burn-erf-profile", action="store_true", help="report erf numerical errors separately from GELU conformance")
+    parser.add_argument("--burn-integer-arithmetic", type=Path, help="run portable exact integer arithmetic conformance")
+    parser.add_argument("--burn-integer-arithmetic-dtype", choices=("i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64"), help="select one integer format")
+    parser.add_argument("--burn-integer-arithmetic-op", choices=("add", "sub", "mul", "div", "floor-rem", "powi", "neg", "abs", "sign", "and", "or", "xor", "not", "shl", "shr"), help="select one arithmetic operation")
     parser.add_argument("--burn-indexed", type=Path, help="run exact indexed payload and integer index dtype conformance")
     parser.add_argument("--burn-indexed-no-flex32", action="store_true", help="exclude directly tagged Flex32 uploads")
     parser.add_argument("--burn-indexed-skip-scalar-nd", action="store_true", help="isolate the retained upstream scalar ND result error")
@@ -1397,7 +1412,7 @@ def main():
     args = parser.parse_args()
     if args.nsight_directory and not args.quantized_profile:
         parser.error("--nsight-directory requires --quantized-profile")
-    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.burn_indexed, args.burn_movement, args.burn_predicate, args.burn_integer_power, args.burn_integer, args.burn_integer_matmul, args.burn_scatter_updates, args.burn_nd_indexing, args.burn_storage, args.burn_conversions, args.burn_remainder, args.burn_inverse, args.burn_spatial_convolution, args.burn_deform, args.burn_interpolate, args.burn_quantized_empty, args.burn_compaction, args.burn_cross, args.burn_scan, args.burn_sort, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
+    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.burn_integer_arithmetic, args.burn_indexed, args.burn_movement, args.burn_predicate, args.burn_integer_power, args.burn_integer, args.burn_integer_matmul, args.burn_scatter_updates, args.burn_nd_indexing, args.burn_storage, args.burn_conversions, args.burn_remainder, args.burn_inverse, args.burn_spatial_convolution, args.burn_deform, args.burn_interpolate, args.burn_quantized_empty, args.burn_compaction, args.burn_cross, args.burn_scan, args.burn_sort, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
         parser.error("--quantized-profile requires a separate diagnostic guest")
     if args.pin_vcpus and len(os.sched_getaffinity(0)) != 4:
         parser.error("--pin-vcpus requires an inherited affinity of four host CPUs")
@@ -1422,6 +1437,7 @@ def main():
                 bool(args.burn_quantization),
                 bool(args.burn_capabilities),
                 bool(args.burn_erf),
+                bool(args.burn_integer_arithmetic),
                 bool(args.burn_indexed),
                 bool(args.burn_movement),
                 bool(args.burn_predicate),
@@ -1460,6 +1476,10 @@ def main():
         parser.error("--burn-erf requires a built conformance executable")
     if args.burn_capabilities and not args.burn_capabilities.is_file():
         parser.error("--burn-capabilities requires a built capabilities executable")
+    if args.burn_integer_arithmetic and not args.burn_integer_arithmetic.is_file():
+        parser.error("--burn-integer-arithmetic requires a built conformance executable")
+    if (args.burn_integer_arithmetic_dtype or args.burn_integer_arithmetic_op) and not args.burn_integer_arithmetic:
+        parser.error("integer arithmetic filters require --burn-integer-arithmetic")
     if args.burn_indexed and not args.burn_indexed.is_file():
         parser.error("--burn-indexed requires a built conformance executable")
     if (args.burn_indexed_no_flex32 or args.burn_indexed_skip_scalar_nd) and not args.burn_indexed:
@@ -1584,6 +1604,8 @@ def main():
         burn_probe(args.directory / "root", args.burn_capabilities.resolve(), "capabilities")
     elif args.burn_erf:
         burn_probe(args.directory / "root", args.burn_erf.resolve(), "erf", erf_profile=args.burn_erf_profile)
+    elif args.burn_integer_arithmetic:
+        burn_probe(args.directory / "root", args.burn_integer_arithmetic.resolve(), "integer_arithmetic", integer_arithmetic_dtype=args.burn_integer_arithmetic_dtype, integer_arithmetic_op=args.burn_integer_arithmetic_op)
     elif args.burn_indexed:
         burn_probe(args.directory / "root", args.burn_indexed.resolve(), "indexed", indexed_no_flex32=args.burn_indexed_no_flex32, indexed_skip_scalar_nd=args.burn_indexed_skip_scalar_nd)
     elif args.burn_movement:
@@ -1770,6 +1792,13 @@ def main():
             raise RuntimeError("Linux CUDA Burn erf/GELU check did not complete")
     if args.burn_capabilities and "BURN_CAPABILITIES_OK os=linux backend=cuda rows=226 flags_only=true" not in text:
         raise RuntimeError("Linux CUDA Burn capability query did not complete")
+    if args.burn_integer_arithmetic:
+        expected = json.loads((args.directory / "burn-integer_arithmetic-expected.json").read_text())
+        matches = re.findall(r"BURN_INTEGER_ARITHMETIC_OK os=linux backend=cuda totals=(\{[^\r\n]*?\}) reference=u128_i128", text)
+        if len(matches) != 1 or json.loads(matches[0]) != expected:
+            raise RuntimeError("Linux CUDA integer arithmetic did not complete with the expected corpus")
+        if "physical_padding=not_public extensions=false mixed_exponents=same_format_portable unsigned_neg=excluded_native_extension" not in text:
+            raise RuntimeError("Linux CUDA integer arithmetic scope differs from the staged corpus")
     if args.burn_indexed:
         expected = json.loads((args.directory / "burn-indexed-expected.json").read_text())
         matches = re.findall(r"BURN_INDEXED_CONFORMANCE_OK os=linux backend=cuda totals=(\{[^\r\n]*?\}) exact_bytes=true", text)

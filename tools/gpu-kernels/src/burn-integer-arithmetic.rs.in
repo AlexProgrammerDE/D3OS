@@ -1,0 +1,147 @@
+// All values stay in the integer domain. Arithmetic wraps modulo the base
+// width; floor remainder, masked shifts, and invalid divides follow Native's
+// explicit extension contract.
+fn integer_width(format: u32) -> u32 {
+    if format == 5u32 || format == 9u32 { 3u32 }
+    else if format == 6u32 || format == 10u32 { 2u32 }
+    else if format == 7u32 || format == 11u32 { 1u32 }
+    else { 0u32 }
+}
+
+fn integer_mask(width: u32) -> Tile<u64, {[128]}> {
+    let shift: Tile<u64, {[128]}> = exti(broadcast_scalar(64u32 - (8u32 << width), shape![128]));
+    let high_bit = broadcast_scalar(1u64, shape![128]) << broadcast_scalar(63u64, shape![128]);
+    (high_bit | (high_bit - broadcast_scalar(1u64, shape![128]))) >> shift
+}
+
+// Sign-extend narrow signed exponents, then retain the source i32 bit pattern.
+// Wide exponents intentionally contribute only their low 32 bits to int_powi.
+fn integer_exponent(bits: Tile<u64, {[128]}>, format: u32) -> Tile<u32, {[128]}> {
+    let one = broadcast_scalar(1u64, shape![128]);
+    let mask = integer_mask(integer_width(format));
+    let sign = mask ^ (mask >> one);
+    let extended = if format <= 8u32 { (bits ^ sign) - sign } else { bits };
+    packed_low(extended)
+}
+
+fn integer_value(left: Tile<u64, {[128]}>, right: Tile<u64, {[128]}>, format: u32, rhs_format: u32, operation: u32) -> Tile<u64, {[128]}> {
+    let zero = broadcast_scalar(0u64, shape![128]);
+    let one = broadcast_scalar(1u64, shape![128]);
+    let width = integer_width(format);
+    let mask = integer_mask(width);
+    let sign = mask ^ (mask >> one);
+    let negative_left = ne_tile(left & sign, zero) & broadcast_scalar(format <= 8u32, shape![128]);
+    let negative_right = ne_tile(right & sign, zero) & broadcast_scalar(format <= 8u32, shape![128]);
+    let value = if operation == 0u32 { left + right }
+    else if operation == 1u32 { left - right }
+    else if operation == 2u32 { left * right }
+    else if operation == 8u32 { zero - left }
+    else if operation == 9u32 { select(negative_left, zero - left, left) }
+    else if operation == 10u32 { select(negative_left, mask, select(ne_tile(left, zero), one, zero)) }
+    else if operation == 11u32 { left & right }
+    else if operation == 12u32 { left | right }
+    else if operation == 13u32 { left ^ right }
+    else if operation == 14u32 { left ^ mask }
+    else if operation == 15u32 || operation == 16u32 {
+        let count_mask: Tile<u64, {[128]}> = exti(broadcast_scalar((8u32 << width) - 1u32, shape![128]));
+        let count = right & count_mask;
+        if operation == 15u32 { left << count }
+        else {
+            // Logical shift of the N-bit complement plus a second complement
+            // produces arithmetic right shift without a signed conversion.
+            select(negative_left, ((left ^ mask) >> count) ^ mask, left >> count)
+        }
+    } else if operation == 31u32 {
+        let mut exponent = integer_exponent(right, rhs_format);
+        let mut factor = left;
+        let mut value = one;
+        let mut step = 0u32;
+        while step < 32u32 {
+            value = value * select(ne_tile(exponent & broadcast_scalar(1u32, shape![128]), broadcast_scalar(0u32, shape![128])), factor, one);
+            factor = factor * factor;
+            exponent = exponent >> broadcast_scalar(1u32, shape![128]);
+            step = step + 1u32;
+        }
+        value
+    } else {
+        // Unsigned magnitudes include abs(I64::MIN). Protect the denominator
+        // BEFORE native division; MIN / -1 is also safe in this domain.
+        let magnitude_left = select(negative_left, (zero - left) & mask, left);
+        let magnitude_right = select(negative_right, (zero - right) & mask, right);
+        let denominator = select(ne_tile(magnitude_right, zero), magnitude_right, one);
+        let quotient = magnitude_left / denominator;
+        let signs_differ = negative_left ^ negative_right;
+        let quotient = select(signs_differ, zero - quotient, quotient);
+        if operation == 29u32 {
+            select(eq_tile(right, zero), mask, quotient)
+        } else {
+            let remainder = (left - quotient * right) & mask;
+            let remainder = select(signs_differ & ne_tile(remainder, zero), remainder + right, remainder);
+            select(eq_tile(right, zero), left, remainder)
+        }
+    };
+    value & mask
+}
+
+// packed_read_width uses unsigned physical word offsets. Check the final word
+// of a wide value too, after excluding invalid signed logical coordinates.
+unsafe fn integer_read(input: *const u32, address: Tile<u32, {[128]}>, width: u32, extent: u32, valid: Tile<bool, {[128]}>) -> Tile<u64, {[128]}> {
+    let valid = valid & lt_tile(address, broadcast_scalar(extent, shape![128]));
+    let address = select(valid, address, broadcast_scalar(0u32, shape![128]));
+    let per_word = if width == 3u32 { 1u32 } else { 4u32 >> width };
+    let words = if width == 3u32 { extent * 2u32 } else { (extent + per_word - 1u32) / per_word };
+    let last_word = if width == 3u32 { address * broadcast_scalar(2u32, shape![128]) + broadcast_scalar(1u32, shape![128]) }
+    else { address / broadcast_scalar(per_word, shape![128]) };
+    let valid = valid & lt_tile(last_word, broadcast_scalar(words, shape![128]));
+    unsafe { packed_read_width(input, address, width, valid) }
+}
+
+#[cutile::entry()]
+unsafe fn burn_integer_arithmetic(a: *const u32, b: *const u32, output: *mut u32, INTEGER_PARAMETERS) {
+    let owner = indices();
+    let format = (operation >> 8u32) & 255u32;
+    let rhs_format = (operation >> 16u32) & 255u32;
+    let op = operation & 255u32;
+    let scalar_rhs = operation & 16777216u32 != 0u32;
+    let unary = op == 8u32 || op == 9u32 || op == 10u32 || op == 14u32;
+    let width = integer_width(format);
+    let rhs_width = integer_width(rhs_format);
+    let per_word = if width == 3u32 { 1u32 } else { 4u32 >> width };
+    let writers = (count + per_word - 1u32) / per_word;
+    let mut result = broadcast_scalar(0u32, shape![128]);
+    for slot in 0u32..per_word {
+        let logical = owner * broadcast_scalar(per_word, shape![128]) + broadcast_scalar(slot, shape![128]);
+        let valid = lt_tile(logical, broadcast_scalar(count, shape![128]));
+        // Padded owners never feed out-of-range signed coordinates to layout
+        // arithmetic, including near the signed-I32 logical extent limit.
+        let mut linear = select(valid, logical, broadcast_scalar(0u32, shape![128]));
+        let mut address_a = broadcast_scalar(signed(offset_a), shape![128]);
+        let mut address_b = broadcast_scalar(signed(if scalar_rhs || unary { 0u32 } else { offset_b }), shape![128]);
+        INTEGER_ADDRESSES
+        let address_a: Tile<u32, {[128]}> = bitcast(address_a);
+        let address_b: Tile<u32, {[128]}> = bitcast(address_b);
+        let left = unsafe { integer_read(a, address_a, width, extent_a, valid) };
+        let right = if scalar_rhs {
+            let low: Tile<u64, {[128]}> = exti(broadcast_scalar(scalar, shape![128]));
+            let high: Tile<u64, {[128]}> = exti(broadcast_scalar(offset_b, shape![128]));
+            low | (high << broadcast_scalar(32u64, shape![128]))
+        } else if unary { broadcast_scalar(0u64, shape![128]) }
+        else { unsafe { integer_read(b, address_b, rhs_width, extent_b, valid) } };
+        let left = select(valid, left, broadcast_scalar(0u64, shape![128]));
+        let right = select(valid, right, broadcast_scalar(1u64, shape![128]));
+        let value = integer_value(left, right, format, rhs_format, op);
+        let value = select(valid, value, broadcast_scalar(0u64, shape![128]));
+        if width == 3u32 {
+            // One lane owns both words. Fresh output never needs a clear or CAS.
+            let word = owner * broadcast_scalar(2u32, shape![128]);
+            unsafe { write_tile(output, word, packed_low(value), valid) };
+            unsafe { write_tile(output, word + broadcast_scalar(1u32, shape![128]), packed_low(value >> broadcast_scalar(32u64, shape![128])), valid) };
+        } else {
+            result = result | (packed_low(value) << broadcast_scalar(slot * (8u32 << width), shape![128]));
+        }
+    }
+    if width != 3u32 {
+        // A single store writes every slot, including zeroed packed tail bits.
+        unsafe { write_tile(output, owner, result, lt_tile(owner, broadcast_scalar(writers, shape![128]))) };
+    }
+}

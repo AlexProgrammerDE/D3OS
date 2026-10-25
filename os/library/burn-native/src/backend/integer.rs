@@ -129,37 +129,31 @@ impl IntTensorOps<Self> for Native {
         binary("int_add", &lhs, &rhs, lhs.dtype(), |a, b| a.word_binary(b, WordOp::Add))
     }
     fn int_add_scalar(lhs: IntTensor<Self>, rhs: Scalar) -> IntTensor<Self> {
-        one("int_add_scalar", &lhs, lhs.dtype(), |a| a.word_scalar(WordOp::Add, rhs.elem::<i32>() as u32))
+        one("int_add_scalar", &lhs, lhs.dtype(), |a| a.integer_scalar(WordOp::Add, rhs))
     }
     fn int_sub(lhs: IntTensor<Self>, rhs: IntTensor<Self>) -> IntTensor<Self> {
         binary("int_sub", &lhs, &rhs, lhs.dtype(), |a, b| a.word_binary(b, WordOp::Subtract))
     }
     fn int_sub_scalar(lhs: IntTensor<Self>, rhs: Scalar) -> IntTensor<Self> {
-        one("int_sub_scalar", &lhs, lhs.dtype(), |a| {
-            a.word_scalar(WordOp::Subtract, rhs.elem::<i32>() as u32)
-        })
+        one("int_sub_scalar", &lhs, lhs.dtype(), |a| a.integer_scalar(WordOp::Subtract, rhs))
     }
     fn int_mul(lhs: IntTensor<Self>, rhs: IntTensor<Self>) -> IntTensor<Self> {
         binary("int_mul", &lhs, &rhs, lhs.dtype(), |a, b| a.word_binary(b, WordOp::Multiply))
     }
     fn int_mul_scalar(lhs: IntTensor<Self>, rhs: Scalar) -> IntTensor<Self> {
-        one("int_mul_scalar", &lhs, lhs.dtype(), |a| {
-            a.word_scalar(WordOp::Multiply, rhs.elem::<i32>() as u32)
-        })
+        one("int_mul_scalar", &lhs, lhs.dtype(), |a| a.integer_scalar(WordOp::Multiply, rhs))
     }
     fn int_div(lhs: IntTensor<Self>, rhs: IntTensor<Self>) -> IntTensor<Self> {
         binary("int_div", &lhs, &rhs, lhs.dtype(), |a, b| a.word_binary(b, WordOp::Divide))
     }
     fn int_div_scalar(lhs: IntTensor<Self>, rhs: Scalar) -> IntTensor<Self> {
-        one("int_div_scalar", &lhs, lhs.dtype(), |a| a.word_scalar(WordOp::Divide, rhs.elem::<i32>() as u32))
+        one("int_div_scalar", &lhs, lhs.dtype(), |a| a.integer_scalar(WordOp::Divide, rhs))
     }
     fn int_remainder(lhs: IntTensor<Self>, rhs: IntTensor<Self>) -> IntTensor<Self> {
         binary("int_remainder", &lhs, &rhs, lhs.dtype(), |a, b| a.word_binary(b, WordOp::Remainder))
     }
     fn int_remainder_scalar(lhs: IntTensor<Self>, rhs: Scalar) -> IntTensor<Self> {
-        one("int_remainder_scalar", &lhs, lhs.dtype(), |a| {
-            a.word_scalar(WordOp::Remainder, rhs.elem::<i32>() as u32)
-        })
+        one("int_remainder_scalar", &lhs, lhs.dtype(), |a| a.integer_scalar(WordOp::Remainder, rhs))
     }
     fn int_matmul(lhs: IntTensor<Self>, rhs: IntTensor<Self>) -> IntTensor<Self> {
         BackendTensor::apply(
@@ -173,8 +167,11 @@ impl IntTensorOps<Self> for Native {
     fn int_powi(lhs: IntTensor<Self>, rhs: IntTensor<Self>) -> IntTensor<Self> {
         binary("int_powi", &lhs, &rhs, lhs.dtype(), |a, b| a.word_binary(b, WordOp::Power))
     }
+    fn int_powi_scalar(lhs: IntTensor<Self>, rhs: Scalar) -> IntTensor<Self> {
+        one("int_powi_scalar", &lhs, lhs.dtype(), |a| a.integer_powi_scalar(rhs))
+    }
     fn int_powi_scalar_impl(lhs: IntTensor<Self>, rhs: Scalar) -> IntTensor<Self> {
-        one("int_powi_scalar", &lhs, lhs.dtype(), |a| a.word_scalar(WordOp::Power, rhs.elem::<i32>() as u32))
+        one("int_powi_scalar", &lhs, lhs.dtype(), |a| a.integer_scalar(WordOp::Power, rhs))
     }
     fn int_sum(tensor: IntTensor<Self>) -> IntTensor<Self> {
         reduce("int_sum", &tensor, None, Reduction::Sum, DType::I32)
@@ -230,6 +227,12 @@ impl IntTensorOps<Self> for Native {
     fn int_max_dim(tensor: IntTensor<Self>, dim: usize) -> IntTensor<Self> {
         reduce("int_max_dim", &tensor, Some(dim), Reduction::Max, DType::I32)
     }
+    fn int_neg(tensor: IntTensor<Self>) -> IntTensor<Self> {
+        one("int_neg", &tensor, tensor.dtype(), |t| t.integer_unary(WordOp::Negate))
+    }
+    fn int_sign(tensor: IntTensor<Self>) -> IntTensor<Self> {
+        one("int_sign", &tensor, tensor.dtype(), |t| t.integer_unary(WordOp::Sign))
+    }
     fn int_abs(tensor: IntTensor<Self>) -> IntTensor<Self> {
         one("int_abs", &tensor, tensor.dtype(), |t| t.word_unary(WordOp::Absolute))
     }
@@ -254,25 +257,19 @@ impl IntTensorOps<Self> for Native {
         binary("bitwise_and", &lhs, &rhs, lhs.dtype(), |a, b| a.word_binary(b, WordOp::BitAnd))
     }
     fn bitwise_and_scalar(lhs: IntTensor<Self>, rhs: Scalar) -> IntTensor<Self> {
-        one("bitwise_and_scalar", &lhs, lhs.dtype(), |a| {
-            a.word_scalar(WordOp::BitAnd, rhs.elem::<i32>() as u32)
-        })
+        one("bitwise_and_scalar", &lhs, lhs.dtype(), |a| a.integer_scalar(WordOp::BitAnd, rhs))
     }
     fn bitwise_or(lhs: IntTensor<Self>, rhs: IntTensor<Self>) -> IntTensor<Self> {
         binary("bitwise_or", &lhs, &rhs, lhs.dtype(), |a, b| a.word_binary(b, WordOp::BitOr))
     }
     fn bitwise_or_scalar(lhs: IntTensor<Self>, rhs: Scalar) -> IntTensor<Self> {
-        one("bitwise_or_scalar", &lhs, lhs.dtype(), |a| {
-            a.word_scalar(WordOp::BitOr, rhs.elem::<i32>() as u32)
-        })
+        one("bitwise_or_scalar", &lhs, lhs.dtype(), |a| a.integer_scalar(WordOp::BitOr, rhs))
     }
     fn bitwise_xor(lhs: IntTensor<Self>, rhs: IntTensor<Self>) -> IntTensor<Self> {
         binary("bitwise_xor", &lhs, &rhs, lhs.dtype(), |a, b| a.word_binary(b, WordOp::BitXor))
     }
     fn bitwise_xor_scalar(lhs: IntTensor<Self>, rhs: Scalar) -> IntTensor<Self> {
-        one("bitwise_xor_scalar", &lhs, lhs.dtype(), |a| {
-            a.word_scalar(WordOp::BitXor, rhs.elem::<i32>() as u32)
-        })
+        one("bitwise_xor_scalar", &lhs, lhs.dtype(), |a| a.integer_scalar(WordOp::BitXor, rhs))
     }
     fn bitwise_not(tensor: IntTensor<Self>) -> IntTensor<Self> {
         one("bitwise_not", &tensor, tensor.dtype(), |t| t.word_unary(WordOp::BitNot))
@@ -281,17 +278,13 @@ impl IntTensorOps<Self> for Native {
         binary("bitwise_left_shift", &lhs, &rhs, lhs.dtype(), |a, b| a.word_binary(b, WordOp::ShiftLeft))
     }
     fn bitwise_left_shift_scalar(lhs: IntTensor<Self>, rhs: Scalar) -> IntTensor<Self> {
-        one("bitwise_left_shift_scalar", &lhs, lhs.dtype(), |a| {
-            a.word_scalar(WordOp::ShiftLeft, rhs.elem::<i32>() as u32)
-        })
+        one("bitwise_left_shift_scalar", &lhs, lhs.dtype(), |a| a.integer_scalar(WordOp::ShiftLeft, rhs))
     }
     fn bitwise_right_shift(lhs: IntTensor<Self>, rhs: IntTensor<Self>) -> IntTensor<Self> {
         binary("bitwise_right_shift", &lhs, &rhs, lhs.dtype(), |a, b| a.word_binary(b, WordOp::ShiftRight))
     }
     fn bitwise_right_shift_scalar(lhs: IntTensor<Self>, rhs: Scalar) -> IntTensor<Self> {
-        one("bitwise_right_shift_scalar", &lhs, lhs.dtype(), |a| {
-            a.word_scalar(WordOp::ShiftRight, rhs.elem::<i32>() as u32)
-        })
+        one("bitwise_right_shift_scalar", &lhs, lhs.dtype(), |a| a.integer_scalar(WordOp::ShiftRight, rhs))
     }
     fn int_cast(tensor: IntTensor<Self>, dtype: IntDType) -> IntTensor<Self> {
         cast("int_cast", &tensor, dtype.into())

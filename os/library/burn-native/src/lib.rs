@@ -10,6 +10,7 @@ pub mod deform;
 mod device;
 mod indexing;
 mod indices;
+mod integer_arithmetic;
 pub mod interpolate;
 pub mod layout;
 mod linear;

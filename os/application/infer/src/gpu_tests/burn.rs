@@ -8,6 +8,7 @@ mod deform;
 mod dispatch;
 mod indexed;
 mod indexing;
+mod integer_arithmetic;
 mod integers;
 mod interpolate;
 mod inverse;
@@ -211,6 +212,21 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     }
     integers::run(backend).map_err(|e| format!("Burn native integer reductions: {e}"))?;
     words::run(backend).map_err(|e| format!("Burn native words: {e}"))?;
+    integer_arithmetic::run(backend)?;
+    let integer_options = d3os_ai::validation::integer_arithmetic::Options {
+        extensions: true,
+        ..Default::default()
+    };
+    let integer_summary = d3os_ai::burn::tensor::try_read_sync(d3os_ai::validation::integer_arithmetic::run(&device, &integer_options))
+        .ok_or_else(|| String::from("native integer arithmetic future did not complete"))??;
+    let expected_integer = d3os_ai::validation::integer_arithmetic::expected_summary(&integer_options);
+    if integer_summary != expected_integer {
+        return Err(format!("integer arithmetic totals: {integer_summary:?}, expected {expected_integer:?}"));
+    }
+    crate::report(format_args!(
+        "BURN_INTEGER_ARITHMETIC_OK os=d3os backend=native totals={} reference=u128_i128 operations=15 values=exact_bits exponent=u32_bits_32_steps scalar=checked_base_format scalar_entry=backend public_power_shortcuts=true views=offset,step,permuted,reversed,broadcast_both ranks=0,1,2,8 tails=0,1,2,3,4,5,127,128,129,257 source_preservation=true poison=retained_allocation physical_padding=raw_verified extensions=true mixed_exponents=native_extension_all8_rhs_formats unsigned_neg=native_extension",
+        serde_json::json!({"dtypes":integer_summary.dtypes,"operations":integer_summary.operations,"cases":integer_summary.cases(),"tensor_cases":integer_summary.tensor_cases,"scalar_cases":integer_summary.scalar_cases,"unary_cases":integer_summary.unary_cases,"extension_cases":integer_summary.extension_cases,"mixed_exponent_cases":integer_summary.mixed_exponent_cases,"source_checks":integer_summary.source_checks,"guard_checks":integer_summary.guard_checks,"values":integer_summary.values,"exhaustive_pairs":integer_summary.exhaustive_pairs,"exhaustive_unary_values":integer_summary.exhaustive_unary_values,"unsigned_neg_cases":integer_summary.unsigned_neg_cases})
+    ));
     indexed::run(backend)?;
     let summary = d3os_ai::burn::tensor::try_read_sync(d3os_ai::validation::indexed::run(&device, &d3os_ai::validation::indexed::Options::default()))
         .ok_or_else(|| String::from("native indexed future did not complete"))??;

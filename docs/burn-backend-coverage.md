@@ -13,9 +13,9 @@ It also includes float, integer, boolean, quantized, module, activation, transac
 Each method records its signature, source location, conditional compilation attributes, and implementation or inherited default.
 Associated types and source SHA-256 hashes accompany the report.
 
-The current inventory contains 484 methods: 277 native overrides and 207 inherited defaults.
+The current inventory contains 484 methods: 280 native overrides and 204 inherited defaults.
 All required methods have declarations or implementations. This count does not establish runtime support.
-The report also records 136 native helper bodies for manual review of dtype and shape restrictions.
+The report also records 141 native helper bodies for manual review of dtype and shape restrictions.
 
 The tool follows syntactic associated backend calls and expands the pinned `dequant_op_quant!` and `dequant_op_flow!` macros.
 It identifies 8 methods with possible paths to explicit declines or panic declarations.
@@ -323,6 +323,47 @@ These records report no tensor mismatch before their failure. They do not establ
 The 12 GiB Linux diagnostic reached its 2,400-second deadline without a completion marker or reported tensor mismatch.
 All Linux records use the same frozen reference, runner, executable, and launcher hashes.
 These are correctness checks, with no execution-performance or compile-time parity claim.
+
+## Typed integer elementwise arithmetic
+
+Protocol 42 adds 15 integer operations across I8, I16, I32, I64, U8, U16, U32, and U64.
+The matching bundle contains 246 inference entries and 81 compute profiles.
+All 245 earlier entries retain 530 identical instruction and constant sections.
+
+The operations include addition, subtraction, multiplication, division, floor remainder, powers, negation, absolute value, sign, bitwise logic, and shifts.
+Tensor, scalar, and unary inputs retain their actual integer format.
+Matching I32 operations retain the existing fast path.
+Other formats use a packed full writer with exact integer arithmetic and zero output tails.
+No integer value passes through a floating-point intermediate.
+
+Native arithmetic wraps at the destination width.
+Division truncates toward zero, and floor remainder follows the divisor sign.
+The portable Linux corpus excludes ordinary signed overflow, invalid divisions, invalid shifts, and signed minimum negation or absolute value.
+Tensor powers use the low 32 exponent bits after signed narrow extension.
+Mixed exponent formats and unsigned negation remain explicitly labeled Native extensions.
+Scalar exponent two follows Burn's multiplication shortcut and its separate overflow domain.
+
+Native backend scalar entry checks the received `Scalar` before dispatch, including empty outputs.
+The Dispatch scalar-power override forwards that check instead of applying an inherited panicking I32 probe.
+Invalid generic scalar arguments can still fail inside Burn's public `Scalar::new` before backend entry.
+This extension therefore does not claim that every generic scalar argument returns a recoverable backend error.
+
+D3OS passes 7,349 public cases, including 998 extension cases, with 2,765,465 exact output values and 10,001 source checks.
+Guarded checks pass 460 raw dispatches, 468 fresh outputs, 804 Native results, 561 expected rejections, and 84 public results.
+They cover signed views, broadcasts, ranks zero and eight, packed guards, zero tails, high integer bits, error recovery, and queued input drops.
+All earlier regression gates pass, including the 52,306-case indexing corpus.
+All three guest compiler hashes match their host audits.
+
+The first GPU run stopped at a public test constructor that selected the default I32 dtype instead of its intended U8 dtype.
+Every public fixture now requests its intended dtype explicitly, including mixed-format exponent tensors.
+The complete rerun passes without a production arithmetic change.
+
+Seven SDK tests, eight host reference tests, 21 Native unit tests, compiler audits, Clippy checks, and the production image build pass.
+The Linux portable run stops at the pinned CubeCL rank-zero readback panic.
+Its frozen executable, reference, runner, expected summary, and launcher hashes remain archived.
+This failure does not establish complete Linux conformance or a numerical mismatch.
+These are correctness checks. They establish neither complete backend support nor performance parity.
+Typed reductions, scans, ordering, matrices, and arithmetic updates remain outside this extension.
 
 ## Inverse FP32 math
 
@@ -1359,3 +1400,28 @@ python3 tools/nvidia/linux-reference.py \
 
 For the complete Linux diagnostic, omit both domain flags and use a fresh directory.
 The runner's `--expected-summary` command returns CPU metadata before device construction. It does not run GPU checks.
+
+The typed integer evidence lives under `target/nvidia/burn-backend-validation/int-arithmetic-explicit-dtypes/`.
+The initial fixture diagnostic remains under `int-arithmetic-runtime/`.
+The Linux arithmetic records use the `target/nvidia/burn-backend-audit/linux-int-arithmetic-` prefix.
+The audit directory contains `traits-int-arithmetic-final.json`, `int-arithmetic-comparison.json`, and `int-arithmetic-section-comparison.json`.
+
+Build the portable arithmetic runner from its pinned toolchain directory:
+
+```bash
+cd tools/mnist-benchmark
+cargo build --release --locked --bin integer_arithmetic
+cd ../..
+```
+
+Run the complete portable Linux corpus in a fresh directory:
+
+```bash
+python3 tools/nvidia/linux-reference.py \
+  --directory target/nvidia/linux-burn-integer-arithmetic \
+  --burn-integer-arithmetic tools/mnist-benchmark/target/release/integer_arithmetic \
+  --memory-mib 12288 --timeout 900
+```
+
+For a diagnostic subset, use `--burn-integer-arithmetic-dtype` or `--burn-integer-arithmetic-op`.
+The runner's `--expected-summary` describes the exact selected corpus before device construction.

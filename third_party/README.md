@@ -46,6 +46,9 @@ The runtime patch remains compatible with `no_std` and `alloc`. The extension co
 Both packages include the upstream MIT and Apache 2.0 licenses.
 The workspace uses these sources through `[patch.crates-io]`.
 These patches do not replace Burn's optimizer or autodiff algorithms.
+The dispatcher forwards scalar integer powers to the active backend before the inherited I32 exponent probe.
+This preserves Native's recoverable scalar-range errors through the public API.
+
 The dispatcher also forwards linear forward and backward operations to the active backend.
 The upstream dispatcher decomposes linear layers before backend-specific implementations can run.
 Forwarding enables native linear execution while retaining each backend's autodiff behavior.

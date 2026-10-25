@@ -172,7 +172,7 @@ The GPU operations include FP32 arithmetic and math, reductions, exact tensor fi
 Another 32 entries implement I32 arithmetic, signed comparisons, bitwise operations, boolean logic, masks, and conversions.
 These operations support strided views and broadcasting. Input tensors remain shared and immutable.
 Full writers avoid a separate output clear. Empty logical outputs require no element work.
-The matching SDK and driver use native compute protocol version 41 and the 245-entry portable inference bundle.
+The matching SDK and driver use native compute protocol version 42 and the 246-entry portable inference bundle.
 
 The D3OS GPU self-test passes reversed and transposed views, overlapping windows, broadcast batches, subviews, empty dimensions, and neighboring guards.
 Matrix references use independent FP64 accumulation. Math references use independent libm functions and include 2,816 FP32 edge values.
@@ -314,6 +314,10 @@ The complete earlier regression suite also passes.
 Linux retains scalar-readback, Flex32-upload, and 4 GiB guest-memory failures.
 Its 12 GiB retry reached the 2,400-second deadline without completing.
 Pooling index outputs remain I32-only. Typed arithmetic updates and broader value domains also remain incomplete.
+Ordinary elementwise arithmetic now supports all eight integer formats through 15 exact GPU operations.
+D3OS passes 7,349 public cases, including 998 Native extensions, and the complete guarded arithmetic and earlier regression suites.
+The portable Linux arithmetic run stops at the pinned CubeCL rank-zero readback panic.
+Typed reductions, scans, ordering, and matrix value domains remain restricted.
 I32 tensor and generic scalar powers now use resident wrapping integer arithmetic without a floating-point intermediate.
 The exponent bits follow the same unsigned interpretation as the pinned Linux backend.
 FP32 deformable convolution now provides input, offset, weight, modulation-mask, and bias gradients on the native GPU.

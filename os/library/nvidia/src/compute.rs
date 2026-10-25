@@ -8,6 +8,7 @@ pub mod convolution;
 pub mod deform;
 pub mod elementwise;
 pub mod indexing;
+pub mod integer_arithmetic;
 pub mod interpolate;
 pub mod optimizer;
 pub mod packed_gather;
@@ -26,7 +27,7 @@ pub mod storage;
 pub mod updates;
 pub mod words;
 
-pub const VERSION: u32 = 41;
+pub const VERSION: u32 = 42;
 /// END_COMMANDS flag: an inner recording scope joins its parent's completion.
 /// The outermost scope always waits. Zero retains synchronous nested scopes.
 pub const DEFER_NESTED_COMPLETION: u64 = 1;
@@ -60,7 +61,7 @@ pub struct MemoryProfile {
     pub device_cached_bytes: u64,
     pub device_retired_bytes: u64,
 }
-pub const KERNEL_COUNT: usize = 80;
+pub const KERNEL_COUNT: usize = 81;
 
 /// CPU service costs by request operation, including queue work within it.
 #[derive(Clone, Copy, Debug, Default)]
@@ -198,9 +199,10 @@ pub enum Kernel {
     PackedMaskWhere = 77,
     PackedBoolScatter = 78,
     PackedScatterAssign = 79,
+    IntegerArithmetic = 80,
 }
 
-const _: () = assert!(Kernel::PackedScatterAssign as usize + 1 == KERNEL_COUNT);
+const _: () = assert!(Kernel::IntegerArithmetic as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -266,6 +268,7 @@ impl Kernel {
                 | Self::TensorSort
                 | Self::ArgWhere
                 | Self::TensorStorage
+                | Self::IntegerArithmetic
                 | Self::PackedGather
                 | Self::PackedMaskWhere
                 | Self::TensorPredicate
@@ -386,6 +389,7 @@ impl Kernel {
             77 => Self::PackedMaskWhere,
             78 => Self::PackedBoolScatter,
             79 => Self::PackedScatterAssign,
+            80 => Self::IntegerArithmetic,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -472,6 +476,7 @@ impl Kernel {
             Self::PackedMaskWhere => "burn_packed_mask",
             Self::PackedBoolScatter => "burn_packed_bool_scatter",
             Self::PackedScatterAssign => "burn_packed_scatter_assign",
+            Self::IntegerArithmetic => "burn_integer_arithmetic",
         }
     }
 
@@ -707,6 +712,10 @@ impl Kernel {
             (Self::PackedMaskWhere, p) => {
                 extents[..4].copy_from_slice(&packed_updates::validate_mask(p)?);
                 (packed_updates::mask_work_items(p)?, 4, 3, false)
+            }
+            (Self::IntegerArithmetic, p) => {
+                extents[..3].copy_from_slice(&integer_arithmetic::validate(p)?);
+                (integer_arithmetic::work_items(p)?, 3, 2, false)
             }
             (Self::PackedScatterAssign, p) => {
                 extents[..4].copy_from_slice(&packed_scatter::validate(p)?);

@@ -417,6 +417,10 @@ impl IntTensorOps<Self> for Dispatch {
         B::int_powi(lhs, rhs)
     }
 
+    fn int_powi_scalar(lhs: IntTensor<Self>, rhs: Scalar) -> IntTensor<Self> {
+        B::int_powi_scalar(lhs, rhs)
+    }
+
     fn int_powi_scalar_impl(lhs: IntTensor<Self>, rhs: Scalar) -> IntTensor<Self> {
         B::int_powi_scalar_impl(lhs, rhs)
     }
