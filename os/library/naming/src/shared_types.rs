@@ -72,3 +72,9 @@ impl RawDirent {
     }
 }
 
+impl Default for RawDirent {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+

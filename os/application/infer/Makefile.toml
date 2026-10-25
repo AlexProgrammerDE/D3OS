@@ -20,6 +20,7 @@ RUST_TARGET_PATH = "${CARGO_MAKE_WORKING_DIRECTORY}"
 LINKER_FILE = "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/os/application/link.ld"
 RUST_OBJECT = "${BUILD_DIRECTORY}/lib${CARGO_MAKE_PROJECT_NAME}.a"
 APPLICATION = "${INITRD_DIRECTORY}/bin/${CARGO_MAKE_PROJECT_NAME}"
+SYMBOL_APPLICATION = "${BUILD_DIRECTORY}/${CARGO_MAKE_PROJECT_NAME}.elf"
 
 
 # Build tasks
@@ -31,11 +32,16 @@ alias = "link"
 command = "cargo"
 args = [ "build", "-Z", "build-std=core,alloc", "-Z", "build-std-features=compiler-builtins-mem", "-Z", "json-target-spec", "--target", "${CARGO_CFG_TARGET_FAMILY}", "${CARGO_BUILD_OPTION}" ]
 
-[tasks.link]
+[tasks.link-symbols]
 command = "${LINKER}"
-args = [ "-n", "-T", "${LINKER_FILE}", "-o", "${APPLICATION}", "${RUST_OBJECT}", "-z", "noexecstack" ]
+args = [ "-n", "-T", "${LINKER_FILE}", "-o", "${SYMBOL_APPLICATION}", "${RUST_OBJECT}", "-z", "noexecstack" ]
 dependencies = [ "compile" ]
-condition = { files_modified = { input = [ "${BUILD_DIRECTORY}/lib${CARGO_MAKE_PROJECT_NAME}*", "${LINKER_FILE}" ], output = [ "${APPLICATION}" ] } }
+condition = { files_modified = { input = [ "${BUILD_DIRECTORY}/lib${CARGO_MAKE_PROJECT_NAME}*", "${LINKER_FILE}", "${CARGO_MAKE_WORKING_DIRECTORY}/Makefile.toml" ], output = [ "${SYMBOL_APPLICATION}" ] } }
+
+[tasks.link]
+command = "${OBJCOPY}"
+args = [ "--strip-debug", "${SYMBOL_APPLICATION}", "${APPLICATION}" ]
+dependencies = [ "link-symbols" ]
 
 [tasks.check]
 command = "cargo"

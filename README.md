@@ -90,6 +90,10 @@ add-symbol-file loader/initrd/bin/hello
 break main
 ```
 
+For `infer`, use `target/d3os_application/debug/infer.elf` for symbols.
+The build keeps its full debug ELF on the host and removes DWARF data from the guest copy to limit image size.
+Both files contain identical runtime load segments.
+
 For further commands check [GDB Quick Reference](docs/gdb-commands.pdf).
 
 For native Rust compute, pretrained AlexNet, and GPU kernel tests without NVIDIA hardware, read the [inference development guide](docs/inference.howto.md).

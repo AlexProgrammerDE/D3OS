@@ -216,7 +216,7 @@ def prepare(directory, mode, qwen_assets, extra_assets=(), *, kernel_image=None)
             try:
                 os.link(source / name, destination)
             except OSError as error:
-                if error.errno != errno.EXDEV:
+                if error.errno not in (errno.EXDEV, errno.EPERM):
                     raise
                 shutil.copyfile(source / name, destination)
     for source, relative in extra_assets:
@@ -226,7 +226,7 @@ def prepare(directory, mode, qwen_assets, extra_assets=(), *, kernel_image=None)
         try:
             os.link(source, destination)
         except OSError as error:
-            if error.errno != errno.EXDEV:
+            if error.errno not in (errno.EXDEV, errno.EPERM):
                 raise
             shutil.copyfile(source, destination)
     with tarfile.open(
