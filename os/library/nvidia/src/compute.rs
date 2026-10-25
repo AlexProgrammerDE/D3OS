@@ -13,7 +13,7 @@ pub mod reduction;
 pub mod updates;
 pub mod words;
 
-pub const VERSION: u32 = 19;
+pub const VERSION: u32 = 20;
 /// END_COMMANDS flag: an inner recording scope joins its parent's completion.
 /// The outermost scope always waits. Zero retains synchronous nested scopes.
 pub const DEFER_NESTED_COMPLETION: u64 = 1;
@@ -398,6 +398,11 @@ impl Kernel {
             (Self::TensorElementwise, p) if p.len() == elementwise::PARAMETERS => {
                 elementwise::Elementwise::from_raw(p[2] & 0xff).map_or(self.symbol(), |op| op.symbol())
             }
+            (Self::ProjectQuantized, [m, _, _, 8]) if *m > 16 => "project_m32_q8_0",
+            (Self::ProjectQuantized, [m, _, _, 11]) if *m > 16 => "project_m32_q3k",
+            (Self::ProjectQuantized, [m, _, _, 12]) if *m > 16 => "project_m32_q4k",
+            (Self::ProjectQuantized, [m, _, _, 13]) if *m > 16 => "project_m32_q5k",
+            (Self::ProjectQuantized, [m, _, _, 14]) if *m > 16 => "project_m32_q6k",
             (Self::ProjectQuantized, [1, _, _, 8]) => "vector_project_q8_0",
             (Self::ProjectQuantized, [1, _, _, 11]) => "vector_project_q3k",
             (Self::ProjectQuantized, [_, _, _, 11]) => "project_q3k",
@@ -525,7 +530,7 @@ impl Kernel {
             (Self::ProjectQuantized, &[m, k, n, format]) => {
                 quantized_words(k, format)?;
                 extents[..3].copy_from_slice(&[product(&[m, k])? as u64, quantized_words(product(&[k, n])?, format)?, product(&[m, n])? as u64]);
-                (product(&[m.div_ceil(16), n.div_ceil(if m == 1 { 4 } else { 32 }), 128])?, 3, 2, false)
+                (product(&[m.div_ceil(32), n.div_ceil(if m == 1 { 4 } else { 32 }), 128])?, 3, 2, false)
             }
             (Self::Dequantize, &[n, format]) => {
                 extents[..2].copy_from_slice(&[quantized_words(n, format)?, product(&[n])? as u64]);

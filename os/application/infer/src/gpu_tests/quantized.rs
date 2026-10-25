@@ -56,6 +56,7 @@ fn verify(backend: &Nvidia, format: Quantization, bytes: &[u8], expected: &[f32]
         (1, format.block_elements() * 32, 13),
         (3, format.block_elements(), 5),
         (17, format.block_elements() * 2, 33),
+        (33, format.block_elements() * 3, 65),
     ] {
         let raw: Vec<u8> = bytes
             .iter()
@@ -102,7 +103,7 @@ fn guards(backend: &Nvidia, format: Quantization, bytes: &[u8], expected: &[f32]
     if actual[0] != GUARD || actual[n + 1] != GUARD || actual[1..n + 1].iter().zip(expected).any(|(a, b)| *a != b.to_bits()) {
         return Err(Error::DeviceFault);
     }
-    for rows in [1, 17] {
+    for rows in [1, 17, 33] {
         let input = backend.upload_words(&alloc::vec![1f32.to_bits(); rows * n])?;
         let output = backend.upload_words(&alloc::vec![GUARD; rows + 2])?;
         backend.dispatch_words(

@@ -286,14 +286,22 @@ fn main() {
     }
     println!("cargo:rerun-if-changed=src/matrix.rs.in");
     let matrix = fs::read_to_string("src/matrix.rs.in").expect("read matrix tile template");
-    for inner in [8, 16, 64] {
+    for (inner, rows) in [(8, 16), (16, 16), (64, 16), (16, 32)] {
+        let name = if rows == 16 {
+            format!("compensated_matrix_{inner}")
+        } else {
+            format!("compensated_matrix_{inner}_m{rows}")
+        };
         source.push_str(
             &matrix
-                .replace("compensated_matrix_template", &format!("compensated_matrix_{inner}"))
+                .replace("compensated_matrix_template", &name)
+                .replace("TILE_ROWS_U32", &format!("{rows}u32"))
+                .replace("TILE_ROWS", &rows.to_string())
                 .replace("TILE_INNER_U32", &format!("{inner}u32"))
                 .replace("TILE_INNER", &inner.to_string())
-                .replace("TILE_A_VALUES", &(16 * inner).to_string())
-                .replace("TILE_B_VALUES", &(32 * inner).to_string()),
+                .replace("TILE_A_VALUES", &(rows * inner).to_string())
+                .replace("TILE_B_VALUES", &(32 * inner).to_string())
+                .replace("TILE_C_VALUES", &(32 * rows).to_string()),
         );
     }
     println!("cargo:rerun-if-changed=src/vector.rs.in");
@@ -342,6 +350,7 @@ fn main() {
             format!("vector_project_k::<{format}>")
         };
         source.push_str(&format!("#[cutile::entry()] unsafe fn vector_project_{name}(a:*const f32,b:*const f32,out:*mut f32,_m:u32,k:u32,n:u32,_format:u32){{unsafe{{ {vector}(a,b,out,k,n) }} }}\n"));
+        source.push_str(&format!("#[cutile::entry()] unsafe fn project_m32_{name}(a:*const f32,b:*const f32,out:*mut f32,m:u32,k:u32,n:u32,_format:u32){{unsafe{{ compensated_matrix_16_m32::<true,false,false,{format}>(a,b,out,m,k,n,1u32) }} }}\n"));
         for (prefix, base, arguments, body) in [
             (
                 "project",

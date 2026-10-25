@@ -5,19 +5,19 @@ unsafe fn compensated_matrix_template<const TRANSPOSE: bool, const BF16: bool, c
 ) {
     let block: u32 = block_id();
     let tile_cols = (cols + 31u32) / 32u32;
-    let tile_rows = (rows + 15u32) / 16u32;
+    let tile_rows = (rows + (TILE_ROWS_U32 - 1u32)) / TILE_ROWS_U32;
     let tiles = tile_rows * tile_cols;
     let part = block / tiles;
     let tile = block % tiles;
-    let r: Tile<u32, { [16] }> = lanes::<16>() + broadcast_scalar(tile / tile_cols * 16u32, shape![16]);
-    let r: Tile<u32, { [16, 1] }> = r.reshape(shape![16, 1]);
-    let r: Tile<u32, { [16, TILE_INNER] }> = r.broadcast(shape![16, TILE_INNER]);
+    let r: Tile<u32, { [TILE_ROWS] }> = lanes::<TILE_ROWS>() + broadcast_scalar(tile / tile_cols * TILE_ROWS_U32, shape![TILE_ROWS]);
+    let r: Tile<u32, { [TILE_ROWS, 1] }> = r.reshape(shape![TILE_ROWS, 1]);
+    let r: Tile<u32, { [TILE_ROWS, TILE_INNER] }> = r.broadcast(shape![TILE_ROWS, TILE_INNER]);
     let c: Tile<u32, { [32] }> = lanes::<32>() + broadcast_scalar(tile % tile_cols * 32u32, shape![32]);
     let c: Tile<u32, { [1, 32] }> = c.reshape(shape![1, 32]);
     let c: Tile<u32, { [TILE_INNER, 32] }> = c.broadcast(shape![TILE_INNER, 32]);
     let ka: Tile<u32, { [TILE_INNER] }> = lanes::<TILE_INNER>();
     let ka: Tile<u32, { [1, TILE_INNER] }> = ka.reshape(shape![1, TILE_INNER]);
-    let ka: Tile<u32, { [16, TILE_INNER] }> = ka.broadcast(shape![16, TILE_INNER]);
+    let ka: Tile<u32, { [TILE_ROWS, TILE_INNER] }> = ka.broadcast(shape![TILE_ROWS, TILE_INNER]);
     let kb: Tile<u32, { [TILE_INNER] }> = lanes::<TILE_INNER>();
     let kb: Tile<u32, { [TILE_INNER, 1] }> = kb.reshape(shape![TILE_INNER, 1]);
     let kb: Tile<u32, { [TILE_INNER, 32] }> = kb.broadcast(shape![TILE_INNER, 32]);
@@ -25,15 +25,15 @@ unsafe fn compensated_matrix_template<const TRANSPOSE: bool, const BF16: bool, c
     let chunk = (ktiles + splits - 1u32) / splits;
     let first = part * chunk;
     let end = min(first + chunk, ktiles);
-    let mut sum: Tile<f32, { [16, 32] }> = broadcast_scalar(0f32, shape![16, 32]);
-    let mut correction: Tile<f32, { [16, 32] }> = broadcast_scalar(0f32, shape![16, 32]);
+    let mut sum: Tile<f32, { [TILE_ROWS, 32] }> = broadcast_scalar(0f32, shape![TILE_ROWS, 32]);
+    let mut correction: Tile<f32, { [TILE_ROWS, 32] }> = broadcast_scalar(0f32, shape![TILE_ROWS, 32]);
     for step in first..end {
-        let ak = ka + broadcast_scalar(step * TILE_INNER_U32, shape![16, TILE_INNER]);
+        let ak = ka + broadcast_scalar(step * TILE_INNER_U32, shape![TILE_ROWS, TILE_INNER]);
         let bk = kb + broadcast_scalar(step * TILE_INNER_U32, shape![TILE_INNER, 32]);
-        let am = lt_tile(r, broadcast_scalar(rows, shape![16, TILE_INNER])) & lt_tile(ak, broadcast_scalar(inner, shape![16, TILE_INNER]));
+        let am = lt_tile(r, broadcast_scalar(rows, shape![TILE_ROWS, TILE_INNER])) & lt_tile(ak, broadcast_scalar(inner, shape![TILE_ROWS, TILE_INNER]));
         let bm = lt_tile(c, broadcast_scalar(cols, shape![TILE_INNER, 32])) & lt_tile(bk, broadcast_scalar(inner, shape![TILE_INNER, 32]));
-        let ai = r * broadcast_scalar(inner, shape![16, TILE_INNER]) + ak;
-        let av: Tile<f32, { [16, TILE_INNER] }> = if MATRIX_LOAD {
+        let ai = r * broadcast_scalar(inner, shape![TILE_ROWS, TILE_INNER]) + ak;
+        let av: Tile<f32, { [TILE_ROWS, TILE_INNER] }> = if MATRIX_LOAD {
             unsafe { read_matrix_tile(a, ai, am, 0f32) }
         } else {
             unsafe { read_matrix(a, ai, am, 0f32, shape![TILE_A_VALUES]) }
@@ -43,21 +43,21 @@ unsafe fn compensated_matrix_template<const TRANSPOSE: bool, const BF16: bool, c
         } else {
             bk * broadcast_scalar(cols, shape![TILE_INNER, 32]) + c
         };
-        let zero: Tile<f32, { [16, 32] }> = broadcast_scalar(0f32, shape![16, 32]);
+        let zero: Tile<f32, { [TILE_ROWS, 32] }> = broadcast_scalar(0f32, shape![TILE_ROWS, 32]);
         let (high, low) = if BF16 {
             let words = unsafe { read_matrix_tile(bf16_pointer(b), bi, bm, 0u16) };
             let weight: Tile<bf16, { [TILE_INNER, 32] }> = bitcast(words);
-            let ah: Tile<bf16, { [16, TILE_INNER] }> = ftof(av, rounding::NearestEven);
-            let ar: Tile<f32, { [16, TILE_INNER] }> = ftof(ah, rounding::NearestEven);
-            let al: Tile<bf16, { [16, TILE_INNER] }> = ftof(av - ar, rounding::NearestEven);
+            let ah: Tile<bf16, { [TILE_ROWS, TILE_INNER] }> = ftof(av, rounding::NearestEven);
+            let ar: Tile<f32, { [TILE_ROWS, TILE_INNER] }> = ftof(ah, rounding::NearestEven);
+            let al: Tile<bf16, { [TILE_ROWS, TILE_INNER] }> = ftof(av - ar, rounding::NearestEven);
             (mmaf(ah, weight, zero), mmaf(al, weight, zero))
         } else {
             let bv: Tile<f32, { [TILE_INNER, 32] }> = if QUANT == 0 { unsafe { read_weights::<false, MATRIX_LOAD, TILE_INNER, 32, TILE_B_VALUES>(b, bi, bm, shape![TILE_B_VALUES]) } } else { unsafe { read_quantized_matrix::<QUANT, TILE_INNER, 32, TILE_B_VALUES>(b, bi, bm, shape![TILE_B_VALUES]) } };
-            let ah: Tile<tf32, { [16, TILE_INNER] }> = ftof(av, rounding::NearestAway);
+            let ah: Tile<tf32, { [TILE_ROWS, TILE_INNER] }> = ftof(av, rounding::NearestAway);
             let bh: Tile<tf32, { [TILE_INNER, 32] }> = ftof(bv, rounding::NearestAway);
-            let ar: Tile<f32, { [16, TILE_INNER] }> = ftof(ah, rounding::NearestEven);
-            let av: Tile<f32, { [16, TILE_INNER] }> = av.reshape(shape![16, TILE_INNER]);
-            let al: Tile<tf32, { [16, TILE_INNER] }> = ftof(av - ar, rounding::NearestAway);
+            let ar: Tile<f32, { [TILE_ROWS, TILE_INNER] }> = ftof(ah, rounding::NearestEven);
+            let av: Tile<f32, { [TILE_ROWS, TILE_INNER] }> = av.reshape(shape![TILE_ROWS, TILE_INNER]);
+            let al: Tile<tf32, { [TILE_ROWS, TILE_INNER] }> = ftof(av - ar, rounding::NearestAway);
             let high = mmaf(ah, bh, zero);
             let low = mmaf(al, bh, zero);
             let br: Tile<f32, { [TILE_INNER, 32] }> = ftof(bh, rounding::NearestEven);
@@ -75,13 +75,13 @@ unsafe fn compensated_matrix_template<const TRANSPOSE: bool, const BF16: bool, c
         correction = (next - sum) - adjusted;
         sum = next;
     }
-    let rr: Tile<u32, { [16] }> = lanes::<16>() + broadcast_scalar(tile / tile_cols * 16u32, shape![16]);
-    let rr: Tile<u32, { [16, 1] }> = rr.reshape(shape![16, 1]);
-    let rr: Tile<u32, { [16, 32] }> = rr.broadcast(shape![16, 32]);
+    let rr: Tile<u32, { [TILE_ROWS] }> = lanes::<TILE_ROWS>() + broadcast_scalar(tile / tile_cols * TILE_ROWS_U32, shape![TILE_ROWS]);
+    let rr: Tile<u32, { [TILE_ROWS, 1] }> = rr.reshape(shape![TILE_ROWS, 1]);
+    let rr: Tile<u32, { [TILE_ROWS, 32] }> = rr.broadcast(shape![TILE_ROWS, 32]);
     let cc: Tile<u32, { [32] }> = lanes::<32>() + broadcast_scalar(tile % tile_cols * 32u32, shape![32]);
     let cc: Tile<u32, { [1, 32] }> = cc.reshape(shape![1, 32]);
-    let cc: Tile<u32, { [16, 32] }> = cc.broadcast(shape![16, 32]);
-    let mask = lt_tile(rr, broadcast_scalar(rows, shape![16, 32])) & lt_tile(cc, broadcast_scalar(cols, shape![16, 32]));
-    let index = (rr + broadcast_scalar(part * rows, shape![16, 32])) * broadcast_scalar(cols, shape![16, 32]) + cc;
-    unsafe { write_matrix(output, index, sum, mask, shape![512]) };
+    let cc: Tile<u32, { [TILE_ROWS, 32] }> = cc.broadcast(shape![TILE_ROWS, 32]);
+    let mask = lt_tile(rr, broadcast_scalar(rows, shape![TILE_ROWS, 32])) & lt_tile(cc, broadcast_scalar(cols, shape![TILE_ROWS, 32]));
+    let index = (rr + broadcast_scalar(part * rows, shape![TILE_ROWS, 32])) * broadcast_scalar(cols, shape![TILE_ROWS, 32]) + cc;
+    unsafe { write_matrix(output, index, sum, mask, shape![TILE_C_VALUES]) };
 }

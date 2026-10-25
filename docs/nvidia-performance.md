@@ -835,6 +835,53 @@ The other native cohorts and fresh Linux baselines are under `target/nvidia/qwen
 Portable inputs, host instruction audits, and the executable-section comparison are under `target/nvidia/qwen-prefill-coalesced-kernels/`.
 The previous portable bundle remains under `target/nvidia/qwen-prefill-original-kernels/`.
 
+### Share packed weights across prompt rows
+
+Batched quantized projections now use 32-row tiles for batches above 16 tokens.
+Smaller batches retain their 16-row kernels, and single-token vector kernels remain unchanged.
+This reuses each decoded weight tile across more prompt tokens without enlarging the reduction tile.
+The SDK and driver use protocol 20 so the launch grid matches the selected tile.
+Applications and portable inputs require matching rebuilds.
+
+Fresh D3OS VMs retain the preceding weights, prompt, decode trace, FP32 cache, guest resources, and host affinity.
+Each VM passes the complete GPU operator suite, including new 33-row cases and guarded output tails.
+The following means use two ordinary warm intervals per model.
+Compilation, model loading, numerical checks, and device instrumentation remain outside execution timing.
+
+| Prompt processing | Previous D3OS GPU | Revised D3OS GPU | Retained Linux CUDA GPU |
+| --- | ---: | ---: | ---: |
+| Qwen3.5-9B Q8_0 | 209.000 ms | 174.000 ms | 43.143 ms |
+| Qwen3.6-27B Q3_K_M | 1,045.500 ms | 774.500 ms | 93.213 ms |
+
+The D3OS prompt intervals improve by 1.201 times for 9B and 1.350 times for 27B.
+Separate device profiles reduce quantized projection time from 199.004 to 167.134 ms, and from 1,077.995 to 816.567 ms respectively.
+These instrumented samples remain separate from ordinary throughput.
+The revised prompt intervals remain 4.033 and 8.309 times longer than the retained Linux GPU intervals.
+Linux uses quantized activations during projection, while D3OS retains FP32 activations and the existing tolerances.
+
+Each model passes all 32,033,280 independent FP32 logit comparisons with zero tolerance failures.
+Maximum errors, selection checksums, and the existing greedy differences remain unchanged.
+All 176 existing inference executable sections remain byte-identical. The bundle adds five 32-row projection entries.
+Host audits enforce Tensor Core instructions and reject local register spills in both matrix variants.
+
+Current D3OS decode means are 49.0045 tokens/s for 9B and 14.2580 tokens/s for 27B.
+The retained Linux CUDA means are 58.303 and 34.3745 tokens/s respectively.
+The unchanged vector code and timing variation do not establish a decode optimization.
+D3OS cold compilation takes 91.875 and 88.212 seconds in these two boots, separately from execution.
+A matched Linux cold-compilation comparison of this revised bundle remains required.
+
+A rejected 64-value reduction tile passes the full 9B numerical reference but increases warm prompt processing to 325.500 ms.
+A 32-row kernel for every batched projection averages 190.000 ms on 9B.
+Keeping the 16-row kernel for short batches reduces that mean to 174.000 ms.
+Only the adaptive selection becomes the default.
+
+The host exporter now combines entries in one transaction, with per-entry checks and one final module verification.
+This removes repeated verification of the growing module. It does not change the compiler work inside D3OS or Linux.
+
+Evidence is under `target/nvidia/qwen-prefill-optimization/adaptive-m32-9b/`, `adaptive-m32-27b/`, and `row-tile-comparison.json`.
+The same parent directory retains the rejected `k64-9b/` and `m32-9b/` experiments.
+Accepted portable inputs and host audits are under `target/nvidia/qwen-adaptive-m32-kernels/` and now populate the default kernel directory.
+
 ### Audit the Linux projection precision
 
 The Linux large-model reference now accepts `--trace-cuda-kernels` for a separate diagnostic run.

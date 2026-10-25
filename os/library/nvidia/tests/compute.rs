@@ -792,7 +792,8 @@ fn quantized_weights_validate_block_rows_and_exact_word_extents() {
         let inner = block * 3;
         let work = Kernel::ProjectQuantized.work(&[17, inner, 33, format]).unwrap();
         assert_eq!(work.extents[..3], [u64::from(17 * inner), (u64::from(99 * bytes)).div_ceil(4), 17 * 33]);
-        assert_eq!(work.blocks, 4);
+        assert_eq!(work.blocks, 2);
+        assert_eq!(Kernel::ProjectQuantized.work(&[33, inner, 33, format]).unwrap().blocks, 4);
         assert_eq!(Kernel::ProjectQuantized.work(&[1, inner, 33, format]).unwrap().blocks, 9);
         let decode = Kernel::Dequantize.work(&[block, format]).unwrap();
         assert_eq!(decode.extents[..2], [u64::from(bytes).div_ceil(4), u64::from(block)]);
