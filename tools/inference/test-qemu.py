@@ -16,6 +16,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def read_serial(path):
+    """Return complete records while QEMU can still append to the log."""
+    if not path.is_file():
+        return ""
+    return path.read_text(errors="replace").rpartition("\n")[0]
+
+
 def capture_failure(directory, port):
     if port is None:
         return
@@ -29,7 +36,10 @@ def capture_failure(directory, port):
         "thread apply all x/12i $pc",
         "detach",
     ]
-    command = ["gdb", "-q", "-batch", str(ROOT / "loader/kernel.elf")]
+    kernel = directory / "boot/kernel.elf"
+    if not kernel.is_file():
+        kernel = ROOT / "loader/kernel.elf"
+    command = ["gdb", "-q", "-batch", str(kernel)]
     for instruction in commands:
         command.extend(["-ex", instruction])
     try:
@@ -384,7 +394,7 @@ def main():
         try:
             qmp = Qmp(monitor, process, deadline)
             while time.monotonic() < deadline:
-                text = serial.read_text(errors="replace") if serial.exists() else ""
+                text = read_serial(serial)
                 if "name = shell" in text:
                     break
                 if process.poll() is not None:
@@ -399,7 +409,7 @@ def main():
             completed = 0
             count = 0
             while time.monotonic() < deadline:
-                text = serial.read_text(errors="replace")
+                text = read_serial(serial)
                 if "INFERENCE_FAIL" in text or "panicked at" in text:
                     raise RuntimeError(f"D3OS inference failed. Read {serial}")
                 count = text.count(expected)

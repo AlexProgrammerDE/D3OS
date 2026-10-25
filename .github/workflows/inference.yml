@@ -39,10 +39,12 @@ jobs:
         run: python3 tools/kernel/test-context-switch.py --accel tcg
       - name: Verify process exit stops workers on other cores
         run: python3 tools/kernel/test-process-exit.py --accel tcg --cpus 2 --repeat 30
+      - name: Verify process exit stops sleeping workers
+        run: python3 tools/kernel/test-process-exit.py --accel tcg --cpus 4 --repeat 30 --sleeping-workers --timeout 240
       - name: Verify Burn timer tasks run on idle cores
         run: python3 tools/inference/test-qemu.py --burn-self-test --accel tcg --cpus 4 --repeat 10
       - name: Verify terminal input and process cleanup after a panic
-        run: python3 tools/kernel/test-terminal-input.py --accel tcg --cpus 2 --repeat 4
+        run: python3 tools/kernel/test-terminal-input.py --accel tcg --cpus 4 --repeat 30 --timeout 240
       - name: Verify PCI BAR enumeration with a virtual 16 GiB device
         run: python3 tools/inference/test-qemu.py --accel tcg --large-pci-bar --repeat 3
       - name: Upload kernel verification logs
@@ -55,8 +57,9 @@ jobs:
             target/context-switch/*.log
             target/context-switch/check.gdb
             target/process-exit-tcg-2/*.log
-            target/terminal-input-tcg-2/*.log
-            target/terminal-input-tcg-2/failure.ppm
+            target/process-exit-tcg-4-sleeping/*.log
+            target/terminal-input-tcg-4/*.log
+            target/terminal-input-tcg-4/failure.ppm
             target/inference-qemu-burn-self-test/*.log
             target/inference-qemu-self-test/serial.log
             target/inference-qemu-self-test/qemu.log

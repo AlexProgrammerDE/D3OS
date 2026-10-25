@@ -102,16 +102,17 @@ pub fn main() {
             input::run(mode == "--raw-input-panic");
             return;
         }
-        Some("--lifecycle") => {
+        Some(mode @ ("--lifecycle" | "--sleeping-lifecycle")) => {
             terminal::init_logger();
-            match lifecycle::parent() {
-                Ok(()) => log::info!("PROCESS_LIFECYCLE_OK workers=4"),
+            let sleeping = mode == "--sleeping-lifecycle";
+            match lifecycle::parent(sleeping) {
+                Ok(()) => log::info!("PROCESS_LIFECYCLE_OK workers=4 sleeping={sleeping}"),
                 Err(error) => log::error!("PROCESS_LIFECYCLE_FAIL {error}"),
             }
             return;
         }
-        Some("--lifecycle-child") => {
-            lifecycle::child(&args.next().expect("missing lifecycle memory name"));
+        Some(mode @ ("--lifecycle-child" | "--sleeping-lifecycle-child")) => {
+            lifecycle::child(&args.next().expect("missing lifecycle memory name"), mode == "--sleeping-lifecycle-child");
             return;
         }
         _ => {}

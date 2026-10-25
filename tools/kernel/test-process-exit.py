@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify that process exit stops CPU-bound workers across native D3OS cores."""
+"""Verify that process exit stops busy or sleeping workers across native D3OS cores."""
 
 import argparse
 import importlib.util
@@ -23,6 +23,9 @@ def main():
     parser.add_argument("--repeat", type=int, default=3)
     parser.add_argument("--timeout", type=int, default=180)
     parser.add_argument("--bios", type=Path)
+    parser.add_argument("--sleeping-workers", action="store_true")
+    parser.add_argument("--kernel-image", type=Path)
+    parser.add_argument("--directory", type=Path)
     args = parser.parse_args()
     if not 2 <= args.cpus <= 64 or not 1 <= args.repeat <= 100 or args.timeout < 10:
         parser.error("use 2 to 64 CPUs, 1 to 100 repetitions, and at least 10 seconds")
@@ -41,13 +44,17 @@ def main():
     )
     if bios is None or not bios.is_file():
         parser.error("provide --bios with an OVMF firmware image")
-    directory = ROOT / f"target/process-exit-{args.accel}-{args.cpus}"
+    suffix = "-sleeping" if args.sleeping_workers else ""
+    directory = (
+        args.directory or ROOT / f"target/process-exit-{args.accel}-{args.cpus}{suffix}"
+    ).resolve()
     directory.mkdir(parents=True, exist_ok=True)
     image = harness.prepare(
         directory,
         "self-test",
         ROOT / "target/qwen",
         [(ROOT / "loader/initrd/bin/proctest", Path("bin/proctest"))],
+        kernel_image=args.kernel_image,
     )
     serial = directory / "serial.log"
     monitor = directory / "qmp.sock"
@@ -97,7 +104,7 @@ def main():
 
             def wait_for(marker, count=1):
                 while time.monotonic() < deadline:
-                    text = serial.read_text(errors="replace") if serial.exists() else ""
+                    text = harness.read_serial(serial)
                     if "panicked at" in text or "PROCESS_LIFECYCLE_FAIL" in text:
                         raise RuntimeError(f"process lifecycle failed; read {serial}")
                     if text.count(marker) >= count:
@@ -111,13 +118,14 @@ def main():
 
             wait_for("name = shell")
             time.sleep(1)
+            mode = "--sleeping-lifecycle" if args.sleeping_workers else "--lifecycle"
             for run in range(1, args.repeat + 1):
-                qmp.type_command("proctest --lifecycle")
+                qmp.type_command(f"proctest {mode}")
                 wait_for("PROCESS_LIFECYCLE_OK", run)
                 time.sleep(0.2)
             print(
                 f"PROCESS_EXIT_SUITE_OK accelerator={args.accel} cpus={args.cpus} "
-                f"runs={args.repeat} serial={serial}"
+                f"runs={args.repeat} sleeping={args.sleeping_workers} serial={serial}"
             )
         except (RuntimeError, TimeoutError):
             harness.capture_failure(directory, port)

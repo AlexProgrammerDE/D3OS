@@ -25,6 +25,9 @@ def main():
     parser.add_argument("--timeout", type=int, default=180)
     parser.add_argument("--bios", type=Path)
     parser.add_argument(
+        "--kernel-image", type=Path, help="compare an alternate D3OS kernel ELF"
+    )
+    parser.add_argument(
         "--directory", type=Path, help="preserve this run in a separate directory"
     )
     parser.add_argument(
@@ -70,6 +73,7 @@ def main():
         "self-test",
         ROOT / "target/qwen",
         extra_assets,
+        kernel_image=args.kernel_image,
     )
     serial = directory / "serial.log"
     monitor = directory / "qmp.sock"
@@ -119,7 +123,7 @@ def main():
 
             def wait_for(marker, count=1):
                 while time.monotonic() < deadline:
-                    text = serial.read_text(errors="replace") if serial.exists() else ""
+                    text = harness.read_serial(serial)
                     if "panicked at" in text or "RAW_INPUT_FAIL" in text:
                         raise RuntimeError(f"terminal input failed; read {serial}")
                     if text.count(marker) >= count:

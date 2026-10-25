@@ -403,7 +403,7 @@ def main():
             compilation_cpu = None
             compilation_reported = False
             while time.monotonic() < deadline:
-                text = serial.read_text(errors="replace") if serial.is_file() else ""
+                text = harness.read_serial(serial)
                 if (
                     args.kernels
                     and compilation_observed is None
@@ -573,7 +573,7 @@ def main():
                         time.sleep(1)
                         qmp.type_command("infer gpu-self-test")
                         while time.monotonic() < deadline:
-                            text = serial.read_text(errors="replace")
+                            text = harness.read_serial(serial)
                             if (
                                 "INFERENCE_OK self-test backend=nvidia" in text
                                 and "NVIDIA_DOOM_EXIT frames=" in text

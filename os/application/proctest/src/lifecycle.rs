@@ -16,7 +16,7 @@ struct Shared {
     counters: [Counter; WORKERS],
 }
 
-pub fn parent() -> Result<(), String> {
+pub fn parent(sleeping_workers: bool) -> Result<(), String> {
     let name = format!("process-lifecycle-{}", process::current().id());
     let size = size_of::<Shared>();
     let handle = shm::shm_open(&name, size, true).map_err(|e| format!("create shared state: {e:?}"))?;
@@ -34,7 +34,12 @@ pub fn parent() -> Result<(), String> {
     let shared = unsafe { &*address };
     let baseline = thread::count();
     let result = (|| {
-        let child = thread::start_application("proctest", vec!["--lifecycle-child", &name]).ok_or("start lifecycle child")?;
+        let mode = if sleeping_workers {
+            "--sleeping-lifecycle-child"
+        } else {
+            "--lifecycle-child"
+        };
+        let child = thread::start_application("proctest", vec![mode, &name]).ok_or("start lifecycle child")?;
         match child.join() {
             Ok(_) | Err(Errno::ESRCH) => {}
             Err(error) => return Err(format!("join child: {error:?}")),
@@ -55,7 +60,7 @@ pub fn parent() -> Result<(), String> {
         }
         Ok(())
     })();
-    // A broken kernel must still let this test release its busy workers.
+    // A broken kernel must still let this test release its remaining workers.
     shared.stop.store(true, Ordering::Release);
     let deadline = systime().num_milliseconds() + 2000;
     while thread::count() > baseline && systime().num_milliseconds() < deadline {
@@ -66,7 +71,7 @@ pub fn parent() -> Result<(), String> {
     result
 }
 
-pub fn child(name: &str) {
+pub fn child(name: &str, sleeping_workers: bool) {
     let handle = shm::shm_open(name, size_of::<Shared>(), false).expect("open lifecycle shared state");
     let address = shm::shm_attach(handle, false).expect("attach lifecycle shared state") as usize;
     for index in 0..WORKERS {
@@ -77,7 +82,11 @@ pub fn child(name: &str) {
             shared.started.fetch_add(1, Ordering::Release);
             while !shared.stop.load(Ordering::Acquire) {
                 shared.counters[index].0.fetch_add(1, Ordering::Relaxed);
-                core::hint::spin_loop();
+                if sleeping_workers {
+                    thread::sleep(1000);
+                } else {
+                    core::hint::spin_loop();
+                }
             }
         })
         .expect("start lifecycle worker");
@@ -86,6 +95,6 @@ pub fn child(name: &str) {
     while shared.started.load(Ordering::Acquire) != WORKERS {
         thread::switch();
     }
-    // Returning exits the entire process while all four workers are busy.
+    // Returning exits the entire process while all four workers remain alive.
     // The mapping remains attached until the kernel tears the process down.
 }

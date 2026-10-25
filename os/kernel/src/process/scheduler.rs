@@ -509,9 +509,11 @@ impl Scheduler {
         let mut next_thread = state.ready_queue.pop_back();
 
         if next_thread.is_none() {
-            // Execute in own if-block, so that the lock is released automatically (block() does not return)
+            // Inbox kill commands also inspect sleepers. Release this list
+            // before dispatching commands while ready_state remains locked.
             let mut sleep_list = self.sleep_list.lock();
             Scheduler::check_sleep_list(&mut state, &mut sleep_list);
+            drop(sleep_list);
             drain_inbox_into_ready(10, &mut state);
             next_thread = state.ready_queue.pop_back();
             if next_thread.is_none() {  //still no new thread => switch to idle
