@@ -31,8 +31,9 @@ def gdb_script(kernel, port):
     entry, size = table["kernel::process::thread::thread_switch"]
     panic, _ = table["__rustc::rust_begin_unwind"]
     unlock, _ = table["unlock_scheduler"]
-    allocate, _ = table["<linked_list_allocator::Heap>::allocate_first_fit"]
-    deallocate, _ = table["<linked_list_allocator::Heap>::deallocate"]
+    heap = "<talc::base::Talc<talc::source::Manual, talc::base::binning::DefaultBinning>>"
+    allocate, _ = table[f"{heap}::allocate"]
+    deallocate, _ = table[f"{heap}::deallocate"]
     output = subprocess.check_output(
         [
             "objdump",

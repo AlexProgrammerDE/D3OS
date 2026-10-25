@@ -159,8 +159,12 @@ fn prepare(process: &Arc<Process>, launch: Launch<'_>, inherited: Option<&Execut
 }
 
 pub extern "sysv64" fn dispatch(frame: &mut SyscallFrame) -> isize {
-    let native_tid = crate::process::core_local_storage::scheduler().current_thread().id();
-    let process = crate::process_manager().read().current_process();
+    let thread = crate::process::core_local_storage::scheduler().current_thread();
+    let native_tid = thread.id();
+    let process = thread.process();
+    // Exit and blocking handlers can abandon this stack. Keep only the process
+    // reference they explicitly release, without a registry lookup or lock.
+    drop(thread);
     let mut guard = process.linux_state.lock();
     if let Some(state) = guard.as_mut() {
         let tid = state.threads.get(&native_tid).map(|thread| thread.id).unwrap_or(state.id());
@@ -415,7 +419,7 @@ pub extern "sysv64" fn dispatch(frame: &mut SyscallFrame) -> isize {
 
 pub fn user_fault(address: u64, instruction: u64) -> ! {
     log::error!("Linux process fault at {address:#x}, instruction {instruction:#x}");
-    let process = crate::process_manager().read().current_process();
+    let process = crate::process::core_local_storage::scheduler().current_thread().process();
     process.exit_status.store(139, Ordering::Release);
     #[cfg(feature = "linux_test")]
     test::set_status(139);

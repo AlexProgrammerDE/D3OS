@@ -156,9 +156,9 @@ impl ProcessManager {
         self.exited_processes.push(process);
     }
 
-    /// 
-    pub fn drop_exited_process(&mut self) {
-        self.exited_processes.clear();
+    /// Detach retired processes so destruction can run without the registry lock.
+    pub fn take_exited_processes(&mut self) -> Vec<Arc<Process>> {
+        core::mem::take(&mut self.exited_processes)
     }
 
     /// Dump all active processes

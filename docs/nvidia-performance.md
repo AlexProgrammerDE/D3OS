@@ -99,7 +99,7 @@ Pinning controls vCPU placement; it does not reserve host cores or fix their clo
 The Linux control trials still show timing variation after pinning.
 The GPU-free CI check verifies real QEMU thread affinities, rejects a mismatched CPU count before changing any affinity, and rejects a shared vCPU thread.
 
-## Current cold compiler measurements
+## Cold compiler baseline
 
 These trials use the validated paired-byte Q8 bundle, CUDA 13.4.92, four KVM CPUs, and 4 GiB of guest RAM.
 Both OSes use fixed guest-to-host CPU assignments on `8,10,12,14`.
@@ -154,13 +154,139 @@ The counters do not establish why its clock ratio differs.
 A separate native kernel sampling run captures 23,354 guest-kernel samples with no lost samples.
 Disassembly locates 47.51 percent in the Linux dispatcher's global process-manager read-lock loop and 10.51 percent in its per-process state-lock loop.
 Kernel heap deallocation is the next major hotspot.
-The process cleanup thread currently destroys exited processes while holding the process-manager write lock.
+The profiled process cleanup thread destroys exited processes while holding the process-manager write lock.
 That destruction can free thousands of mapping descriptors while other CPUs attempt syscalls.
 
 Evidence is under `target/nvidia/compile-parity-q8/`.
 The ordinary runs are `linux-pinned/`, `pinned-before-linux/`, and `pinned-after-linux/`.
 The counter traces, source snapshots, and summaries are under `linux-profile/` and `d3os-profile/`.
 The sampled kernel image, raw perf data, and program-counter report are under `kernel-samples/`.
+
+### Reduce compiler kernel contention
+
+The syscall dispatcher now obtains its process from the current thread without locking the global process registry.
+The cleanup thread detaches retired processes under the registry lock, then destroys them after releasing that lock.
+Process destruction releases mapping descriptors and other heap allocations.
+
+Removing registry contention alone exposes more allocator contention.
+Its separate diagnostic records 52.583 billion guest kernel cycles, above the original 39.773 billion.
+Kernel samples then locate 20.60 percent in first-fit allocation and 14.81 percent in free-list deallocation.
+Per-process state-lock waits account for another 40.70 percent.
+
+The kernel heap now uses Talc 5.1.1 with its manual memory source.
+It retains the fixed 128 MiB region and existing IRQ-save spinlock.
+The allocation counter charges successful allocations only, and both allocator interfaces share that accounting path.
+
+| D3OS inference compiler diagnostic | User instructions | Kernel cycles | Kernel-cycle share |
+| --- | ---: | ---: | ---: |
+| Original registry and first-fit heap | 523.447 billion | 39.773 billion | 8.424 percent |
+| Registry changes with first-fit heap | 524.109 billion | 52.583 billion | 11.174 percent |
+| Registry changes with Talc heap | 521.468 billion | 6.740 billion | 1.672 percent |
+
+The final diagnostic reduces aggregate guest kernel cycles by 83.05 percent relative to the original.
+This percentage describes CPU cycles across all four guest CPUs. It is not a wall-time speedup.
+The retained Linux diagnostic records 1.874 billion kernel cycles, so D3OS still has excess kernel work.
+All three generated GPU binaries match the host audits, and all eight AlexNet layer references pass.
+
+Three additional fresh D3OS boots measure ordinary cold compilation without counter instrumentation:
+
+| Execution OS and kernel | Cold compilation of all three modules | Mean |
+| --- | --- | ---: |
+| Linux VM, retained baseline | 79.321, 84.868 s | 82.095 s |
+| D3OS VM, original kernel | 79.073, 83.351, 92.723 s | 85.049 s |
+| D3OS VM, registry changes and Talc | 75.941, 75.924, 80.228 s | 77.364 s |
+
+The new D3OS mean is 9.04 percent below its earlier mean, with the same input bundle and CPU placement.
+GPU validation takes another 626–636 ms and remains outside compilation and inference throughput.
+All three boots pass all eight AlexNet references and produce the same audited binaries.
+Host clock changes and unrelated host work remain possible contributors to timing variation.
+
+Full-bundle timings overlap the retained Linux range, but compilation parity remains open.
+Vector compilation still takes 383–553 ms on D3OS versus 38–43 ms on Linux.
+PTX compilation also needs a matched latency comparison.
+The context-switch GDB test verifies masked interrupts inside both Talc allocation and deallocation.
+Four multicore process-exit suites pass 30 repetitions each, covering busy and sleeping workers under KVM and TCG.
+Ten KVM keyboard and foreground-cleanup repetitions and all ten Linux compatibility unit tests also pass.
+
+Evidence is under `target/nvidia/compile-parity-q8/`.
+The intermediate diagnostics are `fixed-profile/` and `fixed-kernel-samples/`.
+The final counter trace is `talc-profile/`, and ordinary timing records are under `pinned-talc/`.
+Kernel regression logs use the `talc-test-` prefix and `talc-tests/` directory.
+
+The Talc allocation experiment also passes DOOM's 600 pixel-reference frames, controls, cache purges, atlas rollover, and GPU inference after game exit.
+Qwen 0.8B passes all 29 positions across 24 layers, batched execution, cache comparison, and tokenizer checks.
+Qwen 9B and 27B each pass all 32,033,280 independent FP32 logit references with zero tolerance failures.
+Warm D3OS decode checks record 48.669 and 48.540 tokens/s for 9B, and 14.339 and 14.230 tokens/s for 27B.
+These checks retain the existing precision, inputs, and tolerances. They do not establish Linux performance parity.
+
+The native MNIST training regression repeats the complete seven-epoch recipe and reaches 99.26 percent accuracy at step 6,566.
+It preserves Adam state across the VM restart after epoch five.
+Exported-model inference in a fresh D3OS VM reproduces all 10,000 classifications and the retained prediction CRC32, `ce40d6c3`.
+The final epoch's mean loss remains `0.006849`.
+This is a D3OS training and inference correctness result, with no matched Linux timing sample.
+Its progress timer includes checkpoint export and evaluation, so it does not measure training execution alone.
+
+Runtime logs and MNIST artifacts are under `target/nvidia/compile-parity-q8/talc-workloads/`.
+The trained model and checkpoint also have a persistent copy under `~/.cache/d3os/mnist-trained/`, indexed by model SHA-256.
+The model SHA-256 is `d87a681e2cda7ed1c3301f334053265c76dc7beeb8e9c08e2d18120a6299061e`.
+
+An additional boot exposes a missing compiler runtime dependency: glibc loads `libgcc_s.so.1` dynamically for `pthread_exit`.
+The compiler's `ldd` output omits that library, so the original staging logic does too.
+A small thread-exit fixture reproduces the abort without the library and completes cleanup and join checks when it is present.
+The packager now stages the unwinder and its dependencies explicitly, bringing the compiler manifest to 14 assets.
+Production Linux stderr also reaches the serial log, so a failed compiler reports its diagnostic before its exit status.
+
+The GPU-free thread regression uses the same runtime dependency collector as compiler staging.
+Each invocation creates and joins 64 workers, checking returned pointers and exactly one cleanup handler per worker.
+Three invocations pass under both KVM and TCG with four guest CPUs and 2 GiB of RAM.
+The 512 MiB TCG trial exhausts physical memory during concurrent glibc arena reservations, which D3OS currently backs eagerly.
+This memory inefficiency remains separate work for the compiler performance goal.
+The regression now runs in CI through `tools/kernel/test-linux-threads.py`.
+
+The DOOM comparison runs three identical timedemos per VM, with compilation excluded from FPS.
+It uses the same native GPU presentation, WAD, engine, resolution, 7,117 game ticks, and fixed CPU placement.
+
+| D3OS kernel and runtime | GPU timedemo FPS | Mean FPS |
+| --- | --- | ---: |
+| Original kernel, first control VM | 1,500.57, 1,423.40, 1,607.06 | 1,510.35 |
+| Registry changes and Talc, original runtime | 1,518.87, 1,317.96, 1,509.67 | 1,448.83 |
+| Original kernel, second control VM | 1,586.59, 1,607.06, 1,537.62 | 1,577.09 |
+| Registry changes and Talc, corrected runtime | 1,547.17, 1,596.76, 1,509.67 | 1,551.20 |
+
+The six original-kernel samples average 1,543.72 FPS.
+The final corrected-runtime sample set falls within the control spread; these runs do not isolate a kernel effect on FPS.
+GPU operator checks also pass after the three consecutive timedemos in each VM.
+The failed boot before the unwinder fix produces no FPS sample and remains recorded under `doom-talc-repeat/`.
+Successful comparison logs and source snapshots are under `doom-heap-comparison/` and `doom-talc-unwinder/`.
+These are D3OS kernel comparisons. Linux GPU FPS parity still requires equivalent presentation work.
+
+### Preserve vector state across CPU migration
+
+Further compiler retries expose a separate vector-register corruption bug.
+The scheduler can migrate a queued FPU owner while its latest registers still exist only on the source CPU.
+The old migration path discards that ownership record without saving the registers.
+An incoming CPU with no previous owner also skips restoring the arriving thread's saved state.
+
+Each context-switch path now saves the FPU owner before releasing the outgoing scheduler lock.
+The first vector use on the incoming CPU restores the arriving thread's state, including when no previous owner exists.
+Queued and blocked threads therefore carry their latest vector state in memory before migration.
+
+The Linux thread fixture also holds unique bit patterns in XMM0 and XMM1 across 128 scheduler yields per worker.
+The pre-fix Talc kernel fails this register check with fixture error code 4.
+The fixed kernel passes three invocations under KVM and three under TCG, covering 384 worker lifetimes and 49,152 yields.
+Cleanup handlers and joined return pointers also pass in those runs.
+The same kernel repeats all 120 busy and sleeping process-exit checks, ten keyboard checks, and the interrupt-injection context-switch test successfully.
+
+The failing kernel image and register-test evidence are under `target/nvidia/compile-parity-q8/simd-before-kvm/`.
+Passing vector tests are under `simd-after-kvm/` and `simd-after-tcg/`.
+The compiler and DOOM timing cohorts above precede this vector-state fix and remain retained as historical comparisons.
+
+Three fresh boots after the vector-state fix and unwinder staging complete cold compilation in 73.327, 88.614, and 98.921 seconds.
+The D3OS mean is 86.954 seconds. Each boot produces all three audited binaries and passes all eight AlexNet layer references.
+These trials use the same four pinned CPUs, 4 GiB guest memory, compiler executables, and Tile IR inputs as the earlier comparison.
+Their runtime now includes the additional unwind library.
+They establish successful compilation and GPU validation, while the wide timing spread keeps compilation parity open.
+The records are under `target/nvidia/compile-parity-q8/pinned-fpu-final/`.
 
 ## Compile portable kernels inside D3OS
 
