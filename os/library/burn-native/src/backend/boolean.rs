@@ -116,10 +116,12 @@ impl BoolTensorOps<Self> for Native {
     fn bool_cat(tensors: Vec<BoolTensor<Self>>, dim: usize) -> BoolTensor<Self> {
         cat("bool_cat", tensors, dim)
     }
-    async fn bool_mask_select(tensor: BackendTensor, mask: BackendTensor) -> BackendTensor {
-        BackendTensor::unsupported("bool_mask_select", Shape::new([0]), tensor.dtype(), &[&tensor, &mask], "GPU compaction")
-    }
     async fn bool_argwhere(tensor: BackendTensor, out_dtype: IntDType) -> BackendTensor {
-        BackendTensor::unsupported("bool_argwhere", Shape::new([0, tensor.rank()]), out_dtype.into(), &[&tensor], "GPU compaction")
+        BackendTensor::apply("bool_argwhere", Shape::new([0, tensor.rank()]), out_dtype.into(), &[&tensor], |v| {
+            if out_dtype != IntDType::I32 {
+                return Err(Error::InvalidParameter);
+            }
+            v[0].argwhere()
+        })
     }
 }

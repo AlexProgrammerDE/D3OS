@@ -1,5 +1,6 @@
 //! Independent gradient and checkpoint checks that also run inside D3OS.
 pub mod capabilities;
+pub mod compaction;
 pub mod cross;
 pub mod erf;
 pub mod integer;

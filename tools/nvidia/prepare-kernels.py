@@ -68,6 +68,7 @@ def audit(family, sass):
             "tensor_matmul_tf32x3_split",
             "burn_adam",
             "burn_erf",
+            "burn_argwhere",
             "burn_i32_divide",
             "burn_i32_remainder",
             "burn_i32_matmul",

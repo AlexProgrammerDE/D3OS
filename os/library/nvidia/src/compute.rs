@@ -2,6 +2,7 @@
 
 use crate::{Error, Result};
 
+pub mod argwhere;
 pub mod convolution;
 pub mod elementwise;
 pub mod indexing;
@@ -16,7 +17,7 @@ pub mod sort;
 pub mod updates;
 pub mod words;
 
-pub const VERSION: u32 = 28;
+pub const VERSION: u32 = 29;
 /// END_COMMANDS flag: an inner recording scope joins its parent's completion.
 /// The outermost scope always waits. Zero retains synchronous nested scopes.
 pub const DEFER_NESTED_COMPLETION: u64 = 1;
@@ -50,7 +51,7 @@ pub struct MemoryProfile {
     pub device_cached_bytes: u64,
     pub device_retired_bytes: u64,
 }
-pub const KERNEL_COUNT: usize = 65;
+pub const KERNEL_COUNT: usize = 66;
 
 /// CPU service costs by request operation, including queue work within it.
 #[derive(Clone, Copy, Debug, Default)]
@@ -173,9 +174,10 @@ pub enum Kernel {
     IntMatmul = 62,
     TensorScan = 63,
     TensorSort = 64,
+    ArgWhere = 65,
 }
 
-const _: () = assert!(Kernel::TensorSort as usize + 1 == KERNEL_COUNT);
+const _: () = assert!(Kernel::ArgWhere as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -239,6 +241,7 @@ impl Kernel {
                 | Self::IntMatmul
                 | Self::TensorScan
                 | Self::TensorSort
+                | Self::ArgWhere
                 | Self::Im2col
                 | Self::MaxPool
                 | Self::Project
@@ -335,6 +338,7 @@ impl Kernel {
             62 => Self::IntMatmul,
             63 => Self::TensorScan,
             64 => Self::TensorSort,
+            65 => Self::ArgWhere,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -406,6 +410,7 @@ impl Kernel {
             Self::IntMatmul => "burn_i32_matmul",
             Self::TensorScan => "burn_cumsum",
             Self::TensorSort => "burn_sort_f32_ascending",
+            Self::ArgWhere => "burn_argwhere",
         }
     }
 
@@ -474,6 +479,10 @@ impl Kernel {
         let mut mutated = 0;
         let mut threads = 128;
         let (count, pointers, output, in_place) = match (self, p) {
+            (Self::ArgWhere, p) => {
+                extents[..2].copy_from_slice(&argwhere::validate(p)?);
+                (p[2], 2, 1, false)
+            }
             (Self::TensorSort, p) => {
                 extents[..3].copy_from_slice(&sort::validate(p)?);
                 (p[0], 3, 2, false)

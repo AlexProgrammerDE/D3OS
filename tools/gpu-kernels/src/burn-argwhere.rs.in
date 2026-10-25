@@ -1,0 +1,23 @@
+#[cutile::entry()]
+unsafe fn burn_argwhere(prefix: *const u32, output: *mut u32, count: u32, rank: u32, selected: u32, steps: u32, ARGWHERE_PARAMETERS) {
+    let row = indices();
+    let zero = broadcast_scalar(0u32, shape![128]);
+    let one = broadcast_scalar(1u32, shape![128]);
+    let mask = lt_tile(row, broadcast_scalar(selected, shape![128]));
+    let target = row + one;
+    let mut low = zero;
+    let mut high = broadcast_scalar(count, shape![128]);
+    for _step in 0u32..steps {
+        let middle = (low + high) / broadcast_scalar(2u32, shape![128]);
+        let active = mask & lt_tile(low, high);
+        let value = unsafe { read_tile(prefix, middle, active, 0u32) };
+        let before = lt_tile(value, target);
+        low = select(active & before, middle + one, low);
+        high = select(active & eq_tile(before, broadcast_scalar(false, shape![128])), middle, high);
+    }
+    let current = unsafe { read_tile(prefix, low, mask & lt_tile(low, broadcast_scalar(count, shape![128])), 0u32) };
+    let previous = unsafe { read_tile(prefix, low - one, mask & gt_tile(low, zero) & lt_tile(low, broadcast_scalar(count + 1u32, shape![128])), 0u32) };
+    let valid = lt_tile(low, broadcast_scalar(count, shape![128])) & eq_tile(current, target) & eq_tile(previous, target - one);
+    let mut linear = low;
+    ARGWHERE_COORDINATES
+}

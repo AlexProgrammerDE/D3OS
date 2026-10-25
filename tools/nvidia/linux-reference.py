@@ -73,7 +73,7 @@ def stage_burn_program(root, binary, destination):
     return libdevice
 
 
-def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_finite=False, sort_compile_log=False):
+def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_finite=False, sort_compile_log=False, compaction_aligned=False):
     purposes = {
         "quantization": "shared API conformance; no performance measurement",
         "capabilities": "declared dtype flags; no execution conformance",
@@ -82,11 +82,15 @@ def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_fi
         "integer_matrix": "public I32 matrix product conformance; no performance measurement",
         "scan": "public cumulative operations and gradients; no performance measurement",
         "cross": "public FP32 vector products and gradients; no performance measurement",
+        "compaction": "public dynamic-shape selection conformance; pinned Burn reads argwhere masks on the host; no GPU compaction performance comparison",
         "sort": "public ordering API conformance; pinned Burn uses host sorting with CUDA storage; no GPU sorting performance comparison",
     }
     purpose = "erf error profile and GELU conformance; strict failures reported" if erf_profile else purposes[kind]
     program = f"/burn-{kind}"
     arguments = " --profile" if erf_profile else " --nonempty" if nonempty else ""
+    if compaction_aligned:
+        arguments += " --packed-aligned"
+        purpose += "; aligned Q8 packed input/output only; compact-tail failure retained separately"
     if sort_finite:
         arguments += " --finite"
         purpose += "; finite float corpus"
@@ -118,7 +122,7 @@ exec {program}{arguments}
         sources["cubecl_config"] = config
         purpose += "; basic compilation diagnostics; not performance timing"
     (root.parent / f"burn-{kind}-manifest.json").write_text(json.dumps({
-        "execution_os": "linux", "backend": "CUDA storage; host sort/argsort fallback; GPU top-k and gradients" if kind == "sort" else "cuda GPU", "framework": "burn", "burn_version": "0.22.1",
+        "execution_os": "linux", "backend": "CUDA storage; host sort/argsort fallback; GPU top-k and gradients" if kind == "sort" else "CUDA storage; host argwhere fallback; GPU gathers and gradients" if kind == "compaction" else "cuda GPU", "framework": "burn", "burn_version": "0.22.1",
         "purpose": purpose,
         "arguments": arguments.split(),
         "inputs": {name: {"bytes": path.stat().st_size, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()} for name, path in sources.items()},
@@ -1185,6 +1189,9 @@ def main():
     parser.add_argument("--burn-integer", type=Path, help="run public I32 division and floor remainder conformance on Linux CUDA")
     parser.add_argument("--burn-integer-matmul", type=Path, help="run public I32 matrix product conformance on Linux CUDA")
     parser.add_argument("--burn-integer-matmul-nonempty", action="store_true", help="run the nonempty I32 matrix cases separately from empty shapes")
+    parser.add_argument("--burn-compaction", type=Path, help="compare public argwhere, nonzero, mask selection, and gradients on the CUDA backend")
+    parser.add_argument("--burn-compaction-packed-aligned", action="store_true", help="compare aligned Q8 shapes separately from compact packed tails")
+    parser.add_argument("--burn-compaction-nonempty", action="store_true", help="run dynamic selection separately from empty tensors")
     parser.add_argument("--burn-cross-nonempty", action="store_true", help="run nonempty vector-product checks separately from empty shapes")
     parser.add_argument("--burn-cross", type=Path, help="run public FP32 cross products and gradients on Linux CUDA")
     parser.add_argument("--burn-scan", type=Path, help="run public cumulative operations and gradients on Linux CUDA")
@@ -1244,7 +1251,7 @@ def main():
     args = parser.parse_args()
     if args.nsight_directory and not args.quantized_profile:
         parser.error("--nsight-directory requires --quantized-profile")
-    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.burn_integer, args.burn_integer_matmul, args.burn_cross, args.burn_scan, args.burn_sort, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
+    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.burn_integer, args.burn_integer_matmul, args.burn_compaction, args.burn_cross, args.burn_scan, args.burn_sort, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
         parser.error("--quantized-profile requires a separate diagnostic guest")
     if args.pin_vcpus and len(os.sched_getaffinity(0)) != 4:
         parser.error("--pin-vcpus requires an inherited affinity of four host CPUs")
@@ -1271,6 +1278,7 @@ def main():
                 bool(args.burn_erf),
                 bool(args.burn_integer),
                 bool(args.burn_integer_matmul),
+                bool(args.burn_compaction),
                 bool(args.burn_cross),
                 bool(args.burn_scan),
                 bool(args.burn_sort),
@@ -1298,6 +1306,12 @@ def main():
         parser.error("--burn-integer-matmul requires a built conformance executable")
     if args.burn_integer_matmul_nonempty and not args.burn_integer_matmul:
         parser.error("--burn-integer-matmul-nonempty requires --burn-integer-matmul")
+    if args.burn_compaction and not args.burn_compaction.is_file():
+        parser.error("--burn-compaction requires a built conformance executable")
+    if args.burn_compaction_packed_aligned and not args.burn_compaction:
+        parser.error("--burn-compaction-packed-aligned requires --burn-compaction")
+    if args.burn_compaction_nonempty and not args.burn_compaction:
+        parser.error("--burn-compaction-nonempty requires --burn-compaction")
     if args.burn_cross_nonempty and not args.burn_cross:
         parser.error("--burn-cross-nonempty requires --burn-cross")
     if args.burn_cross and not args.burn_cross.is_file():
@@ -1356,6 +1370,8 @@ def main():
         burn_probe(args.directory / "root", args.burn_integer.resolve(), "integer")
     elif args.burn_integer_matmul:
         burn_probe(args.directory / "root", args.burn_integer_matmul.resolve(), "integer_matrix", nonempty=args.burn_integer_matmul_nonempty)
+    elif args.burn_compaction:
+        burn_probe(args.directory / "root", args.burn_compaction.resolve(), "compaction", nonempty=args.burn_compaction_nonempty, compaction_aligned=args.burn_compaction_packed_aligned)
     elif args.burn_cross:
         burn_probe(args.directory / "root", args.burn_cross.resolve(), "cross", nonempty=args.burn_cross_nonempty)
     elif args.burn_scan:
@@ -1514,6 +1530,11 @@ def main():
         cases, domain, empty = (5, "nonempty", "false") if args.burn_integer_matmul_nonempty else (8, "all", "true")
         if f"BURN_INTEGER_MATMUL_CONFORMANCE_OK os=linux backend=cuda cases={cases} domain={domain} reference=i128 wrapping=exact shared_views=true empty={empty}" not in text:
             raise RuntimeError("Linux CUDA Burn I32 matrix product conformance did not complete")
+    if args.burn_compaction:
+        quantized_domain = "packed_aligned" if args.burn_compaction_packed_aligned else "compact_tails"
+        empty = "false" if args.burn_compaction_nonempty else "true"
+        if f"BURN_COMPACTION_CONFORMANCE_OK os=linux backend=cuda dtypes=f32,i32,bool,q8 argwhere=true nonzero=true mask_select=true gradients=4 ranks=1,3,8 quantized_domain={quantized_domain} empty={empty} shared_views=true" not in text:
+            raise RuntimeError("Linux Burn dynamic-shape selection conformance did not complete")
     if args.burn_cross:
         empty = "false" if args.burn_cross_nonempty else "true"
         if f"BURN_CROSS_CONFORMANCE_OK os=linux backend=cuda dtype=f32 axes=all signed_views=true broadcasting=true gradients=6 empty={empty}" not in text:

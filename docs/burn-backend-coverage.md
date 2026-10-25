@@ -13,12 +13,12 @@ It also includes float, integer, boolean, quantized, module, activation, transac
 Each method records its signature, source location, conditional compilation attributes, and implementation or inherited default.
 Associated types and source SHA-256 hashes accompany the report.
 
-The current inventory contains 484 methods: 267 native overrides and 217 inherited defaults.
+The current inventory contains 484 methods: 264 native overrides and 220 inherited defaults.
 All required methods have declarations or implementations. This count does not establish runtime support.
-The report also records 106 native helper bodies for manual review of dtype and shape restrictions.
+The report also records 107 native helper bodies for manual review of dtype and shape restrictions.
 
 The tool follows syntactic associated backend calls and expands the pinned `dequant_op_quant!` and `dequant_op_flow!` macros.
-It identifies 38 methods with possible paths to explicit declines or panic declarations.
+It identifies 34 methods with possible paths to explicit declines or panic declarations.
 This number is not an unsupported-operation count. Some paths represent expected invalid-input errors or conditional restrictions.
 
 The analysis does not resolve method types, evaluate conditional compilation, or expand other macros and free helper functions.
@@ -202,7 +202,7 @@ The finite Linux comparison therefore remains unverified. These runs contain no 
 
 CPU checks and restricted comparisons do not establish complete GPU parity.
 
-The current portable inference bundle contains 209 entries and 65 native kernel profiles.
+The sorting bundle contains 209 entries and 65 native kernel profiles.
 All 199 earlier instruction and constant sections remain byte-identical. The ten new entries pass the host spill audit.
 These checks establish correctness for the tested cases. They contain no performance or compilation-time parity measurement.
 
@@ -229,10 +229,61 @@ The explicit Flex CPU reference passes the nonempty corpus.
 Its all-shape run panics in the pinned `burn-flex` binary operation when cross-product slices reference empty storage.
 That failed CPU run remains evidence. CPU execution does not establish native GPU conformance.
 
+## Native dynamic selection
+
+Protocol 29 adds GPU coordinate extraction for boolean masks, with I32 output indices.
+Burn's inherited mask-selection methods now compose this operation with reshape and resident gather for FP32, I32, and boolean tensors.
+The public quantized selection path also uses these GPU indices.
+Nonzero coordinates retain logical row order, including reversed transposes and broadcast mask storage.
+
+A resident integer prefix sum counts canonical boolean values.
+Only its final four-byte count returns to the host to determine the output shape.
+Noncontiguous masks require a resident copy before flattening.
+Each selected output row finds its input position through bounded binary search of the prefix counts.
+The coordinate kernel writes every output word, including when prefix contents are malformed.
+Invalid prefix matches produce -1 coordinates. Prefix values never determine output addresses.
+
+This contract permits a fresh output allocation without a separate clear.
+The driver rejects overlapping source/output ranges and malformed dimensions before dispatch.
+Queued prefix storage remains alive through completion of the coordinate kernel.
+An empty input returns shape `[0, rank]` without GPU work or a count readback.
+An all-false nonempty mask still requires its prefix scan and count readback, but launches no coordinate kernel.
+
+Argwhere requires one count readback. The inherited ordinary mask-selection path also reads one four-byte gather-bounds flag.
+Tensor values and index arrays remain on the GPU during execution.
+The existing layout limits still apply: rank at most eight and signed 32-bit extents.
+The product of selected count and rank must also fit a signed 32-bit extent.
+
+The shared checks cover lengths 1, 127, 128, 129, 257, and 531, with empty, full, alternating, sparse, and broadcast masks.
+They cover ranks one, three, and eight, exact FP32 payload bits, full-range integers, boolean values, and retained inputs.
+Four independent weighted gradient checks include reversed transposes, empty selections, and full selections.
+The Q8 cases retain quantized output kind and check both aligned `PackedU32` storage and compact `Native` byte storage.
+Unaligned `PackedU32` fixtures are rejected by both backends. Their failed runs remain diagnostic evidence.
+
+Quantized selection can dequantize and requantize through Burn's default implementation.
+The Q8 reference therefore permits half a quantization step plus four FP32 rounding ULPs.
+For this corpus, the independent F64 bound is `max_abs / 255 + 4 * F32_EPSILON * max_abs`.
+FP32, integer, and boolean selection retain exact comparisons.
+The initial lossless Q8 assertion and Linux's returned packed bytes remain in the diagnostic evidence.
+Both D3OS and Linux CUDA pass the corrected public corpus on the same physical GPU, with 4 GiB per VM.
+
+The raw native checks cover source/output guards, malformed prefix contents, complete writers, and queued prefix lifetime.
+They also check coordinate 16,777,219, beyond FP32's consecutive integer range, using a prefix constructed on the GPU.
+Service counters check one readback for argwhere and two for ordinary mask selection, without tensor uploads.
+The readback sizes follow the checked one-word count and bounds buffers.
+
+The current portable bundle contains 210 inference entries and 66 kernel profiles.
+All 209 prior instruction and constant sections remain byte-identical, and the new entry passes the host spill audit.
+The pinned Linux CUDA backend reads argwhere masks on the host and uses GPU gathers for selection.
+Its public API comparison therefore contains no GPU-compaction performance baseline.
+D3OS also passes the full operator suite, and every guest-compiled module matches its host audit hash.
+These checks add no execution-performance or compile-time parity measurement.
+
 ## Remaining implementation areas
 
 The unresolved work includes ordinary dtypes, complete integer arithmetic, matrix products for further dtypes, and additional floating-point operations.
-Further sorting dtypes, compaction, non-additive updates, further convolution variants, deformable convolution, and interpolation also require coverage.
+Further sorting and compaction dtypes, non-additive updates, further convolution variants, deformable convolution, and interpolation also require coverage.
+Quantized empty selections and compaction formats beyond the checked Q8 cases remain unverified.
 Broadcast cross-product gradients, graph capture, profiling, memory capabilities, records, and observable errors require matched Linux capability checks.
 The current layout also restricts rank to eight and extents to signed 32-bit values.
 The method inventory records defaults, but each composed path still needs dtype, shape, ownership, and execution checks.
@@ -250,7 +301,7 @@ Build the Linux probes with their default CUDA feature:
 
 ```bash
 cd tools/mnist-benchmark
-cargo build --release --locked --bin capabilities --bin erf --bin integer --bin integer_matrix --bin scan --bin sort --bin cross
+cargo build --release --locked --bin capabilities --bin erf --bin integer --bin integer_matrix --bin scan --bin sort --bin cross --bin compaction
 cd ../..
 ```
 
@@ -278,6 +329,9 @@ python3 tools/nvidia/linux-reference.py \
 python3 tools/nvidia/linux-reference.py \
   --directory target/nvidia/linux-burn-cross \
   --burn-cross tools/mnist-benchmark/target/release/cross
+python3 tools/nvidia/linux-reference.py \
+  --directory target/nvidia/linux-burn-compaction \
+  --burn-compaction tools/mnist-benchmark/target/release/compaction
 ```
 
 If the all-shape matrix check fails, run the nonempty comparison in a separate directory:
@@ -331,5 +385,7 @@ Its Linux counterparts are `target/nvidia/burn-backend-audit/linux-sort-ieee-dia
 The audit directory contains `traits-sort-final.json` and `sort-comparison.json`.
 The vector-product evidence lives under `target/nvidia/burn-backend-validation/cross-final/` and `target/nvidia/burn-backend-audit/linux-cross/`.
 The audit directory contains `traits-cross.json`, `cross-comparison.json`, and the retained Flex CPU failure.
+The compaction evidence lives under `target/nvidia/burn-backend-validation/compaction-final/` and `target/nvidia/burn-backend-audit/linux-compaction-native-tails/`.
+The audit directory contains `traits-compaction.json`, `compaction-comparison.json`, and retained format and quantization diagnostics.
 Manifests record the shared validation source hashes, executable hashes, and execution backend.
 These generated local artifacts are not Git-tracked. The probes and audit tool are tracked for reproduction.

@@ -323,6 +323,22 @@ fn main() {
                 .replace("REDUCE_OP", &format!("{}u32", (op as u32) % 7)),
         );
     }
+    println!("cargo:rerun-if-changed=src/burn-argwhere.rs.in");
+    let argwhere = fs::read_to_string("src/burn-argwhere.rs.in").expect("read argwhere template");
+    let parameters = (0..8)
+        .map(|a| format!("dim{a}: u32"))
+        .chain((12..16).map(|a| format!("_reserved{a}: u32")))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let coordinates = (0..8).rev().map(|axis| {
+        let advance = if axis == 0 { String::new() } else { format!("linear = linear / broadcast_scalar(dim{axis}, shape![128]);\n") };
+        format!("let coordinate = linear % broadcast_scalar(dim{axis}, shape![128]);\n{advance}let coordinate = select(valid, coordinate, broadcast_scalar(unsigned(-1i32), shape![128]));\nunsafe {{ write_tile(output, row * broadcast_scalar(rank, shape![128]) + broadcast_scalar({axis}u32, shape![128]), coordinate, mask & broadcast_scalar(rank > {axis}u32, shape![128])) }};\n")
+    }).collect::<String>();
+    source.push_str(
+        &argwhere
+            .replace("ARGWHERE_PARAMETERS", &parameters)
+            .replace("ARGWHERE_COORDINATES", &coordinates),
+    );
     println!("cargo:rerun-if-changed=src/burn-sort.rs.in");
     let sort = fs::read_to_string("src/burn-sort.rs.in").expect("read sort template");
     let (helpers, entry) = sort.split_once("#[cutile::entry()]").expect("sort entry");

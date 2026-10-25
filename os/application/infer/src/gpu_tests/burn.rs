@@ -1,5 +1,6 @@
 //! Check Burn tensor ownership and views on real native GPU allocations.
 mod activation;
+mod compaction;
 mod convolution;
 mod cross;
 mod dispatch;
@@ -147,6 +148,12 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     words::run(backend).map_err(|e| format!("Burn native words: {e}"))?;
     scans::run(backend)?;
     sort::run(backend)?;
+    compaction::run(backend)?;
+    d3os_ai::burn::tensor::try_read_sync(d3os_ai::validation::compaction::run(&device, true, true))
+        .ok_or_else(|| String::from("native compaction future did not complete"))??;
+    crate::report(format_args!(
+        "BURN_COMPACTION_CONFORMANCE_OK os=d3os backend=native dtypes=f32,i32,bool,q8 argwhere=true nonzero=true mask_select=true gradients=4 ranks=1,3,8 quantized_domain=compact_tails empty=true shared_views=true"
+    ));
     cross::run(backend)?;
     d3os_ai::validation::cross::run(&device, true)?;
     crate::report(format_args!(

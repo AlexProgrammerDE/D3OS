@@ -289,9 +289,9 @@ AlexNet, Qwen, and all 600 DOOM reference views pass with the matching SDK and k
 
 Operator coverage remains incomplete. Unsupported native operations return execution errors instead of CPU results.
 Resident I32 division and matrix products, FP32 erf, and cumulative operations now pass native GPU checks.
-Sorting, argsort, top-k, and FP32 cross products also pass their checked cases.
+Sorting, argsort, top-k, FP32 cross products, coordinate extraction, and mask selection also pass their checked cases.
 The [coverage report](burn-backend-coverage.md) records their shapes, numerical semantics, Linux failures, and remaining dtype restrictions.
-The gaps include further ordinary dtypes, additional FP32 math, compaction, and further indexed operations.
+The gaps include further ordinary dtypes, additional FP32 math, further compaction formats, and non-additive indexed updates.
 Complete Burn quantization, non-additive indexed updates, three-dimensional convolutions, transposed convolutions, and interpolation also remain incomplete.
 The native backend also uses Burn's `GraphUnsupported` primitive, so captured graph replay remains a gap.
 Its advertised dtype capabilities cover F32, I32 storage, U32 boolean storage, and the quantization storage described below.

@@ -1,6 +1,45 @@
 use d3os_nvidia::compute::Kernel;
 
 #[test]
+fn argwhere_bounds_prefixes_and_full_coordinate_writes() {
+    use d3os_nvidia::compute::argwhere::validate;
+    let mut p = [0u32; 16];
+    p[..4].copy_from_slice(&[1935, 3, 737, 11]);
+    p[4..12].fill(1);
+    p[4..7].copy_from_slice(&[3, 129, 5]);
+    assert_eq!(validate(&p).unwrap(), [1935, 2211]);
+    let work = Kernel::ArgWhere.work(&p).unwrap();
+    assert_eq!((work.threads, work.blocks, work.pointers, work.output), (128, 6, 2, 1));
+    assert!(!work.in_place);
+    assert!(Kernel::ArgWhere.allocates_output());
+    assert!(work.validate_aliases(&[0x10000, 0x20000]).is_ok());
+    assert!(work.validate_aliases(&[0x10000, 0x10004]).is_err());
+    for (field, value) in [
+        (0, 0),
+        (0, 1934),
+        (0, u32::MAX),
+        (1, 0),
+        (1, 9),
+        (2, 0),
+        (2, 1936),
+        (3, 10),
+        (4, 0),
+        (5, 128),
+        (7, 2),
+        (12, 1),
+    ] {
+        let mut bad = p;
+        bad[field] = value;
+        assert!(validate(&bad).is_err());
+    }
+    p[..4].copy_from_slice(&[1 << 30, 3, 1 << 30, 31]);
+    p[4..12].fill(1);
+    p[4] = 1 << 30;
+    assert!(validate(&p).is_err());
+    assert!(validate(&p[..15]).is_err());
+}
+
+#[test]
 fn sort_passes_bound_packed_outputs_and_validate_source_layouts() {
     use d3os_nvidia::compute::sort::{Mode, validate};
     let mut initial = [0u32; 32];

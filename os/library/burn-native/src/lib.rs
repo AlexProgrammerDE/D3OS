@@ -4,6 +4,7 @@
 extern crate alloc;
 
 pub mod backend;
+mod compaction;
 pub mod convolution;
 mod device;
 pub mod layout;

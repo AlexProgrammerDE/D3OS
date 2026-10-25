@@ -396,7 +396,4 @@ impl IntTensorOps<Self> for Native {
             NativeTensor::arange(plan?)
         })
     }
-    async fn int_mask_select(tensor: BackendTensor, mask: BackendTensor) -> BackendTensor {
-        BackendTensor::unsupported("int_mask_select", Shape::new([0]), tensor.dtype(), &[&tensor, &mask], "GPU compaction")
-    }
 }

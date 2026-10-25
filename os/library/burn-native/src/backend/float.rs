@@ -415,7 +415,4 @@ impl FloatTensorOps<Self> for Native {
             t.sort(dim, descending).map(|(_, indices)| indices)
         })
     }
-    async fn float_mask_select(tensor: BackendTensor, mask: BackendTensor) -> BackendTensor {
-        BackendTensor::unsupported("float_mask_select", Shape::new([0]), tensor.dtype(), &[&tensor, &mask], "GPU compaction")
-    }
 }
