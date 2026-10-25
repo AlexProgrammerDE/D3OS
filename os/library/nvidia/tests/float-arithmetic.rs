@@ -37,9 +37,9 @@ fn scalar(mut p: [u32; 32], bits: u64) -> [u32; 32] {
 }
 
 #[test]
-fn operation_registry_accepts_exactly_the_thirteen_float_primitives() {
+fn operation_registry_accepts_exactly_the_fourteen_float_primitives() {
     for elementwise in Elementwise::ALL {
-        let selected = matches!(elementwise as u32, 1..=4 | 11..=14 | 21..=25);
+        let selected = matches!(elementwise as u32, 1..=4 | 11..=14 | 21..=25 | 34);
         let operation = Operation::from_elementwise(elementwise);
         assert_eq!(operation.is_ok(), selected);
         if let Ok(op) = operation {
@@ -48,9 +48,9 @@ fn operation_registry_accepts_exactly_the_thirteen_float_primitives() {
             assert_eq!(op.binary(), !op.unary());
         }
     }
-    assert_eq!(Operation::ALL.len(), 13);
+    assert_eq!(Operation::ALL.len(), 14);
     for raw in 0..=256 {
-        let selected = matches!(raw, 1..=4 | 11..=14 | 21..=25);
+        let selected = matches!(raw, 1..=4 | 11..=14 | 21..=25 | 34);
         assert_eq!(Operation::from_raw(raw).is_ok(), selected);
     }
     for op in Operation::ALL {
@@ -98,20 +98,22 @@ fn transposed_reversed_and_broadcast_views_retain_packed_storage_extents() {
 #[test]
 fn signed_geometry_matches_enumerated_addresses_for_either_reader() {
     for format in FORMATS {
-        for input in 0..2 {
-            for offset in 0..9 {
-                for outer in -3i32..=3 {
-                    for inner in -3i32..=3 {
-                        let mut p = parameters(Operation::Divide, format, 6);
-                        p[1] = 2;
-                        p[4 + input] = offset;
-                        p[6 + input] = 9;
-                        p[8..10].copy_from_slice(&[2, 3]);
-                        p[16..18].copy_from_slice(&[3, 1]);
-                        p[24..26].copy_from_slice(&[3, 1]);
-                        p[16 + input * 8..18 + input * 8].copy_from_slice(&[outer as u32, inner as u32]);
-                        let reachable = (0..2).all(|row| (0..3).all(|column| (0..9).contains(&(offset as i32 + row * outer + column * inner))));
-                        assert_eq!(float_arithmetic::validate(&p).is_ok(), reachable);
+        for op in [Operation::Divide, Operation::Remainder] {
+            for input in 0..2 {
+                for offset in 0..9 {
+                    for outer in -3i32..=3 {
+                        for inner in -3i32..=3 {
+                            let mut p = parameters(op, format, 6);
+                            p[1] = 2;
+                            p[4 + input] = offset;
+                            p[6 + input] = 9;
+                            p[8..10].copy_from_slice(&[2, 3]);
+                            p[16..18].copy_from_slice(&[3, 1]);
+                            p[24..26].copy_from_slice(&[3, 1]);
+                            p[16 + input * 8..18 + input * 8].copy_from_slice(&[outer as u32, inner as u32]);
+                            let reachable = (0..2).all(|row| (0..3).all(|column| (0..9).contains(&(offset as i32 + row * outer + column * inner))));
+                            assert_eq!(float_arithmetic::validate(&p).is_ok(), reachable);
+                        }
                     }
                 }
             }
@@ -224,70 +226,76 @@ fn full_writers_count_packed_owners_and_forbid_every_output_overlap() {
 #[test]
 fn wide_physical_words_use_unsigned_bounds_while_logical_addresses_stay_signed() {
     for format in FORMATS {
-        let mut p = parameters(Operation::Add, format, 1);
-        p[4] = i32::MAX as u32 - 1;
-        p[5] = p[4];
-        p[6] = i32::MAX as u32;
-        p[7] = p[6];
-        let extents = float_arithmetic::validate(&p).unwrap();
-        assert_eq!(extents[..2], [format.width().words(i32::MAX as u32); 2]);
-        if format == Format::F64 {
-            assert_eq!(extents, [u64::from(u32::MAX) - 1, u64::from(u32::MAX) - 1, 2]);
+        for op in Operation::ALL.into_iter().filter(|op| op.binary()) {
+            let mut p = parameters(op, format, 1);
+            p[4] = i32::MAX as u32 - 1;
+            p[5] = p[4];
+            p[6] = i32::MAX as u32;
+            p[7] = p[6];
+            let extents = float_arithmetic::validate(&p).unwrap();
+            assert_eq!(extents[..2], [format.width().words(i32::MAX as u32); 2]);
+            if format == Format::F64 {
+                assert_eq!(extents, [u64::from(u32::MAX) - 1, u64::from(u32::MAX) - 1, 2]);
+            }
+            for field in [4, 5, 6, 7] {
+                let mut invalid = p;
+                invalid[field] = i32::MAX as u32 + 1;
+                assert!(float_arithmetic::validate(&invalid).is_err());
+            }
+            let p = parameters(op, format, i32::MAX as u32);
+            assert!(Kernel::FloatArithmetic.work(&p).is_ok());
         }
-        for field in [4, 5, 6, 7] {
-            let mut invalid = p;
-            invalid[field] = i32::MAX as u32 + 1;
-            assert!(float_arithmetic::validate(&invalid).is_err());
-        }
-        let p = parameters(Operation::Add, format, i32::MAX as u32);
-        assert!(Kernel::FloatArithmetic.work(&p).is_ok());
     }
 }
 
 #[test]
 fn malformed_fields_empty_launches_and_geometry_overflow_are_rejected() {
-    let p = parameters(Operation::Subtract, Format::F16, 129);
-    for (field, value) in [
-        (0, 0),
-        (0, 128),
-        (0, i32::MAX as u32 + 1),
-        (1, 0),
-        (1, 9),
-        (3, 1),
-        (4, u32::MAX),
-        (5, u32::MAX),
-        (6, 0),
-        (6, 128),
-        (7, 0),
-        (7, 128),
-        (8, 0),
-        (9, 2),
-        (17, 1),
-        (25, 1),
-    ] {
-        let mut invalid = p;
-        invalid[field] = value;
-        assert!(float_arithmetic::validate(&invalid).is_err(), "field {field}, value {value}");
-        assert!(float_arithmetic::work_items(&invalid).is_err());
+    for format in FORMATS {
+        for op in Operation::ALL.into_iter().filter(|op| op.binary()) {
+            let p = parameters(op, format, 129);
+            for (field, value) in [
+                (0, 0),
+                (0, 128),
+                (0, i32::MAX as u32 + 1),
+                (1, 0),
+                (1, 9),
+                (3, 1),
+                (4, u32::MAX),
+                (5, u32::MAX),
+                (6, 0),
+                (6, 128),
+                (7, 0),
+                (7, 128),
+                (8, 0),
+                (9, 2),
+                (17, 1),
+                (25, 1),
+            ] {
+                let mut invalid = p;
+                invalid[field] = value;
+                assert!(float_arithmetic::validate(&invalid).is_err(), "field {field}, value {value}");
+                assert!(float_arithmetic::work_items(&invalid).is_err());
+            }
+            for bit in (16..24).chain(25..32) {
+                let mut invalid = p;
+                invalid[2] |= 1 << bit;
+                assert!(float_arithmetic::validate(&invalid).is_err());
+            }
+            let mut invalid = p;
+            invalid[2] = Operation::Add as u32 | (255 << 8);
+            assert!(float_arithmetic::validate(&invalid).is_err());
+            invalid = p;
+            invalid[2] = 255 | ((Format::F16 as u32) << 8);
+            assert!(float_arithmetic::validate(&invalid).is_err());
+            let mut overflow = p;
+            overflow[1] = 8;
+            overflow[8..16].fill(65536);
+            assert!(float_arithmetic::validate(&overflow).is_err());
+            assert!(float_arithmetic::validate(&p[..31]).is_err());
+            assert!(float_arithmetic::work_items(&p[..31]).is_err());
+            assert!(float_arithmetic::validate(&[0; 33]).is_err());
+        }
     }
-    for bit in (16..24).chain(25..32) {
-        let mut invalid = p;
-        invalid[2] |= 1 << bit;
-        assert!(float_arithmetic::validate(&invalid).is_err());
-    }
-    let mut invalid = p;
-    invalid[2] = Operation::Add as u32 | (255 << 8);
-    assert!(float_arithmetic::validate(&invalid).is_err());
-    invalid = p;
-    invalid[2] = 255 | ((Format::F16 as u32) << 8);
-    assert!(float_arithmetic::validate(&invalid).is_err());
-    let mut overflow = p;
-    overflow[1] = 8;
-    overflow[8..16].fill(65536);
-    assert!(float_arithmetic::validate(&overflow).is_err());
-    assert!(float_arithmetic::validate(&p[..31]).is_err());
-    assert!(float_arithmetic::work_items(&p[..31]).is_err());
-    assert!(float_arithmetic::validate(&[0; 33]).is_err());
 }
 
 #[test]
@@ -320,6 +328,36 @@ fn unary_boundaries_retain_signed_element_offsets_and_reject_empty_launches() {
             );
             p[4] += 1;
             assert!(float_arithmetic::validate(&p).is_err());
+        }
+    }
+}
+
+#[test]
+fn remainder_tensor_and_scalar_boundaries_retain_signed_halfword_offsets() {
+    for format in FORMATS {
+        assert!(float_arithmetic::validate(&parameters(Operation::Remainder, format, 0)).is_err());
+        for count in [1, 2, 3, 127, 128, 129, 255, 256, 257] {
+            let mut p = parameters(Operation::Remainder, format, count);
+            p[4] = 2 * count - 1;
+            p[6] = 2 * count;
+            p[16] = (-2i32) as u32;
+            p[5] = 1;
+            p[7] = 2 * count;
+            p[24] = 2;
+            assert_eq!(
+                float_arithmetic::validate(&p).unwrap(),
+                [format.width().words(2 * count), format.width().words(2 * count), format.width().words(count)]
+            );
+            let encoded = scalar(p, 1);
+            assert_eq!(
+                float_arithmetic::validate(&encoded).unwrap(),
+                [format.width().words(2 * count), 1, format.width().words(count)]
+            );
+            for field in [4, 5] {
+                let mut invalid = p;
+                invalid[field] = 2 * count;
+                assert!(float_arithmetic::validate(&invalid).is_err());
+            }
         }
     }
 }

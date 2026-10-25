@@ -35,6 +35,7 @@ mod sort;
 mod spatial_convolution;
 mod storage;
 mod typed_relu;
+mod typed_remainder;
 mod updates;
 mod words;
 use abi::elementwise::Elementwise;
@@ -215,6 +216,20 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     }
     integers::run(backend).map_err(|e| format!("Burn native integer reductions: {e}"))?;
     words::run(backend).map_err(|e| format!("Burn native words: {e}"))?;
+    typed_remainder::run(backend)?;
+    let remainder_options = d3os_ai::validation::typed_remainder::Options::default();
+    let remainder_summary = d3os_ai::burn::tensor::try_read_sync(d3os_ai::validation::typed_remainder::run(&device, &remainder_options))
+        .ok_or_else(|| String::from("native typed remainder future did not complete"))??;
+    let expected_remainder = d3os_ai::validation::typed_remainder::expected_summary(&remainder_options);
+    if remainder_summary != expected_remainder {
+        return Err(format!("typed remainder totals: {remainder_summary:?}, expected {expected_remainder:?}"));
+    }
+    crate::report(format_args!(
+        "BURN_TYPED_REMAINDER_OK os=d3os backend=native fusion=disabled corpus={} fixture_sha256={} totals={} reference=python_fraction_truncated_quotient_integer_rne schedule=f64_f64_f32_f32_half_stored_f32_remf_correction_one_destination_rne scalar=canonical_f64_f32_storage finite_inf_signed_zero=exact_bits zero_sign=dividend arithmetic_nan=classification preserved_inputs=exact_bytes public_scalar=burn_float_conversion dispatch_scalar=original_variants chain=materialized_each_primitive poison=retained_allocation physical_padding=raw_verified scope=strict_native no_flex32=false skip_rank_zero=false finite=false dtype=all group=all",
+        d3os_ai::validation::typed_remainder::CORPUS_VERSION,
+        d3os_ai::validation::typed_remainder::FIXTURE_SHA256,
+        serde_json::json!({"dtypes":remainder_summary.dtypes,"cases":remainder_summary.cases(),"tensor_cases":remainder_summary.tensor_cases,"scalar_cases":remainder_summary.scalar_cases,"high_level_cases":remainder_summary.high_level_cases,"chain_cases":remainder_summary.chain_cases,"chain_steps":remainder_summary.chain_steps,"tensor_rows":remainder_summary.tensor_rows,"scalar_specs":remainder_summary.scalar_specs,"scalar_results":remainder_summary.scalar_results,"source_checks":remainder_summary.source_checks,"alias_checks":remainder_summary.alias_checks,"poison_checks":remainder_summary.poison_checks,"values":remainder_summary.values,"exact_values":remainder_summary.exact_values,"nan_values":remainder_summary.nan_values})
+    ));
     typed_relu::run(backend)?;
     let relu_options = d3os_ai::validation::relu::Options::default();
     let relu_summary = d3os_ai::burn::tensor::try_read_sync(d3os_ai::validation::relu::run(&device, &relu_options))

@@ -172,7 +172,7 @@ The GPU operations include FP32 arithmetic and math, reductions, exact tensor fi
 Another 32 entries implement I32 arithmetic, signed comparisons, bitwise operations, boolean logic, masks, and conversions.
 These operations support strided views and broadcasting. Input tensors remain shared and immutable.
 Full writers avoid a separate output clear. Empty logical outputs require no element work.
-The matching SDK and driver use native compute protocol version 44 and the 247-entry portable inference bundle.
+The matching SDK and driver use native compute protocol version 45 and the 247-entry portable inference bundle.
 
 The D3OS GPU self-test passes reversed and transposed views, overlapping windows, broadcast batches, subviews, empty dimensions, and neighboring guards.
 Matrix references use independent FP64 accumulation. Math references use independent libm functions and include 2,816 FP32 edge values.
@@ -336,6 +336,13 @@ D3OS passes 85 shared public cases and exhaustive guarded checks across all F16 
 The suite also checks inherited stored-output backward operations, source preservation, both explicit mask stores, and queued ownership.
 Linux passes 64 diagnostic cases with rank-zero results and direct Flex32 uploads excluded.
 Typed reductions and other math still need work before general non-F32 autodiff and full backend coverage.
+
+Tensor and scalar remainder now support all five ordinary floating formats through protocol 45.
+F64 retains its precision, and half values use explicit F32 residue and correction before destination rounding.
+The canonical scalar route also corrects rare large-integer rounding differences in the existing F32 wrapper.
+D3OS passes 692 public cases, every guarded remainder check, and the complete earlier regression suite.
+Linux retains rank-zero and Flex32 failures, plus numerical differences in the filtered four-format corpus.
+These are correctness results. Full backend and workload performance parity remain incomplete.
 
 I32 tensor and generic scalar powers now use resident wrapping integer arithmetic without a floating-point intermediate.
 The exponent bits follow the same unsigned interpretation as the pinned Linux backend.

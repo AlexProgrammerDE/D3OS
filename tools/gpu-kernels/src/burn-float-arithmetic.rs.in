@@ -1,5 +1,6 @@
 // Floating arithmetic and sqrt retain their type and round to nearest even.
 // Typed half division uses tileiras's documented F32 emulation internally.
+// Half remainder explicitly computes and corrects in F32 before one output rounding.
 fn float_arithmetic_width(format: u32) -> u32 {
     if format == 0u32 { 3u32 } else if format <= 2u32 { 2u32 } else { 1u32 }
 }
@@ -106,7 +107,32 @@ fn float_arithmetic_f64(a: Tile<u64, {[128]}>, b: Tile<u64, {[128]}>, op: u32) -
     else if op == 3u32 { bitcast(mulf(x, y, rounding::NearestEven, ftz::Disabled)) }
     else if op == 4u32 { bitcast(divf(x, y, rounding::NearestEven, ftz::Disabled)) }
     else if op == 14u32 { bitcast(sqrt(x, rounding::NearestEven, ftz::Disabled)) }
+    else if op == 34u32 {
+        let residue = remf(x, y);
+        let bits: Tile<u64, {[128]}> = bitcast(residue);
+        let sign = broadcast_scalar(1u64, shape![128]) << broadcast_scalar(63u64, shape![128]);
+        let zero = broadcast_scalar(0u64, shape![128]);
+        let nonzero = ne_tile(bits & (sign - broadcast_scalar(1u64, shape![128])), zero);
+        let opposite = ne_tile((bits ^ b) & sign, zero);
+        let corrected = addf(residue, y, rounding::NearestEven, ftz::Disabled);
+        // Either zero sign bypasses correction and retains the dividend's sign.
+        select(nonzero & opposite, bitcast(corrected), bits)
+    }
     else { bitcast(divf(one, x, rounding::NearestEven, ftz::Disabled)) }
+}
+
+// Truncated residue plus the existing nonzero, opposite-divisor-sign correction.
+fn float_arithmetic_remainder_f32(x: Tile<f32, {[128]}>, y: Tile<f32, {[128]}>) -> Tile<f32, {[128]}> {
+    let residue = remf(x, y);
+    let bits: Tile<u32, {[128]}> = bitcast(residue);
+    let divisor: Tile<u32, {[128]}> = bitcast(y);
+    let sign = broadcast_scalar(1u32, shape![128]) << broadcast_scalar(31u32, shape![128]);
+    let zero = broadcast_scalar(0u32, shape![128]);
+    let nonzero = ne_tile(bits & (sign - broadcast_scalar(1u32, shape![128])), zero);
+    let opposite = ne_tile((bits ^ divisor) & sign, zero);
+    let corrected = addf(residue, y, rounding::NearestEven, ftz::Disabled);
+    // Either zero sign bypasses correction and retains the dividend's sign.
+    select(nonzero & opposite, corrected, residue)
 }
 
 fn float_arithmetic_f32(a: Tile<u32, {[128]}>, b: Tile<u32, {[128]}>, op: u32) -> Tile<u32, {[128]}> {
@@ -118,6 +144,7 @@ fn float_arithmetic_f32(a: Tile<u32, {[128]}>, b: Tile<u32, {[128]}>, op: u32) -
     else if op == 3u32 { bitcast(mulf(x, y, rounding::NearestEven, ftz::Disabled)) }
     else if op == 4u32 { bitcast(divf(x, y, rounding::NearestEven, ftz::Disabled)) }
     else if op == 14u32 { bitcast(sqrt(x, rounding::NearestEven, ftz::Disabled)) }
+    else if op == 34u32 { bitcast(float_arithmetic_remainder_f32(x, y)) }
     else { bitcast(divf(one, x, rounding::NearestEven, ftz::Disabled)) }
 }
 
@@ -130,6 +157,14 @@ fn float_arithmetic_f16(a: Tile<u16, {[128]}>, b: Tile<u16, {[128]}>, op: u32) -
     else if op == 3u32 { bitcast(mulf(x, y, rounding::NearestEven, ftz::Disabled)) }
     else if op == 4u32 { bitcast(divf(x, y, rounding::NearestEven, ftz::Disabled)) }
     else if op == 14u32 { bitcast(sqrt(x, rounding::NearestEven, ftz::Disabled)) }
+    else if op == 34u32 {
+        // Native already normalized a scalar operand to this storage format.
+        let x_staged: Tile<f32, {[128]}> = ftof(x, rounding::NearestEven);
+        let y_staged: Tile<f32, {[128]}> = ftof(y, rounding::NearestEven);
+        let selected = float_arithmetic_remainder_f32(x_staged, y_staged);
+        let rounded: Tile<f16, {[128]}> = ftof(selected, rounding::NearestEven);
+        bitcast(rounded)
+    }
     else { bitcast(divf(one, x, rounding::NearestEven, ftz::Disabled)) }
 }
 
@@ -142,6 +177,14 @@ fn float_arithmetic_bf16(a: Tile<u16, {[128]}>, b: Tile<u16, {[128]}>, op: u32) 
     else if op == 3u32 { bitcast(mulf(x, y, rounding::NearestEven, ftz::Disabled)) }
     else if op == 4u32 { bitcast(divf(x, y, rounding::NearestEven, ftz::Disabled)) }
     else if op == 14u32 { bitcast(sqrt(x, rounding::NearestEven, ftz::Disabled)) }
+    else if op == 34u32 {
+        // Native already normalized a scalar operand to this storage format.
+        let x_staged: Tile<f32, {[128]}> = ftof(x, rounding::NearestEven);
+        let y_staged: Tile<f32, {[128]}> = ftof(y, rounding::NearestEven);
+        let selected = float_arithmetic_remainder_f32(x_staged, y_staged);
+        let rounded: Tile<bf16, {[128]}> = ftof(selected, rounding::NearestEven);
+        bitcast(rounded)
+    }
     else { bitcast(divf(one, x, rounding::NearestEven, ftz::Disabled)) }
 }
 

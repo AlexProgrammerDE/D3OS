@@ -29,10 +29,11 @@ pub enum Operation {
     Round = 23,
     Trunc = 24,
     Sign = 25,
+    Remainder = 34,
 }
 
 impl Operation {
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::Add,
         Self::Subtract,
         Self::Multiply,
@@ -46,6 +47,7 @@ impl Operation {
         Self::Round,
         Self::Trunc,
         Self::Sign,
+        Self::Remainder,
     ];
 
     pub fn from_raw(raw: u32) -> Result<Self> {

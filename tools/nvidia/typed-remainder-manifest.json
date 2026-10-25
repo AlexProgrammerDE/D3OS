@@ -1,0 +1,927 @@
+{
+  "corpus_version": 1,
+  "counts": {
+    "BF16": {
+      "groups": {
+        "correction-rounding": 36,
+        "f64-precision-range": 0,
+        "huge-quotient": 32,
+        "ieee-exceptions": 144,
+        "sign-and-multiples": 28,
+        "subnormal-and-boundary": 76
+      },
+      "linux_unfused_diagnostic_differences": 72,
+      "scalar_results": 480,
+      "scalar_specs": 48,
+      "tensor_rows": 316
+    },
+    "F16": {
+      "groups": {
+        "correction-rounding": 36,
+        "f64-precision-range": 0,
+        "huge-quotient": 32,
+        "ieee-exceptions": 144,
+        "sign-and-multiples": 28,
+        "subnormal-and-boundary": 76
+      },
+      "linux_unfused_diagnostic_differences": 72,
+      "scalar_results": 480,
+      "scalar_specs": 48,
+      "tensor_rows": 316
+    },
+    "F32": {
+      "groups": {
+        "correction-rounding": 36,
+        "f64-precision-range": 0,
+        "huge-quotient": 32,
+        "ieee-exceptions": 144,
+        "sign-and-multiples": 28,
+        "subnormal-and-boundary": 76
+      },
+      "linux_unfused_diagnostic_differences": 72,
+      "scalar_results": 420,
+      "scalar_specs": 42,
+      "tensor_rows": 316
+    },
+    "F64": {
+      "groups": {
+        "correction-rounding": 36,
+        "f64-precision-range": 28,
+        "huge-quotient": 32,
+        "ieee-exceptions": 144,
+        "sign-and-multiples": 28,
+        "subnormal-and-boundary": 76
+      },
+      "linux_unfused_diagnostic_differences": 88,
+      "scalar_results": 410,
+      "scalar_specs": 41,
+      "tensor_rows": 344
+    },
+    "Flex32": {
+      "groups": {
+        "correction-rounding": 36,
+        "f64-precision-range": 0,
+        "huge-quotient": 32,
+        "ieee-exceptions": 144,
+        "sign-and-multiples": 28,
+        "subnormal-and-boundary": 76
+      },
+      "linux_unfused_diagnostic_differences": 72,
+      "scalar_results": 420,
+      "scalar_specs": 42,
+      "tensor_rows": 316
+    }
+  },
+  "fixture_bytes": 92120,
+  "fixture_rust_sha256": "46f21cf90c0c7e83df704c59af3f4af2b83ca16834de766edd8a749df69b23f0",
+  "fixture_sha256": "6086ed3a4ff28e330f51ec2e5a0fc0bed7c1033bb756710eed590fbe9ab431b3",
+  "generator_sha256": "faaf3b391c246b2d3a3528653f3deaaa1095630da710751f300b024c0bde25d8",
+  "half_stage_traces": [
+    {
+      "a": "0x0001",
+      "b": "0xc200",
+      "direct_corrected_half": {
+        "bits": "0xc200",
+        "class": "finite"
+      },
+      "direct_residue_half": "0x0001",
+      "format": "F16",
+      "requested_corrected_f32": {
+        "bits": "0xc0400000",
+        "class": "finite"
+      },
+      "requested_final_half": {
+        "bits": "0xc200",
+        "class": "finite"
+      },
+      "residue_f32": "0x33800000",
+      "widened_a_f32": "0x33800000",
+      "widened_b_f32": "0xc0400000"
+    },
+    {
+      "a": "0x3bff",
+      "b": "0xbc00",
+      "direct_corrected_half": {
+        "bits": "0x9000",
+        "class": "finite"
+      },
+      "direct_residue_half": "0x3bff",
+      "format": "F16",
+      "requested_corrected_f32": {
+        "bits": "0xba000000",
+        "class": "finite"
+      },
+      "requested_final_half": {
+        "bits": "0x9000",
+        "class": "finite"
+      },
+      "residue_f32": "0x3f7fe000",
+      "widened_a_f32": "0x3f7fe000",
+      "widened_b_f32": "0xbf800000"
+    },
+    {
+      "a": "0x0c01",
+      "b": "0xbc00",
+      "direct_corrected_half": {
+        "bits": "0xbbff",
+        "class": "finite"
+      },
+      "direct_residue_half": "0x0c01",
+      "format": "F16",
+      "requested_corrected_f32": {
+        "bits": "0xbf7feffc",
+        "class": "finite"
+      },
+      "requested_final_half": {
+        "bits": "0xbbff",
+        "class": "finite"
+      },
+      "residue_f32": "0x39802000",
+      "widened_a_f32": "0x39802000",
+      "widened_b_f32": "0xbf800000"
+    },
+    {
+      "a": "0x7bff",
+      "b": "0x4980",
+      "direct_corrected_half": {
+        "bits": "0x4900",
+        "class": "finite"
+      },
+      "direct_residue_half": "0x4900",
+      "format": "F16",
+      "requested_corrected_f32": {
+        "bits": "0x41200000",
+        "class": "finite"
+      },
+      "requested_final_half": {
+        "bits": "0x4900",
+        "class": "finite"
+      },
+      "residue_f32": "0x41200000",
+      "widened_a_f32": "0x477fe000",
+      "widened_b_f32": "0x41300000"
+    },
+    {
+      "a": "0x0001",
+      "b": "0xc040",
+      "direct_corrected_half": {
+        "bits": "0xc040",
+        "class": "finite"
+      },
+      "direct_residue_half": "0x0001",
+      "format": "BF16",
+      "requested_corrected_f32": {
+        "bits": "0xc0400000",
+        "class": "finite"
+      },
+      "requested_final_half": {
+        "bits": "0xc040",
+        "class": "finite"
+      },
+      "residue_f32": "0x00010000",
+      "widened_a_f32": "0x00010000",
+      "widened_b_f32": "0xc0400000"
+    },
+    {
+      "a": "0x3f7f",
+      "b": "0xbf80",
+      "direct_corrected_half": {
+        "bits": "0xbb80",
+        "class": "finite"
+      },
+      "direct_residue_half": "0x3f7f",
+      "format": "BF16",
+      "requested_corrected_f32": {
+        "bits": "0xbb800000",
+        "class": "finite"
+      },
+      "requested_final_half": {
+        "bits": "0xbb80",
+        "class": "finite"
+      },
+      "residue_f32": "0x3f7f0000",
+      "widened_a_f32": "0x3f7f0000",
+      "widened_b_f32": "0xbf800000"
+    },
+    {
+      "a": "0x3b01",
+      "b": "0xbf80",
+      "direct_corrected_half": {
+        "bits": "0xbf7f",
+        "class": "finite"
+      },
+      "direct_residue_half": "0x3b01",
+      "format": "BF16",
+      "requested_corrected_f32": {
+        "bits": "0xbf7f7f00",
+        "class": "finite"
+      },
+      "requested_final_half": {
+        "bits": "0xbf7f",
+        "class": "finite"
+      },
+      "residue_f32": "0x3b010000",
+      "widened_a_f32": "0x3b010000",
+      "widened_b_f32": "0xbf800000"
+    },
+    {
+      "a": "0x7f7f",
+      "b": "0x4130",
+      "direct_corrected_half": {
+        "bits": "0x4000",
+        "class": "finite"
+      },
+      "direct_residue_half": "0x4000",
+      "format": "BF16",
+      "requested_corrected_f32": {
+        "bits": "0x40000000",
+        "class": "finite"
+      },
+      "requested_final_half": {
+        "bits": "0x4000",
+        "class": "finite"
+      },
+      "residue_f32": "0x40000000",
+      "widened_a_f32": "0x7f7f0000",
+      "widened_b_f32": "0x41300000"
+    }
+  ],
+  "linux_expression": "diagnostic only: x-y*floor(x/y), never the numerical oracle",
+  "materialized_chain_cases": 15,
+  "mutant_witnesses": [
+    {
+      "a": "0x0000000000000001",
+      "b": "0xc008000000000000",
+      "expected": {
+        "bits": "0xc008000000000000",
+        "class": "finite"
+      },
+      "format": "F64",
+      "wrong_result": {
+        "bits": "0x0000000000000001",
+        "class": "finite"
+      },
+      "wrong_schedule": "omit opposite-sign correction"
+    },
+    {
+      "a": "0x0000000000000001",
+      "b": "0xc008000000000000",
+      "expected": {
+        "bits": "0xc008000000000000",
+        "class": "finite"
+      },
+      "format": "F64",
+      "wrong_result": {
+        "bits": "0x0000000000000000",
+        "class": "finite"
+      },
+      "wrong_schedule": "flush subnormal input to signed zero"
+    },
+    {
+      "a": "0xc018000000000000",
+      "b": "0x4008000000000000",
+      "expected": {
+        "bits": "0x8000000000000000",
+        "class": "finite"
+      },
+      "format": "F64",
+      "wrong_result": {
+        "bits": "0x0000000000000000",
+        "class": "finite"
+      },
+      "wrong_schedule": "normalize exact-zero result to positive zero"
+    },
+    {
+      "a": "0x3fefffffffffffff",
+      "b": "0xbff0000000000000",
+      "expected": {
+        "bits": "0xbca0000000000000",
+        "class": "finite"
+      },
+      "format": "F64",
+      "wrong_result": {
+        "bits": "0x3fefffffffffffff",
+        "class": "finite"
+      },
+      "wrong_schedule": "return raw residue rather than cancellation correction"
+    },
+    {
+      "a": "0x7fefffffffffffff",
+      "b": "0x4026000000000000",
+      "expected": {
+        "bits": "0x4008000000000000",
+        "class": "finite"
+      },
+      "format": "F64",
+      "wrong_result": {
+        "bits": "0x7c70000000000000",
+        "class": "finite"
+      },
+      "wrong_schedule": "round quotient before exact-looking reduction"
+    },
+    {
+      "a": "0x00000001",
+      "b": "0xc0400000",
+      "expected": {
+        "bits": "0xc0400000",
+        "class": "finite"
+      },
+      "format": "F32",
+      "wrong_result": {
+        "bits": "0x00000001",
+        "class": "finite"
+      },
+      "wrong_schedule": "omit opposite-sign correction"
+    },
+    {
+      "a": "0x00000001",
+      "b": "0xc0400000",
+      "expected": {
+        "bits": "0xc0400000",
+        "class": "finite"
+      },
+      "format": "F32",
+      "wrong_result": {
+        "bits": "0x00000000",
+        "class": "finite"
+      },
+      "wrong_schedule": "flush subnormal input to signed zero"
+    },
+    {
+      "a": "0xc0c00000",
+      "b": "0x40400000",
+      "expected": {
+        "bits": "0x80000000",
+        "class": "finite"
+      },
+      "format": "F32",
+      "wrong_result": {
+        "bits": "0x00000000",
+        "class": "finite"
+      },
+      "wrong_schedule": "normalize exact-zero result to positive zero"
+    },
+    {
+      "a": "0x3f7fffff",
+      "b": "0xbf800000",
+      "expected": {
+        "bits": "0xb3800000",
+        "class": "finite"
+      },
+      "format": "F32",
+      "wrong_result": {
+        "bits": "0x3f7fffff",
+        "class": "finite"
+      },
+      "wrong_schedule": "return raw residue rather than cancellation correction"
+    },
+    {
+      "a": "0x7f7fffff",
+      "b": "0x41300000",
+      "expected": {
+        "bits": "0x41100000",
+        "class": "finite"
+      },
+      "format": "F32",
+      "wrong_result": {
+        "bits": "0xf2000000",
+        "class": "finite"
+      },
+      "wrong_schedule": "round quotient before exact-looking reduction"
+    },
+    {
+      "a": "0x00000001",
+      "b": "0xc0400000",
+      "expected": {
+        "bits": "0xc0400000",
+        "class": "finite"
+      },
+      "format": "Flex32",
+      "wrong_result": {
+        "bits": "0x00000001",
+        "class": "finite"
+      },
+      "wrong_schedule": "omit opposite-sign correction"
+    },
+    {
+      "a": "0x00000001",
+      "b": "0xc0400000",
+      "expected": {
+        "bits": "0xc0400000",
+        "class": "finite"
+      },
+      "format": "Flex32",
+      "wrong_result": {
+        "bits": "0x00000000",
+        "class": "finite"
+      },
+      "wrong_schedule": "flush subnormal input to signed zero"
+    },
+    {
+      "a": "0xc0c00000",
+      "b": "0x40400000",
+      "expected": {
+        "bits": "0x80000000",
+        "class": "finite"
+      },
+      "format": "Flex32",
+      "wrong_result": {
+        "bits": "0x00000000",
+        "class": "finite"
+      },
+      "wrong_schedule": "normalize exact-zero result to positive zero"
+    },
+    {
+      "a": "0x3f7fffff",
+      "b": "0xbf800000",
+      "expected": {
+        "bits": "0xb3800000",
+        "class": "finite"
+      },
+      "format": "Flex32",
+      "wrong_result": {
+        "bits": "0x3f7fffff",
+        "class": "finite"
+      },
+      "wrong_schedule": "return raw residue rather than cancellation correction"
+    },
+    {
+      "a": "0x7f7fffff",
+      "b": "0x41300000",
+      "expected": {
+        "bits": "0x41100000",
+        "class": "finite"
+      },
+      "format": "Flex32",
+      "wrong_result": {
+        "bits": "0xf2000000",
+        "class": "finite"
+      },
+      "wrong_schedule": "round quotient before exact-looking reduction"
+    },
+    {
+      "a": "0x0001",
+      "b": "0xc200",
+      "expected": {
+        "bits": "0xc200",
+        "class": "finite"
+      },
+      "format": "F16",
+      "wrong_result": {
+        "bits": "0x0001",
+        "class": "finite"
+      },
+      "wrong_schedule": "omit opposite-sign correction"
+    },
+    {
+      "a": "0x0001",
+      "b": "0xc200",
+      "expected": {
+        "bits": "0xc200",
+        "class": "finite"
+      },
+      "format": "F16",
+      "wrong_result": {
+        "bits": "0x0000",
+        "class": "finite"
+      },
+      "wrong_schedule": "flush subnormal input to signed zero"
+    },
+    {
+      "a": "0xc600",
+      "b": "0x4200",
+      "expected": {
+        "bits": "0x8000",
+        "class": "finite"
+      },
+      "format": "F16",
+      "wrong_result": {
+        "bits": "0x0000",
+        "class": "finite"
+      },
+      "wrong_schedule": "normalize exact-zero result to positive zero"
+    },
+    {
+      "a": "0x3bff",
+      "b": "0xbc00",
+      "expected": {
+        "bits": "0x9000",
+        "class": "finite"
+      },
+      "format": "F16",
+      "wrong_result": {
+        "bits": "0x3bff",
+        "class": "finite"
+      },
+      "wrong_schedule": "return raw residue rather than cancellation correction"
+    },
+    {
+      "a": "0x7bff",
+      "b": "0x4980",
+      "expected": {
+        "bits": "0x4900",
+        "class": "finite"
+      },
+      "format": "F16",
+      "wrong_result": {
+        "bits": "0xbc00",
+        "class": "finite"
+      },
+      "wrong_schedule": "round quotient before exact-looking reduction"
+    },
+    {
+      "a": "0x0001",
+      "b": "0xc040",
+      "expected": {
+        "bits": "0xc040",
+        "class": "finite"
+      },
+      "format": "BF16",
+      "wrong_result": {
+        "bits": "0x0001",
+        "class": "finite"
+      },
+      "wrong_schedule": "omit opposite-sign correction"
+    },
+    {
+      "a": "0x0001",
+      "b": "0xc040",
+      "expected": {
+        "bits": "0xc040",
+        "class": "finite"
+      },
+      "format": "BF16",
+      "wrong_result": {
+        "bits": "0x0000",
+        "class": "finite"
+      },
+      "wrong_schedule": "flush subnormal input to signed zero"
+    },
+    {
+      "a": "0xc0c0",
+      "b": "0x4040",
+      "expected": {
+        "bits": "0x8000",
+        "class": "finite"
+      },
+      "format": "BF16",
+      "wrong_result": {
+        "bits": "0x0000",
+        "class": "finite"
+      },
+      "wrong_schedule": "normalize exact-zero result to positive zero"
+    },
+    {
+      "a": "0x3f7f",
+      "b": "0xbf80",
+      "expected": {
+        "bits": "0xbb80",
+        "class": "finite"
+      },
+      "format": "BF16",
+      "wrong_result": {
+        "bits": "0x3f7f",
+        "class": "finite"
+      },
+      "wrong_schedule": "return raw residue rather than cancellation correction"
+    },
+    {
+      "a": "0x7f7f",
+      "b": "0x4130",
+      "expected": {
+        "bits": "0x4000",
+        "class": "finite"
+      },
+      "format": "BF16",
+      "wrong_result": {
+        "bits": "0x7b20",
+        "class": "finite"
+      },
+      "wrong_schedule": "round quotient before exact-looking reduction"
+    },
+    {
+      "a": "0x3ff0000000000001",
+      "b": "0x3ff0000000000000",
+      "expected": {
+        "bits": "0x3cb0000000000000",
+        "class": "finite"
+      },
+      "format": "F64",
+      "wrong_result": {
+        "bits": "0x0000000000000000",
+        "class": "finite"
+      },
+      "wrong_schedule": "narrow operands and computation to F32"
+    },
+    {
+      "a": "0x7830000000000000",
+      "b": "0x4008000000000000",
+      "expected": {
+        "bits": "0x3ff0000000000000",
+        "class": "finite"
+      },
+      "format": "F64",
+      "wrong_result": {
+        "class": "nan"
+      },
+      "wrong_schedule": "narrow operands and computation to F32"
+    },
+    {
+      "a": "0x0000000000000001",
+      "b": "0x4008000000000000",
+      "expected": {
+        "bits": "0x0000000000000001",
+        "class": "finite"
+      },
+      "format": "F64",
+      "wrong_result": {
+        "bits": "0x0000000000000000",
+        "class": "finite"
+      },
+      "wrong_schedule": "narrow operands and computation to F32"
+    },
+    {
+      "a": "0x3c00",
+      "b": "0x3c00",
+      "expected": {
+        "bits": "0x0000",
+        "class": "finite"
+      },
+      "format": "F16",
+      "scalar_f64_bits": "0x3ff0018000000000",
+      "wrong_result": {
+        "bits": "0x3c00",
+        "class": "finite"
+      },
+      "wrong_schedule": "skip half scalar storage before F32 computation"
+    },
+    {
+      "a": "0x3f80",
+      "b": "0x3f80",
+      "expected": {
+        "bits": "0x0000",
+        "class": "finite"
+      },
+      "format": "BF16",
+      "scalar_f64_bits": "0x3ff00c0000000000",
+      "wrong_result": {
+        "bits": "0x3f80",
+        "class": "finite"
+      },
+      "wrong_schedule": "skip half scalar storage before F32 computation"
+    }
+  ],
+  "reference": "independent Fraction truncation and integer IEEE RNE",
+  "reference_model_sha256": "2ad0b9d0c2bba6515bb6d403dbd74202de76a8adaadfe53e2315f5441f83a837",
+  "scalar_conversion_counterexamples": [
+    {
+      "correct_rhs": "0x5e800000",
+      "discriminating_lhs": [
+        "0x80000001",
+        "0xc0400000",
+        "0x7f7fffff"
+      ],
+      "format": "F32",
+      "kind": "Int",
+      "value": "4611686293305294849",
+      "wrong_rhs": "0x5e800001",
+      "wrong_schedule": "Scalar directly to destination"
+    },
+    {
+      "correct_rhs": "0x5f000000",
+      "discriminating_lhs": [
+        "0x80000001",
+        "0xc0400000",
+        "0x7f7fffff"
+      ],
+      "format": "F32",
+      "kind": "UInt",
+      "value": "9223372586610589697",
+      "wrong_rhs": "0x5f000001",
+      "wrong_schedule": "Scalar directly to destination"
+    },
+    {
+      "correct_rhs": "0x5e800000",
+      "discriminating_lhs": [
+        "0x80000001",
+        "0xc0400000",
+        "0x7f7fffff"
+      ],
+      "format": "Flex32",
+      "kind": "Int",
+      "value": "4611686293305294849",
+      "wrong_rhs": "0x5e800001",
+      "wrong_schedule": "Scalar directly to destination"
+    },
+    {
+      "correct_rhs": "0x5f000000",
+      "discriminating_lhs": [
+        "0x80000001",
+        "0xc0400000",
+        "0x7f7fffff"
+      ],
+      "format": "Flex32",
+      "kind": "UInt",
+      "value": "9223372586610589697",
+      "wrong_rhs": "0x5f000001",
+      "wrong_schedule": "Scalar directly to destination"
+    },
+    {
+      "correct_rhs": "0x3c00",
+      "discriminating_lhs": [
+        "0x8001",
+        "0x3c00",
+        "0x3c01",
+        "0x4200",
+        "0xc200",
+        "0x7bff"
+      ],
+      "format": "F16",
+      "kind": "Float",
+      "value": "0x3ff0020000000001",
+      "wrong_rhs": "0x3c01",
+      "wrong_schedule": "Scalar directly to destination"
+    },
+    {
+      "correct_rhs": "0x0000",
+      "discriminating_lhs": [
+        "0x0000",
+        "0x8000",
+        "0x0001",
+        "0x8001",
+        "0x3c00",
+        "0x3c01",
+        "0x4200",
+        "0xc200",
+        "0x0401",
+        "0x7bff"
+      ],
+      "format": "F16",
+      "kind": "Float",
+      "value": "0x3e60000000000001",
+      "wrong_rhs": "0x0001",
+      "wrong_schedule": "Scalar directly to destination"
+    },
+    {
+      "correct_rhs": "0x0400",
+      "discriminating_lhs": [
+        "0x8001",
+        "0x3c00",
+        "0x3c01",
+        "0x4200",
+        "0xc200",
+        "0x0401",
+        "0x7bff"
+      ],
+      "format": "F16",
+      "kind": "Float",
+      "value": "0x3f0ffbffffffffff",
+      "wrong_rhs": "0x03ff",
+      "wrong_schedule": "Scalar directly to destination"
+    },
+    {
+      "correct_rhs": "0x7c00",
+      "discriminating_lhs": [
+        "0x8001",
+        "0xc200",
+        "0x7bff"
+      ],
+      "format": "F16",
+      "kind": "Float",
+      "value": "0x40effdffffffffff",
+      "wrong_rhs": "0x7bff",
+      "wrong_schedule": "Scalar directly to destination"
+    },
+    {
+      "correct_rhs": "0x3f80",
+      "discriminating_lhs": [
+        "0x8001",
+        "0x3f80",
+        "0x3f81",
+        "0x4040",
+        "0xc040",
+        "0x7f7f"
+      ],
+      "format": "BF16",
+      "kind": "Float",
+      "value": "0x3ff0100000000001",
+      "wrong_rhs": "0x3f81",
+      "wrong_schedule": "Scalar directly to destination"
+    },
+    {
+      "correct_rhs": "0x0000",
+      "discriminating_lhs": [
+        "0x0000",
+        "0x8000",
+        "0x0001",
+        "0x8001",
+        "0x3f80",
+        "0x3f81",
+        "0x4040",
+        "0xc040",
+        "0x0081",
+        "0x7f7f"
+      ],
+      "format": "BF16",
+      "kind": "Float",
+      "value": "0x3790000000000001",
+      "wrong_rhs": "0x0001",
+      "wrong_schedule": "Scalar directly to destination"
+    },
+    {
+      "correct_rhs": "0x0080",
+      "discriminating_lhs": [
+        "0x8001",
+        "0x3f80",
+        "0x3f81",
+        "0x4040",
+        "0xc040",
+        "0x0081",
+        "0x7f7f"
+      ],
+      "format": "BF16",
+      "kind": "Float",
+      "value": "0x380fdfffffffffff",
+      "wrong_rhs": "0x007f",
+      "wrong_schedule": "Scalar directly to destination"
+    },
+    {
+      "correct_rhs": "0x7f80",
+      "discriminating_lhs": [
+        "0x8001",
+        "0xc040",
+        "0x7f7f"
+      ],
+      "format": "BF16",
+      "kind": "Float",
+      "value": "0x47efefffffffffff",
+      "wrong_rhs": "0x7f7f",
+      "wrong_schedule": "Scalar directly to destination"
+    }
+  ],
+  "scalar_normalization_change": {
+    "canonical_schedule": "Scalar Int/UInt -> F64 -> F32, matching pinned Linux InputScalar",
+    "cases": [
+      {
+        "canonical_rhs": "0x5e800000",
+        "expected": {
+          "bits": "0x5e800000",
+          "class": "finite"
+        },
+        "format": "F32",
+        "legacy_result": {
+          "bits": "0x5e800001",
+          "class": "finite"
+        },
+        "legacy_rhs": "0x5e800001",
+        "lhs": "0xc0400000",
+        "scalar_kind": "Int",
+        "scalar_value": "4611686293305294849"
+      },
+      {
+        "canonical_rhs": "0x5e800000",
+        "expected": {
+          "bits": "0x5e800000",
+          "class": "finite"
+        },
+        "format": "Flex32",
+        "legacy_result": {
+          "bits": "0x5e800001",
+          "class": "finite"
+        },
+        "legacy_rhs": "0x5e800001",
+        "lhs": "0xc0400000",
+        "scalar_kind": "Int",
+        "scalar_value": "4611686293305294849"
+      }
+    ],
+    "new_wrapper": "float_remainder_scalar -> canonical float_scalar -> float_scalar_bits",
+    "old_wrapper": "backend/float.rs float_remainder_scalar -> rhs.elem::<f32>() -> scalar",
+    "status": "intentional scalar normalization correction, mathematical model only",
+    "unchanged": "existing F32 GPU entry and remf plus RN non-FTZ correction arithmetic"
+  },
+  "scalar_results": 2210,
+  "scalar_specs": 221,
+  "schedules": {
+    "F16/BF16": "stored operands -> F32 remf -> F32 RN correction -> one destination RNE",
+    "F32/Flex32": "F32 remf residue and RN correction",
+    "F64": "F64 remf residue and RN correction",
+    "scalar": "Scalar Int/UInt/Bool -> F64; Float retains F64; then F32 then half storage"
+  },
+  "self_check_assertions": 121,
+  "source_dependencies_sha256": {
+    "burn-cubecl-0.22.1/src/kernel/binary.rs": "4b44ea79b1d24e08c63553c8be48adb6e05580a19356bc1b8b44cf3d9b02a12a",
+    "burn-cubecl-0.22.1/src/ops/tensor.rs": "01fb0bed638dbae21971b673eea0b9de655d750a1b87b253a8168f3850f8f246",
+    "burn-std-0.22.1/src/element/scalar.rs": "9d03a0325f47d6930cf858b0020a8683f0ecdd7a941270941d9bf3e364fa89c6",
+    "burn-tensor-0.22.1/src/bridge/ops/float.rs": "c6805e2989f6a5d232d259cc61b68f1a8dda3d463c97323eaf6d6173dc52b007",
+    "burn-tensor-0.22.1/src/tensor/api/numeric.rs": "b6e41a354bf335871e3eef6764bb1d9c2c1be248ada86bd8acafc0d9c8b0f78f",
+    "cubecl-core-0.11.3/src/frontend/scalar.rs": "26ce53adba57286e209a7b4e5f2dc03a1ea0e6bb6db04df979e10ce49a8c48d0",
+    "cubecl-cpp-0.11.3/src/shared/binary.rs": "eadef2109d7bb1d1cf0822afc7848f297aa7e93f2e679bf97b24ff589b7c93b9",
+    "half-2.7.1/src/num_traits.rs": "4ec1ab5a2ace7afabcce4e1265753a5a309c04c28144888e3ce8f181d149d973",
+    "num-traits-0.2.19/src/cast.rs": "d2c9337163c3d594a701bfce21aec56571625fa0117f970f14fd82dcc4504bf6"
+  },
+  "strict_policy": "finite, infinity, signed zero exact bits; output NaN classification; preserved sources exact bytes",
+  "supplemental_storage_scalar_specs": 2,
+  "tensor_rows": 1608,
+  "version": 1
+}

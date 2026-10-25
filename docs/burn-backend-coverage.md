@@ -444,6 +444,52 @@ Four shared host tests, three raw fixture audits, 24 Native unit tests, Clippy, 
 The independent reference uses integer IEEE fields. It performs no host floating arithmetic to compute expected ReLU results.
 These are correctness results. Full Burn coverage and Linux compile-time and execution-performance parity remain incomplete.
 
+## Typed floating remainder
+
+Protocol 45 adds tensor and scalar remainder across F64, F32, Flex32, F16, and BF16.
+The existing floating entry now supports 14 operations. The bundle retains 247 entries and 82 compute profiles.
+All 246 other entries retain 532 identical instruction and constant sections.
+The floating entry adds a constant-bank section alongside its changed instructions.
+
+The kernel computes a truncated residue, then corrects a nonzero residue whose sign differs from the divisor.
+F64 residue and correction use actual F64 arithmetic. F32 and Flex32 use F32 arithmetic.
+Half operands first retain their destination storage values, then widen to F32 for residue, correction, and selection.
+The selected result rounds once to destination storage. The correction uses nearest-even addition without FTZ.
+Finite values, infinities, and signed zeros require exact bits. A zero result keeps the dividend sign.
+Arithmetic NaNs require classification. Preserved source tensors retain every byte, including NaN payloads.
+
+The scalar wrapper now uses the canonical conversion through F64, F32, and destination storage where applicable.
+This removes F64 narrowing and corrects rare F32 integer midpoint differences from its former direct conversion.
+For `-3 % Int((1<<62)+(1<<38)+1)`, F32 and Flex32 now return `0x5e800000` instead of `0x5e800001`.
+The F32 GPU entry and its mathematical implementation remain unchanged.
+Public scalar wrappers convert numeric arguments to Float through Burn's `Scalar::new`.
+Separate Dispatch checks preserve the original Float, Int, UInt, and Bool variants.
+
+The independent generator uses exact rational quotients, integer nearest-even encoding, and explicit rounding at each specified stage.
+Its original numerical corpus contains 1,608 tensor rows, 221 scalar specifications, and 2,210 scalar results.
+Supplemental half witnesses distinguish destination scalar storage from a scalar that incorrectly stays in F32.
+The host reference passes 1,008 MPFR residue comparisons, including 388 subnormal results and 256 zero results.
+The half schedule comparison found no differences in its bounded search. The compiler audit separately verifies the required staging.
+
+D3OS passes 692 public cases and 20,200 output values across all five formats.
+The complete guarded gate passes 589 raw dispatches, 604 fresh outputs, 805 Native operations, and 762 public operations.
+It also checks 383 expected rejections, 240 empty operations, and 20 queued ownership cases.
+Operation counters verify 2,458 typed launches and 302 launches through the existing F32 entry.
+The checks retain signed views, broadcasts, ranks zero and eight, packed guards, zero tails, exact aliases, and recoverable errors.
+All earlier regression gates pass, and all three guest compiler hashes match their host audits.
+These checks do not establish broader typed autodiff or reduction support.
+
+Linux retains three explicit failures against the same strict numerical expectations.
+The complete run stops at CubeCL's rank-zero readback panic.
+The diagnostic without rank zero stops at the direct Flex32 upload rejection.
+The diagnostic without either domain reaches numerical checks and reports 4,986 element mismatches.
+Those diagnostics affect 97 F64 cases, 88 F32 cases, 92 F16 cases, and 92 BF16 cases.
+They include zero signs, subnormal residues, extreme ratios, and infinities. These counts describe recorded mismatches, not independent conformance totals.
+The complete diagnostic remains in the serial log. No Linux passing subset or performance-parity claim follows from these records.
+
+All 116 SDK tests, six shared host tests, four raw fixture audits, repository Clippy checks, and the production image build pass.
+These are correctness checks. Full Burn coverage, compile-time parity, and workload performance parity remain incomplete.
+
 ## Typed integer elementwise arithmetic
 
 Protocol 42 adds 15 integer operations across I8, I16, I32, I64, U8, U16, U32, and U64.
@@ -1641,4 +1687,38 @@ python3 tools/nvidia/linux-reference.py \
 
 For the complete Linux attempt, omit both diagnostic flags and use a fresh directory.
 The `--burn-relu-dtype` filter selects a smaller diagnostic group.
+The runner's `--expected-summary` reports exact selected counts before device construction.
+
+The typed remainder evidence lives under `target/nvidia/burn-backend-validation/typed-remainder-first/`.
+The Linux records use the `target/nvidia/burn-backend-audit/linux-typed-remainder-` prefix.
+The audit directory contains `typed-remainder-comparison.json` and `typed-remainder-section-comparison.json`.
+The filtered Linux directory also contains `numerical-failure-summary.json`. Its complete diagnostics remain in `serial.log`.
+
+Build the runner from its pinned toolchain directory:
+
+```bash
+cd tools/mnist-benchmark
+cargo build --release --locked --bin typed_remainder
+cd ../..
+```
+
+Verify the fixtures and the independent MPFR residue checks:
+
+```bash
+python3 tools/nvidia/typed-remainder-generate.py --check --mpfr
+```
+
+Reproduce the retained filtered Linux failure in a fresh directory:
+
+```bash
+python3 tools/nvidia/linux-reference.py \
+  --directory target/nvidia/linux-burn-typed-remainder \
+  --burn-typed-remainder tools/mnist-benchmark/target/release/typed_remainder \
+  --burn-typed-remainder-skip-rank-zero --burn-typed-remainder-no-flex32 \
+  --memory-mib 12288 --timeout 900
+```
+
+For the complete attempt, omit both diagnostic flags and use a fresh directory.
+The `--burn-typed-remainder-finite` option requires finite effective operands and finite expected results.
+The dtype and group filters select explicit diagnostic domains. A group selection omits scalar, geometry, and chain cases.
 The runner's `--expected-summary` reports exact selected counts before device construction.
