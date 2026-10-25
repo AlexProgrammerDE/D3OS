@@ -185,6 +185,10 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     crate::report(format_args!(
         "BURN_SCATTER_UPDATES_OK os=d3os backend=native dtypes=f32,i32 modes=4 axes=all unique_indices=true gradient_cases=12 ieee=true empty=true shared_views=true"
     ));
+    d3os_ai::validation::scatter_updates::run_select(&device, true, true)?;
+    crate::report(format_args!(
+        "BURN_SELECT_UPDATES_OK os=d3os backend=native dtypes=f32,i32 modes=5 axes=all unique_gradient_indices=true gradient_cases=15 duplicates=add,mul,min,max ranks=3,8 ieee=true empty=true shared_views=true"
+    ));
     convolution::run(backend).map_err(|e| format!("Burn native convolution: {e}"))?;
     linear::run(backend).map_err(|e| format!("Burn native linear: {e}"))?;
     activation::run(backend).map_err(|e| format!("Burn native ReLU: {e}"))?;

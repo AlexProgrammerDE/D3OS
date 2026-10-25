@@ -113,17 +113,8 @@ impl FloatTensorOps<Self> for Native {
     fn float_select_assign(
         tensor: FloatTensor<Self>, dim: usize, indices: IntTensor<Self>, value: FloatTensor<Self>, update: IndexingUpdateOp,
     ) -> FloatTensor<Self> {
-        if update != IndexingUpdateOp::Add {
-            return BackendTensor::unsupported(
-                "float_select_assign",
-                tensor.shape(),
-                tensor.dtype(),
-                &[&tensor, &indices, &value],
-                "non-additive indexed updates",
-            );
-        }
         BackendTensor::apply("float_select_assign", tensor.shape(), tensor.dtype(), &[&tensor, &indices, &value], |v| {
-            v[0].select_add(dim, v[1], v[2])
+            v[0].select_update(dim, v[1], v[2], update)
         })
     }
     fn float_slice(tensor: FloatTensor<Self>, slices: &[Slice]) -> FloatTensor<Self> {

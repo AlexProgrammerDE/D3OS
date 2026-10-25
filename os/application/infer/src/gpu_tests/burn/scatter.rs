@@ -2,6 +2,7 @@
 use alloc::{format, string::String, vec, vec::Vec};
 use d3os_ai::{
     burn::backend::{BoolStore, DType, Shape, Slice, TensorData, TensorMetadata},
+    burn::tensor::IndexingUpdateOp,
     native::{NativeTensor, layout::Layout},
 };
 use d3os_compute::{Backend, Error, nvidia::Nvidia};
@@ -108,7 +109,7 @@ fn strided(backend: &Nvidia, dtype: DType) -> Result<(), Error> {
     let output = if matches!(dtype, DType::Bool(_)) {
         source.select_or(2, &ids, &values)?
     } else {
-        source.select_add(2, &ids, &values)?
+        source.select_update(2, &ids, &values, IndexingUpdateOp::Add)?
     };
     let mut expected: Vec<_> = (0..105).map(|i| words[physical(coordinates(i, [7, 3, 5]))]).collect();
     for row in 0..21 {

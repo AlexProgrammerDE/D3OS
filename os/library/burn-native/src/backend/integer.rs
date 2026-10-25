@@ -68,17 +68,8 @@ impl IntTensorOps<Self> for Native {
         )
     }
     fn int_select_assign(tensor: IntTensor<Self>, dim: usize, indices: IntTensor<Self>, value: IntTensor<Self>, update: IndexingUpdateOp) -> IntTensor<Self> {
-        if update != IndexingUpdateOp::Add {
-            return BackendTensor::unsupported(
-                "int_select_assign",
-                tensor.shape(),
-                tensor.dtype(),
-                &[&tensor, &indices, &value],
-                "non-additive indexed updates",
-            );
-        }
         BackendTensor::apply("int_select_assign", tensor.shape(), tensor.dtype(), &[&tensor, &indices, &value], |v| {
-            v[0].select_add(dim, v[1], v[2])
+            v[0].select_update(dim, v[1], v[2], update)
         })
     }
     fn int_equal(lhs: IntTensor<Self>, rhs: IntTensor<Self>, out_dtype: BoolDType) -> BoolTensor<Self> {

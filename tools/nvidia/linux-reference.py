@@ -73,7 +73,7 @@ def stage_burn_program(root, binary, destination):
     return libdevice
 
 
-def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_finite=False, sort_compile_log=False, compaction_aligned=False, quantized_empty_case=None, scatter_finite=False):
+def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_finite=False, sort_compile_log=False, compaction_aligned=False, quantized_empty_case=None, scatter_finite=False, select_updates=False):
     purposes = {
         "quantization": "shared API conformance; no performance measurement",
         "quantized_empty": "empty quantized API diagnostic and record round trip; execution errors retained; no performance measurement",
@@ -90,6 +90,9 @@ def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_fi
     purpose = "erf error profile and GELU conformance; strict failures reported" if erf_profile else purposes[kind]
     program = f"/burn-{kind}"
     arguments = " --profile" if erf_profile else " --nonempty" if nonempty else ""
+    if select_updates:
+        arguments += " --select"
+        purpose = "vector selection updates and gradients; unique gradient indices; duplicate forward reductions; no performance measurement"
     if scatter_finite:
         arguments += " --finite"
         purpose += "; finite floating-point corpus; IEEE diagnostic retained separately"
@@ -1199,6 +1202,7 @@ def main():
     parser.add_argument("--burn-scatter-updates", type=Path, help="run ordered scatter updates and gradients on Linux CUDA")
     parser.add_argument("--burn-scatter-updates-nonempty", action="store_true")
     parser.add_argument("--burn-scatter-updates-finite", action="store_true")
+    parser.add_argument("--burn-scatter-updates-select", action="store_true", help="compare vector selection updates instead of full-rank scatter indices")
     parser.add_argument("--burn-quantized-empty", type=Path, help="diagnose empty quantized construction and selection")
     parser.add_argument("--burn-quantized-empty-case", choices=("direct", "select", "mask"), default="mask")
     parser.add_argument("--burn-compaction", type=Path, help="compare public argwhere, nonzero, mask selection, and gradients on the CUDA backend")
@@ -1322,7 +1326,7 @@ def main():
         parser.error("--burn-integer-matmul-nonempty requires --burn-integer-matmul")
     if args.burn_scatter_updates and not args.burn_scatter_updates.is_file():
         parser.error("--burn-scatter-updates requires a built conformance executable")
-    if (args.burn_scatter_updates_nonempty or args.burn_scatter_updates_finite) and not args.burn_scatter_updates:
+    if (args.burn_scatter_updates_nonempty or args.burn_scatter_updates_finite or args.burn_scatter_updates_select) and not args.burn_scatter_updates:
         parser.error("scatter update domain flags require --burn-scatter-updates")
     if args.burn_quantized_empty and not args.burn_quantized_empty.is_file():
         parser.error("--burn-quantized-empty requires a built diagnostic executable")
@@ -1391,7 +1395,7 @@ def main():
     elif args.burn_integer_matmul:
         burn_probe(args.directory / "root", args.burn_integer_matmul.resolve(), "integer_matrix", nonempty=args.burn_integer_matmul_nonempty)
     elif args.burn_scatter_updates:
-        burn_probe(args.directory / "root", args.burn_scatter_updates.resolve(), "scatter_updates", nonempty=args.burn_scatter_updates_nonempty, scatter_finite=args.burn_scatter_updates_finite)
+        burn_probe(args.directory / "root", args.burn_scatter_updates.resolve(), "scatter_updates", nonempty=args.burn_scatter_updates_nonempty, scatter_finite=args.burn_scatter_updates_finite, select_updates=args.burn_scatter_updates_select)
     elif args.burn_quantized_empty:
         burn_probe(args.directory / "root", args.burn_quantized_empty.resolve(), "quantized_empty", quantized_empty_case=args.burn_quantized_empty_case)
     elif args.burn_compaction:
@@ -1557,7 +1561,8 @@ def main():
     if args.burn_scatter_updates:
         empty = "false" if args.burn_scatter_updates_nonempty else "true"
         ieee = "false" if args.burn_scatter_updates_finite else "true"
-        if f"BURN_SCATTER_UPDATES_OK os=linux backend=cuda dtypes=f32,i32 modes=4 axes=all unique_indices=true gradient_cases=12 ieee={ieee} empty={empty} shared_views=true" not in text:
+        marker = f"BURN_SELECT_UPDATES_OK os=linux backend=cuda dtypes=f32,i32 modes=5 axes=all unique_gradient_indices=true gradient_cases=15 duplicates=add,mul,min,max ranks=3,8 ieee={ieee} empty={empty} shared_views=true" if args.burn_scatter_updates_select else f"BURN_SCATTER_UPDATES_OK os=linux backend=cuda dtypes=f32,i32 modes=4 axes=all unique_indices=true gradient_cases=12 ieee={ieee} empty={empty} shared_views=true"
+        if marker not in text:
             raise RuntimeError("Linux ordered scatter conformance did not complete")
     if args.burn_quantized_empty:
         rows = [json.loads(line.split("BURN_QUANTIZED_EMPTY_RESULT ", 1)[1]) for line in text.splitlines() if line.startswith("BURN_QUANTIZED_EMPTY_RESULT ")]

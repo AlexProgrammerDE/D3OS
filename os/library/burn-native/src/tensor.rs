@@ -351,8 +351,8 @@ impl NativeTensor {
         self.scatter(axis, indices, values, Scatter::BoolOr)
     }
 
-    pub fn select_add(&self, axis: usize, indices: &Self, values: &Self) -> Result<Self> {
-        self.scatter_add(axis, &self.selection_indices(axis, indices)?, values)
+    pub fn select_update(&self, axis: usize, indices: &Self, values: &Self, update: IndexingUpdateOp) -> Result<Self> {
+        self.scatter_update(axis, &self.selection_indices(axis, indices)?, values, update)
     }
 
     pub fn select_or(&self, axis: usize, indices: &Self, values: &Self) -> Result<Self> {

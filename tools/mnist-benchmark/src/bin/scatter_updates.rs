@@ -7,9 +7,20 @@ fn main() {
     let (device, backend) = (Device::flex(), "flex_cpu");
     let include_empty = !std::env::args().any(|a| a == "--nonempty");
     let include_ieee = !std::env::args().any(|a| a == "--finite");
-    d3os_ai::validation::scatter_updates::run(&device, include_empty, include_ieee).expect("ordered scatter conformance");
+    let select = std::env::args().any(|a| a == "--select");
+    if select {
+        d3os_ai::validation::scatter_updates::run_select(&device, include_empty, include_ieee).expect("vector selection conformance");
+    } else {
+        d3os_ai::validation::scatter_updates::run(&device, include_empty, include_ieee).expect("ordered scatter conformance");
+    }
     device.sync().expect("scatter synchronization");
-    println!(
-        "BURN_SCATTER_UPDATES_OK os=linux backend={backend} dtypes=f32,i32 modes=4 axes=all unique_indices=true gradient_cases=12 ieee={include_ieee} empty={include_empty} shared_views=true"
-    );
+    if select {
+        println!(
+            "BURN_SELECT_UPDATES_OK os=linux backend={backend} dtypes=f32,i32 modes=5 axes=all unique_gradient_indices=true gradient_cases=15 duplicates=add,mul,min,max ranks=3,8 ieee={include_ieee} empty={include_empty} shared_views=true"
+        );
+    } else {
+        println!(
+            "BURN_SCATTER_UPDATES_OK os=linux backend={backend} dtypes=f32,i32 modes=4 axes=all unique_indices=true gradient_cases=12 ieee={include_ieee} empty={include_empty} shared_views=true"
+        );
+    }
 }

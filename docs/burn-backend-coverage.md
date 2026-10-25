@@ -18,7 +18,7 @@ All required methods have declarations or implementations. This count does not e
 The report also records 108 native helper bodies for manual review of dtype and shape restrictions.
 
 The tool follows syntactic associated backend calls and expands the pinned `dequant_op_quant!` and `dequant_op_flow!` macros.
-It identifies 32 methods with possible paths to explicit declines or panic declarations.
+It identifies 29 methods with possible paths to explicit declines or panic declarations.
 This number is not an unsupported-operation count. Some paths represent expected invalid-input errors or conditional restrictions.
 
 The analysis does not resolve method types, evaluate conditional compilation, or expand other macros and free helper functions.
@@ -322,6 +322,37 @@ The two new entries pass the host spill audit, and all three guest-compiled modu
 The complete D3OS operator suite passes. These results add no workload-throughput or compile-time parity measurement.
 Protocol 30 requires a matching driver, SDK, application image, and portable bundle.
 
+## Native vector-selection updates
+
+The native backend now supports all five FP32 and I32 `select_assign` update modes.
+Assignment, multiplication, minimum, and maximum join the existing addition path.
+The index vector becomes a signed-stride broadcast view across the other tensor dimensions.
+The operation reuses resident scatter, including its private destination copy and four-byte bounds status.
+This composition requires no index expansion kernel, tensor readback, or additional portable entry.
+Protocol 30, 66 kernel profiles, and the 212-entry bundle remain unchanged.
+
+The shared corpus checks all three axes, offset and reversed index vectors, reversed tensor views, and retained inputs.
+It covers update lengths 1, 127, 128, and 129, FP32 IEEE values, full-range I32 arithmetic, and empty FP32 updates.
+Fifteen independent weighted gradient cases check both input derivatives, including minimum and maximum ties.
+A rank-eight case checks the broadcast index view across singleton dimensions.
+The repeated-index corpus checks addition, multiplication, minimum, and maximum with exact, order-independent references.
+It excludes duplicate assignment and duplicate gradients, whose public contracts are undefined.
+
+Linux CUDA passes the complete corpus on the physical RTX 4090 Laptop GPU.
+The explicit Flex CPU backend passes the finite corpus.
+Its strict IEEE run retains the same signed-zero minimum difference as the scatter diagnostic.
+
+D3OS passes the same complete public corpus on the same GPU, with 4 GiB per VM.
+Its raw checks cover all ten dtype/update combinations and retain the original index storage, including neighboring guards.
+The checks use a nonzero index offset and stride -2, with zero broadcast strides across the other dimensions.
+Native counters report no tensor uploads and one four-byte bounds read per nonempty operation.
+Invalid indices return recoverable errors. Empty FP32 and I32 updates enqueue no GPU work.
+The full native operator suite also passes, including the refactored scatter corpus.
+
+All three guest-compiled modules match their host audit hashes, and the portable bundle is byte-identical to the preceding checkpoint.
+This step adds operation coverage without a new throughput or compile-time parity measurement.
+Quantized selection-update execution remains unverified across the supported format matrix.
+
 ## Empty quantized diagnostics
 
 An empty Q8 tensor with an explicit unit scale round-trips through quantized records on both D3OS and Linux CUDA.
@@ -338,7 +369,7 @@ Other quantization formats and layouts still require separate coverage.
 ## Remaining implementation areas
 
 The unresolved work includes ordinary dtypes, complete integer arithmetic, matrix products for further dtypes, and additional floating-point operations.
-Further sorting and compaction dtypes, multidimensional indexing, selection updates, further convolution variants, deformable convolution, and interpolation also require coverage.
+Further sorting and compaction dtypes, multidimensional indexing, further convolution variants, deformable convolution, and interpolation also require coverage.
 Compaction formats beyond the checked Q8 cases remain unverified.
 Broadcast cross-product gradients, graph capture, profiling, memory capabilities, records, and observable errors require matched Linux capability checks.
 The current layout also restricts rank to eight and extents to signed 32-bit values.
@@ -426,6 +457,15 @@ python3 tools/nvidia/linux-reference.py \
   --burn-scatter-updates tools/mnist-benchmark/target/release/scatter_updates
 ```
 
+Run the vector-selection corpus with the same executable:
+
+```bash
+python3 tools/nvidia/linux-reference.py \
+  --directory target/nvidia/linux-burn-select-updates \
+  --burn-scatter-updates tools/mnist-benchmark/target/release/scatter_updates \
+  --burn-scatter-updates-select
+```
+
 Run each empty quantized diagnostic in a separate Linux VM:
 
 ```bash
@@ -469,5 +509,8 @@ The ordered scatter evidence lives under `target/nvidia/burn-backend-validation/
 The audit directory contains `traits-ordered-scatter.json`, `ordered-scatter-comparison.json`, and `ordered-scatter-section-comparison.json`.
 The empty quantized diagnostics live under `linux-quantized-empty-final-direct/`, `linux-quantized-empty-final-select/`, and `linux-quantized-empty-final-mask/`.
 The native scatter run contains the corresponding D3OS diagnostics.
+The vector-selection evidence lives under `target/nvidia/burn-backend-validation/select-updates-first/` and `target/nvidia/burn-backend-audit/linux-select-updates-ieee/`.
+The refactored scatter comparison lives under `target/nvidia/burn-backend-audit/linux-scatter-updates-refactored/`.
+The audit directory contains `traits-select-updates.json`, `select-updates-comparison.json`, and separate Flex CPU diagnostics.
 Manifests record the shared validation source hashes, executable hashes, and execution backend.
 These generated local artifacts are not Git-tracked. The probes and audit tool are tracked for reproduction.

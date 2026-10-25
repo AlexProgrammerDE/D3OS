@@ -2,8 +2,8 @@
 use alloc::{format, string::String, vec, vec::Vec};
 use d3os_ai::{
     burn::{
-        backend::{Shape, TensorData},
-        tensor::IndexingUpdateOp,
+        backend::{DType, Shape, TensorData},
+        tensor::{IndexingUpdateOp, Slice},
     },
     native::{NativeTensor, layout::Layout},
 };
@@ -19,8 +19,90 @@ fn update(a: u32, b: u32, op: Scatter) -> u32 {
         Scatter::IntMultiply => a.wrapping_mul(b),
         Scatter::IntMin => (a as i32).min(b as i32) as u32,
         Scatter::IntMax => (a as i32).max(b as i32) as u32,
+        Scatter::FloatAdd => (f32::from_bits(a) + f32::from_bits(b)).to_bits(),
+        Scatter::IntAdd => a.wrapping_add(b),
         _ => unreachable!(),
     }
+}
+
+fn selection(backend: &Nvidia) -> Result<(), String> {
+    let guard_ids = vec![-88i32, 0, -88, 4, -88, 1, -88, 4, -88];
+    let original = NativeTensor::from_data(TensorData::new(guard_ids.clone(), [9])).map_err(|e| format!("{e}"))?;
+    let indices = original
+        .clone()
+        .slice(&[Slice::new(1, Some(8), 2)])
+        .and_then(|t| t.flip(&[0]))
+        .map_err(|e| format!("{e}"))?;
+    for (dtype, modes) in [
+        (
+            DType::F32,
+            [
+                Scatter::FloatAdd,
+                Scatter::FloatAssign,
+                Scatter::FloatMultiply,
+                Scatter::FloatMin,
+                Scatter::FloatMax,
+            ],
+        ),
+        (
+            DType::I32,
+            [Scatter::IntAdd, Scatter::IntAssign, Scatter::IntMultiply, Scatter::IntMin, Scatter::IntMax],
+        ),
+    ] {
+        let word = |n: u32| if dtype == DType::F32 { (n as f32).to_bits() } else { n };
+        let data = NativeTensor::full(Shape::new([3, 2, 5]), dtype, word(3)).map_err(|e| format!("{e}"))?;
+        let values = NativeTensor::full(Shape::new([3, 2, 4]), dtype, word(2))
+            .and_then(|t| t.flip(&[0, 2]))
+            .map_err(|e| format!("{e}"))?;
+        for (update_op, mode) in [
+            IndexingUpdateOp::Add,
+            IndexingUpdateOp::Assign,
+            IndexingUpdateOp::Mul,
+            IndexingUpdateOp::Min,
+            IndexingUpdateOp::Max,
+        ]
+        .into_iter()
+        .zip(modes)
+        {
+            let before = backend.service_profile().map_err(|e| format!("{e}"))?;
+            let output = backend
+                .with_commands(|| data.select_update(2, &indices, &values, update_op))
+                .map_err(|e| format!("{e}"))?;
+            super::dispatch::resident(backend, &before, 1)?;
+            let mut row = vec![word(3); 5];
+            for id in [4, 1, 4, 0] {
+                row[id] = update(row[id], word(2), mode);
+            }
+            let actual = output.read().map_err(|e| format!("{e}"))?;
+            let expected: Vec<_> = (0..30).map(|i| row[i % 5]).collect();
+            if actual.as_bytes() != expected.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>() {
+                return Err(format!("native vector selection {mode:?}"));
+            }
+            for id in [-1i32, 5] {
+                let invalid = NativeTensor::from_data(TensorData::new(vec![id; 4], [4])).map_err(|e| format!("{e}"))?;
+                if !matches!(data.select_update(2, &invalid, &values, update_op), Err(Error::InvalidParameter)) {
+                    return Err(String::from("vector selection accepted an invalid index"));
+                }
+            }
+            let empty = NativeTensor::from_data(TensorData::new(Vec::<i32>::new(), [0])).map_err(|e| format!("{e}"))?;
+            let no_values = NativeTensor::full(Shape::new([3, 2, 0]), dtype, 0).map_err(|e| format!("{e}"))?;
+            let before = backend.queue_profile().map_err(|e| format!("{e}"))?;
+            let output = data.select_update(2, &empty, &no_values, update_op).map_err(|e| format!("{e}"))?;
+            if backend.queue_profile().map_err(|e| format!("{e}"))?.launches != before.launches
+                || output.read().map_err(|e| format!("{e}"))?.as_bytes() != vec![word(3); 30].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>()
+            {
+                return Err(String::from("empty vector selection changed data or launched work"));
+            }
+        }
+    }
+    let preserved = original.read().map_err(|e| format!("{e}"))?;
+    if preserved.as_slice::<i32>().map_err(|e| format!("{e:?}"))? != guard_ids {
+        return Err(String::from("vector selection changed index storage or guards"));
+    }
+    crate::report(format_args!(
+        "NVIDIA_BURN_SELECT_UPDATES_OK modes=10 index_view=offset_negative_stride broadcast_indices=true resident=true status_reads=1 invalid_indices=recoverable empty=no_launch"
+    ));
+    Ok(())
 }
 
 fn guarded(backend: &Nvidia) -> Result<(), String> {
@@ -145,6 +227,7 @@ fn lifetime(backend: &Nvidia) -> Result<(), String> {
 pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     guarded(backend)?;
     lifetime(backend)?;
+    selection(backend)?;
     crate::report(format_args!(
         "NVIDIA_BURN_ORDERED_SCATTER_OK modes=8 guards=ok duplicates=ordered rows=129 updates=257 invalid_indices=recoverable resident=true status_reads=1 queued_lifetime=verified empty=no_launch"
     ));
