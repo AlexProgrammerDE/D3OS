@@ -15,6 +15,7 @@ fn main() {
         "burn-random-common.rs",
         "burn-pooling-common.rs",
         "burn-interpolate-common.rs",
+        "burn-spatial-common.rs",
         "quantized.rs",
         "quantized-vector.rs",
         "quad.rs",
@@ -167,6 +168,45 @@ fn main() {
             );
         }
     }
+    println!("cargo:rerun-if-changed=src/burn-spatial.rs.in");
+    let spatial = fs::read_to_string("src/burn-spatial.rs.in").expect("read spatial source");
+    let names = [
+        "batch",
+        "channels",
+        "depth",
+        "height",
+        "width",
+        "_outputs",
+        "kd",
+        "kh",
+        "kw",
+        "gd",
+        "gh",
+        "gw",
+        "sd",
+        "sh",
+        "sw",
+        "pd",
+        "ph",
+        "pw",
+        "dd",
+        "dh",
+        "dw",
+        "group_flags",
+        "_end_d",
+        "_end_h",
+        "_end_w",
+        "extent",
+        "offset",
+        "stride_n",
+        "stride_c",
+        "stride_d",
+        "stride_h",
+        "stride_w",
+    ];
+    let geometry = names[..25].iter().map(|n| format!("{n}:u32")).collect::<Vec<_>>().join(",");
+    let parameters = names.iter().map(|n| format!("{n}:u32")).collect::<Vec<_>>().join(",");
+    source.push_str(&spatial.replace("WINDOW_PARAMETERS", &parameters).replace("GEOMETRY_PARAMETERS", &geometry));
     println!("cargo:rerun-if-changed=src/burn-convolution.rs.in");
     let convolution = fs::read_to_string("src/burn-convolution.rs.in").expect("read convolution source");
     let geometry = [

@@ -1,0 +1,45 @@
+#[cutile::entry()]
+unsafe fn burn_spatial_windows(input:*const u32,output:*mut u32,WINDOW_PARAMETERS) {
+    let groups=group_flags&0x7fffffffu32;
+    let ci=channels/groups;let volume=kd*kh*kw;let inner=ci*volume;let spatial=gd*gh*gw;
+    let count=batch*groups*inner*spatial;
+    let raw=indices();let mask=lt_tile(raw,broadcast_scalar(count,shape![128]));let i=select(mask,raw,broadcast_scalar(0u32,shape![128]));
+    let position=i%broadcast_scalar(spatial,shape![128]);let k=i/broadcast_scalar(spatial,shape![128])%broadcast_scalar(inner,shape![128]);
+    let group=i/broadcast_scalar(spatial*inner,shape![128])%broadcast_scalar(groups,shape![128]);let n=i/broadcast_scalar(spatial*inner*groups,shape![128]);
+    let c=group*broadcast_scalar(ci,shape![128])+k/broadcast_scalar(volume,shape![128]);
+    let (z,mz)=spatial_coordinate(position/broadcast_scalar(gh*gw,shape![128]),k/broadcast_scalar(kh*kw,shape![128])%broadcast_scalar(kd,shape![128]),sd,dd,pd,depth);
+    let (y,my)=spatial_coordinate(position/broadcast_scalar(gw,shape![128])%broadcast_scalar(gh,shape![128]),k/broadcast_scalar(kw,shape![128])%broadcast_scalar(kh,shape![128]),sh,dh,ph,height);
+    let (x,mx)=spatial_coordinate(position%broadcast_scalar(gw,shape![128]),k%broadcast_scalar(kw,shape![128]),sw,dw,pw,width);
+    let n:Tile<i32,{[128]}>=bitcast(n);let c:Tile<i32,{[128]}>=bitcast(c);
+    let address=broadcast_scalar(signed(offset),shape![128])+n*broadcast_scalar(signed(stride_n),shape![128])+c*broadcast_scalar(signed(stride_c),shape![128])+z*broadcast_scalar(signed(stride_d),shape![128])+y*broadcast_scalar(signed(stride_h),shape![128])+x*broadcast_scalar(signed(stride_w),shape![128]);
+    let address:Tile<u32,{[128]}>=bitcast(address);
+    let value=unsafe {read_tile(input,address,mask&mz&my&mx&lt_tile(address,broadcast_scalar(extent,shape![128])),0u32)};
+    unsafe {write_tile(output,raw,value,mask)};
+}
+#[cutile::entry()]
+unsafe fn burn_spatial_fold(input:*const f32,output:*mut f32,GEOMETRY_PARAMETERS) {
+    let groups=group_flags&0x7fffffffu32;
+    let count=batch*channels*depth*height*width;
+    let raw=indices();let mask=lt_tile(raw,broadcast_scalar(count,shape![128]));let i=select(mask,raw,broadcast_scalar(0u32,shape![128]));
+    let x=i%broadcast_scalar(width,shape![128]);let y=i/broadcast_scalar(width,shape![128])%broadcast_scalar(height,shape![128]);let z=i/broadcast_scalar(width*height,shape![128])%broadcast_scalar(depth,shape![128]);
+    let c=i/broadcast_scalar(width*height*depth,shape![128])%broadcast_scalar(channels,shape![128]);let n=i/broadcast_scalar(width*height*depth*channels,shape![128]);
+    let ci=channels/groups;let inner=ci*kd*kh*kw;let spatial=gd*gh*gw;
+    let group=c/broadcast_scalar(ci,shape![128]);let local=c%broadcast_scalar(ci,shape![128]);
+    let mut sum=broadcast_scalar(0f32,shape![128]);let mut kz=0u32;
+    while kz<kd {
+        let (oz,mz)=spatial_inverse(z,kz,sd,dd,pd,gd);let mut ky=0u32;
+        while ky<kh {
+            let (oy,my)=spatial_inverse(y,ky,sh,dh,ph,gh);let mut kx=0u32;
+            while kx<kw {
+                let (ox,mx)=spatial_inverse(x,kx,sw,dw,pw,gw);
+                let k=local*broadcast_scalar(kd*kh*kw,shape![128])+broadcast_scalar((kz*kh+ky)*kw+kx,shape![128]);
+                let address=((n*broadcast_scalar(groups,shape![128])+group)*broadcast_scalar(inner,shape![128])+k)*broadcast_scalar(spatial,shape![128])+(oz*broadcast_scalar(gh,shape![128])+oy)*broadcast_scalar(gw,shape![128])+ox;
+                let value=unsafe {read_tile(input,address,mask&mz&my&mx,0f32)};
+                sum=addf(sum,value,rounding::NearestEven,ftz::Disabled);kx=kx+1u32;
+            }
+            ky=ky+1u32;
+        }
+        kz=kz+1u32;
+    }
+    unsafe {write_tile(output,raw,sum,mask)};
+}

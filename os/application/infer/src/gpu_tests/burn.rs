@@ -25,6 +25,7 @@ mod scatter;
 mod scatter_updates;
 mod selection;
 mod sort;
+mod spatial_convolution;
 mod storage;
 mod updates;
 mod words;
@@ -150,6 +151,21 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     ));
     crate::report(format_args!(
         "BURN_ERF_CONFORMANCE_OK os=d3os backend=native erf_ulp=8 erf=forward,backward gelu=forward,backward shared_views=verified"
+    ));
+    spatial_convolution::run(backend)?;
+    for exact in [false, true] {
+        let (forward, gradients) = d3os_ai::validation::spatial_convolution::check(&device, false, None, exact, false)?;
+        crate::report(format_args!(
+            "BURN_SPATIAL_CONVOLUTION_OK os=d3os backend=native forward={forward} gradients={gradients} empty=false selected=None tf32_exact_inputs={exact} empty_backward=false reference=f64 signed_views=true shared=true"
+        ));
+    }
+    let (forward, gradients) = d3os_ai::validation::spatial_convolution::check(&device, true, None, false, false)?;
+    crate::report(format_args!(
+        "BURN_SPATIAL_CONVOLUTION_OK os=d3os backend=native forward={forward} gradients={gradients} empty=true selected=None tf32_exact_inputs=false empty_backward=false reference=f64 signed_views=true shared=true"
+    ));
+    let (forward, gradients) = d3os_ai::validation::spatial_convolution::check(&device, true, None, false, true)?;
+    crate::report(format_args!(
+        "BURN_SPATIAL_CONVOLUTION_OK os=d3os backend=native forward={forward} gradients={gradients} empty=true selected=None tf32_exact_inputs=false empty_backward=true reference=f64 signed_views=true shared=true"
     ));
     interpolate::run(backend)?;
     let forwards = d3os_ai::validation::interpolate::check_forward(&device, true)?;

@@ -1181,3 +1181,55 @@ fn interpolation_contract_checks_transpose_views_and_reduced_coordinates() {
         }
     }
 }
+
+#[test]
+fn spatial_windows_and_fold_validate_grouped_shapes_and_signed_views() {
+    use d3os_nvidia::compute::spatial_convolution as spatial;
+    let mut p = [0u32; 32];
+    p[..25].copy_from_slice(&[2, 4, 4, 5, 7, 6, 2, 3, 2, 3, 3, 3, 2, 1, 2, 1, 1, 0, 1, 2, 1, 2, 1, 1, 0]);
+    let elements = 2 * 4 * 4 * 5 * 7;
+    p[25] = elements;
+    p[26] = elements - 1;
+    p[27..].copy_from_slice(&[(-560i32) as u32, (-140i32) as u32, (-35i32) as u32, (-7i32) as u32, (-1i32) as u32]);
+    let (g, ranges) = spatial::validate_windows(&p).unwrap();
+    assert_eq!((g.images, g.weights, g.grid, g.columns), (1120, 144, 324, 2592));
+    assert_eq!(ranges, [1120, 2592]);
+    let window = Kernel::SpatialWindows.work(&p).unwrap();
+    let fold = Kernel::SpatialFold.work(&p[..25]).unwrap();
+    assert_eq!((window.pointers, window.output, window.in_place), (2, 1, false));
+    assert_eq!(fold.extents[..2], [2592, 1120]);
+    assert!(Kernel::SpatialWindows.allocates_output() && Kernel::SpatialFold.allocates_output());
+    for (field, value) in [(1, 5), (5, 5), (9, 4), (12, 0), (18, 0), (21, 0), (25, elements - 1), (26, elements), (31, 1)] {
+        let mut bad = p;
+        bad[field] = value;
+        assert!(Kernel::SpatialWindows.work(&bad).is_err(), "field={field}");
+    }
+    let mut empty = p;
+    empty[0] = 0;
+    assert_eq!(spatial::validate_windows(&empty).unwrap().0.columns, 0);
+    assert!(Kernel::SpatialWindows.work(&empty).is_err());
+    assert!(Kernel::SpatialFold.work(&empty[..25]).is_err());
+}
+
+#[test]
+fn spatial_transpose_accepts_extra_padding_beyond_stride_without_inverse_rounding() {
+    use d3os_nvidia::compute::spatial_convolution as spatial;
+    let geometry = [1, 2, 1, 3, 6, 3, 1, 1, 1, 1, 1, 3, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1 | spatial::TRANSPOSED, 0, 2, 3];
+    let g = spatial::geometry(&geometry).unwrap();
+    assert_eq!((g.images, g.grid, g.columns), (36, 9, 6));
+    for input in [1u32, 2, 65537, i32::MAX as u32] {
+        for kernel in [1u32, 3, 65539] {
+            for stride in [1u32, 2, 65537] {
+                for dilation in [1u32, 3] {
+                    let reference = i128::from(input - 1) * i128::from(stride) + i128::from(kernel - 1) * i128::from(dilation) + 6 - 4;
+                    let actual = spatial::transpose_extent(input, kernel, stride, 2, 5, dilation);
+                    if reference > 0 && reference <= i128::from(i32::MAX) {
+                        assert_eq!(actual.unwrap() as i128, reference);
+                    } else {
+                        assert!(actual.is_err());
+                    }
+                }
+            }
+        }
+    }
+}

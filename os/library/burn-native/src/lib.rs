@@ -16,6 +16,7 @@ pub mod quantization;
 pub mod random;
 pub mod range;
 mod sort;
+pub mod spatial_convolution;
 mod storage;
 mod tensor;
 mod updates;

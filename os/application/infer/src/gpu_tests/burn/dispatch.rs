@@ -71,7 +71,7 @@ fn tensors_and_errors(backend: &Nvidia, device: &Device) -> Result<(), String> {
         return Err(String::from("Burn indexed error did not recover"));
     }
     // An acknowledged error in an optional bias remains the original root.
-    // The unsupported consumer must not create a second, unrelated error.
+    // The consumer must not create a second, unrelated error.
     let failed_bias = invalid_gather(source.clone().sum(), device);
     if device.sync().is_ok() {
         return Err(String::from("Burn optional input failure was not reported"));

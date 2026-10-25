@@ -17,6 +17,7 @@ pub mod scan;
 pub mod scatter_updates;
 pub mod sort;
 pub mod storage;
+pub mod spatial_convolution;
 use alloc::{format, string::String};
 use burn::{
     module::{Module, Param},

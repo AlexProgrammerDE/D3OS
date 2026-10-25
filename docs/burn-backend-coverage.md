@@ -13,12 +13,12 @@ It also includes float, integer, boolean, quantized, module, activation, transac
 Each method records its signature, source location, conditional compilation attributes, and implementation or inherited default.
 Associated types and source SHA-256 hashes accompany the report.
 
-The current inventory contains 484 methods: 264 native overrides and 220 inherited defaults.
+The current inventory contains 484 methods: 273 native overrides and 211 inherited defaults.
 All required methods have declarations or implementations. This count does not establish runtime support.
-The report also records 119 native helper bodies for manual review of dtype and shape restrictions.
+The report also records 125 native helper bodies for manual review of dtype and shape restrictions.
 
 The tool follows syntactic associated backend calls and expands the pinned `dequant_op_quant!` and `dequant_op_flow!` macros.
-It identifies 14 methods with possible paths to explicit declines or panic declarations.
+It identifies 10 methods with possible paths to explicit declines or panic declarations.
 This number is not an unsupported-operation count. Some paths represent expected invalid-input errors or conditional restrictions.
 
 The analysis does not resolve method types, evaluate conditional compilation, or expand other macros and free helper functions.
@@ -252,6 +252,54 @@ These failed Linux diagnostics remain separate from the passing compact result.
 The first D3OS run panicked during compiler startup when a scheduler inbox filled, before interpolation execution.
 The [scheduler correction](nvidia-performance.md#scheduler-inbox-saturation-during-compilation) replaces that bounded delivery path.
 D3OS passes the complete public interpolation corpus, all raw native checks, and the existing operator and quantization regressions.
+All three modules compiled inside D3OS match their host audit hashes.
+These correctness checks do not establish execution-performance or compile-time parity.
+
+## Native 3D and transposed convolutions
+
+Protocol 36 adds FP32 3D convolution and transposed 1D/2D/3D convolutions through public Burn APIs.
+Their input and weight gradients use native implementations. Bias gradients use Burn's resident reduction defaults.
+The matching driver, SDK, application image, and portable bundle contain 235 inference entries and 71 compute profiles.
+All 233 earlier instruction entries and their constant sections remain byte-identical.
+
+Two new kernels extract canonical NCDHW windows and apply the transpose of that extraction.
+Matrix products reuse compensated TF32x3 Tensor Core kernels.
+Each group combines batch and spatial positions into one matrix dimension.
+The backward fold gathers overlapping contributions without floating-point atomics.
+Intermediate columns, products, and gradients remain on the GPU.
+The explicit column workspace must fit the existing signed 32-bit layout limits and available device memory.
+
+The shared geometry supports grouped and depthwise convolutions, stride, dilation, and output padding.
+Transposed output padding can exceed the stride. An explicit input-shape calculation avoids inverse rounding assumptions in that case.
+The kernel computes spatial coordinates in 64 bits and clamps masked coordinates before signed view addressing.
+The new geometry and view fields fit the existing 32-scalar request without changing its structure.
+Normal 3D plans also accept asymmetric padding through backend operations.
+Burn's high-level `conv3d` function rejects asymmetric padding before backend dispatch, so the shared public corpus uses symmetric padding.
+
+The independent FP64 reference uses scalar convolution sums and analytic input, weight, and bias derivatives.
+Two host tests anchor volume orientation, transposed output padding, and centered finite differences across every checked geometry.
+Fourteen shape groups combine both view directions and optional bias into 56 forward and 140 gradient checks per numerical corpus.
+The 1D transposed API uses the same native spatial algebra, including direct input and weight gradients.
+The general FP32 corpus uses values outside TF32's exact representation.
+A separate corpus uses dyadic inputs exactly representable in TF32.
+Both use the same `3e-5 * (1 + abs(reference))` tolerance.
+Another 56 cases check empty batches, with a separate set of 140 empty-batch gradient checks.
+D3OS passes the empty-batch gradient corpus, including exact zero weight and bias gradients.
+
+The raw native suite contains 56 guarded window/fold cases, including broadcast and negative-stride reads.
+It checks source preservation, complete writers, resident counters, queued source lifetime, and invalid geometry rejection before launch.
+Both new entries pass the spill audit without local loads or stores.
+
+Linux CUDA passes 56 forward and 140 gradient checks with TF32-exact inputs, plus 56 empty forward cases.
+Its empty-batch backward diagnostic returns `0.96774197` for a weight gradient whose independent reference is zero.
+This failed diagnostic remains separate from the passing empty forward result.
+Its general FP32 run fails at the first forward output, returning `0.2412498` instead of `0.24037458584038518`.
+A scalar diagnostic reproduces that result after rounding operands to ten fraction bits.
+FP16 rounding also reproduces it for these bounded operands, so this sample alone does not identify Linux's selected instruction type.
+The strict failed run remains separate from the passing exact-input corpus.
+These results do not establish strict general FP32 conformance on Linux.
+
+D3OS passes both complete numerical corpora, all empty and guarded cases, and the existing operator and quantization regressions.
 All three modules compiled inside D3OS match their host audit hashes.
 These correctness checks do not establish execution-performance or compile-time parity.
 
@@ -671,7 +719,8 @@ Other quantization formats and layouts still require separate coverage.
 ## Remaining implementation areas
 
 The unresolved work includes ordinary dtype arithmetic, quantized and boolean-producing conversions, complete integer arithmetic, further matrix dtypes, and additional floating-point operations.
-Further sorting and compaction dtypes, further convolution variants, and deformable convolution also require coverage.
+Further sorting and compaction dtypes and deformable convolution also require coverage.
+Further convolution dtypes and numerical domains beyond the checked finite corpus remain unresolved.
 Compaction formats beyond the checked Q8 cases remain unverified.
 Broadcast cross-product gradients, graph capture, profiling, memory capabilities, records, and observable errors require matched Linux capability checks.
 The current layout also restricts rank to eight and extents to signed 32-bit values.
@@ -692,7 +741,7 @@ Build the Linux probes with their default CUDA feature:
 
 ```bash
 cd tools/mnist-benchmark
-cargo build --release --locked --bin capabilities --bin erf --bin integer --bin integer_matrix --bin scan --bin sort --bin cross --bin compaction --bin scatter_updates --bin quantized_empty --bin nd_indexing --bin storage --bin conversions --bin remainder --bin inverse --bin interpolate
+cargo build --release --locked --bin capabilities --bin erf --bin integer --bin integer_matrix --bin scan --bin sort --bin cross --bin compaction --bin scatter_updates --bin quantized_empty --bin nd_indexing --bin storage --bin conversions --bin remainder --bin inverse --bin interpolate --bin spatial_convolution
 cd ../..
 ```
 
@@ -875,6 +924,28 @@ python3 tools/nvidia/linux-reference.py \
 The compact flag excludes only the two wide-coordinate shape groups. D3OS retains all ten groups.
 For isolated diagnostics, use fresh directories with cases `empty`, `ieee`, `linear_backward`, `cubic_backward`, and `lanczos3_backward`.
 
+Run the strict spatial-convolution comparison first and retain its FP32 diagnostic:
+
+```bash
+python3 tools/nvidia/linux-reference.py \
+  --directory target/nvidia/linux-burn-spatial-strict \
+  --burn-spatial-convolution tools/mnist-benchmark/target/release/spatial_convolution
+```
+
+Run the separate TF32-exact input corpus:
+
+```bash
+python3 tools/nvidia/linux-reference.py \
+  --directory target/nvidia/linux-burn-spatial-exact \
+  --burn-spatial-convolution tools/mnist-benchmark/target/release/spatial_convolution \
+  --burn-spatial-tf32-exact
+```
+
+The flag changes the checked inputs. It does not change the numerical tolerance or establish general FP32 conformance.
+For empty diagnostics, use fresh directories with `--burn-spatial-empty` and `--burn-spatial-empty-backward` separately.
+The `--burn-spatial-case` option selects one of the 14 shape groups for isolated diagnosis.
+D3OS retains both complete numerical corpora and both empty checks.
+
 Run the D3OS GPU suite with the matching production image and portable kernel bundle:
 
 ```bash
@@ -936,3 +1007,8 @@ The interpolation evidence lives under `target/nvidia/burn-backend-validation/in
 Its Linux counterparts use the `target/nvidia/burn-backend-audit/linux-interpolate-` prefix.
 The audit directory contains `traits-interpolate-final.json`, `interpolate-comparison.json`, and `interpolate-section-comparison.json`.
 The original scheduler panic and initial Lanczos scratch export remain in separate diagnostic directories.
+
+The spatial convolution evidence lives under `target/nvidia/burn-backend-validation/spatial-final/`.
+Its Linux counterparts use `target/nvidia/burn-backend-audit/linux-spatial-` with the `normal-final`, `exact-final`, `empty-final`, and `empty-backward-final` suffixes.
+The audit directory contains `traits-spatial-final.json`, `spatial-comparison.json`, and `spatial-section-comparison.json`.
+Earlier 48-case runs remain separate from the final 56-case corpus.

@@ -40,18 +40,105 @@ impl ModuleOps<Self> for Native {
             bias_grad: bias.map(|b| BackendTensor::unsupported("deform_conv2d_backward", b.shape(), DType::F32, &[&failure], "deform_conv2d_backward")),
         }
     }
-    fn conv3d(x: FloatTensor<Self>, weight: FloatTensor<Self>, bias: Option<FloatTensor<Self>>, _options: ConvOptions<3>) -> FloatTensor<Self> {
-        unsupported_module("conv3d", &[&x, &weight], &[bias.as_ref()])
+    fn conv3d(x: FloatTensor<Self>, weight: FloatTensor<Self>, bias: Option<FloatTensor<Self>>, options: ConvOptions<3>) -> FloatTensor<Self> {
+        let mut refs = alloc::vec![&x, &weight];
+        if let Some(bias) = &bias {
+            refs.push(bias);
+        }
+        let shape = crate::spatial_convolution::SpatialConvolution::conv3d(x.shape(), weight.shape(), &options)
+            .map_or_else(|_| x.shape(), |p| p.output_shape().clone());
+        BackendTensor::apply("conv3d", shape, DType::F32, &refs, |v| v[0].conv3d(v[1], v.get(2).copied(), &options))
+    }
+    fn conv3d_x_backward(x: FloatTensor<Self>, weight: FloatTensor<Self>, grad: FloatTensor<Self>, options: ConvOptions<3>) -> FloatTensor<Self> {
+        BackendTensor::apply("conv3d_x_backward", x.shape(), DType::F32, &[&x, &weight, &grad], |v| {
+            v[0].conv3d_input_backward(v[1], v[2], &options)
+        })
+    }
+    fn conv3d_weight_backward(x: FloatTensor<Self>, weight: FloatTensor<Self>, grad: FloatTensor<Self>, options: ConvOptions<3>) -> FloatTensor<Self> {
+        BackendTensor::apply("conv3d_weight_backward", weight.shape(), DType::F32, &[&x, &weight, &grad], |v| {
+            v[0].conv3d_weight_backward(v[1], v[2], &options)
+        })
+    }
+    fn conv_transpose1d(
+        x: FloatTensor<Self>, weight: FloatTensor<Self>, bias: Option<FloatTensor<Self>>, options: ConvTransposeOptions<1>,
+    ) -> FloatTensor<Self> {
+        let mut refs = alloc::vec![&x, &weight];
+        if let Some(bias) = &bias {
+            refs.push(bias);
+        }
+        let shape = crate::spatial_convolution::SpatialConvolution::transpose(x.shape(), weight.shape(), &options)
+            .map_or_else(|_| x.shape(), |p| p.output_shape().clone());
+        BackendTensor::apply("conv_transpose1d", shape, DType::F32, &refs, |v| {
+            v[0].conv_transpose(v[1], v.get(2).copied(), &options)
+        })
+    }
+    fn conv_transpose1d_x_backward(weight: FloatTensor<Self>, grad: FloatTensor<Self>, options: ConvTransposeOptions<1>) -> FloatTensor<Self> {
+        let shape = crate::spatial_convolution::SpatialConvolution::transpose_input(weight.shape(), grad.shape(), &options)
+            .map_or_else(|_| grad.shape(), |p| p.input_shape().clone());
+        BackendTensor::apply("conv_transpose1d_x_backward", shape, DType::F32, &[&weight, &grad], |v| {
+            v[0].conv_transpose_input_backward(v[1], &options)
+        })
+    }
+    fn conv_transpose1d_weight_backward(
+        x: FloatTensor<Self>, weight: FloatTensor<Self>, grad: FloatTensor<Self>, options: ConvTransposeOptions<1>,
+    ) -> FloatTensor<Self> {
+        BackendTensor::apply("conv_transpose1d_weight_backward", weight.shape(), DType::F32, &[&x, &weight, &grad], |v| {
+            v[0].conv_transpose_weight_backward(v[1], v[2], &options)
+        })
     }
     fn conv_transpose2d(
-        x: FloatTensor<Self>, weight: FloatTensor<Self>, bias: Option<FloatTensor<Self>>, _options: ConvTransposeOptions<2>,
+        x: FloatTensor<Self>, weight: FloatTensor<Self>, bias: Option<FloatTensor<Self>>, options: ConvTransposeOptions<2>,
     ) -> FloatTensor<Self> {
-        unsupported_module("conv_transpose2d", &[&x, &weight], &[bias.as_ref()])
+        let mut refs = alloc::vec![&x, &weight];
+        if let Some(bias) = &bias {
+            refs.push(bias);
+        }
+        let shape = crate::spatial_convolution::SpatialConvolution::transpose(x.shape(), weight.shape(), &options)
+            .map_or_else(|_| x.shape(), |p| p.output_shape().clone());
+        BackendTensor::apply("conv_transpose2d", shape, DType::F32, &refs, |v| {
+            v[0].conv_transpose(v[1], v.get(2).copied(), &options)
+        })
+    }
+    fn conv_transpose2d_x_backward(weight: FloatTensor<Self>, grad: FloatTensor<Self>, options: ConvTransposeOptions<2>) -> FloatTensor<Self> {
+        let shape = crate::spatial_convolution::SpatialConvolution::transpose_input(weight.shape(), grad.shape(), &options)
+            .map_or_else(|_| grad.shape(), |p| p.input_shape().clone());
+        BackendTensor::apply("conv_transpose2d_x_backward", shape, DType::F32, &[&weight, &grad], |v| {
+            v[0].conv_transpose_input_backward(v[1], &options)
+        })
+    }
+    fn conv_transpose2d_weight_backward(
+        x: FloatTensor<Self>, weight: FloatTensor<Self>, grad: FloatTensor<Self>, options: ConvTransposeOptions<2>,
+    ) -> FloatTensor<Self> {
+        BackendTensor::apply("conv_transpose2d_weight_backward", weight.shape(), DType::F32, &[&x, &weight, &grad], |v| {
+            v[0].conv_transpose_weight_backward(v[1], v[2], &options)
+        })
     }
     fn conv_transpose3d(
-        x: FloatTensor<Self>, weight: FloatTensor<Self>, bias: Option<FloatTensor<Self>>, _options: ConvTransposeOptions<3>,
+        x: FloatTensor<Self>, weight: FloatTensor<Self>, bias: Option<FloatTensor<Self>>, options: ConvTransposeOptions<3>,
     ) -> FloatTensor<Self> {
-        unsupported_module("conv_transpose3d", &[&x, &weight], &[bias.as_ref()])
+        let mut refs = alloc::vec![&x, &weight];
+        if let Some(bias) = &bias {
+            refs.push(bias);
+        }
+        let shape = crate::spatial_convolution::SpatialConvolution::transpose(x.shape(), weight.shape(), &options)
+            .map_or_else(|_| x.shape(), |p| p.output_shape().clone());
+        BackendTensor::apply("conv_transpose3d", shape, DType::F32, &refs, |v| {
+            v[0].conv_transpose(v[1], v.get(2).copied(), &options)
+        })
+    }
+    fn conv_transpose3d_x_backward(weight: FloatTensor<Self>, grad: FloatTensor<Self>, options: ConvTransposeOptions<3>) -> FloatTensor<Self> {
+        let shape = crate::spatial_convolution::SpatialConvolution::transpose_input(weight.shape(), grad.shape(), &options)
+            .map_or_else(|_| grad.shape(), |p| p.input_shape().clone());
+        BackendTensor::apply("conv_transpose3d_x_backward", shape, DType::F32, &[&weight, &grad], |v| {
+            v[0].conv_transpose_input_backward(v[1], &options)
+        })
+    }
+    fn conv_transpose3d_weight_backward(
+        x: FloatTensor<Self>, weight: FloatTensor<Self>, grad: FloatTensor<Self>, options: ConvTransposeOptions<3>,
+    ) -> FloatTensor<Self> {
+        BackendTensor::apply("conv_transpose3d_weight_backward", weight.shape(), DType::F32, &[&x, &weight, &grad], |v| {
+            v[0].conv_transpose_weight_backward(v[1], v[2], &options)
+        })
     }
     fn avg_pool2d(
         x: FloatTensor<Self>, kernel_size: [usize; 2], stride: [usize; 2], padding: [usize; 2], count_include_pad: bool, ceil_mode: bool,

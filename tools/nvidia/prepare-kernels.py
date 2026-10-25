@@ -81,6 +81,8 @@ def audit(family, sass):
             "burn_scatter_ordered_f32",
             "burn_scatter_ordered_i32",
             "burn_cast",
+            "burn_spatial_windows",
+            "burn_spatial_fold",
             *(f"burn_interpolate_{mode}{direction}" for mode in ("nearest","exact","linear","cubic","lanczos3") for direction in ("","_backward")),
             "burn_storage_copy",
             "burn_storage_fill",

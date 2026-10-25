@@ -16,11 +16,12 @@ pub mod range;
 pub mod reduction;
 pub mod scan;
 pub mod sort;
+pub mod spatial_convolution;
 pub mod storage;
 pub mod updates;
 pub mod words;
 
-pub const VERSION: u32 = 35;
+pub const VERSION: u32 = 36;
 /// END_COMMANDS flag: an inner recording scope joins its parent's completion.
 /// The outermost scope always waits. Zero retains synchronous nested scopes.
 pub const DEFER_NESTED_COMPLETION: u64 = 1;
@@ -54,7 +55,7 @@ pub struct MemoryProfile {
     pub device_cached_bytes: u64,
     pub device_retired_bytes: u64,
 }
-pub const KERNEL_COUNT: usize = 69;
+pub const KERNEL_COUNT: usize = 71;
 
 /// CPU service costs by request operation, including queue work within it.
 #[derive(Clone, Copy, Debug, Default)]
@@ -181,9 +182,11 @@ pub enum Kernel {
     TensorStorage = 66,
     TensorCast = 67,
     Interpolate = 68,
+    SpatialWindows = 69,
+    SpatialFold = 70,
 }
 
-const _: () = assert!(Kernel::Interpolate as usize + 1 == KERNEL_COUNT);
+const _: () = assert!(Kernel::SpatialFold as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -251,6 +254,8 @@ impl Kernel {
                 | Self::TensorStorage
                 | Self::TensorCast
                 | Self::Interpolate
+                | Self::SpatialWindows
+                | Self::SpatialFold
                 | Self::Im2col
                 | Self::MaxPool
                 | Self::Project
@@ -351,6 +356,8 @@ impl Kernel {
             66 => Self::TensorStorage,
             67 => Self::TensorCast,
             68 => Self::Interpolate,
+            69 => Self::SpatialWindows,
+            70 => Self::SpatialFold,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -426,6 +433,8 @@ impl Kernel {
             Self::TensorStorage => "burn_storage_copy",
             Self::TensorCast => "burn_cast",
             Self::Interpolate => "burn_interpolate_nearest",
+            Self::SpatialWindows => "burn_spatial_windows",
+            Self::SpatialFold => "burn_spatial_fold",
         }
     }
 
@@ -545,6 +554,22 @@ impl Kernel {
                 }
                 extents[..2].copy_from_slice(&ranges);
                 (count, 2, 1, false)
+            }
+            (Self::SpatialWindows, p) => {
+                let (geometry, ranges) = spatial_convolution::validate_windows(p)?;
+                if geometry.columns == 0 {
+                    return Err(Error::InvalidField);
+                }
+                extents[..2].copy_from_slice(&ranges);
+                (geometry.columns, 2, 1, false)
+            }
+            (Self::SpatialFold, p) => {
+                let geometry = spatial_convolution::geometry(p)?;
+                if geometry.images == 0 {
+                    return Err(Error::InvalidField);
+                }
+                extents[..2].copy_from_slice(&[u64::from(geometry.columns), u64::from(geometry.images)]);
+                (geometry.images, 2, 1, false)
             }
             (Self::Conv2d, p) => {
                 let (geometry, ranges) = convolution::validate(p)?;
