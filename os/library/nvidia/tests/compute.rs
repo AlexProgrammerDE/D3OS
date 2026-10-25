@@ -1233,3 +1233,38 @@ fn spatial_transpose_accepts_extra_padding_beyond_stride_without_inverse_roundin
         }
     }
 }
+
+#[test]
+fn deform_geometry_validates_crossing_group_partitions_and_paired_outputs() {
+    use d3os_nvidia::compute::deform;
+    let p = [2, 6, 5, 7, 4, 2, 3, 4, 7, 1, 1, 0, 1, 1, 1, 2, 3, 1];
+    let g = deform::geometry(&p).unwrap();
+    assert_eq!(
+        (g.images, g.weights, g.outputs, g.columns, g.offsets, g.masks, g.coordinates),
+        (420, 72, 224, 2016, 2016, 1008, 3024)
+    );
+    let windows = Kernel::DeformWindows.work(&p).unwrap();
+    let coordinates = Kernel::DeformCoordinates.work(&p).unwrap();
+    let input = Kernel::DeformInput.work(&p).unwrap();
+    assert_eq!(windows.extents[..4], [420, 2016, 1008, 2016]);
+    assert_eq!(coordinates.extents[..5], [420, 2016, 1008, 2016, 3024]);
+    assert_eq!(input.extents[..4], [2016, 1008, 2016, 420]);
+    assert!(Kernel::DeformWindows.allocates_output() && Kernel::DeformCoordinates.allocates_output());
+    assert!(!Kernel::DeformInput.allocates_output());
+    assert!(coordinates.validate_aliases(&[0x10000, 0x20000, 0x30000, 0x40000, 0x50000]).is_ok());
+    assert!(coordinates.validate_aliases(&[0x10000, 0x20000, 0x30000, 0x40000, 0x40004]).is_err());
+    for (field, value) in [(1, 5), (4, 5), (7, 5), (9, 0), (13, 0), (15, 0), (16, 4), (17, 2)] {
+        let mut invalid = p;
+        invalid[field] = value;
+        assert!(Kernel::DeformWindows.work(&invalid).is_err(), "field={field}");
+    }
+    let mut plain = p;
+    plain[17] = 0;
+    let work = Kernel::DeformCoordinates.work(&plain).unwrap();
+    assert_eq!(work.extents[2], 1);
+    assert_eq!(work.extents[4], 2016);
+    let mut empty = p;
+    empty[0] = 0;
+    assert_eq!(deform::geometry(&empty).unwrap().columns, 0);
+    assert!(Kernel::DeformWindows.work(&empty).is_err());
+}

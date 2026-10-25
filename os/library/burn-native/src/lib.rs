@@ -6,6 +6,7 @@ extern crate alloc;
 pub mod backend;
 mod compaction;
 pub mod convolution;
+pub mod deform;
 mod device;
 mod indexing;
 pub mod interpolate;

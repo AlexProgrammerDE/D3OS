@@ -1,0 +1,52 @@
+#[cutile::entry()]
+unsafe fn burn_deform_windows(input:*const f32,offset:*const f32,mask_values:*const f32,output:*mut f32,DEFORM_PARAMETERS) {
+    let spatial=oh*ow;let kernel=kh*kw;let count=channels*kernel*batch*spatial;
+    let raw=indices();let active=lt_tile(raw,broadcast_scalar(count,shape![128]));let i=select(active,raw,broadcast_scalar(0u32,shape![128]));
+    let s=i%broadcast_scalar(spatial,shape![128]);let n=i/broadcast_scalar(spatial,shape![128])%broadcast_scalar(batch,shape![128]);let k=i/broadcast_scalar(spatial*batch,shape![128])%broadcast_scalar(kernel,shape![128]);let c=i/broadcast_scalar(spatial*batch*kernel,shape![128]);
+    let og=c/broadcast_scalar(channels/offset_groups,shape![128]);let m=((n*broadcast_scalar(offset_groups,shape![128])+og)*broadcast_scalar(kernel,shape![128])+k)*broadcast_scalar(spatial,shape![128])+s;
+    let o=(m/broadcast_scalar(spatial,shape![128]))*broadcast_scalar(2u32*spatial,shape![128])+s;
+    let oy=unsafe{read_tile(offset,o,active,0f32)};let ox=unsafe{read_tile(offset,o+broadcast_scalar(spatial,shape![128]),active,0f32)};
+    let y=deform_axis(s/broadcast_scalar(ow,shape![128]),k/broadcast_scalar(kw,shape![128]),sh,dh,ph,oy);let x=deform_axis(s%broadcast_scalar(ow,shape![128]),k%broadcast_scalar(kw,shape![128]),sw,dw,pw,ox);
+    let (value,_dy,_dx)=unsafe{deform_sample(input,n,c,y,x,channels,height,width,active)};
+    let result=if masked!=0u32{value*unsafe{read_tile(mask_values,m,active,0f32)}}else{value};
+    unsafe{write_tile(output,raw,result,active)};
+}
+#[cutile::entry()]
+unsafe fn burn_deform_coordinates(input:*const f32,offset:*const f32,mask_values:*const f32,columns:*const f32,output:*mut f32,DEFORM_PARAMETERS) {
+    let spatial=oh*ow;let kernel=kh*kw;let count=batch*offset_groups*kernel*spatial;
+    let raw=indices();let active=lt_tile(raw,broadcast_scalar(count,shape![128]));let i=select(active,raw,broadcast_scalar(0u32,shape![128]));
+    let s=i%broadcast_scalar(spatial,shape![128]);let k=i/broadcast_scalar(spatial,shape![128])%broadcast_scalar(kernel,shape![128]);let og=i/broadcast_scalar(spatial*kernel,shape![128])%broadcast_scalar(offset_groups,shape![128]);let n=i/broadcast_scalar(spatial*kernel*offset_groups,shape![128]);
+    let o=i/broadcast_scalar(spatial,shape![128])*broadcast_scalar(2u32*spatial,shape![128])+s;
+    let oy=unsafe{read_tile(offset,o,active,0f32)};let ox=unsafe{read_tile(offset,o+broadcast_scalar(spatial,shape![128]),active,0f32)};
+    let y=deform_axis(s/broadcast_scalar(ow,shape![128]),k/broadcast_scalar(kw,shape![128]),sh,dh,ph,oy);let x=deform_axis(s%broadcast_scalar(ow,shape![128]),k%broadcast_scalar(kw,shape![128]),sw,dw,pw,ox);
+    let modulation=if masked!=0u32{unsafe{read_tile(mask_values,i,active,0f32)}}else{broadcast_scalar(1f32,shape![128])};
+    let mut gy=broadcast_scalar(0f32,shape![128]);let mut gx=gy;let mut gm=gy;let mut local=0u32;
+    while local<channels/offset_groups {
+        let c=og*broadcast_scalar(channels/offset_groups,shape![128])+broadcast_scalar(local,shape![128]);let at=((c*broadcast_scalar(kernel,shape![128])+k)*broadcast_scalar(batch,shape![128])+n)*broadcast_scalar(spatial,shape![128])+s;
+        let g=unsafe{read_tile(columns,at,active,0f32)};let (v,dy,dx)=unsafe{deform_sample(input,n,c,y,x,channels,height,width,active)};
+        gy=addf(gy,g*dy*modulation,rounding::NearestEven,ftz::Disabled);gx=addf(gx,g*dx*modulation,rounding::NearestEven,ftz::Disabled);gm=addf(gm,g*v,rounding::NearestEven,ftz::Disabled);
+        local=local+1u32;
+    }
+    unsafe{write_tile(output,o,gy,active);write_tile(output,o+broadcast_scalar(spatial,shape![128]),gx,active)};
+    if masked!=0u32{unsafe{write_tile(output,raw+broadcast_scalar(2u32*count,shape![128]),gm,active)}};
+}
+#[cutile::entry()]
+unsafe fn burn_deform_input(offset:*const f32,mask_values:*const f32,columns:*const f32,output:*mut u32,DEFORM_PARAMETERS) {
+    let spatial=oh*ow;let kernel=kh*kw;let count=channels*kernel*batch*spatial;
+    let raw=indices();let active=lt_tile(raw,broadcast_scalar(count,shape![128]));let i=select(active,raw,broadcast_scalar(0u32,shape![128]));
+    let s=i%broadcast_scalar(spatial,shape![128]);let n=i/broadcast_scalar(spatial,shape![128])%broadcast_scalar(batch,shape![128]);let k=i/broadcast_scalar(spatial*batch,shape![128])%broadcast_scalar(kernel,shape![128]);let c=i/broadcast_scalar(spatial*batch*kernel,shape![128]);
+    let og=c/broadcast_scalar(channels/offset_groups,shape![128]);let m=((n*broadcast_scalar(offset_groups,shape![128])+og)*broadcast_scalar(kernel,shape![128])+k)*broadcast_scalar(spatial,shape![128])+s;
+    let o=m/broadcast_scalar(spatial,shape![128])*broadcast_scalar(2u32*spatial,shape![128])+s;
+    let oy=unsafe{read_tile(offset,o,active,0f32)};let ox=unsafe{read_tile(offset,o+broadcast_scalar(spatial,shape![128]),active,0f32)};
+    let y=deform_axis(s/broadcast_scalar(ow,shape![128]),k/broadcast_scalar(kw,shape![128]),sh,dh,ph,oy);let x=deform_axis(s%broadcast_scalar(ow,shape![128]),k%broadcast_scalar(kw,shape![128]),sw,dw,pw,ox);
+    let (iy,ix,ly,lx,valid)=deform_location(y,x,height,width);
+    let modulation=if masked!=0u32{unsafe{read_tile(mask_values,m,active,0f32)}}else{broadcast_scalar(1f32,shape![128])};let g=unsafe{read_tile(columns,i,active,0f32)}*modulation;
+    for tap in 0..4u32 {
+        let yy=iy+broadcast_scalar(signed(tap/2u32),shape![128]);let xx=ix+broadcast_scalar(signed(tap%2u32),shape![128]);
+        let wy=if tap/2u32==0u32{broadcast_scalar(1f32,shape![128])-ly}else{ly};let wx=if tap%2u32==0u32{broadcast_scalar(1f32,shape![128])-lx}else{lx};
+        let weight=wy*wx;let enabled=active&valid&ge_tile(yy,broadcast_scalar(0i32,shape![128]))&lt_tile(yy,broadcast_scalar(signed(height),shape![128]))&ge_tile(xx,broadcast_scalar(0i32,shape![128]))&lt_tile(xx,broadcast_scalar(signed(width),shape![128]))&ne_tile(weight,broadcast_scalar(0f32,shape![128]));
+        let yy:Tile<u32,{[128]}>=bitcast(min_tile(max_tile(yy,broadcast_scalar(0i32,shape![128])),broadcast_scalar(signed(height)-1,shape![128])));let xx:Tile<u32,{[128]}>=bitcast(min_tile(max_tile(xx,broadcast_scalar(0i32,shape![128])),broadcast_scalar(signed(width)-1,shape![128])));
+        let at=((n*broadcast_scalar(channels,shape![128])+c)*broadcast_scalar(height,shape![128])+yy)*broadcast_scalar(width,shape![128])+xx;
+        unsafe{deform_atomic_add(output,at,g*weight,enabled)};
+    }
+}

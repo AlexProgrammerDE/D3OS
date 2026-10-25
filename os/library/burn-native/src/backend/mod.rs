@@ -22,7 +22,7 @@ use d3os_compute::{Backend as _, Error, nvidia::Nvidia};
 use d3os_nvidia::compute::scan::Scan;
 use d3os_nvidia::compute::{elementwise::Elementwise, reduction::Reduction, words::WordOp};
 pub use execution::BackendTensor;
-use execution::{CONTEXT, Cause};
+use execution::CONTEXT;
 pub use quantized::BackendQuantizedTensor;
 
 /// D3OS's process-owned native NVIDIA backend.
@@ -52,7 +52,7 @@ impl Backend for Native {
         }
         Nvidia
             .with_commands(|| Ok::<_, Error>(()))
-            .map_err(|error| CONTEXT.fail("synchronize", Cause::Native(error)).report())?;
+            .map_err(|error| CONTEXT.fail("synchronize", error).report())?;
         semantic_error?;
         CONTEXT.check()
     }

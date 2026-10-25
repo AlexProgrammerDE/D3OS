@@ -23,21 +23,87 @@ impl ModuleOps<Self> for Native {
     }
     fn deform_conv2d(
         x: FloatTensor<Self>, offset: FloatTensor<Self>, weight: FloatTensor<Self>, mask: Option<FloatTensor<Self>>, bias: Option<FloatTensor<Self>>,
-        _options: DeformConvOptions<2>,
+        options: DeformConvOptions<2>,
     ) -> FloatTensor<Self> {
-        unsupported_module("deform_conv2d", &[&x, &offset, &weight], &[mask.as_ref(), bias.as_ref()])
+        let mut refs = alloc::vec![&x, &offset, &weight];
+        refs.extend(mask.iter());
+        refs.extend(bias.iter());
+        let shape = crate::deform::DeformConv2d::new(
+            x.shape(),
+            offset.shape(),
+            weight.shape(),
+            mask.as_ref().map(|m| m.shape()).as_ref(),
+            bias.as_ref().map(|b| b.shape()).as_ref(),
+            &options,
+        )
+        .map_or_else(|_| x.shape(), |p| p.output_shape().clone());
+        BackendTensor::apply("deform_conv2d", shape, DType::F32, &refs, |v| {
+            v[0].deform_conv2d(
+                v[1],
+                v[2],
+                mask.as_ref().map(|_| v[3]),
+                bias.as_ref().map(|_| v[3 + usize::from(mask.is_some())]),
+                &options,
+            )
+        })
     }
     fn deform_conv2d_backward(
         x: FloatTensor<Self>, offset: FloatTensor<Self>, weight: FloatTensor<Self>, mask: Option<FloatTensor<Self>>, bias: Option<FloatTensor<Self>>,
-        output_grad: FloatTensor<Self>, _options: DeformConvOptions<2>,
+        grad: FloatTensor<Self>, options: DeformConvOptions<2>,
     ) -> DeformConv2dBackward<Self> {
-        let failure = unsupported_module("deform_conv2d_backward", &[&x, &offset, &weight, &output_grad], &[mask.as_ref(), bias.as_ref()]);
+        let mut refs = alloc::vec![&x, &offset, &weight, &grad];
+        refs.extend(mask.iter());
+        refs.extend(bias.iter());
+        let mut shapes = alloc::vec![x.shape(), offset.shape(), weight.shape()];
+        shapes.extend(mask.iter().map(|m| m.shape()));
+        shapes.extend(bias.iter().map(|b| b.shape()));
+        let run = |v: &[&NativeTensor]| {
+            let result = v[0].deform_conv2d_backward(
+                v[1],
+                v[2],
+                mask.as_ref().map(|_| v[4]),
+                bias.as_ref().map(|_| v[4 + usize::from(mask.is_some())]),
+                v[3],
+                &options,
+            )?;
+            let mut outputs = alloc::vec![result.input, result.offset, result.weights];
+            outputs.extend(result.mask);
+            outputs.extend(result.bias);
+            Ok::<_, Error>(outputs)
+        };
+        let outputs = match shapes.len() {
+            3 => BackendTensor::outputs(
+                "deform_conv2d_backward",
+                core::array::from_fn::<_, 3, _>(|i| shapes[i].clone()),
+                [DType::F32; 3],
+                &refs,
+                |v| run(v)?.try_into().map_err(|_| Error::ShapeMismatch),
+            )
+            .to_vec(),
+            4 => BackendTensor::outputs(
+                "deform_conv2d_backward",
+                core::array::from_fn::<_, 4, _>(|i| shapes[i].clone()),
+                [DType::F32; 4],
+                &refs,
+                |v| run(v)?.try_into().map_err(|_| Error::ShapeMismatch),
+            )
+            .to_vec(),
+            _ => BackendTensor::outputs(
+                "deform_conv2d_backward",
+                core::array::from_fn::<_, 5, _>(|i| shapes[i].clone()),
+                [DType::F32; 5],
+                &refs,
+                |v| run(v)?.try_into().map_err(|_| Error::ShapeMismatch),
+            )
+            .to_vec(),
+        };
+        let mut outputs = outputs.into_iter();
         DeformConv2dBackward {
-            x_grad: failure.clone(),
-            offset_grad: BackendTensor::unsupported("deform_conv2d_backward", offset.shape(), DType::F32, &[&failure], "deform_conv2d_backward"),
-            weight_grad: BackendTensor::unsupported("deform_conv2d_backward", weight.shape(), DType::F32, &[&failure], "deform_conv2d_backward"),
-            mask_grad: mask.map(|m| BackendTensor::unsupported("deform_conv2d_backward", m.shape(), DType::F32, &[&failure], "deform_conv2d_backward")),
-            bias_grad: bias.map(|b| BackendTensor::unsupported("deform_conv2d_backward", b.shape(), DType::F32, &[&failure], "deform_conv2d_backward")),
+            x_grad: outputs.next().unwrap(),
+            offset_grad: outputs.next().unwrap(),
+            weight_grad: outputs.next().unwrap(),
+            mask_grad: mask.map(|_| outputs.next().unwrap()),
+            bias_grad: bias.map(|_| outputs.next().unwrap()),
         }
     }
     fn conv3d(x: FloatTensor<Self>, weight: FloatTensor<Self>, bias: Option<FloatTensor<Self>>, options: ConvOptions<3>) -> FloatTensor<Self> {
@@ -244,11 +310,4 @@ impl ModuleOps<Self> for Native {
             v[0].conv2d_weight_backward(v[1], v[2], &options)
         })
     }
-}
-
-fn unsupported_module(operation: &'static str, required: &[&BackendTensor], optional: &[Option<&BackendTensor>]) -> BackendTensor {
-    let mut inputs = required.to_vec();
-    inputs.extend(optional.iter().flatten().copied());
-    let shape = required.first().map_or_else(|| Shape::new([0]), |t| t.shape());
-    BackendTensor::unsupported(operation, shape, DType::F32, &inputs, operation)
 }

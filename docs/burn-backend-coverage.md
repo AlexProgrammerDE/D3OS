@@ -15,10 +15,10 @@ Associated types and source SHA-256 hashes accompany the report.
 
 The current inventory contains 484 methods: 273 native overrides and 211 inherited defaults.
 All required methods have declarations or implementations. This count does not establish runtime support.
-The report also records 125 native helper bodies for manual review of dtype and shape restrictions.
+The report also records 126 native helper bodies for manual review of dtype and shape restrictions.
 
 The tool follows syntactic associated backend calls and expands the pinned `dequant_op_quant!` and `dequant_op_flow!` macros.
-It identifies 10 methods with possible paths to explicit declines or panic declarations.
+It identifies 8 methods with possible paths to explicit declines or panic declarations.
 This number is not an unsupported-operation count. Some paths represent expected invalid-input errors or conditional restrictions.
 
 The analysis does not resolve method types, evaluate conditional compilation, or expand other macros and free helper functions.
@@ -302,6 +302,57 @@ These results do not establish strict general FP32 conformance on Linux.
 D3OS passes both complete numerical corpora, all empty and guarded cases, and the existing operator and quantization regressions.
 All three modules compiled inside D3OS match their host audit hashes.
 These correctness checks do not establish execution-performance or compile-time parity.
+
+## Native deformable convolution
+
+Protocol 37 adds FP32 deformable 2D convolution and all five gradients through Burn's public module API.
+The gradients cover the input, offsets, weights, optional modulation mask, and optional bias.
+The matching driver, SDK, application image, and portable bundle contain 238 inference entries and 74 compute profiles.
+All 235 earlier instruction entries and their constant sections remain byte-identical.
+
+Three new kernels sample bilinear windows, compute offset/mask derivatives, and accumulate input derivatives.
+Grouped compensated TF32x3 Tensor Core products implement forward projections and weight/column gradients.
+Weight groups and offset groups remain independent, including partitions that cross each other.
+Noncontiguous inputs require resident GPU copies. No activation tensor returns to the host during these operations.
+
+Forward windows and paired offset/mask gradients use complete writers without a separate output clear.
+The paired gradients share private storage through checked views.
+Input gradients accumulate into initialized zero storage with raw-word compare-and-swap and explicit non-FTZ addition.
+This avoids native floating-point atomics that can flush subnormals on Ada.
+The accumulation order can vary across blocks, so ordinary gradients use a numerical tolerance.
+
+Coordinates use 64-bit integer base arithmetic followed by FP32 offset addition and bilinear sampling.
+The kernel sanitizes invalid coordinates before integer conversion and clamps masked pixel addresses.
+Native nonfinite offsets contribute zero sampled values and derivatives.
+Finite coordinate boundaries use the right derivative of the piecewise bilinear function, including the `-1` boundary.
+Other nonfinite-input arithmetic and wider dtype conformance remain unverified.
+
+The independent reference uses FP64 bilinear samples and analytic derivatives for every input kind.
+Host tests anchor all five derivatives, zero modulation, and coordinate boundaries.
+Centered finite differences check eight geometries, excluding offset discontinuities in the separate zero-offset fixture.
+The corpus includes stride, dilation, depthwise and crossing groups, collisions, partial tiles, zero offsets, and out-of-range samples.
+Optional masks, optional bias, and reversed views produce 64 forward cases and 256 gradient checks per numerical corpus.
+Both general FP32 and TF32-exact input corpora use the same `4e-5 * (1 + abs(reference))` tolerance.
+The empty-batch corpus also checks all required and optional gradients.
+
+The raw suite checks 96 guarded primitive cases, full writers, source preservation, queued lifetime, resident counters, and rejected geometry.
+It includes nonfinite offsets and an exact smallest-subnormal input-gradient check.
+All three new entries pass the spill audit without local loads or stores.
+The first export exposed a pointer-type inference error in the pinned cuTile compiler.
+Explicit types on each pointer reshape/broadcast step correct that error. Its generated source and diagnostic remain archived separately.
+
+The general Linux CUDA run fails its first forward result: `0.033498675` instead of `0.03331488615597683`.
+The TF32-exact run passes that forward result, then fails an offset derivative: `0.38085938` instead of `-0.94482421875`.
+The pinned coordinate-gradient kernel omits the kernel-tap displacement from its column base.
+A scalar reproduction that uses tap zero returns exactly the observed value.
+The source and reproduction remain separate evidence from the shared independent reference.
+The empty Linux diagnostic returns a nonzero weight gradient where the independent reference requires zero.
+D3OS passes both complete numerical corpora, the empty-batch gradient corpus, and every guarded primitive check.
+All three guest-compiled modules match their host audit hashes. The existing operator and quantization regressions also pass.
+Linux passes all 64 forward cases with TF32-exact inputs and all 64 empty forward cases.
+Separate 1x1-filter and outside-sample probes each pass eight forwards and all 32 required/optional gradient checks.
+Those limited passing gradient domains do not replace the failed complete corpus.
+These checks do not establish execution-performance or compile-time parity.
 
 ## Native floating-point remainder
 
@@ -719,7 +770,7 @@ Other quantization formats and layouts still require separate coverage.
 ## Remaining implementation areas
 
 The unresolved work includes ordinary dtype arithmetic, quantized and boolean-producing conversions, complete integer arithmetic, further matrix dtypes, and additional floating-point operations.
-Further sorting and compaction dtypes and deformable convolution also require coverage.
+Further sorting and compaction dtypes also require coverage.
 Further convolution dtypes and numerical domains beyond the checked finite corpus remain unresolved.
 Compaction formats beyond the checked Q8 cases remain unverified.
 Broadcast cross-product gradients, graph capture, profiling, memory capabilities, records, and observable errors require matched Linux capability checks.
@@ -741,7 +792,7 @@ Build the Linux probes with their default CUDA feature:
 
 ```bash
 cd tools/mnist-benchmark
-cargo build --release --locked --bin capabilities --bin erf --bin integer --bin integer_matrix --bin scan --bin sort --bin cross --bin compaction --bin scatter_updates --bin quantized_empty --bin nd_indexing --bin storage --bin conversions --bin remainder --bin inverse --bin interpolate --bin spatial_convolution
+cargo build --release --locked --bin capabilities --bin erf --bin integer --bin integer_matrix --bin scan --bin sort --bin cross --bin compaction --bin scatter_updates --bin quantized_empty --bin nd_indexing --bin storage --bin conversions --bin remainder --bin inverse --bin interpolate --bin spatial_convolution --bin deform
 cd ../..
 ```
 
@@ -946,6 +997,28 @@ For empty diagnostics, use fresh directories with `--burn-spatial-empty` and `--
 The `--burn-spatial-case` option selects one of the 14 shape groups for isolated diagnosis.
 D3OS retains both complete numerical corpora and both empty checks.
 
+Run the strict deformable-convolution comparison and retain its diagnostic:
+
+```bash
+python3 tools/nvidia/linux-reference.py \
+  --directory target/nvidia/linux-burn-deform-strict \
+  --burn-deform tools/mnist-benchmark/target/release/deform
+```
+
+Run the full forward-only comparison with TF32-exact inputs:
+
+```bash
+python3 tools/nvidia/linux-reference.py \
+  --directory target/nvidia/linux-burn-deform-forward \
+  --burn-deform tools/mnist-benchmark/target/release/deform \
+  --burn-deform-tf32-exact --burn-deform-forward-only
+```
+
+For the failed complete gradient diagnostic, use a fresh directory and omit `--burn-deform-forward-only`.
+For isolated passing gradient domains, add `--burn-deform-case 4` or `--burn-deform-case 7` with TF32-exact inputs.
+For empty diagnostics, use `--burn-deform-empty`. Its separate forward-only run also needs `--burn-deform-forward-only`.
+D3OS retains the complete general, exact-input, and empty-batch gradient corpora.
+
 Run the D3OS GPU suite with the matching production image and portable kernel bundle:
 
 ```bash
@@ -1012,3 +1085,9 @@ The spatial convolution evidence lives under `target/nvidia/burn-backend-validat
 Its Linux counterparts use `target/nvidia/burn-backend-audit/linux-spatial-` with the `normal-final`, `exact-final`, `empty-final`, and `empty-backward-final` suffixes.
 The audit directory contains `traits-spatial-final.json`, `spatial-comparison.json`, and `spatial-section-comparison.json`.
 Earlier 48-case runs remain separate from the final 56-case corpus.
+
+The deformable-convolution evidence lives under `target/nvidia/burn-backend-validation/deform-first/`.
+Its Linux counterparts use the `target/nvidia/burn-backend-audit/linux-deform-` prefix.
+The audit directory contains `traits-deform-final.json`, `deform-comparison.json`, and `deform-section-comparison.json`.
+The coordinate-row diagnosis includes `deform-linux-row-index-diagnostic.json` and the archived pinned coordinate-kernel source.
+The pointer-inference compiler diagnostic remains under `deform-pointer-inference/`.

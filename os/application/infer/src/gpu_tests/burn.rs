@@ -4,6 +4,7 @@ mod compaction;
 mod conversions;
 mod convolution;
 mod cross;
+mod deform;
 mod dispatch;
 mod indexing;
 mod integers;
@@ -152,6 +153,13 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     crate::report(format_args!(
         "BURN_ERF_CONFORMANCE_OK os=d3os backend=native erf_ulp=8 erf=forward,backward gelu=forward,backward shared_views=verified"
     ));
+    deform::run(backend)?;
+    for (empty, exact) in [(false, false), (false, true), (true, false)] {
+        let (forward, gradients) = d3os_ai::validation::deform::check(&device, empty, exact, None, true)?;
+        crate::report(format_args!(
+            "BURN_DEFORM_OK os=d3os backend=native forward={forward} gradients={gradients} empty={empty} tf32_exact_inputs={exact} selected=None backward=true reference=f64 signed_views=true shared=true"
+        ));
+    }
     spatial_convolution::run(backend)?;
     for exact in [false, true] {
         let (forward, gradients) = d3os_ai::validation::spatial_convolution::check(&device, false, None, exact, false)?;

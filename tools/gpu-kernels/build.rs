@@ -16,6 +16,7 @@ fn main() {
         "burn-pooling-common.rs",
         "burn-interpolate-common.rs",
         "burn-spatial-common.rs",
+        "burn-deform-common.rs",
         "quantized.rs",
         "quantized-vector.rs",
         "quad.rs",
@@ -168,6 +169,37 @@ fn main() {
             );
         }
     }
+    println!("cargo:rerun-if-changed=src/burn-deform.rs.in");
+    let atomics = fs::read_to_string("src/burn-scatter-f32.rs.in").expect("read FP32 atomics");
+    source.push_str("unsafe fn deform_atomic_add(output:*mut u32,index:Tile<u32,{[128]}>,value:Tile<f32,{[128]}>,valid:Tile<bool,{[128]}>){let pointer:PointerTile<*mut u32,{[]}>=pointer_to_tile(output);let pointer:PointerTile<*mut u32,{[1]}>=pointer.reshape(shape![1]);let pointer:PointerTile<*mut u32,{[128]}>=pointer.broadcast(shape![128]);let pointer=pointer.offset_tile(index);let value:Tile<u32,{[128]}>=bitcast(value);");
+    source.push_str(&atomics);
+    source.push_str("}\n");
+    let names = [
+        "batch",
+        "channels",
+        "height",
+        "width",
+        "_outputs",
+        "kh",
+        "kw",
+        "oh",
+        "ow",
+        "sh",
+        "sw",
+        "ph",
+        "pw",
+        "dh",
+        "dw",
+        "_weight_groups",
+        "offset_groups",
+        "masked",
+    ];
+    let parameters = names.iter().map(|n| format!("{n}:u32")).collect::<Vec<_>>().join(",");
+    source.push_str(
+        &fs::read_to_string("src/burn-deform.rs.in")
+            .expect("read deform source")
+            .replace("DEFORM_PARAMETERS", &parameters),
+    );
     println!("cargo:rerun-if-changed=src/burn-spatial.rs.in");
     let spatial = fs::read_to_string("src/burn-spatial.rs.in").expect("read spatial source");
     let names = [

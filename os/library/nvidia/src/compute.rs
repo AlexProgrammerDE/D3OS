@@ -5,6 +5,7 @@ use crate::{Error, Result};
 pub mod argwhere;
 pub mod cast;
 pub mod convolution;
+pub mod deform;
 pub mod elementwise;
 pub mod indexing;
 pub mod interpolate;
@@ -21,7 +22,7 @@ pub mod storage;
 pub mod updates;
 pub mod words;
 
-pub const VERSION: u32 = 36;
+pub const VERSION: u32 = 37;
 /// END_COMMANDS flag: an inner recording scope joins its parent's completion.
 /// The outermost scope always waits. Zero retains synchronous nested scopes.
 pub const DEFER_NESTED_COMPLETION: u64 = 1;
@@ -55,7 +56,7 @@ pub struct MemoryProfile {
     pub device_cached_bytes: u64,
     pub device_retired_bytes: u64,
 }
-pub const KERNEL_COUNT: usize = 71;
+pub const KERNEL_COUNT: usize = 74;
 
 /// CPU service costs by request operation, including queue work within it.
 #[derive(Clone, Copy, Debug, Default)]
@@ -184,9 +185,12 @@ pub enum Kernel {
     Interpolate = 68,
     SpatialWindows = 69,
     SpatialFold = 70,
+    DeformWindows = 71,
+    DeformCoordinates = 72,
+    DeformInput = 73,
 }
 
-const _: () = assert!(Kernel::SpatialFold as usize + 1 == KERNEL_COUNT);
+const _: () = assert!(Kernel::DeformInput as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -254,6 +258,8 @@ impl Kernel {
                 | Self::TensorStorage
                 | Self::TensorCast
                 | Self::Interpolate
+                | Self::DeformWindows
+                | Self::DeformCoordinates
                 | Self::SpatialWindows
                 | Self::SpatialFold
                 | Self::Im2col
@@ -358,6 +364,9 @@ impl Kernel {
             68 => Self::Interpolate,
             69 => Self::SpatialWindows,
             70 => Self::SpatialFold,
+            71 => Self::DeformWindows,
+            72 => Self::DeformCoordinates,
+            73 => Self::DeformInput,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -435,6 +444,9 @@ impl Kernel {
             Self::Interpolate => "burn_interpolate_nearest",
             Self::SpatialWindows => "burn_spatial_windows",
             Self::SpatialFold => "burn_spatial_fold",
+            Self::DeformWindows => "burn_deform_windows",
+            Self::DeformCoordinates => "burn_deform_coordinates",
+            Self::DeformInput => "burn_deform_input",
         }
     }
 
@@ -554,6 +566,27 @@ impl Kernel {
                 }
                 extents[..2].copy_from_slice(&ranges);
                 (count, 2, 1, false)
+            }
+            (Self::DeformWindows | Self::DeformCoordinates | Self::DeformInput, p) => {
+                let g = deform::geometry(p)?;
+                if g.columns == 0 {
+                    return Err(Error::InvalidField);
+                }
+                let mask = if p[17] != 0 { u64::from(g.masks) } else { 1 };
+                match self {
+                    Self::DeformWindows => {
+                        extents[..4].copy_from_slice(&[u64::from(g.images), u64::from(g.offsets), mask, u64::from(g.columns)]);
+                        (g.columns, 4, 3, false)
+                    }
+                    Self::DeformCoordinates => {
+                        extents[..5].copy_from_slice(&[u64::from(g.images), u64::from(g.offsets), mask, u64::from(g.columns), u64::from(g.coordinates)]);
+                        (g.masks, 5, 4, false)
+                    }
+                    _ => {
+                        extents[..4].copy_from_slice(&[u64::from(g.offsets), mask, u64::from(g.columns), u64::from(g.images)]);
+                        (g.columns, 4, 3, false)
+                    }
+                }
             }
             (Self::SpatialWindows, p) => {
                 let (geometry, ranges) = spatial_convolution::validate_windows(p)?;

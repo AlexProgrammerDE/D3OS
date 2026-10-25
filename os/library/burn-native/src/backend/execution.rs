@@ -7,29 +7,20 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use d3os_compute::Error;
 use spin::Mutex;
 
-#[derive(Clone, Debug)]
-pub(super) enum Cause {
-    Native(Error),
-    Capability(&'static str),
-}
-
 #[derive(Debug)]
 pub(super) struct Failure {
     operation: &'static str,
-    cause: Cause,
+    cause: Error,
     reported: AtomicBool,
 }
 
 impl Failure {
     fn is_poisoned(&self) -> bool {
-        matches!(self.cause, Cause::Native(Error::DeviceFault))
+        matches!(self.cause, Error::DeviceFault)
     }
 
     fn error(&self) -> ExecutionError {
-        let reason = match &self.cause {
-            Cause::Native(error) => format!("D3OS native Burn {}: {error}", self.operation),
-            Cause::Capability(capability) => format!("D3OS native Burn {} requires unsupported {capability}", self.operation),
-        };
+        let reason = format!("D3OS native Burn {}: {}", self.operation, self.cause);
         if self.is_poisoned() {
             ExecutionError::device_poisoned(reason)
         } else {
@@ -68,7 +59,7 @@ impl Context {
         self.errors.lock().poisoned.clone()
     }
 
-    pub(super) fn fail(&self, operation: &'static str, cause: Cause) -> Arc<Failure> {
+    pub(super) fn fail(&self, operation: &'static str, cause: Error) -> Arc<Failure> {
         let mut errors = self.errors.lock();
         if let Some(failure) = &errors.poisoned {
             return failure.clone();
@@ -120,7 +111,7 @@ impl BackendTensor {
         if let Some(failure) = CONTEXT.poisoned() {
             return Err(failure.report());
         }
-        work(value).map_err(|error| CONTEXT.fail(operation, Cause::Native(error)).report())
+        work(value).map_err(|error| CONTEXT.fail(operation, error).report())
     }
 
     pub(super) fn value(&self) -> Option<&NativeTensor> {
@@ -162,7 +153,7 @@ impl BackendTensor {
                         Ok(outputs)
                     }
                 })
-                .map_err(|error| CONTEXT.fail(operation, Cause::Native(error)))
+                .map_err(|error| CONTEXT.fail(operation, error))
         };
         match result {
             Ok(outputs) => outputs.map(Self::ready),
@@ -192,7 +183,7 @@ impl BackendTensor {
         let result = work().and_then(|value| if value.dtype() == dtype { Ok(value) } else { Err(Error::InvalidParameter) });
         match result {
             Ok(value) => Self::ready(value),
-            Err(error) => Self::failed(shape, dtype, CONTEXT.fail(operation, Cause::Native(error))),
+            Err(error) => Self::failed(shape, dtype, CONTEXT.fail(operation, error)),
         }
     }
 
@@ -209,19 +200,10 @@ impl BackendTensor {
         Self::build(operation, shape, dtype, || work(&values))
     }
 
-    pub(super) fn unsupported(operation: &'static str, shape: Shape, dtype: DType, inputs: &[&Self], capability: &'static str) -> Self {
-        for input in inputs {
-            if let Err(failure) = &input.value {
-                return Self::failed(shape, dtype, failure.clone());
-            }
-        }
-        Self::failed(shape, dtype, CONTEXT.fail(operation, Cause::Capability(capability)))
-    }
-
     pub(super) fn read(self) -> Result<TensorData, ExecutionError> {
         match self.value {
             Err(failure) => Err(failure.report()),
-            Ok(value) => value.read().map_err(|error| CONTEXT.fail("readback", Cause::Native(error)).report()),
+            Ok(value) => value.read().map_err(|error| CONTEXT.fail("readback", error).report()),
         }
     }
 }
@@ -257,7 +239,7 @@ mod tests {
         ];
         for tensor in invalid {
             let failure = tensor.value.unwrap_err();
-            assert!(matches!(failure.cause, Cause::Native(Error::InvalidParameter)));
+            assert!(matches!(failure.cause, Error::InvalidParameter));
             failure.report();
         }
         assert!(CONTEXT.check().is_ok());
@@ -266,7 +248,7 @@ mod tests {
     #[test]
     fn failed_tensors_preserve_roots_and_never_execute_dependent_work() {
         let context = Context::new();
-        let failure = context.fail("gather", Cause::Native(Error::InvalidParameter));
+        let failure = context.fail("gather", Error::InvalidParameter);
         let tensor = BackendTensor::failed(Shape::new([3, 4]), DType::F32, failure.clone());
         let output = BackendTensor::apply("reshape", Shape::new([12]), DType::F32, &[&tensor], |_| panic!());
         assert_eq!(output.shape().as_slice(), [12]);
@@ -281,16 +263,16 @@ mod tests {
     #[test]
     fn acknowledgment_does_not_hide_independent_errors_or_clear_a_poisoned_device() {
         let context = Context::new();
-        let first = context.fail("allocation", Cause::Native(Error::AllocationFailed));
-        let second = context.fail("dtype", Cause::Capability("F64"));
+        let first = context.fail("allocation", Error::AllocationFailed);
+        let second = context.fail("dtype", Error::InvalidParameter);
         first.report();
         assert!(context.check().is_err());
         assert!(second.reported.load(Ordering::Acquire));
         assert!(context.check().is_ok());
-        let fault = context.fail("kernel", Cause::Native(Error::DeviceFault));
+        let fault = context.fail("kernel", Error::DeviceFault);
         assert!(context.check().unwrap_err().is_device_poisoned());
         assert!(context.check().unwrap_err().is_device_poisoned());
-        assert!(Arc::ptr_eq(&context.fail("later", Cause::Native(Error::InvalidParameter)), &fault));
+        assert!(Arc::ptr_eq(&context.fail("later", Error::InvalidParameter), &fault));
         assert!(fault.report().is_device_poisoned());
         assert!(context.check().is_err());
     }

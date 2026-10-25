@@ -172,7 +172,7 @@ The GPU operations include FP32 arithmetic and math, reductions, exact tensor fi
 Another 31 entries implement I32 arithmetic, signed comparisons, bitwise operations, boolean logic, masks, and conversions.
 These operations support strided views and broadcasting. Input tensors remain shared and immutable.
 Full writers avoid a separate output clear. Empty logical outputs require no element work.
-The matching SDK and driver use native compute protocol version 36 and the 235-entry portable inference bundle.
+The matching SDK and driver use native compute protocol version 37 and the 238-entry portable inference bundle.
 
 The D3OS GPU self-test passes reversed and transposed views, overlapping windows, broadcast batches, subviews, empty dimensions, and neighboring guards.
 Matrix references use independent FP64 accumulation. Math references use independent libm functions and include 2,816 FP32 edge values.
@@ -298,7 +298,11 @@ Vector-selection updates also support all five modes through resident scatter an
 Multidimensional gather/scatter now pass native FP32/I32 checks, including scalar forward results and duplicate addition.
 The [coverage report](burn-backend-coverage.md) records their shapes, numerical semantics, Linux failures, and remaining dtype restrictions.
 The gaps include further dtype arithmetic, quantized conversion variants, additional FP32 math, further compaction formats, and scalar autodiff.
-Complete Burn quantization, further convolution dtypes, and deformable convolutions also remain incomplete.
+Complete Burn quantization and further convolution dtypes also remain incomplete.
+FP32 deformable convolution now provides input, offset, weight, modulation-mask, and bias gradients on the native GPU.
+Grouped Tensor Core projections and resident sampling keep activations and gradients on the device.
+Both 64-case numerical corpora and the empty-batch corpus pass all 256 gradient checks.
+The raw suite also checks 96 guarded cases, queued lifetime, and exact subnormal accumulation.
 FP32 3D and transposed 1D/2D/3D convolutions now use native spatial windows, transpose folds, and grouped Tensor Core matrix products.
 Their finite forward and gradient checks include signed views, depthwise groups, dilation, and output padding larger than the stride.
 D3OS passes 56 forward and 140 gradient checks in each of two numerical corpora.

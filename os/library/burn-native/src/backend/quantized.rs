@@ -39,7 +39,7 @@ impl BackendQuantizedTensor {
         let failure = inputs.iter().find_map(|t| t.failure()).or_else(|| CONTEXT.poisoned());
         let value = match failure {
             Some(failure) => Err(failure),
-            None => work().map_err(|e| CONTEXT.fail(operation, Cause::Native(e))),
+            None => work().map_err(|e| CONTEXT.fail(operation, e)),
         };
         Self::from_result(shape, scheme, value)
     }
@@ -64,7 +64,7 @@ impl BackendQuantizedTensor {
             Err(failure) => Err(failure),
             Ok(value) => match CONTEXT.poisoned() {
                 Some(failure) => Err(failure),
-                None => work(&value).map_err(|e| CONTEXT.fail(operation, Cause::Native(e))),
+                None => work(&value).map_err(|e| CONTEXT.fail(operation, e)),
             },
         };
         Self::from_result(shape, self.scheme, value)
@@ -121,7 +121,7 @@ impl QTensorOps<Self> for Native {
         if let Some(failure) = CONTEXT.poisoned() {
             return Err(failure.report());
         }
-        value.read().map_err(|e| CONTEXT.fail("q_into_data", Cause::Native(e)).report())
+        value.read().map_err(|e| CONTEXT.fail("q_into_data", e).report())
     }
 
     fn q_swap_dims(tensor: QuantizedTensor<Self>, dim1: usize, dim2: usize) -> QuantizedTensor<Self> {
