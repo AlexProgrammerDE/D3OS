@@ -182,3 +182,5 @@ pub fn mnist_checkpoint(device: &Device) -> Result<(), String> {
     check(reloaded.forward(input), &expected)?;
     Ok(())
 }
+
+pub mod conversions;

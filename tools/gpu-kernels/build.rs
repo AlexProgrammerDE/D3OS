@@ -1,3 +1,5 @@
+#[path = "build/cast.rs"]
+mod cast;
 use std::{env, fs, path::PathBuf};
 fn main() {
     let mut source = String::from("#[cutile::module] pub mod kernels { use cutile::core::*;\n");
@@ -232,6 +234,12 @@ fn main() {
             .replace("STORAGE_GEOMETRY_ARGUMENTS", &geometry.join(", "))
             .replace("STORAGE_ADDRESSES", &address),
     );
+    println!("cargo:rerun-if-changed=src/burn-cast.rs.in");
+    println!("cargo:rerun-if-changed=build/cast.rs");
+    println!("cargo:rerun-if-changed=src/burn-cast-bf16.rs.in");
+    let conversion = fs::read_to_string("src/burn-cast.rs.in").expect("read conversion source");
+    let cast_parameters = copy_parameters.replace("extent:", "_extent:");
+    source.push_str(&cast::expand(&conversion, &cast_parameters, &geometry.join(", ")));
     println!("cargo:rerun-if-changed=src/burn-gather.rs.in");
     let gather = fs::read_to_string("src/burn-gather.rs.in").expect("read gather template");
     let mut parameters: Vec<String> = ["_rank", "axis", "count", "extent_a", "offset_a", "extent_b", "offset_b", "axis_length"]

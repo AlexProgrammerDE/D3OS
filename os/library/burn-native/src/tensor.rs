@@ -238,15 +238,13 @@ impl NativeTensor {
     }
 
     /// Convert supported native dtypes. Float-to-int truncates toward zero,
-    /// clamps overflow to I32 bounds, and maps NaN to zero, as Rust casts do.
+    /// clamps overflow to destination bounds and maps NaN to zero. Integer
+    /// narrowing retains the low bits; float rounding uses ties to even.
     pub fn cast(&self, dtype: DType) -> Result<Self> {
         if !supported(dtype) {
             return Err(Error::InvalidParameter);
         }
-        if self.dtype == dtype
-            || (matches!(self.dtype, DType::F32 | DType::Flex32) && matches!(dtype, DType::F32 | DType::Flex32))
-            || (self.dtype == DType::Bool(BoolStore::U32) && dtype == DType::I32)
-        {
+        if self.dtype == dtype || (matches!(self.dtype, DType::F32 | DType::Flex32) && matches!(dtype, DType::F32 | DType::Flex32)) {
             return Ok(Self {
                 buffer: self.buffer.clone(),
                 layout: self.layout.clone(),
@@ -259,7 +257,7 @@ impl NativeTensor {
             (DType::I32, DType::F32) => WordOp::IntToFloat,
             (DType::I32, DType::Bool(BoolStore::U32)) => WordOp::IntToBool,
             (DType::Bool(BoolStore::U32), DType::F32) => WordOp::BoolToFloat,
-            _ => return Err(Error::InvalidParameter),
+            _ => return self.cast_storage(dtype),
         };
         self.word_unary(op)
     }

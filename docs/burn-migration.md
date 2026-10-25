@@ -172,7 +172,7 @@ The GPU operations include FP32 arithmetic and math, reductions, exact tensor fi
 Another 31 entries implement I32 arithmetic, signed comparisons, bitwise operations, boolean logic, masks, and conversions.
 These operations support strided views and broadcasting. Input tensors remain shared and immutable.
 Full writers avoid a separate output clear. Empty logical outputs require no element work.
-The matching SDK and driver use native compute protocol version 31 and the 214-entry portable inference bundle.
+The matching SDK and driver use native compute protocol version 32 and the 215-entry portable inference bundle.
 
 The D3OS GPU self-test passes reversed and transposed views, overlapping windows, broadcast batches, subviews, empty dimensions, and neighboring guards.
 Matrix references use independent FP64 accumulation. Math references use independent libm functions and include 2,816 FP32 edge values.
@@ -181,7 +181,8 @@ The driver rejects invalid address ranges and malformed launches before dispatch
 Resident-operation counters show no host activation transfers during the checked GPU operations.
 The CI operator suite includes the portable AI library and native tensor package.
 Typed-word GPU checks pass wrapping arithmetic, shift boundaries, signed comparisons, and conversions across every FP32 exponent range.
-Boolean-to-I32 casts share resident storage. Ownership and service-counter checks confirm that they require no GPU allocation, transfer, or launch.
+Boolean-to-I32 casts normalize nonzero records to one through a resident full writer.
+Ownership and service-counter checks confirm independent output storage without activation transfers or a separate clear.
 All 118 earlier GPU instruction sections remain byte-identical after the typed-word entries are added.
 
 Native gather and vector select now support FP32, I32, and boolean tensors with checked, signed strides.
@@ -294,12 +295,12 @@ All single-axis scatter update modes pass matched public checks on D3OS and Linu
 Vector-selection updates also support all five modes through resident scatter and broadcast index views.
 Multidimensional gather/scatter now pass native FP32/I32 checks, including scalar forward results and duplicate addition.
 The [coverage report](burn-backend-coverage.md) records their shapes, numerical semantics, Linux failures, and remaining dtype restrictions.
-The gaps include further dtype arithmetic and conversions, additional FP32 math, further compaction formats, and scalar autodiff.
+The gaps include further dtype arithmetic, quantized conversion variants, additional FP32 math, further compaction formats, and scalar autodiff.
 Complete Burn quantization, three-dimensional convolutions, transposed convolutions, and interpolation also remain incomplete.
 The native backend also uses Burn's `GraphUnsupported` primitive, so captured graph replay remains a gap.
 Its advertised dtype capabilities cover F32, I32 storage, U32 boolean storage, and the quantization storage described below.
-Physical storage also supports the other ordinary formats, but their numeric conversions remain incomplete.
-Burn's `Storage` flag requires those conversions, so their capability declarations remain disabled.
+Physical storage and ordinary numeric casts also support the other ordinary formats.
+Their broader quantized and boolean-producing conversion paths remain incomplete, so the capability declarations stay disabled.
 These formats do not yet provide general arithmetic or accelerated execution.
 The public `QTensorOps` methods now execute for six integer formats, two FP8 formats, and FP4 with five scale dtypes.
 Two-level schemes use an F32 tensor scale. Optimized public quantized matrix products remain open.

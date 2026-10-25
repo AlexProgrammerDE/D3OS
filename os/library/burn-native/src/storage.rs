@@ -8,14 +8,30 @@ use d3os_nvidia::compute::{
     storage::{Mode, Width},
 };
 
-pub(crate) fn width(dtype: DType) -> Result<Width> {
+pub(crate) fn format(dtype: DType) -> Result<d3os_nvidia::compute::cast::Format> {
+    use d3os_nvidia::compute::cast::Format;
     match dtype {
-        DType::I8 | DType::U8 | DType::Bool(BoolStore::U8) => Ok(Width::One),
-        DType::F16 | DType::BF16 | DType::I16 | DType::U16 => Ok(Width::Two),
-        DType::F32 | DType::Flex32 | DType::I32 | DType::U32 | DType::Bool(BoolStore::U32) => Ok(Width::Four),
-        DType::F64 | DType::I64 | DType::U64 => Ok(Width::Eight),
+        DType::F64 => Ok(Format::F64),
+        DType::F32 => Ok(Format::F32),
+        DType::Flex32 => Ok(Format::Flex32),
+        DType::F16 => Ok(Format::F16),
+        DType::BF16 => Ok(Format::BF16),
+        DType::I64 => Ok(Format::I64),
+        DType::I32 => Ok(Format::I32),
+        DType::I16 => Ok(Format::I16),
+        DType::I8 => Ok(Format::I8),
+        DType::U64 => Ok(Format::U64),
+        DType::U32 => Ok(Format::U32),
+        DType::U16 => Ok(Format::U16),
+        DType::U8 => Ok(Format::U8),
+        DType::Bool(BoolStore::U8) => Ok(Format::Bool8),
+        DType::Bool(BoolStore::U32) => Ok(Format::Bool32),
         _ => Err(Error::InvalidParameter),
     }
+}
+
+pub(crate) fn width(dtype: DType) -> Result<Width> {
+    Ok(format(dtype)?.width())
 }
 
 pub(crate) fn word_sized(dtype: DType) -> bool {
@@ -69,6 +85,32 @@ impl NativeTensor {
             _ => return Err(Error::InvalidParameter),
         };
         Self::fill_bits(shape, dtype, bits)
+    }
+
+    pub(crate) fn cast_storage(&self, dtype: DType) -> Result<Self> {
+        let source = format(self.dtype)?;
+        let destination = format(dtype)?;
+        let layout = Layout::contiguous(self.layout.shape().clone())?;
+        if layout.is_empty() {
+            return Ok(Self {
+                buffer: self.buffer.clone(),
+                layout,
+                dtype,
+            });
+        }
+        let mut parameters = self.layout.storage_parameters(source.width(), Mode::Copy, 0)?;
+        parameters[2] = source as usize | ((destination as usize) << 8);
+        let buffer = Nvidia.produce_words(
+            destination.width().words(layout.len() as u32) as usize,
+            Kernel::TensorCast,
+            &[(&self.buffer, 0)],
+            &parameters,
+        )?;
+        Ok(Self {
+            buffer: Arc::new(buffer),
+            layout,
+            dtype,
+        })
     }
 
     pub(crate) fn copy_storage(&self) -> Result<Self> {

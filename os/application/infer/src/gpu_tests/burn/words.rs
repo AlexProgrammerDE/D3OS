@@ -189,15 +189,9 @@ fn booleans(backend: &Nvidia) -> Result<(), String> {
     let before = backend.service_profile().map_err(|e| e.to_string())?;
     let integers = original.cast(DType::I32).map_err(|e| e.to_string())?;
     let after = backend.service_profile().map_err(|e| e.to_string())?;
-    if before
-        .iter()
-        .zip(after)
-        .enumerate()
-        .any(|(op, (a, b))| op != abi::SERVICE_PROFILE as usize && a.calls != b.calls)
-        || original.can_mut()
-        || integers.can_mut()
-    {
-        return Err(String::from("boolean-to-int cast allocated or lost shared ownership"));
+    resident(&before, &after)?;
+    if after[abi::LAUNCH_ALLOCATE as usize].calls - before[abi::LAUNCH_ALLOCATE as usize].calls != 1 || original.can_mut() || !integers.can_mut() {
+        return Err(String::from("boolean-to-int cast lost resident full-writer or ownership guarantees"));
     }
     check(&integers, &values.iter().map(|&v| u32::from(v)).collect::<Vec<_>>(), DType::I32)?;
     check(

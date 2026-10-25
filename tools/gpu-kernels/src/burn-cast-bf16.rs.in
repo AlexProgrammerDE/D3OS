@@ -1,0 +1,47 @@
+// Round directly from FP64 bits. The compiler otherwise lowers this conversion
+// through FP32, which loses the side of a BF16 rounding midpoint.
+fn cast_f64_bf16(bits: Tile<u64, { [128] }>) -> Tile<u64, { [128] }> {
+    let one = broadcast_scalar(1u64, shape![128]);
+    let zero = broadcast_scalar(0u64, shape![128]);
+    let magnitude = bits & ((one << broadcast_scalar(63u64, shape![128])) - one);
+    let exponent = magnitude >> broadcast_scalar(52u64, shape![128]);
+    let parity = (magnitude >> broadcast_scalar(45u64, shape![128])) & one;
+    let rounded = (magnitude + ((one << broadcast_scalar(44u64, shape![128])) - one) + parity) >> broadcast_scalar(45u64, shape![128]);
+    let normal = min_tile(rounded - broadcast_scalar(114688u64, shape![128]), broadcast_scalar(32640u64, shape![128]));
+    let shift = broadcast_scalar(942u64, shape![128]) - min_tile(max_tile(exponent, broadcast_scalar(889u64, shape![128])), broadcast_scalar(896u64, shape![128]));
+    let significand = (magnitude & ((one << broadcast_scalar(52u64, shape![128])) - one)) | (one << broadcast_scalar(52u64, shape![128]));
+    let upper = significand >> shift;
+    let remainder = significand & ((one << shift) - one);
+    let halfway = one << (shift - one);
+    let up = gt_tile(remainder, halfway) | (eq_tile(remainder, halfway) & ne_tile(upper & one, zero));
+    let subnormal = select(ge_tile(exponent, broadcast_scalar(889u64, shape![128])), upper + select(up,one,zero), zero);
+    let finite = select(lt_tile(exponent, broadcast_scalar(897u64, shape![128])), subnormal, normal);
+    let infinity = broadcast_scalar(2047u64, shape![128]) << broadcast_scalar(52u64, shape![128]);
+    let value = select(gt_tile(magnitude,infinity), broadcast_scalar(32704u64, shape![128]), finite);
+    let sign = (bits >> broadcast_scalar(48u64, shape![128])) & broadcast_scalar(32768u64, shape![128]);
+    value | sign
+}
+
+// Integer BF16 conversions also need one rounding step. Find the leading bit
+// with integer comparisons, then retain guard and sticky bits before packing.
+fn cast_integer_bf16(magnitude: Tile<u64, { [128] }>, negative: Tile<bool, { [128] }>) -> Tile<u64, { [128] }> {
+    let one = broadcast_scalar(1u64, shape![128]);
+    let zero = broadcast_scalar(0u64, shape![128]);
+    let mut remaining: Tile<u64, { [128] }> = magnitude;
+    let mut top: Tile<u64, { [128] }> = broadcast_scalar(0u64, shape![128]);
+    BF16_LEADING_BIT
+    let right = max_tile(top,broadcast_scalar(7u64,shape![128])) - broadcast_scalar(7u64,shape![128]);
+    let upper = magnitude >> right;
+    let remainder = magnitude & ((one << right)-one);
+    let halfway = one << (max_tile(right,one)-one);
+    let up = ne_tile(right,zero) & (gt_tile(remainder,halfway) | (eq_tile(remainder,halfway) & ne_tile(upper & one,zero)));
+    let rounded = upper + select(up,one,zero);
+    let left = broadcast_scalar(7u64,shape![128]) - min_tile(top,broadcast_scalar(7u64,shape![128]));
+    let normalized = select(lt_tile(top,broadcast_scalar(7u64,shape![128])), magnitude << left, rounded);
+    let carry = ge_tile(normalized,broadcast_scalar(256u64,shape![128]));
+    let normalized = select(carry,normalized >> one,normalized);
+    let exponent = top + broadcast_scalar(127u64,shape![128]) + select(carry,one,zero);
+    let value = (exponent << broadcast_scalar(7u64,shape![128])) | (normalized & broadcast_scalar(127u64,shape![128]));
+    let sign = select(negative,broadcast_scalar(32768u64,shape![128]),zero);
+    select(eq_tile(magnitude,zero),zero,value | sign)
+}

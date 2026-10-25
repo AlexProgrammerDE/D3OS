@@ -73,7 +73,7 @@ def stage_burn_program(root, binary, destination):
     return libdevice
 
 
-def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_finite=False, sort_compile_log=False, compaction_aligned=False, quantized_empty_case=None, scatter_finite=False, select_updates=False, nd_unique=False, nd_nonempty=False, nd_scalar_grad=False, nd_no_scalar=False, storage_flex_direct=False, storage_no_flex32=False):
+def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_finite=False, sort_compile_log=False, compaction_aligned=False, quantized_empty_case=None, scatter_finite=False, select_updates=False, nd_unique=False, nd_nonempty=False, nd_scalar_grad=False, nd_no_scalar=False, storage_flex_direct=False, storage_no_flex32=False, conversions_no_flex32=False):
     purposes = {
         "quantization": "shared API conformance; no performance measurement",
         "quantized_empty": "empty quantized API diagnostic and record round trip; execution errors retained; no performance measurement",
@@ -83,6 +83,7 @@ def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_fi
         "integer_matrix": "public I32 matrix product conformance; no performance measurement",
         "scan": "public cumulative operations and gradients; no performance measurement",
         "cross": "public FP32 vector products and gradients; no performance measurement",
+        "conversions": "ordinary numeric conversions, independent binary rounding reference, signed views and empty shapes; no performance measurement",
         "storage": "ordinary dtype storage, exact view copies, scalar fills and reloads; no arithmetic or performance comparison",
         "nd_indexing": "ND gather/scatter conformance, scalar forward execution and exact I32 indices; no performance measurement",
         "scatter_updates": "ordered scatter assignment/product/min/max and gradients; unique indices; no performance measurement",
@@ -92,6 +93,9 @@ def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_fi
     purpose = "erf error profile and GELU conformance; strict failures reported" if erf_profile else purposes[kind]
     program = f"/burn-{kind}"
     arguments = " --profile" if erf_profile else " --nonempty" if nonempty else ""
+    if conversions_no_flex32:
+        arguments += " --no-flex32"
+        purpose += "; Flex32 excluded due to retained upload and alias dtype errors"
     if storage_no_flex32:
         arguments += " --no-flex32"
         purpose += "; Flex32 excluded due to retained direct-upload failure"
@@ -148,6 +152,8 @@ exec {program}{arguments}
     }
     if kind == "nd_indexing":
         sources["reference_helpers"] = ROOT / "os/library/ai/src/validation/scatter_updates.rs"
+    if kind == "conversions":
+        sources["reference_helpers"] = ROOT / "os/library/ai/src/validation/storage.rs"
     if sort_compile_log:
         config = root / "CubeCL.toml"
         config.write_text('[compilation.logger]\nlevel = "basic"\nstdout = true\n')
@@ -1221,6 +1227,8 @@ def main():
     parser.add_argument("--burn-integer", type=Path, help="run public I32 division and floor remainder conformance on Linux CUDA")
     parser.add_argument("--burn-integer-matmul", type=Path, help="run public I32 matrix product conformance on Linux CUDA")
     parser.add_argument("--burn-integer-matmul-nonempty", action="store_true", help="run the nonempty I32 matrix cases separately from empty shapes")
+    parser.add_argument("--burn-conversions", type=Path, help="compare ordinary numeric GPU conversions and independent rounding references")
+    parser.add_argument("--burn-conversions-no-flex32", action="store_true")
     parser.add_argument("--burn-storage-flex32-direct", action="store_true")
     parser.add_argument("--burn-storage-no-flex32", action="store_true")
     parser.add_argument("--burn-storage", type=Path, help="compare ordinary dtype storage, views, fills and reloads on Linux CUDA")
@@ -1297,7 +1305,7 @@ def main():
     args = parser.parse_args()
     if args.nsight_directory and not args.quantized_profile:
         parser.error("--nsight-directory requires --quantized-profile")
-    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.burn_integer, args.burn_integer_matmul, args.burn_scatter_updates, args.burn_nd_indexing, args.burn_storage, args.burn_quantized_empty, args.burn_compaction, args.burn_cross, args.burn_scan, args.burn_sort, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
+    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.burn_integer, args.burn_integer_matmul, args.burn_scatter_updates, args.burn_nd_indexing, args.burn_storage, args.burn_conversions, args.burn_quantized_empty, args.burn_compaction, args.burn_cross, args.burn_scan, args.burn_sort, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
         parser.error("--quantized-profile requires a separate diagnostic guest")
     if args.pin_vcpus and len(os.sched_getaffinity(0)) != 4:
         parser.error("--pin-vcpus requires an inherited affinity of four host CPUs")
@@ -1327,6 +1335,7 @@ def main():
                 bool(args.burn_scatter_updates),
                 bool(args.burn_nd_indexing),
                 bool(args.burn_storage),
+                bool(args.burn_conversions),
                 bool(args.burn_quantized_empty),
                 bool(args.burn_compaction),
                 bool(args.burn_cross),
@@ -1356,6 +1365,10 @@ def main():
         parser.error("--burn-integer-matmul requires a built conformance executable")
     if args.burn_integer_matmul_nonempty and not args.burn_integer_matmul:
         parser.error("--burn-integer-matmul-nonempty requires --burn-integer-matmul")
+    if args.burn_conversions and not args.burn_conversions.is_file():
+        parser.error("--burn-conversions requires a built conformance executable")
+    if args.burn_conversions_no_flex32 and not args.burn_conversions:
+        parser.error("--burn-conversions-no-flex32 requires --burn-conversions")
     if (args.burn_storage_flex32_direct or args.burn_storage_no_flex32) and not args.burn_storage:
         parser.error("storage domain flags require --burn-storage")
     if args.burn_storage_flex32_direct and args.burn_storage_no_flex32:
@@ -1438,6 +1451,8 @@ def main():
         burn_probe(args.directory / "root", args.burn_integer.resolve(), "integer")
     elif args.burn_integer_matmul:
         burn_probe(args.directory / "root", args.burn_integer_matmul.resolve(), "integer_matrix", nonempty=args.burn_integer_matmul_nonempty)
+    elif args.burn_conversions:
+        burn_probe(args.directory / "root", args.burn_conversions.resolve(), "conversions", conversions_no_flex32=args.burn_conversions_no_flex32)
     elif args.burn_storage:
         burn_probe(args.directory / "root", args.burn_storage.resolve(), "storage", storage_flex_direct=args.burn_storage_flex32_direct, storage_no_flex32=args.burn_storage_no_flex32)
     elif args.burn_nd_indexing:
@@ -1606,6 +1621,12 @@ def main():
         cases, domain, empty = (5, "nonempty", "false") if args.burn_integer_matmul_nonempty else (8, "all", "true")
         if f"BURN_INTEGER_MATMUL_CONFORMANCE_OK os=linux backend=cuda cases={cases} domain={domain} reference=i128 wrapping=exact shared_views=true empty={empty}" not in text:
             raise RuntimeError("Linux CUDA Burn I32 matrix product conformance did not complete")
+    if args.burn_conversions:
+        pairs, flex32 = (168, "false") if args.burn_conversions_no_flex32 else (195, "true")
+        gradient_cases = 6 if args.burn_conversions_no_flex32 else 8
+        marker = f"BURN_CONVERSIONS_OK os=linux backend=cuda pairs={pairs} flex32={flex32} float_to_int=finite_in_range rounding=nearest_even integer_narrowing=low_bits half_float_codes=exhaustive bf16_midpoints=all_intervals gradients={gradient_cases} signed_views=true empty=true"
+        if marker not in text:
+            raise RuntimeError("Linux ordinary numeric conversions did not complete")
     if args.burn_storage:
         dtypes, flex32 = (14, "excluded_upstream_failure") if args.burn_storage_no_flex32 else (15, "direct")
         marker = "BURN_STORAGE_FLEX32_DIRECT_OK os=linux backend=cuda" if args.burn_storage_flex32_direct else f"BURN_STORAGE_CONFORMANCE_OK os=linux backend=cuda dtypes={dtypes} flex32={flex32} bytes=1,2,4,8 views=signed,broadcast,overlap fill=true bool_storage=explicit_backend reload=true half_bits=exhaustive empty=true scope=storage"

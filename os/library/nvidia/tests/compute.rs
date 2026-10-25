@@ -1,6 +1,33 @@
 use d3os_nvidia::compute::Kernel;
 
 #[test]
+fn conversions_check_both_physical_widths_and_logical_geometry() {
+    use d3os_nvidia::compute::cast::{self, Format};
+    let mut p = [0u32; 32];
+    p[..8].copy_from_slice(&[411, 2, 0, 0, 410, 0, 411, 0]);
+    p[8..16].fill(1);
+    p[8..10].copy_from_slice(&[137, 3]);
+    p[16..18].copy_from_slice(&[(-1i32) as u32, (-137i32) as u32]);
+    for source in Format::ALL {
+        for destination in Format::ALL {
+            p[2] = source as u32 | ((destination as u32) << 8);
+            let work = Kernel::TensorCast.work(&p).unwrap();
+            assert_eq!(work.extents[..2], [source.width().words(411), destination.width().words(411)]);
+            assert_eq!((work.pointers, work.output, work.in_place), (2, 1, false));
+            assert_eq!((work.blocks, work.threads), (destination.width().words(411).div_ceil(128) as u32, 128));
+            assert!(work.validate_aliases(&[0x1000, 0x1000]).is_err());
+        }
+    }
+    for (field, value) in [(2, 15), (2, 15 << 8), (2, 1 << 16), (3, 1), (5, 1), (6, 410), (7, 1), (24, 1)] {
+        let mut invalid = p;
+        invalid[field] = value;
+        assert!(cast::validate(&invalid).is_err());
+    }
+    assert!(cast::validate(&p[..31]).is_err());
+    assert!(Kernel::TensorCast.allocates_output());
+}
+
+#[test]
 fn packed_storage_counts_physical_words_and_rejects_noncanonical_metadata() {
     use d3os_nvidia::compute::storage::{self, Mode, Width};
     let mut p = [0u32; 32];

@@ -1,6 +1,7 @@
 //! Check Burn tensor ownership and views on real native GPU allocations.
 mod activation;
 mod compaction;
+mod conversions;
 mod convolution;
 mod cross;
 mod dispatch;
@@ -202,6 +203,12 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     crate::report(format_args!("BURN_STORAGE_FLEX32_DIRECT_OK os=d3os backend=native"));
     crate::report(format_args!(
         "BURN_STORAGE_CONFORMANCE_OK os=d3os backend=native dtypes=15 flex32=direct bytes=1,2,4,8 views=signed,broadcast,overlap fill=true bool_storage=explicit_backend reload=true half_bits=exhaustive empty=true scope=storage"
+    ));
+    conversions::run(backend)?;
+    let pairs = d3os_ai::validation::conversions::run(&device, true)?;
+    let gradient_cases = 8;
+    crate::report(format_args!(
+        "BURN_CONVERSIONS_OK os=d3os backend=native pairs={pairs} flex32=true float_to_int=finite_in_range rounding=nearest_even integer_narrowing=low_bits half_float_codes=exhaustive bf16_midpoints=all_intervals gradients={gradient_cases} signed_views=true empty=true"
     ));
     convolution::run(backend).map_err(|e| format!("Burn native convolution: {e}"))?;
     linear::run(backend).map_err(|e| format!("Burn native linear: {e}"))?;

@@ -3,6 +3,7 @@
 use crate::{Error, Result};
 
 pub mod argwhere;
+pub mod cast;
 pub mod convolution;
 pub mod elementwise;
 pub mod indexing;
@@ -18,7 +19,7 @@ pub mod storage;
 pub mod updates;
 pub mod words;
 
-pub const VERSION: u32 = 31;
+pub const VERSION: u32 = 32;
 /// END_COMMANDS flag: an inner recording scope joins its parent's completion.
 /// The outermost scope always waits. Zero retains synchronous nested scopes.
 pub const DEFER_NESTED_COMPLETION: u64 = 1;
@@ -52,7 +53,7 @@ pub struct MemoryProfile {
     pub device_cached_bytes: u64,
     pub device_retired_bytes: u64,
 }
-pub const KERNEL_COUNT: usize = 67;
+pub const KERNEL_COUNT: usize = 68;
 
 /// CPU service costs by request operation, including queue work within it.
 #[derive(Clone, Copy, Debug, Default)]
@@ -177,9 +178,10 @@ pub enum Kernel {
     TensorSort = 64,
     ArgWhere = 65,
     TensorStorage = 66,
+    TensorCast = 67,
 }
 
-const _: () = assert!(Kernel::TensorStorage as usize + 1 == KERNEL_COUNT);
+const _: () = assert!(Kernel::TensorCast as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -245,6 +247,7 @@ impl Kernel {
                 | Self::TensorSort
                 | Self::ArgWhere
                 | Self::TensorStorage
+                | Self::TensorCast
                 | Self::Im2col
                 | Self::MaxPool
                 | Self::Project
@@ -343,6 +346,7 @@ impl Kernel {
             64 => Self::TensorSort,
             65 => Self::ArgWhere,
             66 => Self::TensorStorage,
+            67 => Self::TensorCast,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -416,6 +420,7 @@ impl Kernel {
             Self::TensorSort => "burn_sort_f32_ascending",
             Self::ArgWhere => "burn_argwhere",
             Self::TensorStorage => "burn_storage_copy",
+            Self::TensorCast => "burn_cast",
         }
     }
 
@@ -590,6 +595,11 @@ impl Kernel {
             (Self::TensorReduction, p) => {
                 extents[..2].copy_from_slice(&reduction::validate(p)?);
                 (product(&[p[0], 128])?, 2, 1, false)
+            }
+            (Self::TensorCast, p) => {
+                let (source, output) = cast::validate(p)?;
+                extents[..2].copy_from_slice(&[source, output]);
+                (u32::try_from(output).map_err(|_| Error::InvalidField)?, 2, 1, false)
             }
             (Self::TensorStorage, p) => {
                 let (mode, _, source, output) = storage::validate(p)?;

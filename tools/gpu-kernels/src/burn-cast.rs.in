@@ -1,0 +1,84 @@
+CAST_HELPERS
+
+fn cast_width(format: u32) -> u32 {
+    if format == 0u32 || format == 5u32 || format == 9u32 { 3u32 }
+    else if format == 3u32 || format == 4u32 || format == 7u32 || format == 11u32 { 1u32 }
+    else if format == 8u32 || format == 12u32 || format == 13u32 { 0u32 }
+    else { 2u32 }
+}
+
+fn cast_value(mut bits: Tile<u64, { [128] }>, source: u32, destination: u32) -> Tile<u64, { [128] }> {
+    if source == destination || ((source == 1u32 || source == 2u32) && (destination == 1u32 || destination == 2u32)) {
+        bits
+    } else if source == 0u32 { cast_f64(bits, destination) }
+    else if source == 1u32 || source == 2u32 { cast_f32(bits, destination) }
+    else if source == 3u32 { cast_f16(bits, destination) }
+    else if source == 4u32 { cast_bf16(bits, destination) }
+    else {
+    if source >= 13u32 {
+        bits = select(ne_tile(bits, broadcast_scalar(0u64, shape![128])), broadcast_scalar(1u64, shape![128]), broadcast_scalar(0u64, shape![128]));
+    }
+    if source >= 5u32 && source <= 8u32 {
+        if source == 6u32 {
+            let small: Tile<u32, { [128] }> = trunci(bits & ((broadcast_scalar(1u64, shape![128]) << broadcast_scalar(32u64, shape![128])) - broadcast_scalar(1u64, shape![128])), overflow::NoUnsignedWrap);
+            let signed: Tile<i32, { [128] }> = bitcast(small);
+            let large: Tile<i64, { [128] }> = exti(signed);
+            bits = bitcast(large);
+        } else if source == 7u32 {
+            let small: Tile<u16, { [128] }> = trunci(bits & ((broadcast_scalar(1u64, shape![128]) << broadcast_scalar(16u64, shape![128])) - broadcast_scalar(1u64, shape![128])), overflow::NoUnsignedWrap);
+            let signed: Tile<i16, { [128] }> = bitcast(small);
+            let large: Tile<i64, { [128] }> = exti(signed);
+            bits = bitcast(large);
+        } else if source == 8u32 {
+            let small: Tile<u8, { [128] }> = trunci(bits & ((broadcast_scalar(1u64, shape![128]) << broadcast_scalar(8u64, shape![128])) - broadcast_scalar(1u64, shape![128])), overflow::NoUnsignedWrap);
+            let signed: Tile<i8, { [128] }> = bitcast(small);
+            let large: Tile<i64, { [128] }> = exti(signed);
+            bits = bitcast(large);
+        }
+        cast_i64(bits, destination)
+    } else { cast_u64(bits, destination) }
+    }
+}
+
+#[cutile::entry()]
+unsafe fn burn_cast(input: *const u32, output: *mut u32, CAST_PARAMETERS) {
+    let source = kind & 0xffu32;
+    let destination = kind >> 8u32;
+    let source_width = cast_width(source);
+    let output_width = cast_width(destination);
+    let output_per_word = if output_width == 3u32 { 1u32 } else { 4u32 >> output_width };
+    let input_per_word = if source_width == 3u32 { 1u32 } else { 4u32 >> source_width };
+    let words = if output_width == 3u32 { count * 2u32 } else { (count + output_per_word - 1u32) / output_per_word };
+    let word = indices();
+    let valid_word = lt_tile(word, broadcast_scalar(words, shape![128]));
+    let mut result = broadcast_scalar(0u32, shape![128]);
+    let output_bits = 8u32 << output_width;
+    for slot in 0u32..output_per_word {
+        let logical = if output_width == 3u32 { word / broadcast_scalar(2u32, shape![128]) } else { word * broadcast_scalar(output_per_word, shape![128]) + broadcast_scalar(slot, shape![128]) };
+        let valid = valid_word & lt_tile(logical, broadcast_scalar(count, shape![128]));
+        let address = storage_address(logical, offset, CAST_GEOMETRY_ARGUMENTS);
+        let bits: Tile<u64, { [128] }> = if source_width == 3u32 {
+            let address = address * broadcast_scalar(2u32, shape![128]);
+            let low = unsafe { read_tile(input, address, valid, 0u32) };
+            let high = unsafe { read_tile(input, address + broadcast_scalar(1u32, shape![128]), valid, 0u32) };
+            let low: Tile<u64, { [128] }> = exti(low);
+            let high: Tile<u64, { [128] }> = exti(high);
+            low | (high << broadcast_scalar(32u64, shape![128]))
+        } else {
+            let part = unsafe { read_tile(input, address / broadcast_scalar(input_per_word, shape![128]), valid, 0u32) };
+            let shift = address % broadcast_scalar(input_per_word, shape![128]) * broadcast_scalar(8u32 << source_width, shape![128]);
+            let value = part >> shift;
+            let mask = unsigned(-1i32) >> (32u32 - (8u32 << source_width));
+            exti(value & broadcast_scalar(mask, shape![128]))
+        };
+        let converted = cast_value(bits, source, destination);
+        let selected = if output_width == 3u32 {
+            converted >> (exti(word % broadcast_scalar(2u32, shape![128])) * broadcast_scalar(32u64, shape![128]))
+        } else { converted };
+        let selected: Tile<u32, { [128] }> = trunci(selected & ((broadcast_scalar(1u64, shape![128]) << broadcast_scalar(32u64, shape![128])) - broadcast_scalar(1u64, shape![128])), overflow::NoUnsignedWrap);
+        let selected = if output_width == 3u32 { selected } else { selected & broadcast_scalar(unsigned(-1i32) >> (32u32 - output_bits), shape![128]) };
+        let selected = select(valid, selected, broadcast_scalar(0u32, shape![128]));
+        result = result | (selected << broadcast_scalar(if output_width == 3u32 { 0u32 } else { slot * output_bits }, shape![128]));
+    }
+    unsafe { write_tile(output, word, result, valid_word) };
+}

@@ -15,7 +15,7 @@ Associated types and source SHA-256 hashes accompany the report.
 
 The current inventory contains 484 methods: 264 native overrides and 220 inherited defaults.
 All required methods have declarations or implementations. This count does not establish runtime support.
-The report also records 115 native helper bodies for manual review of dtype and shape restrictions.
+The report also records 116 native helper bodies for manual review of dtype and shape restrictions.
 
 The tool follows syntactic associated backend calls and expands the pinned `dequant_op_quant!` and `dequant_op_flow!` macros.
 It identifies 25 methods with possible paths to explicit declines or panic declarations.
@@ -36,8 +36,9 @@ Linux CUDA declares storage support missing from D3OS for these 12 formats:
 `F64`, `Flex32`, `F16`, `BF16`, `I64`, `I16`, `I8`, `U64`, `U32`, `U16`, `U8`, and `Bool(U8)`.
 
 Burn's `Storage` flag requires conversion to and from other supported dtypes as well as physical storage.
-The new packed storage implementation does not advertise these flags before numeric conversions are complete.
-The physical storage tests below therefore do not close this capability gap.
+Ordinary numeric casts now execute on the GPU, as described below.
+Quantized conversions and additional boolean-producing paths remain incomplete for the new formats.
+The usage flags stay disabled until the complete conversion contract passes.
 Both backends decline the separate `Bool(Native)` declaration.
 
 Linux also declares arithmetic support for these formats and `I32`.
@@ -52,10 +53,9 @@ Resident dequantization and requantization can implement some operations without
 
 ## Packed ordinary dtype storage
 
-Protocol 31 adds packed storage copy and fill kernels.
-The matching SDK, driver, application image, and portable bundle must use this protocol together.
-The bundle contains 214 inference entries and 67 compute profile slots.
-All 212 previous instruction entries and their constant sections remain byte-identical.
+Protocol 31 introduced packed storage copy and fill kernels with 214 inference entries and 67 compute profile slots.
+All 212 earlier instruction entries and their constant sections remain byte-identical.
+The current protocol and bundle include the conversions described below.
 
 | Physical bytes per value | Ordinary formats |
 | --- | --- |
@@ -95,8 +95,65 @@ Its service counters check resident execution and output allocation without a se
 Negative checks reject F16, BF16, F64, I64, and U64 arithmetic and gathers without a GPU launch.
 
 These additions provide storage, fills, views, materialization, and tensor record reloads.
-Arithmetic, numeric casts, matrix products, and accelerated execution for the additional formats remain incomplete.
+General arithmetic, matrix products, and accelerated execution for the additional formats remain incomplete.
+Ordinary numeric casts now pass the checks in the next section.
 This checkpoint contains no execution-performance or compile-time parity measurement.
+
+## Ordinary numeric conversions
+
+Protocol 32 adds one resident conversion kernel for all 15 ordinary formats.
+The matching SDK, driver, application image, and 215-entry portable inference bundle must use this protocol together.
+The compute profile contains 68 slots.
+All 214 earlier instruction entries and their constant sections remain byte-identical.
+The existing FP32/I32 conversion paths remain in use.
+
+Each lane writes a complete output word, including zero padding after the final narrow value.
+Source offsets and signed strides use logical elements, while the driver checks packed physical bounds for both buffers.
+Conversions need no host activation transfer or separate output clear.
+Identity conversions retain shared storage and exact bits.
+The F32/Flex32 alias also retains shared storage because both formats use the same physical representation.
+Other conversions produce independent storage and preserve the source.
+
+Floating-point conversions use nearest-even rounding.
+Integer narrowing retains the low destination bits after signed source extension.
+Native float-to-integer conversion truncates toward zero, clamps overflow, and maps NaN to zero.
+The Linux comparison uses finite inputs within the destination range because its overflow behavior is not portable.
+Finite results require exact bits. Conversions between different floating-point formats compare NaN classification instead of payload bits.
+
+The independent reference rounds binary significands with integer arithmetic.
+It includes U64 values whose correct result differs from an intermediate FP32 or FP64 conversion.
+The native raw suite checks 225 format pairs, scalar results, empty casts, neighboring guards, zero padding, and queued source lifetimes.
+Service counters check resident execution and allocation through a single full writer.
+Boolean cases include zero, one, and all-ones records.
+Boolean-to-I32 conversion now produces numeric zero or one instead of reinterpreting the original bits.
+Its output owns independent storage, so the previous allocation-free alias check now checks full-writer and ownership behavior.
+
+The shared suite covers 195 Burn API pairs on D3OS and 168 on Linux CUDA with Flex32 excluded explicitly.
+Numeric cases use public Burn tensors. Boolean cases use public backend operations to request both physical storage widths.
+Checks include reversed transposes, empty shapes, and eight native or six Linux cast-gradient cases.
+Every F16 and BF16 bit code converts to each floating-point format in the checked backend's domain.
+BF16 checks also cover 195,840 FP64 boundary inputs and 99,072 integer boundary inputs across signed and unsigned 16/32/64-bit formats.
+These inputs include both sides of each midpoint, ties, both signs, subnormals, and overflow boundaries where applicable.
+
+The first native run detected double rounding in the pinned NVIDIA compiler's FP64-to-BF16 lowering.
+It returned `0x3f80` where the independent reference and Linux returned `0x3f81`.
+The instruction dump shows FP64-to-FP32 conversion followed by FP32-to-BF16 conversion.
+The integer-to-BF16 paths also used an intermediate FP32 value.
+The replacement rounds directly from FP64 bits or the original integer's leading, guard, and sticky bits.
+The [Tile IR 13.4 conversion rules](https://docs.nvidia.com/cuda/tile-ir/13.4/sections/operations.html) define the rounding and saturating operations used by the other paths.
+
+The pinned Linux F32-to-Flex32 cast returns F32 metadata, so the full Flex32 corpus remains a separate failed diagnostic.
+Another retained failure came from the gradient fixture's constructor, before casting.
+Burn autodiff inherits `float_full`, which uses `TensorData::full_dtype` and tags a Flex32 fill as F32.
+The corrected cast fixture creates explicitly tagged leaves and checks their source dtype first.
+This avoids treating a constructor result as proof about cast gradients.
+
+D3OS passes the full native corpus and existing operator regressions after compilation inside the VM.
+All three generated modules match their host audit hashes.
+Linux CUDA passes the shared corpus with Flex32 excluded explicitly.
+
+These checks cover ordinary casts, not full dtype arithmetic, quantized conversion variants, or accelerated matrix products for the additional formats.
+The capability declarations remain conservative. This checkpoint contains no matched execution-performance or compile-time parity measurement.
 
 ## Native erf and GELU validation
 
@@ -469,7 +526,7 @@ Other quantization formats and layouts still require separate coverage.
 
 ## Remaining implementation areas
 
-The unresolved work includes ordinary dtype arithmetic and conversions, complete integer arithmetic, further matrix dtypes, and additional floating-point operations.
+The unresolved work includes ordinary dtype arithmetic, quantized and boolean-producing conversions, complete integer arithmetic, further matrix dtypes, and additional floating-point operations.
 Further sorting and compaction dtypes, further convolution variants, deformable convolution, and interpolation also require coverage.
 Compaction formats beyond the checked Q8 cases remain unverified.
 Broadcast cross-product gradients, graph capture, profiling, memory capabilities, records, and observable errors require matched Linux capability checks.
@@ -491,9 +548,21 @@ Build the Linux probes with their default CUDA feature:
 
 ```bash
 cd tools/mnist-benchmark
-cargo build --release --locked --bin capabilities --bin erf --bin integer --bin integer_matrix --bin scan --bin sort --bin cross --bin compaction --bin scatter_updates --bin quantized_empty --bin nd_indexing --bin storage
+cargo build --release --locked --bin capabilities --bin erf --bin integer --bin integer_matrix --bin scan --bin sort --bin cross --bin compaction --bin scatter_updates --bin quantized_empty --bin nd_indexing --bin storage --bin conversions
 cd ../..
 ```
+
+Run the conversion comparison with the pinned Linux Flex32 failure excluded:
+
+```bash
+python3 tools/nvidia/linux-reference.py \
+  --directory target/nvidia/linux-burn-conversions \
+  --burn-conversions tools/mnist-benchmark/target/release/conversions \
+  --burn-conversions-no-flex32
+```
+
+For the full Flex32 diagnostic, use a fresh directory and omit `--burn-conversions-no-flex32`.
+The D3OS `gpu-self-test` always includes all 15 formats and the complete native gradient and boundary corpus.
 
 Run the storage comparison with the pinned Linux Flex32 failure excluded:
 
@@ -657,5 +726,10 @@ The accepted storage evidence lives under `target/nvidia/burn-backend-validation
 The audit directory contains `traits-storage-final.json`, `storage-comparison.json`, and `storage-section-comparison.json`.
 The isolated Linux Flex32 failure remains under `linux-storage-flex32-direct/`, with the assignment diagnostic under `linux-storage-alias/`.
 The first native boolean fixture failure remains under `target/nvidia/burn-backend-validation/storage-first/`.
+The accepted conversion evidence lives under `target/nvidia/burn-backend-validation/cast-resident-final/` and `target/nvidia/burn-backend-audit/linux-conversions-final/`.
+The audit directory contains `traits-cast-final.json`, `cast-comparison.json`, and `cast-section-comparison.json`.
+The first rounding failure remains under `cast-first/`, with the old machine code, portable input, and instruction dumps retained.
+The gradient-constructor diagnostic remains under `cast-direct-bf16/`; the replaced Boolean alias check remains under `cast-final/`.
+The Linux Flex32 metadata diagnostic remains under `linux-conversions-flex32/` with its exact shared source archive.
 Manifests record the shared validation source hashes, executable hashes, and execution backend.
 These generated local artifacts are not Git-tracked. The probes and audit tool are tracked for reproduction.
