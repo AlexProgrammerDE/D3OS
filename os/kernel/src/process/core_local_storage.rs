@@ -6,8 +6,6 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use log::info;
 use raw_cpuid::CpuId;
 use spin::{Mutex};
-use thingbuf::mpsc::errors::TryRecvError;
-use thingbuf::mpsc::Receiver;
 use x2apic::lapic::LocalApic;
 use x86_64::instructions::segmentation::{Segment, CS, DS, ES, FS, GS, SS};
 use x86_64::instructions::tables::load_tss;
@@ -18,8 +16,7 @@ use x86_64::structures::gdt::{Descriptor, GlobalDescriptorTable};
 use x86_64::structures::tss::TaskStateSegment;
 use x86_64::VirtAddr;
 use crate::device::apic::Apic;
-use crate::process::scheduler::{per_cpu_apic_id, set_inbox_apic_id, Scheduler, MessageItem};
-use crate::take_inbox_receiver;
+use crate::process::scheduler::{per_cpu_apic_id, set_inbox_apic_id, Scheduler};
 
 const PREEMPT_COUNT_OFFSET: usize = offset_of!(CoreLocalStorage, preempt_count);
 
@@ -39,7 +36,6 @@ pub struct CoreLocalStorage {
     tss: Mutex<TaskStateSegment>,
     gdt: Mutex<GlobalDescriptorTable>,
     scheduler: Scheduler,
-    rx: Receiver<Option<MessageItem>>,  // single owner (this core)
     preempt_count: AtomicUsize,
 }
 
@@ -55,7 +51,6 @@ impl CoreLocalStorage {
             tss: Mutex::new(TaskStateSegment::new()),
             gdt: Mutex::new(GlobalDescriptorTable::new()),
             scheduler: Scheduler::new(),
-            rx: take_inbox_receiver(id as usize),
             preempt_count: AtomicUsize::new(0),
         }
     }
@@ -68,11 +63,6 @@ impl CoreLocalStorage {
 
     pub fn init_apic(&mut self, kernel_core: bool) {
         self.local_apic = Some(Apic::new_local_apic(kernel_core));
-    }
-
-    /// Tries to receive a MessageItem from the inbox.
-    pub fn try_recv(&self) -> Result<Option<MessageItem>, TryRecvError> {
-        self.rx.try_recv()
     }
 
     /// Sets the timer ticks per ms that will be used for the timer interrupt in the future.

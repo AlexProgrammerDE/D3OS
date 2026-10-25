@@ -26,7 +26,7 @@ use crate::memory::PAGE_SIZE;
 use crate::memory::acpi_handler::AcpiHandler;
 use crate::memory::heap::KernelAllocator;
 use crate::process::process_manager::ProcessManager;
-use crate::process::scheduler::{MessageItem, PerCpuRef};
+use crate::process::scheduler::PerCpuRef;
 use crate::syscall::sys_graphic::LfbInfo;
 
 use alloc::boxed::Box;
@@ -49,8 +49,6 @@ use graphic::lfb::LFB;
 use multiboot2::ModuleTag;
 use spin::{Mutex, Once, RwLock};
 use tar_no_std::TarArchiveRef;
-use thingbuf::mpsc;
-use thingbuf::mpsc::Receiver;
 use x86_64::PhysAddr;
 use x86_64::structures::gdt::GlobalDescriptorTable;
 use x86_64::structures::idt::InterruptDescriptorTable;
@@ -256,31 +254,17 @@ pub fn idt() -> &'static Mutex<InterruptDescriptorTable> {
 
 /// Global PERCPU Reference Table indexed by core_id
 static PER_CPU_REF: Once<&'static [PerCpuRef]> = Once::new();
-static PER_CPU_RX: Once<&'static [Mutex<Option<Receiver<Option<MessageItem>>>>]> = Once::new();
 
 /// Called only once by the boot processor core during startup to initialize the global tables
 pub fn per_cpu_init(cpu_count: usize, capacity: usize) {
     let mut publics = Vec::with_capacity(cpu_count);
-    let mut receivers = Vec::with_capacity(cpu_count);
 
     for _ in 0..cpu_count {
-        let (tx, rx) = mpsc::channel::<Option<MessageItem>>(capacity);
-        publics.push(PerCpuRef::new(tx));
-        receivers.push(Mutex::new(Some(rx)));
+        publics.push(PerCpuRef::new(capacity));
     }
 
     let leaked_cpu_slice: &'static [PerCpuRef] = Box::leak(publics.into_boxed_slice());
     PER_CPU_REF.call_once(|| leaked_cpu_slice);
-    let leaked_receiver_slice: &'static [Mutex<Option<Receiver<Option<MessageItem>>>>]
-        = Box::leak(receivers.into_boxed_slice());
-    PER_CPU_RX.call_once(|| leaked_receiver_slice);
-}
-
-/// Called only once by each owner core during startup to move the RX into its CLS
-pub fn take_inbox_receiver(id: usize) -> Receiver<Option<MessageItem>> {
-    let bank = PER_CPU_RX.get().expect("per_cpu_init not called");
-    let mut guard = bank[id].lock();
-    guard.take().expect("Receiver already taken")
 }
 
 /// Returns a reference to the PerCpuSched struct of the core with the given id

@@ -2518,3 +2518,38 @@ The weight audit follows its [Qwen conversion rules](https://github.com/ggml-org
 
 The tiled attention design uses the running softmax normalization described in [FlashAttention](https://arxiv.org/abs/2205.14135).
 This Rust kernel retains FP32 operands and does not reuse the Linux library's attention kernels.
+
+
+## Scheduler inbox saturation during compilation
+
+The first interpolation validation stopped during inference-module compilation, before any interpolation kernel ran.
+A cross-core broadcast filled the scheduler's 100-slot inbox and panicked with `TrySendError::Full`.
+The thread-transfer path also discarded a runnable thread if its bounded send failed.
+Retrying a full inbox can deadlock because producers can hold scheduler locks with interrupts disabled.
+
+Each core now owns one growable FIFO for thread transfers and control messages.
+An IRQ-save lock protects insertion and removal.
+The consumer releases this lock before it dispatches a message.
+This preserves insertion order and permits handlers to enqueue follow-up commands.
+The shared FIFO keeps control messages behind earlier thread transfers.
+The initial allocation remains 100 entries. Growth uses the existing IRQ-save allocator and retains normal kernel OOM behavior.
+Neither the inbox lock nor the allocator calls the scheduler while held.
+The obsolete channel receiver bank and sender interface are removed.
+
+Host checks use the production FIFO and lock, with thread-local interrupt state in place of privileged instructions.
+They check 12,288 queued thread/control messages, retained ownership, nested interrupt state, and requeue after removal.
+Four concurrent producers also deliver 65,536 messages with exact per-producer order and no missing or duplicate messages.
+CI runs these checks before the OS build.
+
+The rebuilt D3OS kernel passes ten thread/vector/cleanup runs with four KVM CPUs.
+It also passes 30 sleeping-worker process-exit cycles with four TCG CPUs.
+These regressions overlap GPU validation and do not establish a performance change.
+The original panic remains under `target/nvidia/burn-backend-validation/interpolate-first/`.
+The regression logs use the `target/interpolate-inbox-` prefix.
+
+```sh
+rustc --edition=2024 --test tools/kernel/test-scheduler-inbox.rs -o target/test-scheduler-inbox
+target/test-scheduler-inbox
+python3 tools/kernel/test-linux-threads.py --accel kvm --cpus 4 --repeat 10
+python3 tools/kernel/test-process-exit.py --accel tcg --cpus 4 --repeat 30 --sleeping-workers --timeout 240
+```

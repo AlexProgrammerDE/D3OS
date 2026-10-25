@@ -43,13 +43,13 @@ use log::{debug, info};
 use smallmap::Map;
 use spin::{Mutex, Once};
 use spin::mutex::{SpinMutex, SpinMutexGuard};
-use thingbuf::mpsc::{Sender};
 use x86_64::registers::control::{Cr0, Cr0Flags};
 use crate::device::apic::get_apic_id;
 use crate::device::cpu::{disable_int_nested, enable_int_nested};
 use crate::ipi::send_fixed_to_apic;
 use crate::process::core_local_storage::{cls, current_core_id, preempt_is_disabled, scheduler, tss_static};
 use crate::sync::irqsave_spinlock::IrqSaveSpinlock;
+use crate::process::inbox::SchedulerInbox;
 
 // thread IDs
 pub static THREAD_ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
@@ -790,9 +790,8 @@ impl Scheduler {
                         let _tid = thread.id();
                         let w = MessageItem::new_thread(thread);
                         dec_rq_len();
-                        if let Ok(_r) = schedule_on(target_core, w) {
-                            debug!(" Scheduler{}: Scheduled thread {} on core {}", current_core_id(), _tid, target_core);
-                        }
+                        schedule_on(target_core, w);
+                        debug!(" Scheduler{}: Scheduled thread {} on core {}", current_core_id(), _tid, target_core);
                     }
                 }
             }
@@ -966,7 +965,7 @@ impl Scheduler {
                     // Move the target into the ready queue before retrying its
                     // removal. This also handles a CPU-bound thread with no peer.
                     state.kill_pending = true;
-                    let _ = schedule_on(current_core_id() as usize, MessageItem::Cmd(MessageCmd::Kill { tid }));
+                    schedule_on(current_core_id() as usize, MessageItem::Cmd(MessageCmd::Kill { tid }));
                     return;
                 }
                 self.kill_locally(tid, state);
@@ -1049,19 +1048,25 @@ impl Scheduler {
 /// Helper struct to store shared public information of a core
 ///     rq_len: approximate runqueue length (owner updates, others read)
 ///     resched_flag: indicates whether another core requested a reschedule
-///     tx: sender for other cores to send messages to this one
+///     inbox: FIFO for other cores to send messages to this one
 ///     apic_id: stored at initialization, used to translate cpu_id to apic_id for IPI's
 #[repr(align(64))]
 pub struct PerCpuRef {
     rq_len: AtomicU32,
     resched_flag: AtomicBool,
-    tx: Sender<Option<MessageItem>>,    // producers (remote cores)
+    inbox: SchedulerInbox<MessageItem>,
     apic_id: AtomicUsize,
 }
-unsafe impl Sync for PerCpuRef {}
-impl PerCpuRef { pub fn new(tx: Sender<Option<MessageItem>>) -> Self {
-    Self { rq_len: AtomicU32::new(0), resched_flag: AtomicBool::new(false),
-        tx, apic_id: AtomicUsize::new(0) } } }
+impl PerCpuRef {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            rq_len: AtomicU32::new(0),
+            resched_flag: AtomicBool::new(false),
+            inbox: SchedulerInbox::with_capacity(capacity),
+            apic_id: AtomicUsize::new(0),
+        }
+    }
+}
 
 
 /// Wrapper enum to store either a runnable thread or a small cross-core command.
@@ -1116,23 +1121,14 @@ pub fn per_cpu_ref_curr() -> &'static PerCpuRef {
     per_cpu_ref(current_core_id() as usize)
 }
 
-/// Returns a reference to the sender out of the PerCpuSched struct of the core with the given id
-#[inline]
-pub fn per_cpu_sender(id: usize) -> &'static Sender<Option<MessageItem>> {
-    &per_cpu_ref(id).tx
-}
-
-/// Schedules a thread (wrapped in a MessageItem) on a remote core with the target_id
-/// Sends a reschedule IPI to wake that core up, if it was idle.
-pub fn schedule_on(target_id: usize, item: MessageItem) -> Result<(), MessageItem> {
-    let pc = per_cpu_ref(target_id);
-    match pc.tx.try_send(Some(item)) {
-        Ok(()) => {
-            send_reschedule_ipi(target_id);
-            Ok(())
-        }
-        Err(e) => Err(e.into_inner().unwrap()), // unwrap: we sent Some(_)
-    }
+/// Schedules a thread or command on the target core without capacity failure.
+/// Sends a reschedule IPI after releasing the inbox lock.
+/// The queue only acquires its own IRQ-save lock and the IRQ-save allocator
+/// during growth; it never acquires a scheduler lock while holding either.
+/// Allocation failure retains the kernel's ordinary fatal OOM behavior.
+pub fn schedule_on(target_id: usize, item: MessageItem) {
+    per_cpu_ref(target_id).inbox.push(item);
+    send_reschedule_ipi(target_id);
 }
 
 /// Schedules a cmd (wrapped in a MessageItem) on ALL remote cores
@@ -1141,34 +1137,24 @@ pub fn schedule_on_all_others(item: MessageItem) {
     let own_id = current_core_id() as usize;
     for i in 0..ACTIVE_CPUS.load(Ordering::Acquire) as usize {
         if i != own_id {
-            let pc = per_cpu_ref(i);
-            pc.tx.try_send(Some(item.clone())).expect("Failed to send message to remote core!");
+            per_cpu_ref(i).inbox.push(item.clone());
         }
     }
 }
 
-/// drains the inbox from the cls into the ready queue; 10 items max per call
-/// automatically calls inc_rq_len()
+/// Drain at most `max` messages, releasing the inbox lock before dispatch.
+/// Update the runqueue length for each transferred thread.
 pub fn drain_inbox_into_ready(max: usize, state: &mut ReadyState) {
     let mut drained_threads = 0usize;
     for _ in 0..max {
-        match cls().try_recv() {
-            Ok(Some(item)) => match item {
-                MessageItem::Thread(thread) => {
-
-                    state.ready_queue.push_front(thread);
-                    inc_rq_len();
-                    drained_threads += 1;
-                }
-                MessageItem::Cmd(cmd) => {
-                    scheduler().handle_inbox_cmd(cmd, state);
-                }
-            },
-            Ok(None) => {
-                log::error!("cpu{}: inbox returned None (unexpected)", current_core_id());
-                break;
+        let Some(item) = per_cpu_ref_curr().inbox.pop() else { break; };
+        match item {
+            MessageItem::Thread(thread) => {
+                state.ready_queue.push_front(thread);
+                inc_rq_len();
+                drained_threads += 1;
             }
-            Err(_) => break,
+            MessageItem::Cmd(cmd) => scheduler().handle_inbox_cmd(cmd, state),
         }
     }
     if drained_threads > 0 {

@@ -35,6 +35,11 @@ jobs:
           cargo install --locked cargo-license --version 0.6.1
       - name: Verify QEMU vCPU affinity
         run: python3 tools/inference/test-vcpu-affinity.py
+      - name: Verify scheduler inbox saturation and concurrent delivery
+        run: |
+          mkdir -p target
+          rustc --edition=2024 --test tools/kernel/test-scheduler-inbox.rs -o target/test-scheduler-inbox
+          target/test-scheduler-inbox
       - name: Build D3OS
         run: cargo make --no-workspace --profile production image
       - name: Inject an interrupt during a multicore context switch
