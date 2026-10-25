@@ -23,7 +23,7 @@ pub struct Layout {
 }
 
 fn count(shape: &[usize]) -> Result<usize> {
-    if shape.is_empty() || shape.len() > MAX_RANK || shape.iter().any(|&dim| dim > INDEX_MAX) {
+    if shape.len() > MAX_RANK || shape.iter().any(|&dim| dim > INDEX_MAX) {
         return Err(Error::InvalidShape);
     }
     if shape.contains(&0) {
@@ -274,7 +274,7 @@ impl Layout {
         let mut parameters = [0u32; 32];
         parameters[..8].copy_from_slice(&[
             self.elements as u32,
-            self.shape.num_dims() as u32,
+            self.shape.num_dims().max(1) as u32,
             operation | if scalar_rhs { elementwise::SCALAR_RHS } else { 0 },
             scalar_bits,
             self.offset as u32,
@@ -433,4 +433,21 @@ pub fn matmul_shape(lhs: &Shape, rhs: &Shape) -> Result<Shape> {
     dimensions[rank - 1] = rhs[right_rank - 1];
     count(&dimensions)?;
     Ok(Shape::from(dimensions))
+}
+
+/// Shape of ND gather output and ND scatter values. Empty index tensors are
+/// rejected by Burn's public contract; selecting a single point is a scalar.
+pub fn nd_shape(data: &Shape, indices: &Shape) -> Result<Shape> {
+    count(data.as_slice())?;
+    let index_count = count(indices.as_slice())?;
+    let Some(&width) = indices.last() else {
+        return Err(Error::InvalidShape);
+    };
+    if index_count == 0 || width == 0 || width > data.num_dims() {
+        return Err(Error::InvalidShape);
+    }
+    let mut dims = indices[..indices.num_dims() - 1].to_vec();
+    dims.extend_from_slice(&data[width..]);
+    count(&dims)?;
+    Ok(Shape::from(dims))
 }

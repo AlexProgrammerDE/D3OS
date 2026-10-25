@@ -73,7 +73,7 @@ fn destination(mut i: usize, input: [usize; 3], output: [usize; 3], axis: usize,
     (coords[0] * output[1] + coords[1]) * output[2] + coords[2]
 }
 
-fn integer(a: u32, b: u32, update: IndexingUpdateOp) -> u32 {
+pub(super) fn integer(a: u32, b: u32, update: IndexingUpdateOp) -> u32 {
     match update {
         IndexingUpdateOp::Assign => b,
         IndexingUpdateOp::Mul => a.wrapping_mul(b),
@@ -83,7 +83,7 @@ fn integer(a: u32, b: u32, update: IndexingUpdateOp) -> u32 {
     }
 }
 
-fn float(a: f32, b: f32, update: IndexingUpdateOp) -> f32 {
+pub(super) fn float(a: f32, b: f32, update: IndexingUpdateOp) -> f32 {
     match update {
         IndexingUpdateOp::Assign => b,
         IndexingUpdateOp::Mul => a * b,

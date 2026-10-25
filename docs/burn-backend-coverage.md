@@ -15,10 +15,10 @@ Associated types and source SHA-256 hashes accompany the report.
 
 The current inventory contains 484 methods: 264 native overrides and 220 inherited defaults.
 All required methods have declarations or implementations. This count does not establish runtime support.
-The report also records 108 native helper bodies for manual review of dtype and shape restrictions.
+The report also records 111 native helper bodies for manual review of dtype and shape restrictions.
 
 The tool follows syntactic associated backend calls and expands the pinned `dequant_op_quant!` and `dequant_op_flow!` macros.
-It identifies 29 methods with possible paths to explicit declines or panic declarations.
+It identifies 25 methods with possible paths to explicit declines or panic declarations.
 This number is not an unsupported-operation count. Some paths represent expected invalid-input errors or conditional restrictions.
 
 The analysis does not resolve method types, evaluate conditional compilation, or expand other macros and free helper functions.
@@ -353,6 +353,54 @@ All three guest-compiled modules match their host audit hashes, and the portable
 This step adds operation coverage without a new throughput or compile-time parity measurement.
 Quantized selection-update execution remains unverified across the supported format matrix.
 
+## Native multidimensional indexing
+
+The native backend implements FP32 and I32 `gather_nd` and all five `scatter_nd` update modes.
+An index tuple addresses leading data dimensions. The output preserves index batch dimensions and trailing data slices.
+Empty index tensors remain invalid under Burn's public contract.
+Empty trailing data slices perform no GPU element work.
+
+The implementation forms exact I32 linear row indices on the GPU.
+It validates each coordinate independently before the final gather or scatter bounds check.
+This prevents an invalid tuple such as `[1, -1]` from aliasing an otherwise valid flattened position.
+Nonempty operations replace invalid tuples with sentinel indices and produce a recoverable bounds error.
+Signed source, index, and value views use resident copies where flattening requires contiguous storage.
+Tensor payloads remain on the GPU. Each nonempty operation reads one four-byte bounds flag.
+
+A single full-coordinate tuple can produce a rank-zero scalar.
+The native layout now represents that scalar as one logical element with no axes.
+Its strided launch descriptor uses one physical dimension of length one, preserving the scalar's logical shape.
+The existing portable kernels therefore handle scalar copies, arithmetic, broadcasting, and ND values without a new GPU entry.
+Protocol 30, 66 kernel profiles, and the 212-entry bundle remain unchanged.
+
+The shared corpus covers tuple widths one through three and index ranks one through three.
+It checks reversed and offset views, batches, update lengths 1, 127, 128, and 129, and shared input preservation.
+Fifteen scatter-gradient cases check both input derivatives for all five modes.
+Three gather-gradient cases use independent weighted references.
+Large I32 gathers check flattened positions 16,785,407 and 16,785,408 without FP32 conversion.
+The full Flex CPU corpus passes, including scalar forward results, duplicate addition, and empty trailing slices.
+
+The initial Linux CUDA run fails scalar readback with CubeCL's `Unsupported rank 0` error.
+The subsequent non-scalar run returns a duplicate gather gradient of 1, where 513 repeated indices require 513.
+The pinned ND scatter kernel uses ordinary loads and stores for addition, without atomic accumulation.
+These failures remain separate evidence. They are not successful conformance cases.
+
+Linux CUDA passes the separate unique, non-scalar corpus, including all 18 gradient cases and empty trailing slices.
+D3OS passes the full corpus on the same GPU, including scalar forward results and duplicate accumulation.
+Its raw checks reject cancelling invalid tuples, preserve source guards, and retain exact IEEE payload bits.
+They also cover a rank-eight scalar result and FP32/I32 scalar arithmetic.
+Native counters check zero tensor uploads and one four-byte bounds read per nonempty operation.
+Empty results reuse the source buffer and enqueue no GPU work.
+
+The first native run caught an extra clear launch from an empty-result allocation.
+The corrected run passes the complete operator suite, and all guest-compiled modules match the unchanged host audit hashes.
+This step adds no execution-throughput or compile-time parity measurement.
+
+An isolated scalar-gradient diagnostic also covers a pinned Burn autodiff limitation.
+Its CPU run panics in `unsqueeze_like` when a rank-one gradient targets a rank-zero shape.
+The isolated Linux scalar-gradient run fails earlier during rank-zero readback.
+Native scalar autodiff remains unverified. Scalar forward support does not establish scalar autodiff support.
+
 ## Empty quantized diagnostics
 
 An empty Q8 tensor with an explicit unit scale round-trips through quantized records on both D3OS and Linux CUDA.
@@ -369,11 +417,13 @@ Other quantization formats and layouts still require separate coverage.
 ## Remaining implementation areas
 
 The unresolved work includes ordinary dtypes, complete integer arithmetic, matrix products for further dtypes, and additional floating-point operations.
-Further sorting and compaction dtypes, multidimensional indexing, further convolution variants, deformable convolution, and interpolation also require coverage.
+Further sorting and compaction dtypes, further convolution variants, deformable convolution, and interpolation also require coverage.
 Compaction formats beyond the checked Q8 cases remain unverified.
 Broadcast cross-product gradients, graph capture, profiling, memory capabilities, records, and observable errors require matched Linux capability checks.
 The current layout also restricts rank to eight and extents to signed 32-bit values.
 The method inventory records defaults, but each composed path still needs dtype, shape, ownership, and execution checks.
+
+Scalar autodiff and the full quantized ND format matrix also remain unresolved.
 
 ## Reproduce the checks
 
@@ -388,7 +438,7 @@ Build the Linux probes with their default CUDA feature:
 
 ```bash
 cd tools/mnist-benchmark
-cargo build --release --locked --bin capabilities --bin erf --bin integer --bin integer_matrix --bin scan --bin sort --bin cross --bin compaction --bin scatter_updates --bin quantized_empty
+cargo build --release --locked --bin capabilities --bin erf --bin integer --bin integer_matrix --bin scan --bin sort --bin cross --bin compaction --bin scatter_updates --bin quantized_empty --bin nd_indexing
 cd ../..
 ```
 
@@ -466,6 +516,27 @@ python3 tools/nvidia/linux-reference.py \
   --burn-scatter-updates-select
 ```
 
+Run the full ND diagnostic first and retain any failure:
+
+```bash
+python3 tools/nvidia/linux-reference.py \
+  --directory target/nvidia/linux-burn-nd-indexing-all \
+  --burn-nd-indexing tools/mnist-benchmark/target/release/nd_indexing
+```
+
+Run the accepted Linux ND domain separately:
+
+```bash
+python3 tools/nvidia/linux-reference.py \
+  --directory target/nvidia/linux-burn-nd-indexing-unique \
+  --burn-nd-indexing tools/mnist-benchmark/target/release/nd_indexing \
+  --burn-nd-indexing-no-scalar --burn-nd-indexing-unique
+```
+
+The flags exclude the retained scalar-read and duplicate-gradient failures.
+They leave the D3OS suite unchanged.
+The `--burn-nd-indexing-scalar-grad` flag runs the isolated scalar autodiff diagnostic.
+
 Run each empty quantized diagnostic in a separate Linux VM:
 
 ```bash
@@ -512,5 +583,9 @@ The native scatter run contains the corresponding D3OS diagnostics.
 The vector-selection evidence lives under `target/nvidia/burn-backend-validation/select-updates-first/` and `target/nvidia/burn-backend-audit/linux-select-updates-ieee/`.
 The refactored scatter comparison lives under `target/nvidia/burn-backend-audit/linux-scatter-updates-refactored/`.
 The audit directory contains `traits-select-updates.json`, `select-updates-comparison.json`, and separate Flex CPU diagnostics.
+The accepted ND evidence lives under `target/nvidia/burn-backend-validation/nd-indexing-empty-fixed/` and `target/nvidia/burn-backend-audit/linux-nd-indexing-unique/`.
+The first native failure remains under `target/nvidia/burn-backend-validation/nd-indexing-first/`.
+The Linux scalar, duplicate, and scalar-gradient failures remain under `linux-nd-indexing-all/`, `linux-nd-indexing-no-scalar/`, and `linux-nd-indexing-scalar-grad/`.
+The audit directory contains `traits-nd-indexing.json`, `nd-indexing-comparison.json`, and separate CPU diagnostics.
 Manifests record the shared validation source hashes, executable hashes, and execution backend.
 These generated local artifacts are not Git-tracked. The probes and audit tool are tracked for reproduction.

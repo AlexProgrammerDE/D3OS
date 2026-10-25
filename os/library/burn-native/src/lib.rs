@@ -7,6 +7,7 @@ pub mod backend;
 mod compaction;
 pub mod convolution;
 mod device;
+mod indexing;
 pub mod layout;
 mod linear;
 pub mod pooling;

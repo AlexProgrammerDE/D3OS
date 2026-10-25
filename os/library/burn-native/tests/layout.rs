@@ -6,6 +6,42 @@ fn offsets(layout: &Layout) -> Vec<usize> {
 }
 
 #[test]
+fn scalar_layout_retains_one_element_and_lowers_to_one_physical_lane() {
+    use d3os_nvidia::compute::{elementwise::Elementwise, words::WordOp};
+    let scalar = Layout::from_parts(Shape::new([]), vec![], 3, 7).unwrap();
+    assert_eq!(offsets(&scalar), [3]);
+    assert!(scalar.is_contiguous());
+    assert_eq!(scalar.reshape(Shape::new([1])).unwrap().offset(), 3);
+    let other = Layout::contiguous(Shape::new([])).unwrap();
+    let p = scalar.elementwise_parameters(&other, Elementwise::Add, 0, false).unwrap();
+    assert_eq!(&p[..2], &[1, 1]);
+    assert_eq!(&p[4..8], &[3, 0, 7, 1]);
+    assert!(scalar.word_parameters(&other, WordOp::Multiply, 0, false).is_ok());
+    assert_eq!(offsets(&scalar.expand(Shape::new([2, 3])).unwrap()), [3; 6]);
+    assert_eq!(broadcast(other.shape(), &Shape::new([2, 3])).unwrap(), Shape::new([2, 3]));
+    assert!(Layout::from_parts(Shape::new([]), vec![], 7, 7).is_err());
+    assert!(Layout::from_parts(Shape::new([]), vec![1], 0, 1).is_err());
+}
+
+#[test]
+fn nd_shapes_preserve_batches_trailing_slices_and_scalar_points() {
+    use d3os_burn_native::layout::nd_shape;
+    let data = Shape::new([2, 3, 4]);
+    for (indices, expected) in [
+        (vec![2, 5, 2], vec![2, 5, 4]),
+        (vec![3], vec![]),
+        (vec![1], vec![3, 4]),
+        (vec![127, 3], vec![127]),
+    ] {
+        assert_eq!(nd_shape(&data, &Shape::from(indices)).unwrap().as_slice(), expected);
+    }
+    assert_eq!(nd_shape(&Shape::new([2, 0, 4]), &Shape::new([1, 1])).unwrap(), Shape::new([1, 0, 4]));
+    for indices in [vec![], vec![0, 1], vec![2, 0], vec![2, 4]] {
+        assert!(nd_shape(&data, &Shape::from(indices)).is_err());
+    }
+}
+
+#[test]
 fn scan_layout_retains_signed_axes_and_dense_prefix_destinations() {
     use d3os_nvidia::compute::scan::{self, Scan};
     let view = Layout::contiguous(Shape::new([2, 3, 129]))

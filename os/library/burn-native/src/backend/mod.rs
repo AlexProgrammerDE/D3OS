@@ -11,7 +11,7 @@ mod qwen;
 
 use crate::{
     NativeDevice, NativeTensor,
-    layout::{Layout, broadcast, matmul_shape},
+    layout::{Layout, broadcast, matmul_shape, nd_shape},
 };
 use alloc::{string::String, vec::Vec};
 use burn_backend::{

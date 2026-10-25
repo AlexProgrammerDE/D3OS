@@ -355,17 +355,19 @@ impl FloatTensorOps<Self> for Native {
     fn float_prod_dim(tensor: BackendTensor, dim: usize) -> BackendTensor {
         reduce("float_prod_dim", &tensor, Some(dim), Reduction::Product, tensor.dtype())
     }
-    fn float_scatter_nd(data: BackendTensor, indices: BackendTensor, values: BackendTensor, _update: IndexingUpdateOp) -> BackendTensor {
-        BackendTensor::unsupported(
-            "float_scatter_nd",
-            data.shape(),
-            data.dtype(),
-            &[&data, &indices, &values],
-            "multidimensional scatter",
-        )
+    fn float_scatter_nd(data: BackendTensor, indices: BackendTensor, values: BackendTensor, update: IndexingUpdateOp) -> BackendTensor {
+        BackendTensor::apply("float_scatter_nd", data.shape(), data.dtype(), &[&data, &indices, &values], |v| {
+            v[0].scatter_nd(v[1], v[2], update)
+        })
     }
     fn float_gather_nd(data: BackendTensor, indices: BackendTensor) -> BackendTensor {
-        BackendTensor::unsupported("float_gather_nd", data.shape(), data.dtype(), &[&data, &indices], "multidimensional gather")
+        BackendTensor::apply(
+            "float_gather_nd",
+            nd_shape(&data.shape(), &indices.shape()).unwrap_or_else(|_| data.shape()),
+            data.dtype(),
+            &[&data, &indices],
+            |v| v[0].gather_nd(v[1]),
+        )
     }
     fn float_sort(tensor: BackendTensor, dim: usize, descending: bool) -> BackendTensor {
         one("float_sort", &tensor, tensor.dtype(), |t| t.sort(dim, descending).map(|(values, _)| values))

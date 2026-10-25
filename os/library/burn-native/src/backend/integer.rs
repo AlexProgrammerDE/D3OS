@@ -334,17 +334,19 @@ impl IntTensorOps<Self> for Native {
             NativeTensor::full(shape, dtype.into(), fill_value.elem::<i32>() as u32)
         })
     }
-    fn int_scatter_nd(data: BackendTensor, indices: BackendTensor, values: BackendTensor, _update: IndexingUpdateOp) -> BackendTensor {
-        BackendTensor::unsupported(
-            "int_scatter_nd",
-            data.shape(),
-            data.dtype(),
-            &[&data, &indices, &values],
-            "multidimensional scatter",
-        )
+    fn int_scatter_nd(data: BackendTensor, indices: BackendTensor, values: BackendTensor, update: IndexingUpdateOp) -> BackendTensor {
+        BackendTensor::apply("int_scatter_nd", data.shape(), data.dtype(), &[&data, &indices, &values], |v| {
+            v[0].scatter_nd(v[1], v[2], update)
+        })
     }
     fn int_gather_nd(data: BackendTensor, indices: BackendTensor) -> BackendTensor {
-        BackendTensor::unsupported("int_gather_nd", data.shape(), data.dtype(), &[&data, &indices], "multidimensional gather")
+        BackendTensor::apply(
+            "int_gather_nd",
+            nd_shape(&data.shape(), &indices.shape()).unwrap_or_else(|_| data.shape()),
+            data.dtype(),
+            &[&data, &indices],
+            |v| v[0].gather_nd(v[1]),
+        )
     }
     fn int_sort(tensor: BackendTensor, dim: usize, descending: bool) -> BackendTensor {
         one("int_sort", &tensor, tensor.dtype(), |t| t.sort(dim, descending).map(|(values, _)| values))

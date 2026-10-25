@@ -292,8 +292,9 @@ Resident I32 division and matrix products, FP32 erf, and cumulative operations n
 Sorting, argsort, top-k, FP32 cross products, coordinate extraction, and mask selection also pass their checked cases.
 All single-axis scatter update modes pass matched public checks on D3OS and Linux CUDA.
 Vector-selection updates also support all five modes through resident scatter and broadcast index views.
+Multidimensional gather/scatter now pass native FP32/I32 checks, including scalar forward results and duplicate addition.
 The [coverage report](burn-backend-coverage.md) records their shapes, numerical semantics, Linux failures, and remaining dtype restrictions.
-The gaps include further ordinary dtypes, additional FP32 math, further compaction formats, and multidimensional indexing.
+The gaps include further ordinary dtypes, additional FP32 math, further compaction formats, and scalar autodiff.
 Complete Burn quantization, three-dimensional convolutions, transposed convolutions, and interpolation also remain incomplete.
 The native backend also uses Burn's `GraphUnsupported` primitive, so captured graph replay remains a gap.
 Its advertised dtype capabilities cover F32, I32 storage, U32 boolean storage, and the quantization storage described below.
