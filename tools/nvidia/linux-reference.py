@@ -11,10 +11,12 @@ import os
 import platform
 import re
 import resource
+import shlex
 import shutil
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import tomllib
@@ -58,13 +60,13 @@ def stage_compiler(root):
     return compiler
 
 
-def compiler_benchmark(root, repeats):
+def compiler_benchmark(root, repeats, cpu_masks):
     stage_compiler(root)
     for name in ("date", "taskset", "sha256sum", "cp", "time"):
         executable(root, name)
     benchmark = root / "benchmark"
     benchmark.write_text(
-        f"#!/bin/bash\nrepeats={repeats}\n"
+        f"#!/bin/bash\nrepeats={repeats}\ncpu_masks={shlex.quote(' '.join(dict.fromkeys(cpu_masks)))}\n"
         + """
 set -eux
 capability=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader,nounits)
@@ -74,7 +76,7 @@ cp -r /usr/cuda/. /tmp/cuda/
 for input in /usr/share/nvidia/*.tilebc /usr/share/nvidia/*.ptx; do
     if [ -f "$input" ]; then cp "$input" /tmp/kernels/; fi
 done
-for cpus in 0 0-3; do
+for cpus in $cpu_masks; do
     for ((run=0; run<repeats; run++)); do
         total_ms=0
         for family in vector-add tensor-matmul inference; do
@@ -921,6 +923,12 @@ def main():
     parser.add_argument("--kernel-benchmark", action="store_true")
     parser.add_argument("--compiler-benchmark", action="store_true")
     parser.add_argument("--compiler-repeats", type=int, default=3)
+    parser.add_argument(
+        "--compiler-cpus",
+        choices=("0", "1", "2", "3", "0-3"),
+        nargs="+",
+        help="compiler CPU masks inside the four-CPU Linux guest; default: 0 0-3",
+    )
     parser.add_argument("--llama-directory", type=Path)
     parser.add_argument("--large-qwen", choices=("9b", "27b"))
     parser.add_argument(
@@ -945,9 +953,18 @@ def main():
     parser.add_argument("--model", type=Path)
     parser.add_argument("--memory-mib", type=int, default=4096)
     parser.add_argument("--timeout", type=int, default=300)
+    parser.add_argument(
+        "--pin-vcpus",
+        action="store_true",
+        help="pin guest CPUs individually to the caller's four host CPUs before boot",
+    )
     parser.add_argument("--doom-benchmark", action="store_true")
     parser.add_argument("--alexnet-benchmark", action="store_true")
     args = parser.parse_args()
+    if args.pin_vcpus and len(os.sched_getaffinity(0)) != 4:
+        parser.error("--pin-vcpus requires an inherited affinity of four host CPUs")
+    if args.compiler_cpus and not args.compiler_benchmark:
+        parser.error("--compiler-cpus requires --compiler-benchmark")
     if args.trace_cuda_kernels and not (args.large_qwen and args.llama_directory):
         parser.error("--trace-cuda-kernels requires --large-qwen and --llama-directory")
     affinity = ",".join(str(cpu) for cpu in sorted(os.sched_getaffinity(0)))
@@ -990,7 +1007,9 @@ def main():
         parser.error("this Linux guest directory is already in use")
     prepare(args.directory, args.kernel)
     if args.compiler_benchmark:
-        compiler_benchmark(args.directory / "root", args.compiler_repeats)
+        compiler_benchmark(
+            args.directory / "root", args.compiler_repeats, args.compiler_cpus or ("0", "0-3")
+        )
     elif args.kernel_benchmark:
         kernel_benchmark(args.directory / "root")
     elif args.llama_directory:
@@ -1075,12 +1094,33 @@ def main():
         f"file:{args.directory / 'serial.log'}",
         "-no-reboot",
     ]
+    monitor = args.directory / "qmp.sock"
+    (args.directory / "vcpu-affinity.json").unlink(missing_ok=True)
+    if args.pin_vcpus:
+        monitor.unlink(missing_ok=True)
+        command.extend(["-S", "-qmp", f"unix:{monitor},server=on,wait=off"])
     with (args.directory / "qemu.log").open("w") as log:
         process = subprocess.Popen(command, stdout=log, stderr=log)
+        qmp = None
         try:
+            if args.pin_vcpus:
+                spec = importlib.util.spec_from_file_location(
+                    "inference_qemu", ROOT / "tools/inference/test-qemu.py"
+                )
+                harness = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(harness)
+                qmp = harness.Qmp(monitor, process, time.monotonic() + args.timeout)
+                mapping = {"execution_os": "linux", **harness.pin_vcpus(qmp)}
+                (args.directory / "vcpu-affinity.json").write_text(
+                    json.dumps(mapping, indent=2) + "\n"
+                )
+                print(f"NVIDIA_VM_AFFINITY {json.dumps(mapping)}", flush=True)
+                qmp.execute("cont")
             if process.wait(timeout=args.timeout):
                 raise RuntimeError(f"Linux reference failed: {args.directory}")
         finally:
+            if qmp is not None:
+                qmp.close()
             if process.poll() is None:
                 process.terminate()
                 process.wait(timeout=15)

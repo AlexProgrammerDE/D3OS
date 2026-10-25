@@ -69,6 +69,99 @@ The boot check calibrates a cuTile kernel to run for at least 10 ms and compares
 The first `mean_us` pass runs without timestamp instrumentation.
 These measurements separate end-to-end overhead from device throughput. They are not interchangeable timers.
 
+## Control guest CPU placement
+
+Both GPU launchers accept `--pin-vcpus` for comparisons with fixed CPU placement.
+Start the launcher with an affinity of exactly four host CPUs.
+It pauses QEMU before boot, assigns one host CPU to each guest CPU, verifies the assignments, and then resumes the VM.
+The `vcpu-affinity.json` file records the execution OS, guest CPU indices, host CPU indices, and QEMU thread IDs.
+
+For the current four-CPU compiler comparison, use:
+
+```bash
+taskset -c 8,10,12,14 python3 tools/nvidia/linux-reference.py \
+  --compiler-benchmark --compiler-repeats 3 --compiler-cpus 0-3 \
+  --memory-mib 4096 --pin-vcpus --timeout 480 \
+  --directory target/nvidia/compile-parity/linux-pinned
+
+taskset -c 8,10,12,14 python3 tools/nvidia/run-qemu.py \
+  --firmware target/nvidia/firmware --kernels target/nvidia/kernels \
+  --memory-mib 4096 --pin-vcpus --boot-check \
+  --inference gpu-alexnet-bench --timeout 90
+```
+
+The Linux `--compiler-cpus` option selects compiler CPU masks inside the guest.
+Its default compares CPU 0 with CPUs 0 through 3. Select `0-3` for the primary four-CPU comparison.
+Each D3OS sample requires a new VM because its compiled modules remain cached for the VM's lifetime.
+Keep compilation, GPU validation, and AlexNet execution as separate phases.
+
+Pinning controls vCPU placement; it does not reserve host cores or fix their clock rates.
+The Linux control trials still show timing variation after pinning.
+The GPU-free CI check verifies real QEMU thread affinities, rejects a mismatched CPU count before changing any affinity, and rejects a shared vCPU thread.
+
+## Current cold compiler measurements
+
+These trials use the validated paired-byte Q8 bundle, CUDA 13.4.92, four KVM CPUs, and 4 GiB of guest RAM.
+Both OSes use fixed guest-to-host CPU assignments on `8,10,12,14`.
+All 13 staged compiler assets, including runtime libraries and portable inputs, match by SHA-256.
+All generated GPU binaries match the host audits byte for byte.
+No host builds overlap these trials. Other host workloads and CPU clock changes remain outside the launcher's control.
+
+| Execution OS | Compiler CPUs | Cold compilation of all three modules | Mean |
+| --- | --- | --- | ---: |
+| Linux VM | CPUs 0 through 3 | 79.321, 84.868 s | 82.095 s |
+| D3OS VM | Four online CPUs | 79.073, 83.351, 92.723 s | 85.049 s |
+
+The D3OS samples use three fresh boots, with all eight AlexNet references passing afterward.
+The Linux samples use separate compiler processes in one VM, with inputs copied to guest tmpfs before timing.
+The 3.60 percent mean difference and overlapping ranges do not settle the remaining timing spread.
+Small-module startup also remains slower: vector compilation takes 258–337 ms on D3OS versus 38–43 ms on Linux.
+Tensor test compilation takes 891–1,159 ms on D3OS versus 314–534 ms on Linux.
+PTX compilation latency still needs its own matched comparison.
+Compilation parity therefore remains open.
+
+### Separate hardware-counter diagnostics
+
+The compiler profiler counts guest user and kernel CPU events through the host's `perf_event_open` API.
+It samples cumulative counters every 250 ms and retains enabled and running times for multiplexing corrections.
+It also records each pinned host CPU's current frequency and archives its source.
+These diagnostic runs have `instrumented=true` and remain separate from ordinary compilation timing.
+
+```bash
+taskset -c 8,10,12,14 python3 tools/nvidia/profile-compiler.py \
+  --os linux --directory target/nvidia/compile-profile/linux
+
+taskset -c 8,10,12,14 python3 tools/nvidia/profile-compiler.py \
+  --os d3os --directory target/nvidia/compile-profile/d3os
+```
+
+The retained diagnostics cover inference-module compilation after the tensor test module finishes.
+The following counts sum all four guest CPUs, excluding host execution.
+Kernel-cycle share includes activity on otherwise idle guest CPUs. It is not a wall-time percentage.
+
+| Inference compiler diagnostic | Linux VM | D3OS VM |
+| --- | ---: | ---: |
+| Guest user instructions | 522.788 billion | 523.447 billion |
+| Guest user cycles | 422.247 billion | 432.349 billion |
+| Guest kernel cycles | 1.874 billion | 39.773 billion |
+| Guest kernel-cycle share | 0.442 percent | 8.424 percent |
+| User instructions per cycle | 1.238 | 1.211 |
+| User cycles per reference cycle | 2.099 | 1.998 |
+
+The nearly identical instruction totals establish comparable compiler work in these runs.
+D3OS records much more kernel activity and a lower effective clock ratio.
+The counters do not establish why its clock ratio differs.
+A separate native kernel sampling run captures 23,354 guest-kernel samples with no lost samples.
+Disassembly locates 47.51 percent in the Linux dispatcher's global process-manager read-lock loop and 10.51 percent in its per-process state-lock loop.
+Kernel heap deallocation is the next major hotspot.
+The process cleanup thread currently destroys exited processes while holding the process-manager write lock.
+That destruction can free thousands of mapping descriptors while other CPUs attempt syscalls.
+
+Evidence is under `target/nvidia/compile-parity-q8/`.
+The ordinary runs are `linux-pinned/`, `pinned-before-linux/`, and `pinned-after-linux/`.
+The counter traces, source snapshots, and summaries are under `linux-profile/` and `d3os-profile/`.
+The sampled kernel image, raw perf data, and program-counter report are under `kernel-samples/`.
+
 ## Compile portable kernels inside D3OS
 
 The host now exports Tile IR instead of injecting GPU machine code.
@@ -151,14 +244,14 @@ Warm D3OS generation measures 5.339 and 5.118 tokens per second, compared with t
 Two greedy selections differ from the retained Linux CUDA trace; the same teacher-forced inputs remain enforced.
 The retained Linux CUDA 27B baseline is 34.4025 tokens per second. Comparable throughput is not established.
 
-## Compiler scheduling and current-input comparison
+## Earlier compiler scheduling comparison
 
 Timer preemption now keeps the current runnable thread when its ready queue has no peer.
 Previously, that path queued the runnable thread and selected idle until the next scheduling opportunity.
 The kernel also uses explicit cooperative yields in input and network polling loops.
 Those yields retain their existing behavior.
 
-The current compiler comparison uses CUDA 13.4.92 and the packed-block kernel inputs from the following section.
+This earlier compiler comparison uses CUDA 13.4.92 and the packed-block kernel inputs from the following section.
 Both guests use four KVM CPUs, 4 GiB of RAM, affinity `8,10,12,14`, and target `sm_89`.
 The Linux trial first copies compiler inputs and executables to guest tmpfs.
 Linux repeats fresh compiler invocations in one VM. Each D3OS sample uses a fresh boot.

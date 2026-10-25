@@ -70,6 +70,28 @@ def firmware_options(image, directory):
     ]
 
 
+def pin_vcpus(qmp):
+    """Give each guest CPU one host CPU from the caller's explicit affinity."""
+    hosts = sorted(os.sched_getaffinity(0))
+    guests = sorted(qmp.execute("query-cpus-fast"), key=lambda cpu: cpu["cpu-index"])
+    if len(hosts) != len(guests):
+        raise ValueError(
+            f"vCPU pinning requires exactly {len(guests)} host CPUs in the caller's affinity, got {hosts}"
+        )
+    if len({guest["thread-id"] for guest in guests}) != len(guests):
+        raise ValueError("vCPU pinning requires one host thread per guest CPU")
+    mapping = []
+    for host, guest in zip(hosts, guests, strict=True):
+        thread = guest["thread-id"]
+        os.sched_setaffinity(thread, {host})
+        if os.sched_getaffinity(thread) != {host}:
+            raise RuntimeError(f"QEMU thread {thread} did not retain host CPU {host}")
+        mapping.append(
+            {"guest_cpu": guest["cpu-index"], "host_cpu": host, "thread_id": thread}
+        )
+    return {"host_affinity": hosts, "vcpus": mapping}
+
+
 class Qmp:
     def __init__(self, path, process, deadline):
         self.socket = socket.socket(socket.AF_UNIX)

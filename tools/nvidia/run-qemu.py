@@ -143,7 +143,14 @@ def main():
     parser.add_argument(
         "--gdb-port", type=int, help="pause at reset for a local GDB connection"
     )
+    parser.add_argument(
+        "--pin-vcpus",
+        action="store_true",
+        help="pin guest CPUs individually to the caller's four host CPUs before boot",
+    )
     args = parser.parse_args()
+    if args.pin_vcpus and len(os.sched_getaffinity(0)) != 4:
+        parser.error("--pin-vcpus requires an inherited affinity of four host CPUs")
     if args.kernel_image is not None and (
         not args.firmware or not args.kernel_image.is_file()
     ):
@@ -369,6 +376,8 @@ def main():
         if not 1 <= args.gdb_port <= 65535:
             parser.error("--gdb-port must be from 1 to 65535")
         command.extend(["-gdb", f"tcp:127.0.0.1:{args.gdb_port}", "-S"])
+    elif args.pin_vcpus:
+        command.append("-S")
     for name, path in firmware_files.items():
         filename = str(path).replace(",", ",,")
         command.extend(["-fw_cfg", f"name=opt/d3os/{name},file={filename}"])
@@ -377,10 +386,22 @@ def main():
         return
     serial.unlink(missing_ok=True)
     monitor.unlink(missing_ok=True)
+    (directory / "vcpu-affinity.json").unlink(missing_ok=True)
     with (directory / "qemu.log").open("w") as log:
         process = subprocess.Popen(command, cwd=ROOT, stdout=log, stderr=log)
         qmp = None
         try:
+            if args.pin_vcpus:
+                qmp = harness.Qmp(
+                    monitor, process, time.monotonic() + args.compile_timeout
+                )
+                mapping = {"execution_os": "d3os", **harness.pin_vcpus(qmp)}
+                (directory / "vcpu-affinity.json").write_text(
+                    json.dumps(mapping, indent=2) + "\n"
+                )
+                print(f"NVIDIA_VM_AFFINITY {json.dumps(mapping)}", flush=True)
+                if args.gdb_port is None:
+                    qmp.execute("cont")
             if not args.boot_check:
                 print(
                     f"NVIDIA_VM_RUNNING pid={process.pid} serial={serial} qmp={monitor}",
@@ -396,7 +417,8 @@ def main():
                 + args.timeout
                 + (args.compile_timeout if args.kernels else 0)
             )
-            qmp = harness.Qmp(monitor, process, deadline)
+            if qmp is None:
+                qmp = harness.Qmp(monitor, process, deadline)
             started = False
             controls = False
             compilation_observed = None
