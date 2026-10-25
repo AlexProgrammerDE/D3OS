@@ -73,7 +73,7 @@ def stage_burn_program(root, binary, destination):
     return libdevice
 
 
-def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_finite=False, sort_compile_log=False, compaction_aligned=False, quantized_empty_case=None, scatter_finite=False, select_updates=False, nd_unique=False, nd_nonempty=False, nd_scalar_grad=False, nd_no_scalar=False, storage_flex_direct=False, storage_no_flex32=False, conversions_no_flex32=False, remainder_finite=False, remainder_wide=False, inverse_finite=False, inverse_diagnostic=False, interpolate_case="normal", spatial_empty=False, spatial_case=None, spatial_exact=False, spatial_empty_backward=False, deform_empty=False, deform_exact=False, deform_case=None, deform_forward_only=False, predicate_no_flex32=False, predicate_finite=False, movement_no_flex32=False, movement_skip_empty_bool_scatter=False, movement_matching_bool_masks=False, indexed_no_flex32=False, indexed_skip_scalar_nd=False, integer_arithmetic_dtype=None, integer_arithmetic_op=None, float_arithmetic_arguments=(), float_rounding_arguments=()):
+def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_finite=False, sort_compile_log=False, compaction_aligned=False, quantized_empty_case=None, scatter_finite=False, select_updates=False, nd_unique=False, nd_nonempty=False, nd_scalar_grad=False, nd_no_scalar=False, storage_flex_direct=False, storage_no_flex32=False, conversions_no_flex32=False, remainder_finite=False, remainder_wide=False, inverse_finite=False, inverse_diagnostic=False, interpolate_case="normal", spatial_empty=False, spatial_case=None, spatial_exact=False, spatial_empty_backward=False, deform_empty=False, deform_exact=False, deform_case=None, deform_forward_only=False, predicate_no_flex32=False, predicate_finite=False, movement_no_flex32=False, movement_skip_empty_bool_scatter=False, movement_matching_bool_masks=False, indexed_no_flex32=False, indexed_skip_scalar_nd=False, integer_arithmetic_dtype=None, integer_arithmetic_op=None, float_arithmetic_arguments=(), float_rounding_arguments=(), relu_arguments=()):
     purposes = {
         "quantization": "shared API conformance; no performance measurement",
         "quantized_empty": "empty quantized API diagnostic and record round trip; execution errors retained; no performance measurement",
@@ -83,6 +83,7 @@ def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_fi
         "integer_power": "public exact wrapping I32 powers; independent I128 reference; no performance measurement",
         "predicate": "ordinary numeric predicates and both boolean widths; independent decoded references; no performance measurement",
         "movement": "ordinary stored-value movement, packed masks and Boolean consumers; independent byte-record reference; no performance measurement",
+        "relu": "typed ReLU and backward with independent IEEE bit references; no performance measurement",
         "float_rounding": "typed square root and integral rounding with independent expected bits; no performance measurement",
         "float_arithmetic": "typed basic floating arithmetic with independent expected bits; no performance measurement",
         "integer_arithmetic": "exact integer elementwise arithmetic across eight formats; independent U128/I128 reference; no performance measurement",
@@ -105,8 +106,8 @@ def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_fi
     purpose = "erf error profile and GELU conformance; strict failures reported" if erf_profile else purposes[kind]
     program = f"/burn-{kind}"
     arguments = " --profile" if erf_profile else " --nonempty" if nonempty else ""
-    if kind in ("float_arithmetic", "float_rounding"):
-        selected_arguments = float_arithmetic_arguments if kind == "float_arithmetic" else float_rounding_arguments
+    if kind in ("float_arithmetic", "float_rounding", "relu"):
+        selected_arguments = {"float_arithmetic": float_arithmetic_arguments, "float_rounding": float_rounding_arguments, "relu": relu_arguments}[kind]
         arguments += " " + " ".join(selected_arguments) if selected_arguments else ""
         summary_args = [str(binary), "--expected-summary", *selected_arguments]
         expected_summary = json.loads(subprocess.check_output(summary_args, text=True, cwd=ROOT))
@@ -236,6 +237,8 @@ exec {program}{arguments}
         sources["reference_manifest"] = ROOT / f"tools/nvidia/{tool_prefix}-manifest.json"
         if kind == "float_rounding":
             sources["reference_base_generator"] = ROOT / "tools/nvidia/float-arithmetic-generate.py"
+    if kind == "relu":
+        sources["expected_summary"] = root.parent / "burn-relu-expected.json"
     if kind == "integer_arithmetic":
         sources["expected_summary"] = root.parent / "burn-integer_arithmetic-expected.json"
     if kind == "indexed":
@@ -1316,6 +1319,10 @@ def main():
     parser.add_argument("--burn-capabilities", type=Path, help="query Burn dtype usage declarations on the Linux CUDA device")
     parser.add_argument("--burn-erf", type=Path, help="run public erf and GELU conformance on Linux CUDA")
     parser.add_argument("--burn-erf-profile", action="store_true", help="report erf numerical errors separately from GELU conformance")
+    parser.add_argument("--burn-relu", type=Path, help="run typed ReLU and backward conformance")
+    parser.add_argument("--burn-relu-dtype", choices=("f64", "f32", "flex32", "f16", "bf16"))
+    parser.add_argument("--burn-relu-no-flex32", action="store_true", help="isolate direct Flex32 upload support")
+    parser.add_argument("--burn-relu-skip-rank-zero", action="store_true", help="isolate the pinned scalar readback diagnostic")
     parser.add_argument("--burn-float-rounding", type=Path, help="run typed square root and integral rounding conformance")
     parser.add_argument("--burn-float-rounding-dtype", choices=("f64", "f32", "flex32", "f16", "bf16"))
     parser.add_argument("--burn-float-rounding-op", choices=("sqrt", "floor", "ceil", "round", "trunc"))
@@ -1441,7 +1448,7 @@ def main():
     args = parser.parse_args()
     if args.nsight_directory and not args.quantized_profile:
         parser.error("--nsight-directory requires --quantized-profile")
-    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.burn_float_rounding, args.burn_float_arithmetic, args.burn_integer_arithmetic, args.burn_indexed, args.burn_movement, args.burn_predicate, args.burn_integer_power, args.burn_integer, args.burn_integer_matmul, args.burn_scatter_updates, args.burn_nd_indexing, args.burn_storage, args.burn_conversions, args.burn_remainder, args.burn_inverse, args.burn_spatial_convolution, args.burn_deform, args.burn_interpolate, args.burn_quantized_empty, args.burn_compaction, args.burn_cross, args.burn_scan, args.burn_sort, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
+    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.burn_relu, args.burn_float_rounding, args.burn_float_arithmetic, args.burn_integer_arithmetic, args.burn_indexed, args.burn_movement, args.burn_predicate, args.burn_integer_power, args.burn_integer, args.burn_integer_matmul, args.burn_scatter_updates, args.burn_nd_indexing, args.burn_storage, args.burn_conversions, args.burn_remainder, args.burn_inverse, args.burn_spatial_convolution, args.burn_deform, args.burn_interpolate, args.burn_quantized_empty, args.burn_compaction, args.burn_cross, args.burn_scan, args.burn_sort, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
         parser.error("--quantized-profile requires a separate diagnostic guest")
     if args.pin_vcpus and len(os.sched_getaffinity(0)) != 4:
         parser.error("--pin-vcpus requires an inherited affinity of four host CPUs")
@@ -1466,6 +1473,7 @@ def main():
                 bool(args.burn_quantization),
                 bool(args.burn_capabilities),
                 bool(args.burn_erf),
+                bool(args.burn_relu),
                 bool(args.burn_float_rounding),
                 bool(args.burn_float_arithmetic),
                 bool(args.burn_integer_arithmetic),
@@ -1507,6 +1515,16 @@ def main():
         parser.error("--burn-erf requires a built conformance executable")
     if args.burn_capabilities and not args.burn_capabilities.is_file():
         parser.error("--burn-capabilities requires a built capabilities executable")
+    relu_arguments = []
+    if args.burn_relu_dtype is not None:
+        relu_arguments.append(f"--dtype={args.burn_relu_dtype}")
+    for flag, enabled in (("no-flex32", args.burn_relu_no_flex32), ("skip-rank-zero", args.burn_relu_skip_rank_zero)):
+        if enabled:
+            relu_arguments.append(f"--{flag}")
+    if args.burn_relu and not args.burn_relu.is_file():
+        parser.error("--burn-relu requires a built conformance executable")
+    if relu_arguments and not args.burn_relu:
+        parser.error("ReLU filters require --burn-relu")
     float_rounding_arguments = []
     for flag, value in (("dtype", args.burn_float_rounding_dtype), ("op", args.burn_float_rounding_op)):
         if value is not None:
@@ -1657,6 +1675,8 @@ def main():
         burn_probe(args.directory / "root", args.burn_capabilities.resolve(), "capabilities")
     elif args.burn_erf:
         burn_probe(args.directory / "root", args.burn_erf.resolve(), "erf", erf_profile=args.burn_erf_profile)
+    elif args.burn_relu:
+        burn_probe(args.directory / "root", args.burn_relu.resolve(), "relu", relu_arguments=relu_arguments)
     elif args.burn_float_rounding:
         burn_probe(args.directory / "root", args.burn_float_rounding.resolve(), "float_rounding", float_rounding_arguments=float_rounding_arguments)
     elif args.burn_float_arithmetic:
@@ -1849,6 +1869,14 @@ def main():
             raise RuntimeError("Linux CUDA Burn erf/GELU check did not complete")
     if args.burn_capabilities and "BURN_CAPABILITIES_OK os=linux backend=cuda rows=226 flags_only=true" not in text:
         raise RuntimeError("Linux CUDA Burn capability query did not complete")
+    if args.burn_relu:
+        expected = json.loads((args.directory / "burn-relu-expected.json").read_text())
+        prefix = "BURN_TYPED_RELU_OK os=linux backend=cuda fusion=enabled_materialized_chain_steps totals="
+        scope = f"no_flex32={str(args.burn_relu_no_flex32).lower()} skip_rank_zero={str(args.burn_relu_skip_rank_zero).lower()}"
+        policy = " corpus=1 exact_bits=true reference=integer_ieee_fields backward=stored_output mask_stores=u8,u32 materialized=true physical_padding=not_public " + scope + " scope=bounded_public_tensor_dispatch_forward_dispatch_activation_backward_and_maskfill"
+        matches = re.findall(re.escape(prefix) + r"(\{[^\r\n]*?\})" + re.escape(policy) + r"\r?$", text, re.M)
+        if len(matches) != 1 or json.loads(matches[0]) != expected:
+            raise RuntimeError("Linux CUDA typed ReLU did not complete with the expected corpus and exact-bit policy")
     if args.burn_float_rounding:
         expected = json.loads((args.directory / "burn-float_rounding-expected.json").read_text())
         fixtures = json.loads((ROOT / "tools/nvidia/float-rounding-manifest.json").read_text())

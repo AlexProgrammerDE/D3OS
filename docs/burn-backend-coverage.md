@@ -408,6 +408,42 @@ The diagnostic without rank-zero results stops at its direct Flex32 upload rejec
 All three Linux records retain matching reference, fixture, executable, launcher, and dependency hashes.
 These are correctness checks. Full backend coverage, compile-time parity, and execution-performance parity remain incomplete.
 
+## Typed ReLU and its backward operation
+
+Native ReLU now accepts F64, F16, BF16, and Flex32 alongside the existing F32 path.
+The new paths compose a resident ordered comparison with mask fill. They retain the input shape and dtype.
+Both zero signs become positive zero. Negative finite values and negative infinity also become positive zero.
+Positive values and every NaN retain their stored bits, including signaling payloads and signs.
+The backward operation masks the stored forward output and preserves each unmasked gradient byte.
+
+The existing F32 ownership logic and GPU entry remain unchanged.
+Typed nonempty operations allocate a predicate and a full output without host activation transfers.
+Empty typed operations return their input without a kernel launch or output allocation.
+The native default mask uses U32. Separate explicit compositions validate U8 and U32 masks.
+The SDK, all 247 inference entries, and the 82 compute profiles retain protocol 44.
+This change does not broaden the general dtype capability declarations.
+
+D3OS passes 85 public cases, 245 materialized stages, 12,200 exact floating values, and 320 boolean values across five formats.
+The corpus checks forward results, stored-output backward results, idempotence, aliases, poison allocations, and explicit masks.
+It includes true rank zero, rank eight, empty shapes, signed views, broadcasts, odd offsets, and packed boundaries.
+Guarded checks pass 260 raw compositions, 260 Native forward results, 390 backward results, and 260 explicit mask compositions.
+They also pass eight public results, eight expected rejections, 32 empty checks, and eight queued ownership checks.
+Two exhaustive cases cover all 131,072 F16 and BF16 input encodings through every checked raw and Native route.
+The existing F32 ownership and autodiff gate also passes. Broader non-F32 autodiff remains unclaimed.
+All earlier regression gates pass, including typed rounding, basic float arithmetic, integer arithmetic, and indexing.
+All three guest compiler hashes match the unchanged host audits.
+
+Linux CUDA passes the 64-case diagnostic across F64, F32, F16, and BF16 on the same passed-through GPU.
+It checks 9,748 exact floating values, 256 boolean values, and 184 materialized stages.
+The diagnostic excludes rank-zero results and direct Flex32 uploads. It retains empty shapes and exact IEEE payload checks.
+The complete Linux attempt retains a fusion vectorization panic on the true rank-zero F64 case.
+The diagnostic without rank zero retains the direct Flex32 upload rejection.
+Every Linux record preserves matching executable, source, expected-summary, and libdevice hashes.
+
+Four shared host tests, three raw fixture audits, 24 Native unit tests, Clippy, and production image compilation pass.
+The independent reference uses integer IEEE fields. It performs no host floating arithmetic to compute expected ReLU results.
+These are correctness results. Full Burn coverage and Linux compile-time and execution-performance parity remain incomplete.
+
 ## Typed integer elementwise arithmetic
 
 Protocol 42 adds 15 integer operations across I8, I16, I32, I64, U8, U16, U32, and U64.
@@ -1579,4 +1615,30 @@ python3 tools/nvidia/linux-reference.py \
 For the complete Linux attempt, omit both diagnostic flags and use a fresh directory.
 The `--burn-float-rounding-finite` option requires finite inputs and finite expected results.
 The `--burn-float-rounding-dtype` and `--burn-float-rounding-op` filters select smaller diagnostic groups.
+The runner's `--expected-summary` reports exact selected counts before device construction.
+
+The typed ReLU evidence lives under `target/nvidia/burn-backend-validation/typed-relu-first/`.
+The Linux records use the `target/nvidia/burn-backend-audit/linux-typed-relu-` prefix.
+The audit directory contains `typed-relu-comparison.json`, `typed-relu-source-baseline.json`, and `traits-typed-relu-final.json`.
+
+Build the typed ReLU runner from its pinned toolchain directory:
+
+```bash
+cd tools/mnist-benchmark
+cargo build --release --locked --bin relu
+cd ../..
+```
+
+Run the supported Linux diagnostic in a fresh directory:
+
+```bash
+python3 tools/nvidia/linux-reference.py \
+  --directory target/nvidia/linux-burn-typed-relu \
+  --burn-relu tools/mnist-benchmark/target/release/relu \
+  --burn-relu-skip-rank-zero --burn-relu-no-flex32 \
+  --memory-mib 12288 --timeout 900
+```
+
+For the complete Linux attempt, omit both diagnostic flags and use a fresh directory.
+The `--burn-relu-dtype` filter selects a smaller diagnostic group.
 The runner's `--expected-summary` reports exact selected counts before device construction.

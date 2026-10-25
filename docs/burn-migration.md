@@ -330,6 +330,13 @@ D3OS passes 465 public cases, 655,360 exhaustive half results, and the complete 
 Linux passes 352 diagnostic cases with rank-zero results and direct Flex32 uploads excluded.
 The complete Linux records retain both upstream failures. These are correctness results, with no performance-parity claim.
 
+ReLU now supports F64, F16, BF16, and Flex32 through resident comparison and mask fill.
+The existing F32 ownership path remains unchanged.
+D3OS passes 85 shared public cases and exhaustive guarded checks across all F16 and BF16 input encodings.
+The suite also checks inherited stored-output backward operations, source preservation, both explicit mask stores, and queued ownership.
+Linux passes 64 diagnostic cases with rank-zero results and direct Flex32 uploads excluded.
+Typed reductions and other math still need work before general non-F32 autodiff and full backend coverage.
+
 I32 tensor and generic scalar powers now use resident wrapping integer arithmetic without a floating-point intermediate.
 The exponent bits follow the same unsigned interpretation as the pinned Linux backend.
 FP32 deformable convolution now provides input, offset, weight, modulation-mask, and bias gradients on the native GPU.

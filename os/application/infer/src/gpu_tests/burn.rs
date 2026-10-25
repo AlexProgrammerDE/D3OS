@@ -34,6 +34,7 @@ mod selection;
 mod sort;
 mod spatial_convolution;
 mod storage;
+mod typed_relu;
 mod updates;
 mod words;
 use abi::elementwise::Elementwise;
@@ -214,6 +215,19 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     }
     integers::run(backend).map_err(|e| format!("Burn native integer reductions: {e}"))?;
     words::run(backend).map_err(|e| format!("Burn native words: {e}"))?;
+    typed_relu::run(backend)?;
+    let relu_options = d3os_ai::validation::relu::Options::default();
+    let relu_summary = d3os_ai::burn::tensor::try_read_sync(d3os_ai::validation::relu::run(&device, &relu_options))
+        .ok_or_else(|| String::from("native typed ReLU future did not complete"))??;
+    let expected_relu = d3os_ai::validation::relu::expected_summary(&relu_options);
+    if relu_summary != expected_relu {
+        return Err(format!("typed ReLU totals: {relu_summary:?}, expected {expected_relu:?}"));
+    }
+    crate::report(format_args!(
+        "BURN_TYPED_RELU_OK os=d3os backend=native fusion=disabled totals={} corpus={} exact_bits=true reference=integer_ieee_fields backward=stored_output mask_stores=u8,u32 materialized=true physical_padding=raw_verified no_flex32=false skip_rank_zero=false scope=bounded_public_tensor_dispatch_forward_dispatch_activation_backward_and_maskfill",
+        serde_json::json!({"dtypes":relu_summary.dtypes,"cases":relu_summary.cases(),"forward_cases":relu_summary.forward_cases,"high_level_cases":relu_summary.high_level_cases,"unique_cases":relu_summary.unique_cases,"backward_cases":relu_summary.backward_cases,"idempotence_cases":relu_summary.idempotence_cases,"mask_cases":relu_summary.mask_cases,"chain_steps":relu_summary.chain_steps,"source_checks":relu_summary.source_checks,"alias_checks":relu_summary.alias_checks,"gradient_checks":relu_summary.gradient_checks,"output_checks":relu_summary.output_checks,"poison_checks":relu_summary.poison_checks,"values":relu_summary.values,"nan_values":relu_summary.nan_values,"bool_values":relu_summary.bool_values}),
+        d3os_ai::validation::relu::CORPUS_VERSION
+    ));
     float_rounding::run(backend)?;
     let rounding_options = d3os_ai::validation::float_rounding::Options::default();
     let rounding_summary = d3os_ai::burn::tensor::try_read_sync(d3os_ai::validation::float_rounding::run(&device, &rounding_options))
