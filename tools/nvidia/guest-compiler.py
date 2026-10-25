@@ -3,6 +3,7 @@
 import hashlib
 import json
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -15,6 +16,45 @@ def digest(path):
         return hashlib.file_digest(source, "sha256").hexdigest()
 
 
+def runtime_library(name):
+    cache = subprocess.check_output(
+        [shutil.which("ldconfig") or "/sbin/ldconfig", "-p"], text=True
+    )
+    for line in cache.splitlines():
+        description, separator, path = line.partition(" => ")
+        if separator and description.split()[0] == name and "x86-64" in description:
+            return Path(path).resolve(strict=True)
+    raise RuntimeError(f"missing x86-64 guest runtime library: {name}")
+
+
+def runtime_assets(sources):
+    # glibc loads the unwinder lazily for pthread_exit; it is absent from the
+    # compiler binaries' DT_NEEDED entries and therefore from their ldd output.
+    unwinder = runtime_library("libgcc_s.so.1")
+    libraries = {Path("lib64/libgcc_s.so.1"): unwinder}
+
+    def dependencies(source):
+        result = subprocess.run(
+            ["ldd", str(source)], text=True, capture_output=True, check=True
+        )
+        for line in result.stdout.splitlines():
+            if "not found" in line:
+                raise RuntimeError(
+                    f"unresolved guest compiler dependency: {line.strip()}"
+                )
+            paths = re.findall(r"(/[^\s()]+)", line)
+            if paths:
+                library = Path(paths[-1]).resolve(strict=True)
+                destination = Path("lib64") / Path(paths[0]).name
+                if destination in libraries and libraries[destination] != library:
+                    raise RuntimeError(f"conflicting guest library: {destination}")
+                libraries[destination] = library
+
+    for source in [unwinder, *sources]:
+        dependencies(source)
+    return [(source, destination) for destination, source in sorted(libraries.items())]
+
+
 def prepare(kernels, toolkit, directory, *, execution_os="d3os"):
     assets = []
     for family in FAMILIES:
@@ -24,7 +64,7 @@ def prepare(kernels, toolkit, directory, *, execution_os="d3os"):
             raise RuntimeError(f"{family}: provide exactly one Tile IR or PTX input")
         assets.append((present[0], Path("usr/share/nvidia") / present[0].name))
 
-    libraries = {}
+    elf_sources = []
     for relative in (
         "bin/tileiras",
         "bin/ptxas",
@@ -41,24 +81,8 @@ def prepare(kernels, toolkit, directory, *, execution_os="d3os"):
                 raise RuntimeError(f"guest compiler must use CUDA {VERSION}: {source}")
         if relative.endswith(".bc"):
             continue
-        result = subprocess.run(
-            ["ldd", str(source)], text=True, capture_output=True, check=True
-        )
-        for line in result.stdout.splitlines():
-            if "not found" in line:
-                raise RuntimeError(
-                    f"unresolved guest compiler dependency: {line.strip()}"
-                )
-            paths = re.findall(r"(/[^\s()]+)", line)
-            if paths:
-                library = Path(paths[-1]).resolve(strict=True)
-                destination = Path("lib64") / Path(paths[0]).name
-                if destination in libraries and libraries[destination] != library:
-                    raise RuntimeError(f"conflicting guest library: {destination}")
-                libraries[destination] = library
-    assets.extend(
-        (source, destination) for destination, source in sorted(libraries.items())
-    )
+        elf_sources.append(source)
+    assets.extend(runtime_assets(elf_sources))
     manifest = {
         "compiler_version": VERSION,
         "execution_os": execution_os,

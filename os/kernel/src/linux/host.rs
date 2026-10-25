@@ -127,7 +127,9 @@ unsafe impl Host for KernelHost {
         #[cfg(feature = "linux_test")]
         self.output.lock()[descriptor as usize - 1].extend_from_slice(buffer);
         #[cfg(not(feature = "linux_test"))]
-        let _ = descriptor;
+        if descriptor == 2 {
+            log::warn!("LINUX_STDERR {}", alloc::string::String::from_utf8_lossy(buffer));
+        }
         Ok(crate::tty_output().write(buffer))
     }
 
