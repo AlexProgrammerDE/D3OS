@@ -10,6 +10,46 @@ Qwen3.5-0.8B, Qwen3.5-9B Q8_0, Qwen3.6-27B Q3_K_M, and AlexNet now use Burn.
 The goal also includes an MNIST convolutional model trained and exported inside D3OS.
 Correctness alone does not complete the goal. Matched Linux performance comparisons remain required.
 
+## Primary goal: Linux backend API parity
+
+Implement the full native Burn backend before returning to workload-specific performance optimization.
+D3OS applications must be able to use the backend APIs supported by the pinned Burn Linux CUDA backend on the same GPU.
+The current comparison uses Burn 0.22.1 and the RTX 4090 Laptop GPU.
+Passing AlexNet, MNIST, and Qwen does not establish complete backend support.
+
+The implementation must cover these areas:
+
+| Area | Required behavior |
+| --- | --- |
+| Tensor operations | Floating-point, integer, boolean, indexing, reductions, scans, sorting, compaction, and view operations |
+| Quantization | Public Burn quantization, dynamic calibration, packed storage, quantization parameters, dequantization, views, and quantized operations |
+| Dtypes | The storage, conversion, arithmetic, and accelerated capabilities supported by the Linux reference on the same hardware |
+| Modules and training | Supported convolution variants, pooling, interpolation, activations, backward operations, gradient accumulation, and optimizer updates |
+| Data and model records | Quantized and ordinary tensor upload, download, serialization, model export, and reload |
+| Execution | Device dispatch, synchronization, transactions, graph capture and replay, and asynchronous buffer lifetime |
+| Semantics | Shared tensor preservation, broadcasting, strided views, empty shapes, numerical edge cases, and observable error behavior |
+
+Audit every backend trait method, including methods inherited from Burn defaults.
+Record support by operation, dtype, shape restrictions, and quantization scheme.
+Distinguish an optimized kernel from a correct composition of resident GPU operations.
+An implemented trait containing unsupported branches is not evidence of complete support.
+Optional features require comparison with the Linux backend's actual capabilities on the available hardware.
+
+Unsupported GPU operations must not silently execute on the CPU.
+Use Burn's public APIs for general capabilities instead of adding parallel application-only interfaces.
+The existing packed GGUF extensions can remain optimized implementations, but they do not replace public quantization support.
+Activation quantization is authorized. Match the Linux comparison's precision and report its numerical effects explicitly.
+Keep the independent FP32 path and references for validation; do not require all inference arithmetic to remain FP32.
+
+Acceptance requires upstream backend conformance checks where portable, independent numerical references, and execution inside D3OS on the GPU.
+Tests must cover quantized storage and parameters, shared and strided tensors, boundary shapes, serialization, and error propagation.
+No unsupported operation or dtype advertised as supported by the matched Linux backend may remain without an explicit unresolved entry.
+An unresolved entry keeps this goal incomplete.
+
+After backend parity, resume the full [performance acceptance table](nvidia-performance.md#performance-goal-and-acceptance).
+It retains cold PTX and Tile IR compilation, DOOM FPS, MNIST training and inference, AlexNet, and all three Qwen variants.
+Compilation and loading remain outside execution averages.
+
 ## Architecture
 
 Applications use Burn tensors and modules through the D3OS AI library.
@@ -248,6 +288,10 @@ AlexNet, Qwen, and all 600 DOOM reference views pass with the matching SDK and k
 Operator coverage remains incomplete. Unsupported native operations return execution errors instead of CPU results.
 The gaps include integer division, integer matrix products, scans, some FP32 math, compaction, and sorting.
 Generic Burn quantization, non-additive indexed updates, three-dimensional convolutions, transposed convolutions, and interpolation also remain incomplete.
+The native backend also uses Burn's `GraphUnsupported` primitive, so captured graph replay remains a gap.
+Its advertised dtype capabilities currently cover F32, I32 storage, and U32 boolean storage.
+The public `QTensorOps` quantization and dequantization methods still return unsupported-operation errors.
+Packed GGUF projection support does not close those public API or dtype gaps.
 Qwen now has public Burn extensions for packed projections, embeddings, gates, and normalization.
 Attention caches and recurrent state now use public Burn tensors.
 The full model, loading, and generation now use these Burn extensions.

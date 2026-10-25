@@ -6,6 +6,8 @@ The Linux performance target remains open. Correct output does not imply compara
 The goal now includes [Burn-based AI APIs and native training](burn-migration.md).
 AlexNet and Qwen now use Burn with a native D3OS/cuTile backend.
 DOOM keeps its native renderer. Its correctness and Linux performance requirements remain unchanged.
+Full [Burn backend API parity with Linux](burn-migration.md#primary-goal-linux-backend-api-parity) now takes priority over further workload-specific optimization.
+The existing model migrations do not establish complete backend support, particularly for public quantization and additional dtypes.
 
 The optimization goal also includes Qwen3.5-9B at Q8_0 and Qwen3.6-27B at Q3_K_M.
 Both targets must fit entirely in the GPU's 16 GiB of VRAM, including context and working storage.
@@ -986,6 +988,22 @@ NVIDIA's [compute triage guide](https://docs.nvidia.com/nsight-compute/ComputeTr
 
 The accepted baseline reports are under `target/nvidia/quantized-counter-profile/baseline-q3-q4-final/`.
 Earlier failed profiler and exporter attempts remain in separate directories and are excluded from accepted results.
+
+Further Q3_K experiments compare adjacent packed weights and wider scale loads.
+The original adjacent-load candidate passes all 17,408 CPU reference values and buffer guards but takes 161.280 us.
+Adding 16-bit scale loads reduces the instrumented Linux GPU interval to 140.832 us.
+A fresh accepted-kernel control takes 156.864 us, consistent with the preceding 156.800 us sample.
+An alternative integer bit expression takes 142.816 us and is not selected.
+These are Linux hardware-counter diagnostics, not ordinary D3OS model measurements.
+
+The complete wider-load bundle passes host Tensor Core and spill audits.
+Only `vector_project_q3k` changes; the other 203 executable and compiler-constant sections remain byte-identical.
+Its focused and complete-module Q3_K instruction sections also match byte for byte.
+The candidate is not adopted because it still needs full D3OS model validation and ordinary throughput measurements.
+Work now prioritizes the complete public Burn backend and quantization API.
+The accepted default bundle remains unchanged.
+Candidate source, portable inputs, audits, and the experiment summary remain under `target/nvidia/q3-wide-paired-kernels/`.
+Counter reports use the `q3-` directories under `target/nvidia/quantized-counter-profile/`.
 
 ### Audit the Linux projection precision
 
