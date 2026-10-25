@@ -93,6 +93,18 @@ fn verify(backend: &Nvidia) -> Result<(), Error> {
 }
 
 pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
+    let device = d3os_ai::native_device().map_err(|e| format!("capability device: {e}"))?;
+    let capabilities = d3os_ai::validation::capabilities::declared(&device);
+    for capability in &capabilities {
+        crate::report(format_args!(
+            "BURN_DTYPE_CAPABILITY os=d3os backend=native name={} storage={} arithmetic={} accelerated={}",
+            capability.name, capability.storage, capability.arithmetic, capability.accelerated
+        ));
+    }
+    crate::report(format_args!(
+        "BURN_CAPABILITIES_OK os=d3os backend=native rows={} flags_only=true",
+        capabilities.len()
+    ));
     memory::run(backend)?;
     verify(backend).map_err(|e| format!("Burn native tensor storage: {e}"))?;
     crate::report(format_args!(
@@ -115,6 +127,19 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
         "NVIDIA_BURN_REDUCTION_OK operations=7 views=strided_broadcast nan=first ties=first empty=ok guards=ok resident=ok backend=nvidia"
     ));
     math::run(backend).map_err(|e| format!("Burn native math: {e}"))?;
+    d3os_ai::validation::erf::run(&device, d3os_ai::validation::erf::GeluGradient::BurnDefault)?;
+    let profile = d3os_ai::validation::erf::profile(&device)?;
+    crate::report(format_args!(
+        "BURN_ERF_PROFILE os=d3os backend=native cases={} strict_mismatches={} special_mismatches={} max_abs_error={} max_ulp_error={}",
+        profile.input_bits.len(),
+        profile.strict_mismatches,
+        profile.special_mismatches,
+        profile.max_absolute_error,
+        profile.max_ulp_error
+    ));
+    crate::report(format_args!(
+        "BURN_ERF_CONFORMANCE_OK os=d3os backend=native erf_ulp=8 erf=forward,backward gelu=forward,backward shared_views=verified"
+    ));
     integers::run(backend).map_err(|e| format!("Burn native integer reductions: {e}"))?;
     words::run(backend).map_err(|e| format!("Burn native words: {e}"))?;
     indexing::run(backend).map_err(|e| format!("Burn native indexing: {e}"))?;

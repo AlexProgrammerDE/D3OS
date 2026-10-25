@@ -291,7 +291,7 @@ fn strided_elementwise_validates_every_reachable_address_before_dispatch() {
         (0, 7),
         (1, 0),
         (1, 9),
-        (2, 33),
+        (2, Elementwise::ALL.len() as u32),
         (2, 1 << 17),
         (3, 1),
         (4, 4),

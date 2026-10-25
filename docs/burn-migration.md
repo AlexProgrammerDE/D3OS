@@ -46,6 +46,8 @@ Tests must cover quantized storage and parameters, shared and strided tensors, b
 No unsupported operation or dtype advertised as supported by the matched Linux backend may remain without an explicit unresolved entry.
 An unresolved entry keeps this goal incomplete.
 
+The [backend coverage report](burn-backend-coverage.md) records the current inventory, matched capability declarations, and unresolved areas.
+
 After backend parity, resume the full [performance acceptance table](nvidia-performance.md#performance-goal-and-acceptance).
 It retains cold PTX and Tile IR compilation, DOOM FPS, MNIST training and inference, AlexNet, and all three Qwen variants.
 Compilation and loading remain outside execution averages.
@@ -170,7 +172,7 @@ The GPU operations include FP32 arithmetic and math, reductions, exact tensor fi
 Another 29 entries implement I32 arithmetic, signed comparisons, bitwise operations, boolean logic, masks, and conversions.
 These operations support strided views and broadcasting. Input tensors remain shared and immutable.
 Full writers avoid a separate output clear. Empty logical outputs require no element work.
-The matching SDK and driver use native compute protocol version 23.
+The matching SDK and driver use native compute protocol version 24.
 
 The D3OS GPU self-test passes reversed and transposed views, overlapping windows, broadcast batches, subviews, empty dimensions, and neighboring guards.
 Matrix references use independent FP64 accumulation. Math references use independent libm functions and include 2,816 FP32 edge values.

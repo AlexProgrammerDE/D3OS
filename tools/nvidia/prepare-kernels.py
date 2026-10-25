@@ -67,6 +67,7 @@ def audit(family, sass):
             "tensor_matmul_tf32x3_k16",
             "tensor_matmul_tf32x3_split",
             "burn_adam",
+            "burn_erf",
             "burn_quantize",
             "burn_dequantize",
             "burn_quantized_copy",

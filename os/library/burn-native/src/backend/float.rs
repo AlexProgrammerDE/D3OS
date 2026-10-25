@@ -332,7 +332,7 @@ impl FloatTensorOps<Self> for Native {
         one("float_trunc", &tensor, tensor.dtype(), |t| t.unary(Elementwise::Trunc))
     }
     fn float_erf(tensor: FloatTensor<Self>) -> FloatTensor<Self> {
-        BackendTensor::unsupported("float_erf", tensor.shape(), DType::F32, &[&tensor], "float_erf")
+        one("float_erf", &tensor, tensor.dtype(), |t| t.unary(Elementwise::Erf))
     }
     fn float_argmax(tensor: FloatTensor<Self>, dim: usize, out_dtype: IntDType) -> IntTensor<Self> {
         reduce("float_argmax", &tensor, Some(dim), Reduction::ArgMax, out_dtype.into())

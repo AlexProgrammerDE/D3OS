@@ -4,6 +4,7 @@ fn main() {
     for file in [
         "common.rs",
         "burn-math.rs",
+        "burn-erf.rs",
         "burn-scale-common.rs",
         "burn-range.rs",
         "burn-random-common.rs",

@@ -40,10 +40,11 @@ pub enum Elementwise {
     Sinh = 30,
     Cosh = 31,
     Tan = 32,
+    Erf = 33,
 }
 
 impl Elementwise {
-    pub const ALL: [Self; 33] = [
+    pub const ALL: [Self; 34] = [
         Self::Copy,
         Self::Add,
         Self::Subtract,
@@ -77,6 +78,7 @@ impl Elementwise {
         Self::Sinh,
         Self::Cosh,
         Self::Tan,
+        Self::Erf,
     ];
 
     pub fn from_raw(raw: u32) -> Result<Self> {
@@ -118,6 +120,7 @@ impl Elementwise {
             Self::Sinh => "burn_sinh",
             Self::Cosh => "burn_cosh",
             Self::Tan => "burn_tan",
+            Self::Erf => "burn_erf",
         }
     }
 

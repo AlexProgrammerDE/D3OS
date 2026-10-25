@@ -89,8 +89,10 @@ unsafe fn BURN_ENTRY(a: *const u32, b: *const u32, output: *mut u32, BURN_PARAME
         bitcast(sinh(x))
     } else if BURN_OP == 31u32 {
         bitcast(cosh(x))
-    } else {
+    } else if BURN_OP == 32u32 {
         bitcast(tan(x))
+    } else {
+        burn_erf_bits(left)
     };
     unsafe { write_tile(output, i, result, mask) };
 }

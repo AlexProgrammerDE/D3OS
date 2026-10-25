@@ -73,30 +73,38 @@ def stage_burn_program(root, binary, destination):
     return libdevice
 
 
-def burn_quantization(root, binary):
-    libdevice = stage_burn_program(root, binary, "/burn-quantization")
+def burn_probe(root, binary, kind, *, erf_profile=False):
+    purposes = {
+        "quantization": "shared API conformance; no performance measurement",
+        "capabilities": "declared dtype flags; no execution conformance",
+        "erf": "public erf and GELU conformance; no performance measurement",
+    }
+    purpose = "erf error profile and GELU conformance; strict failures reported" if erf_profile else purposes[kind]
+    program = f"/burn-{kind}"
+    arguments = " --profile" if erf_profile else ""
+    libdevice = stage_burn_program(root, binary, program)
     benchmark = root / "benchmark"
-    benchmark.write_text("""#!/bin/bash
+    benchmark.write_text(f"""#!/bin/bash
 set -eux
 export CUDA_PATH=/usr/cuda
 export LD_LIBRARY_PATH=/lib64
 export HOME=/tmp
 export XDG_CACHE_HOME=/tmp/cache
 export RUST_BACKTRACE=1
-exec /burn-quantization
+exec {program}{arguments}
 """)
     benchmark.chmod(0o755)
     sources = {
         "executable": binary,
-        "runner": ROOT / "tools/mnist-benchmark/src/bin/quantization.rs",
+        "runner": ROOT / f"tools/mnist-benchmark/src/bin/{kind}.rs",
         "launcher": Path(__file__).resolve(),
-        "shared_validation": ROOT / "os/library/ai/src/validation/quantization.rs",
+        "shared_validation": ROOT / f"os/library/ai/src/validation/{kind}.rs",
         "cargo_lock": ROOT / "tools/mnist-benchmark/Cargo.lock",
         "libdevice": libdevice,
     }
-    (root.parent / "burn-quantization-manifest.json").write_text(json.dumps({
+    (root.parent / f"burn-{kind}-manifest.json").write_text(json.dumps({
         "execution_os": "linux", "backend": "cuda GPU", "framework": "burn", "burn_version": "0.22.1",
-        "purpose": "shared API conformance; no performance measurement",
+        "purpose": purpose,
         "inputs": {name: {"bytes": path.stat().st_size, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()} for name, path in sources.items()},
     }, indent=2) + "\n")
 
@@ -1155,6 +1163,9 @@ def main():
     parser.add_argument("--compiler-benchmark", action="store_true")
     parser.add_argument("--mnist-benchmark", action="store_true")
     parser.add_argument("--burn-quantization", type=Path, help="run the shared Burn quantization conformance executable on Linux CUDA")
+    parser.add_argument("--burn-capabilities", type=Path, help="query Burn dtype usage declarations on the Linux CUDA device")
+    parser.add_argument("--burn-erf", type=Path, help="run public erf and GELU conformance on Linux CUDA")
+    parser.add_argument("--burn-erf-profile", action="store_true", help="report erf numerical errors separately from GELU conformance")
     parser.add_argument("--mnist-data", type=Path, default=ROOT / "target/mnist")
     parser.add_argument(
         "--mnist-executable", type=Path,
@@ -1206,7 +1217,7 @@ def main():
     args = parser.parse_args()
     if args.nsight_directory and not args.quantized_profile:
         parser.error("--nsight-directory requires --quantized-profile")
-    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
+    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
         parser.error("--quantized-profile requires a separate diagnostic guest")
     if args.pin_vcpus and len(os.sched_getaffinity(0)) != 4:
         parser.error("--pin-vcpus requires an inherited affinity of four host CPUs")
@@ -1229,6 +1240,8 @@ def main():
                 args.compiler_benchmark,
                 args.mnist_benchmark,
                 bool(args.burn_quantization),
+                bool(args.burn_capabilities),
+                bool(args.burn_erf),
                 bool(args.llama_directory),
                 args.doom_benchmark,
                 args.alexnet_benchmark,
@@ -1241,6 +1254,12 @@ def main():
         parser.error("--llama-directory and --model must be supplied together")
     if args.mnist_benchmark and (args.model is None or not args.mnist_executable.is_file()):
         parser.error("--mnist-benchmark requires --model and a built --mnist-executable")
+    if args.burn_erf_profile and not args.burn_erf:
+        parser.error("--burn-erf-profile requires --burn-erf")
+    if args.burn_erf and not args.burn_erf.is_file():
+        parser.error("--burn-erf requires a built conformance executable")
+    if args.burn_capabilities and not args.burn_capabilities.is_file():
+        parser.error("--burn-capabilities requires a built capabilities executable")
     if args.burn_quantization and not args.burn_quantization.is_file():
         parser.error("--burn-quantization requires a built conformance executable")
     if args.matched_qwen_input and not args.llama_directory:
@@ -1274,7 +1293,11 @@ def main():
             nsight = package.prepare(ROOT / "target/nvidia/nsight-compute")
         quantized_profile(args.directory / "root", [p.resolve() for p in args.quantized_profile], nsight.resolve(), args.compiler_inputs)
     elif args.burn_quantization:
-        burn_quantization(args.directory / "root", args.burn_quantization.resolve())
+        burn_probe(args.directory / "root", args.burn_quantization.resolve(), "quantization")
+    elif args.burn_capabilities:
+        burn_probe(args.directory / "root", args.burn_capabilities.resolve(), "capabilities")
+    elif args.burn_erf:
+        burn_probe(args.directory / "root", args.burn_erf.resolve(), "erf", erf_profile=args.burn_erf_profile)
     elif args.mnist_benchmark:
         mnist_benchmark(
             args.directory / "root", args.mnist_executable.resolve(),
@@ -1415,6 +1438,12 @@ def main():
         raise RuntimeError("Linux compiler benchmark did not pass")
     if args.mnist_benchmark and "LINUX_MNIST_BENCH_OK backend=cuda" not in text:
         raise RuntimeError("Linux CUDA MNIST benchmark did not pass")
+    if args.burn_erf:
+        marker = "BURN_ERF_PROFILE_OK os=linux backend=cuda" if args.burn_erf_profile else "BURN_ERF_CONFORMANCE_OK os=linux backend=cuda"
+        if marker not in text:
+            raise RuntimeError("Linux CUDA Burn erf/GELU check did not complete")
+    if args.burn_capabilities and "BURN_CAPABILITIES_OK os=linux backend=cuda rows=226 flags_only=true" not in text:
+        raise RuntimeError("Linux CUDA Burn capability query did not complete")
     if args.burn_quantization and "BURN_QUANTIZATION_REFERENCE_OK os=linux backend=cuda formats=9 minifloat=e4m3,e5m2,e2m1 boundaries=exhaustive scale_dtypes=5 levels=1,2" not in text:
         raise RuntimeError("Linux CUDA Burn quantization conformance did not pass")
     if args.alexnet_benchmark:

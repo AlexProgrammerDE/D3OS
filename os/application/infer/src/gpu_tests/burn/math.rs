@@ -42,6 +42,7 @@ fn reference(op: Elementwise, x: f32) -> u32 {
         Elementwise::Sinh => libm::sinhf(x).to_bits(),
         Elementwise::Cosh => libm::coshf(x).to_bits(),
         Elementwise::Tan => libm::tanf(x).to_bits(),
+        Elementwise::Erf => libm::erff(x).to_bits(),
         _ => unreachable!(),
     }
 }
@@ -258,7 +259,7 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
         return Err(String::from("empty unary math dispatched GPU work"));
     }
     crate::report(format_args!(
-        "NVIDIA_BURN_MATH_OK unary=21 power=ok fill=ok edge_values={} rounding=ties_even guards=ok resident=ok backend=nvidia",
+        "NVIDIA_BURN_MATH_OK unary=22 power=ok fill=ok edge_values={} rounding=ties_even guards=ok resident=ok backend=nvidia",
         edges.len()
     ));
     Ok(())
