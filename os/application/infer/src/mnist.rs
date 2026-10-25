@@ -231,6 +231,117 @@ fn export_values(name: &str, values: &[f32]) -> Result<(), String> {
     export(name, &bytes)
 }
 
+/// Separate diagnostics. Device timestamps change submission behavior, so these
+/// intervals never contribute to the ordinary training throughput benchmark.
+pub(super) fn profile() -> Result<(), String> {
+    let images = read_file("/fwcfg/mnist.train-images")?;
+    let labels = read_file("/fwcfg/mnist.train-labels")?;
+    let training = dataset(&images, &labels, 60_000)?;
+    let device = d3os_ai::native_device().map_err(|e| format!("MNIST GPU: {e}"))?.autodiff();
+    let backend = Nvidia::new().map_err(|e| format!("MNIST compute: {e}"))?;
+    let config = Config {
+        seed: 42,
+        batch_size: 64,
+        learning_rate: 0.0001,
+    };
+    let mut trainer = Trainer::from_artifact(&read_file("/fwcfg/mnist.model")?, &training, &device, config)?;
+    for _ in 0..4 {
+        trainer = backend
+            .with_commands(|| Ok::<_, Error>(trainer.step(&training)))
+            .map_err(|e| format!("MNIST profile warmup: {e}"))??
+            .0;
+    }
+    for instrumented in [false, true] {
+        backend.set_device_timing(instrumented).map_err(|e| format!("MNIST device timing: {e}"))?;
+        let measured = (|| {
+            let before = backend.profile().map_err(|e| format!("MNIST profile: {e}"))?;
+            let queue = backend.queue_profile().map_err(|e| format!("MNIST queue profile: {e}"))?;
+            let service = backend.service_profile().map_err(|e| format!("MNIST service profile: {e}"))?;
+            let start = time::systime().num_milliseconds();
+            let mut next = trainer;
+            for _ in 0..8 {
+                next = backend
+                    .with_commands(|| Ok::<_, Error>(next.step(&training)))
+                    .map_err(|e| format!("MNIST profile step: {e}"))??
+                    .0;
+            }
+            let elapsed_ms = time::systime().num_milliseconds() - start;
+            let after = backend.profile().map_err(|e| format!("MNIST profile: {e}"))?;
+            let after_queue = backend.queue_profile().map_err(|e| format!("MNIST queue profile: {e}"))?;
+            let after_service = backend.service_profile().map_err(|e| format!("MNIST service profile: {e}"))?;
+            let phase = if instrumented { "mnist_train_device" } else { "mnist_train" };
+            report(format_args!(
+                "MNIST_TRAIN_PROFILE os=d3os backend=nvidia instrumented={instrumented} steps=8 samples=512 elapsed_ms={elapsed_ms} final_step={} phase={phase} performance_comparison=false",
+                next.progress().steps
+            ));
+            super::benchmark::profile(&before, &after, phase);
+            super::benchmark::queue_profile(queue, after_queue, phase);
+            super::benchmark::service_profile(&service, &after_service, phase);
+            Ok::<_, String>(next)
+        })();
+        let stopped = backend.set_device_timing(false);
+        trainer = measured?;
+        stopped.map_err(|e| format!("MNIST stop device timing: {e}"))?;
+    }
+    profile_matrices(&backend).map_err(|e| format!("MNIST matrix profile: {e}"))?;
+    report(format_args!("INFERENCE_OK mnist mode=profile os=d3os backend=nvidia"));
+    Ok(())
+}
+
+/// Isolate the dense products used by one batch-64 training step. Resident
+/// constant inputs exclude views, allocation, upload, and optimizer work.
+fn profile_matrices(backend: &Nvidia) -> d3os_compute::Result<()> {
+    use d3os_nvidia::compute::Kernel;
+    const REPEATS: usize = 16;
+    for (rows, inner, cols, calls_per_step) in [
+        (64, 512, 64, 1),
+        (64, 64, 10, 2),
+        (64, 10, 64, 1),
+        (64, 64, 512, 1),
+        (512, 64, 64, 1),
+        (400, 32, 4096, 1),
+        (32, 4096, 400, 1),
+        (16, 36864, 25, 1),
+    ] {
+        let left = backend.produce_words(rows * inner, Kernel::Fill, &[], &[rows * inner, 0.125f32.to_bits() as usize])?;
+        let right = backend.produce_words(inner * cols, Kernel::Fill, &[], &[inner * cols, 0.25f32.to_bits() as usize])?;
+        let output = backend.allocate_words(rows * cols)?;
+        let variants: &[usize] = if rows <= 32 && inner >= 4096 { &[1, 8, 16, 32, 64, 128] } else { &[1] };
+        for &splits in variants {
+            let partials = backend.allocate_words(rows * cols * splits)?;
+            let run = || {
+                if splits == 1 {
+                    backend.dispatch_words(Kernel::Matmul, &[(&left, 0), (&right, 0), (&output, 0)], &[rows, inner, cols])
+                } else {
+                    backend.dispatch_words(Kernel::Matmul, &[(&left, 0), (&right, 0), (&partials, 0)], &[rows, inner, cols, splits])?;
+                    backend.dispatch_words(Kernel::SumProjectionPartials, &[(&partials, 0), (&output, 0)], &[rows, cols, splits])
+                }
+            };
+            run()?;
+            backend.set_device_timing(true)?;
+            let measured = (|| {
+                let before = backend.profile()?;
+                for _ in 0..REPEATS {
+                    run()?;
+                }
+                let after = backend.profile()?;
+                let elapsed = |kernel: Kernel| after[kernel as usize].device_ns.wrapping_sub(before[kernel as usize].device_ns);
+                let matmul_ns = elapsed(Kernel::Matmul);
+                let reduction_ns = elapsed(Kernel::SumProjectionPartials);
+                let device_ns = matmul_ns + reduction_ns;
+                report(format_args!(
+                    "MNIST_MATMUL_PROFILE os=d3os backend=nvidia rows={rows} inner={inner} cols={cols} splits={splits} calls_per_step={calls_per_step} repeats={REPEATS} device_ns={device_ns} matmul_ns={matmul_ns} reduction_ns={reduction_ns} instrumented=true performance_comparison=false"
+                ));
+                Ok::<_, Error>(())
+            })();
+            let stopped = backend.set_device_timing(false);
+            measured?;
+            stopped?;
+        }
+    }
+    Ok(())
+}
+
 /// Fixed work shared with the Linux Burn reference. No checkpoint or export work
 /// enters a timed interval. Each training repetition starts with fresh Adam state.
 pub(super) fn benchmark() -> Result<(), String> {

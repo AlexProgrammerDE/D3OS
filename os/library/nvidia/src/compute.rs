@@ -101,6 +101,8 @@ pub struct Request {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u32)]
 pub enum Kernel {
+    /// Row-major FP32 product. An optional fourth parameter partitions the
+    /// reduction and writes [splits, rows, columns] for SumProjectionPartials.
     Matmul = 0,
     Project = 1,
     Relu = 2,
@@ -408,6 +410,7 @@ impl Kernel {
             (Self::ProjectQuantized, [_, _, _, 14]) => "project_q6k",
             (Self::Dequantize, [_, 14]) => "dequantize_q6k",
             (Self::EmbeddingQuantized, [_, _, _, 14]) => "embedding_q6k",
+            (Self::Matmul, [_, _, _, _]) => "tensor_matmul_tf32x3_split",
             (Self::Matmul, [m, k, n]) if *m >= 64 && *k >= 256 && *n >= 64 => "tensor_matmul_tf32x3_k16",
             (Self::AttentionFusedBatch, [_, _, _, _, _, _]) => "attention_split_batch",
             (Self::AttentionOutput, [_, _, _]) => "attention_merge_splits",
@@ -581,10 +584,11 @@ impl Kernel {
                 extents[..5].copy_from_slice(&[u64::from(n), u64::from(cache), u64::from(cache), u64::from(product(&[n, 2])?), u64::from(n)]);
                 (product(&[rows, heads, 128])?, 5, 4, false)
             }
-            (Self::ProjectBf16Split, &[m, k, n, splits]) => {
+            (Self::Matmul | Self::ProjectBf16Split, &[m, k, n, splits]) => {
+                let weights = u64::from(product(&[k, n])?);
                 extents[..3].copy_from_slice(&[
                     u64::from(product(&[m, k])?),
-                    u64::from(product(&[k, n])?).div_ceil(2),
+                    if self == Self::ProjectBf16Split { weights.div_ceil(2) } else { weights },
                     u64::from(product(&[splits, m, n])?),
                 ]);
                 (product(&[splits, m.div_ceil(16), n.div_ceil(32), 128])?, 3, 2, false)

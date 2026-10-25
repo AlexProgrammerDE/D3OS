@@ -90,6 +90,7 @@ fn run() -> Result<(), String> {
         Some("gpu-mnist-train") if args.len() == 1 => mnist::train()?,
         Some("gpu-mnist-infer") if args.len() == 1 => mnist::infer()?,
         Some("gpu-mnist-bench") if args.len() == 1 => mnist::benchmark()?,
+        Some("gpu-mnist-profile") if args.len() == 1 => mnist::profile()?,
         Some("fwcfg-self-test") if args.len() == 1 => file_tests::firmware()?,
         None | Some("self-test") if args.len() <= 1 => {
             d3os_ai::self_test(&Device::flex())?;
@@ -150,7 +151,7 @@ fn run() -> Result<(), String> {
         }
         _ => {
             return Err(String::from(
-                "usage: infer self-test | burn-self-test | gpu-mnist-train | gpu-mnist-infer | gpu-mnist-bench | fwcfg-self-test | gpu-self-test | gpu-kernel-bench | alexnet [MODEL FIXTURE] | gpu-alexnet [MODEL FIXTURE] | gpu-alexnet-bench | qwen [MAX_TOKENS PROMPT...] | qwen-verify | gpu-qwen [MAX_TOKENS PROMPT...] | gpu-qwen-verify | gpu-qwen-bench [long] [device-timing] | gpu-qwen-gguf [MAX_TOKENS PROMPT...] | gpu-qwen-gguf-bench [device-timing] | gpu-qwen-gguf-verify",
+                "usage: infer self-test | burn-self-test | gpu-mnist-train | gpu-mnist-infer | gpu-mnist-bench | gpu-mnist-profile | fwcfg-self-test | gpu-self-test | gpu-kernel-bench | alexnet [MODEL FIXTURE] | gpu-alexnet [MODEL FIXTURE] | gpu-alexnet-bench | qwen [MAX_TOKENS PROMPT...] | qwen-verify | gpu-qwen [MAX_TOKENS PROMPT...] | gpu-qwen-verify | gpu-qwen-bench [long] [device-timing] | gpu-qwen-gguf [MAX_TOKENS PROMPT...] | gpu-qwen-gguf-bench [device-timing] | gpu-qwen-gguf-verify",
             ));
         }
     }

@@ -613,6 +613,20 @@ fn matrix_work_covers_partial_tiles_and_checks_products() {
 }
 
 #[test]
+fn split_matrix_bounds_all_fp32_partials_and_rejects_aliases() {
+    let work = Kernel::Matmul.work(&[17, 4099, 33, 32]).unwrap();
+    assert_eq!(work.extents[..3], [17 * 4099, 4099 * 33, 32 * 17 * 33]);
+    assert_eq!((work.threads, work.blocks, work.pointers, work.output), (128, 128, 3, 2));
+    assert!(!work.in_place);
+    assert!(work.validate_aliases(&[0x100000, 0x200000, 0x300000]).is_ok());
+    assert!(work.validate_aliases(&[0x100000, 0x200000, 0x200004]).is_err());
+    for dimensions in [[17, 4099, 33, 0], [0, 4099, 33, 32], [1, 1, 1, u32::MAX], [u32::MAX, 2, 1, 2]] {
+        assert!(Kernel::Matmul.work(&dimensions).is_err());
+    }
+    assert!(Kernel::Project.work(&[17, 4099, 33, 32]).is_err());
+}
+
+#[test]
 fn convolution_validates_padded_extents() {
     let work = Kernel::Im2col.work(&[3, 224, 224, 11, 11, 55, 55, 4, 4, 2, 2]).unwrap();
     assert_eq!(work.extents[..2], [3 * 224 * 224, 3 * 11 * 11 * 55 * 55]);

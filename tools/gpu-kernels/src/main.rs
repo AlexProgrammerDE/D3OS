@@ -112,6 +112,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "attention_split_batch",
             "attention_merge_splits",
             "tensor_matmul_tf32x3_k16",
+            "tensor_matmul_tf32x3_split",
             "vector_project_q8_0",
             "vector_project_q3k",
             "project_q3k",

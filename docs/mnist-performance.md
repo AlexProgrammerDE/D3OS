@@ -88,6 +88,77 @@ Every inference pass preserves 99.26 percent accuracy and prediction CRC32 `ce40
 Evidence is under `target/nvidia/mnist-parity/d3os-batched-backward/` and `backward-operators/`.
 The numerical and timing comparison is `comparison-batched-backward.json`.
 
+## Separate training diagnostics
+
+The native profile command runs eight training steps with ordinary counters, then eight steps with GPU timestamps.
+Device timestamps force individual submissions and change execution time. These intervals never enter the throughput comparison.
+The profiler also measures each matrix shape with resident constant inputs and preallocated outputs.
+These isolated products exclude tensor views, allocation, upload, and optimizer work.
+
+Before split reductions, an ordinary training step launches 196 kernels.
+Matrix products account for about 51 percent of the instrumented GPU interval.
+The first convolution's weight gradient multiplies `[16, 36864]` by `[36864, 25]`.
+It uses one GPU block and takes 909 microseconds per isolated call in the retained diagnostic.
+The second convolution's weight gradient takes 107 microseconds for `[32, 4096]` by `[4096, 400]`.
+This identifies long reductions with few output tiles as the next optimization target.
+
+```bash
+taskset -c 8,10,12,14 python3 tools/nvidia/benchmark-mnist.py \
+  --os d3os --profile-only --model /absolute/path/to/mnist.model \
+  --directory target/nvidia/mnist-parity/new-profile
+```
+
+The profile manifest marks `performance_comparison=false` and retains kernel, queue, service, and matrix diagnostics.
+The initial evidence is under `target/nvidia/mnist-parity/matrix-profile-before/`.
+
+### Split long matrix reductions
+
+The native matrix request now accepts an optional split count.
+Each block writes one partition of the reduction into temporary GPU storage.
+A second kernel combines the partial results with compensated FP32 summation.
+Both stages preserve the existing TF32x3 product arithmetic. No intermediate returns to the CPU.
+The host exports portable Tile IR, and D3OS compiles the new entry for the detected GPU.
+The separate host instruction audit verifies Tensor Core instructions and no register spills in that entry.
+
+Burn selects splits from the matrix dimensions, targeting 128 output blocks with at most one split per 256 reduction elements.
+It retains the ordinary path for short reductions or matrices with enough output tiles.
+The measured MNIST weight-gradient shapes select 128 and eight splits, respectively.
+
+The following D3OS diagnostic means include the final partial-sum kernel and use 16 resident calls per configuration.
+They exclude ordinary training throughput and cannot establish Linux parity.
+
+| Gradient matrix | D3OS, unsplit | D3OS, selected split count |
+| --- | ---: | ---: |
+| `[16, 36864]` by `[36864, 25]` | 909.366 microseconds | 18.104 microseconds, 128 splits |
+| `[32, 4096]` by `[4096, 400]` | 106.998 microseconds | 29.958 microseconds, eight splits |
+
+The split sweep is under `target/nvidia/mnist-parity/split-matrix-profile/`.
+Portable inputs and host instruction audits are under `split-portable-kernels/` in the same parent directory.
+
+The complete GPU operator suite passes with the new dispatch path.
+New matrix checks cover uneven tiles, empty split ranges, input offsets, output guards, reversed views, and broadcast batches.
+Their independent FP64 references use the established `2e-5 * (1 + abs(reference))` convolution bound.
+The maximum scaled error across the new broadcast cases is `6.9341977e-6`.
+Existing basic matrix checks retain their `1e-6 * (1 + abs(reference))` bound.
+Accepted operator evidence is under `target/nvidia/mnist-parity/split-operators-reference/`.
+
+The ordinary D3OS training repetitions record 97, 96, and 96 ms for 64 steps, with a mean of 96.333 ms.
+This is 1.654 times faster than the preceding batched-gradient cohort, reducing elapsed time by 39.5 percent.
+It is 2.668 times faster than the initial 257 ms mean.
+The retained Linux CUDA mean is 88.054 ms, leaving D3OS 9.4 percent slower in this cohort.
+The different matrix arithmetic and Linux timing spread still prevent an identical-precision parity claim.
+
+All 448,062 strict CPU oracle values pass with zero tolerance failures, including every trained parameter and timed loss.
+Inference means are 1,600.000, 46.667, and 30.000 ms at batches 1, 64, and 256.
+Every inference repetition preserves 99.26 percent accuracy and prediction CRC32 `ce40d6c3`.
+The batch-256 inference mean remains 9.9 percent above the retained Linux mean.
+
+Ordinary execution evidence is under `target/nvidia/mnist-parity/d3os-split-matmul/`.
+The comparison is `comparison-split-matmul.json` in the same parent directory.
+It retains the Linux GPU speed target and the independent CPU numerical oracle as separate references.
+AlexNet also passes its eight-layer Burn validation after the shared matrix dispatch change.
+That regression log is under `target/nvidia/mnist-parity/split-alexnet/`; its load-inclusive interval is not a warm inference measurement.
+
 ## Reproduce the comparison
 
 Build the production D3OS image and prepare the normal NVIDIA firmware and portable kernel inputs first.

@@ -7,6 +7,10 @@ unsafe fn tensor_matmul_tf32x3_k16(a: *const f32, b: *const f32, out: *mut f32, 
     unsafe { compensated_matrix_16::<false, false, false, 0>(a, b, out, m, k, n, 1u32) }
 }
 #[cutile::entry()]
+unsafe fn tensor_matmul_tf32x3_split(a: *const f32, b: *const f32, out: *mut f32, m: u32, k: u32, n: u32, splits: u32) {
+    unsafe { compensated_matrix_16::<false, false, false, 0>(a, b, out, m, k, n, splits) }
+}
+#[cutile::entry()]
 unsafe fn tensor_project_tf32x3(a: *const f32, b: *const f32, out: *mut f32, m: u32, k: u32, n: u32) {
     unsafe { compensated_matrix_8::<true, false, false, 0>(a, b, out, m, k, n, 1u32) }
 }

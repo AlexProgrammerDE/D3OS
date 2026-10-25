@@ -111,11 +111,14 @@ def main():
     parser.add_argument("--data", type=Path, default=ROOT / "target/mnist")
     parser.add_argument("--timeout", type=int, default=1800)
     parser.add_argument("--cpu-reference", action="store_true", help="run a strict host CPU numerical oracle; never use its timings for GPU parity")
+    parser.add_argument("--profile-only", action="store_true", help="collect separate native training CPU/queue/GPU diagnostics instead of throughput measurements")
     args = parser.parse_args()
     if len(os.sched_getaffinity(0)) != 4 or args.timeout < 60:
         parser.error("inherit exactly four host CPUs and allow at least 60 seconds")
     if args.cpu_reference and args.execution_os != "linux":
         parser.error("--cpu-reference requires --os linux")
+    if args.profile_only and (args.execution_os != "d3os" or args.cpu_reference):
+        parser.error("--profile-only requires --os d3os without --cpu-reference")
     model, data, output = args.model.resolve(), args.data.resolve(), args.directory.resolve()
     if not model.is_file():
         parser.error("--model must be an exported MNIST inference artifact")
@@ -134,7 +137,8 @@ def main():
         "execution_location": "host" if args.cpu_reference else "vm",
         "host_training": args.cpu_reference,
         "reference_only": args.cpu_reference,
-        "performance_comparison": not args.cpu_reference,
+        "performance_comparison": not (args.cpu_reference or args.profile_only),
+        "training_profile": args.profile_only,
         "source_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
         "inputs": {name: {"bytes": path.stat().st_size, "sha256": digest(path)} for name, path in inputs.items()},
     }
@@ -149,6 +153,12 @@ def main():
         (output / "runtime").mkdir()
         for name in ("loader/kernel.elf", "loader/initrd/bin/infer"):
             shutil.copyfile(ROOT / name, output / "runtime" / Path(name).name)
+        kernels = ROOT / "target/nvidia/kernels"
+        portable = json.loads((kernels / "manifest.json").read_text())
+        manifest["portable_kernels"] = portable
+        (output / "portable-kernels").mkdir()
+        for name in ("manifest.json", *(entry["input"] for entry in portable["kernels"].values())):
+            shutil.copyfile(kernels / name, output / "portable-kernels" / name)
     sources = (
         "os/library/ai/src/mnist.rs", "os/library/ai/src/mnist/training.rs",
         "os/library/ai/src/mnist/artifact.rs", "os/library/ai/src/mnist/data.rs",
@@ -158,6 +168,8 @@ def main():
         "tools/mnist-benchmark/src/bin/mnist-inspect-pack.rs", "rust-toolchain.toml", "d3os_application.json",
         "tools/nvidia/benchmark-mnist.py", "tools/nvidia/linux-reference.py",
         "tools/nvidia/run-mnist.py", "tools/nvidia/run-qemu.py",
+        "os/library/burn-native/src/tensor.rs", "os/library/nvidia/src/compute.rs",
+        "tools/gpu-kernels/src/matrix.rs", "tools/gpu-kernels/src/matrix.rs.in",
     )
     manifest["sources"] = {name: digest(ROOT / name) for name in sources}
     for name in sources:
@@ -187,7 +199,7 @@ def main():
             "--firmware", str(ROOT / "target/nvidia/firmware"),
             "--kernels", str(ROOT / "target/nvidia/kernels"),
             "--memory-mib", "4096", "--pin-vcpus", "--boot-check",
-            "--inference", "gpu-mnist-bench", "--timeout", str(args.timeout),
+            "--inference", "gpu-mnist-profile" if args.profile_only else "gpu-mnist-bench", "--timeout", str(args.timeout),
         ]
         for name, path in inputs.items():
             command.extend(["--fwcfg-file", f"{name}={path}"])
@@ -199,6 +211,21 @@ def main():
     if result.returncode:
         raise RuntimeError(f"MNIST guest failed: {output / 'launcher.log'}")
     text = (output / ("launcher.log" if args.cpu_reference else "serial.log")).read_text(errors="replace")
+    if args.profile_only:
+        diagnostics = re.findall(r"MNIST_TRAIN_PROFILE [^\r\n]+", text)
+        if len(diagnostics) != 2 or not all(f"instrumented={value}" in diagnostics[index] for index, value in enumerate(("false", "true"))):
+            raise RuntimeError("missing ordinary or device-instrumented MNIST profile")
+        records = [
+            row for row in re.findall(r"NATIVE_(?:KERNEL|QUEUE|SERVICE)_PROFILE [^\r\n]+", text)
+            if re.search(r"\bphase=mnist_train(?:_device)?(?:\s|$)", row)
+        ]
+        matrices = re.findall(r"MNIST_MATMUL_PROFILE [^\r\n]+", text)
+        if len(matrices) != 18:
+            raise RuntimeError("missing MNIST matrix shape diagnostics")
+        (output / "results.json").write_text(json.dumps({**manifest, "diagnostics": diagnostics, "profiles": records, "matrices": matrices}, indent=2) + "\n")
+        for line in diagnostics + matrices:
+            print(line)
+        return
     if not args.cpu_reference and args.execution_os == "linux":
         shutil.copytree(guest / "root/mnist-output", artifacts)
     elif not args.cpu_reference:

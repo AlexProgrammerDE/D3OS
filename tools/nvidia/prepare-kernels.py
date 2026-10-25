@@ -34,6 +34,7 @@ TENSOR_INSTRUCTIONS = {
         ),
         "tensor_matmul_tf32x3": r"\bHMMA\.1688\.F32\.TF32\s",
         "tensor_matmul_tf32x3_k16": r"\bHMMA\.1688\.F32\.TF32\s",
+        "tensor_matmul_tf32x3_split": r"\bHMMA\.1688\.F32\.TF32\s",
         "tensor_project_tf32x3": r"\bHMMA\.1688\.F32\.TF32\s",
         "tensor_project_bf16_weights": r"\bHMMA\.16816\.F32\.BF16\s",
         "project_bf16_split": r"\bHMMA\.16816\.F32\.BF16\s",
@@ -59,6 +60,7 @@ def audit(family, sass):
         for name in (
             "delta_fused_four_taps",
             "tensor_matmul_tf32x3_k16",
+            "tensor_matmul_tf32x3_split",
             "vector_project_q8_0",
             "vector_project_q3k",
             "vector_project_q4k",

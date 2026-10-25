@@ -6,6 +6,7 @@ mod indexing;
 mod integers;
 mod linear;
 mod math;
+mod matrix;
 mod memory;
 mod pooling;
 mod qwen;
@@ -101,6 +102,7 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
         "NVIDIA_BURN_ELEMENTWISE_OK operations=11 views=strided_broadcast scalar=ok guards=ok resident=ok backend=nvidia"
     ));
     verify_matrices(backend).map_err(|e| format!("Burn native matrices: {e}"))?;
+    matrix::run(backend).map_err(|e| format!("Burn native split matrices: {e}"))?;
     crate::report(format_args!(
         "NVIDIA_BURN_MATRIX_OK cases=5 batched=ok subviews=ok empty=ok tensor_cores=true backend=nvidia"
     ));

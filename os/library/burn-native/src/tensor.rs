@@ -414,26 +414,50 @@ impl NativeTensor {
         let left_layout = left.layout.expand(Shape::from(left_shape))?;
         let right_layout = right.layout.expand(Shape::from(right_shape))?;
         let batches = layout.len() / (rows * cols);
-        let parameters = [rows, inner, cols];
-        let buffer = if batches == 1 {
+        // Thin, long reductions otherwise leave most of the GPU idle. Target
+        // 128 output blocks, limited to one split per 256 K elements. Each
+        // split and the final merge use compensated FP32 sums.
+        let tiles = rows.div_ceil(16) * cols.div_ceil(32);
+        let splits = if inner >= 4096 && tiles < 128 {
+            128usize.div_ceil(tiles).next_power_of_two().min(inner / 256)
+        } else {
+            1
+        };
+        let parameters = [rows, inner, cols, splits];
+        let product = |left_offset, right_offset| {
             Nvidia.produce_words(
-                rows * cols,
+                rows * cols * splits,
                 Kernel::Matmul,
-                &[(&left.buffer, left_layout.offset()), (&right.buffer, right_layout.offset())],
-                &parameters,
-            )?
+                &[(&left.buffer, left_offset), (&right.buffer, right_offset)],
+                &parameters[..if splits == 1 { 3 } else { 4 }],
+            )
+        };
+        let buffer = if batches == 1 {
+            let result = product(left_layout.offset(), right_layout.offset())?;
+            if splits == 1 {
+                result
+            } else {
+                Nvidia.produce_words(rows * cols, Kernel::SumProjectionPartials, &[(&result, 0)], &[rows, cols, splits])?
+            }
         } else {
             let buffer = Nvidia.allocate_words(layout.len())?;
             for batch in 0..batches {
-                Nvidia.dispatch_words(
-                    Kernel::Matmul,
-                    &[
-                        (&left.buffer, left_layout.element_offset(batch * rows * inner)?),
-                        (&right.buffer, right_layout.element_offset(batch * inner * cols)?),
-                        (&buffer, batch * rows * cols),
-                    ],
-                    &parameters,
-                )?;
+                let left_offset = left_layout.element_offset(batch * rows * inner)?;
+                let right_offset = right_layout.element_offset(batch * inner * cols)?;
+                if splits == 1 {
+                    Nvidia.dispatch_words(
+                        Kernel::Matmul,
+                        &[(&left.buffer, left_offset), (&right.buffer, right_offset), (&buffer, batch * rows * cols)],
+                        &parameters[..3],
+                    )?;
+                } else {
+                    let partials = product(left_offset, right_offset)?;
+                    Nvidia.dispatch_words(
+                        Kernel::SumProjectionPartials,
+                        &[(&partials, 0), (&buffer, batch * rows * cols)],
+                        &[rows, cols, splits],
+                    )?;
+                }
             }
             buffer
         };
