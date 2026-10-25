@@ -1,0 +1,69 @@
+#[cutile::entry()]
+unsafe fn ORDERED_ENTRY(values: *const u32, index_words: *const u32, errors: *mut u32, output: *mut u32, GATHER_PARAMETERS) {
+    let axis_count = ORDERED_AXIS_COUNT;
+    let suffix = ORDERED_SUFFIX;
+    let rows = count / axis_count;
+    let row = indices();
+    let mask = lt_tile(row, broadcast_scalar(rows, shape![128]));
+    let value_base = (row / broadcast_scalar(suffix, shape![128])) * broadcast_scalar(axis_count * suffix, shape![128]) + row % broadcast_scalar(suffix, shape![128]);
+    let mut linear = value_base;
+    let mut address_a = broadcast_scalar(signed(offset_a), shape![128]);
+    let mut address_b = broadcast_scalar(signed(offset_b), shape![128]);
+    GATHER_ADDRESSES
+    let destination_base = address_a;
+    let index_base = address_b;
+    let pointer: PointerTile<*mut u32, { [] }> = pointer_to_tile(output);
+    let pointer: PointerTile<*mut u32, { [1] }> = pointer.reshape(shape![1]);
+    let pointer: PointerTile<*mut u32, { [128] }> = pointer.broadcast(shape![128]);
+    let first: Tile<u32, { [128] }> = bitcast(destination_base);
+    let first_pointer = pointer.offset_tile(first);
+    let (_unused, initial_token): (Tile<u32, { [128] }>, Token) = unsafe {
+        load_ptr_tko(first_pointer, ordering::Weak, None::<scope::TileBlock>, Some(mask), Some(0u32), None, Latency::<0>)
+    };
+    let mut token = initial_token;
+    let mut invalid = broadcast_scalar(0u32, shape![128]);
+    for position in 0u32..axis_count {
+        let address_b = index_base + broadcast_scalar(signed(position) * signed(ORDERED_INDEX_STRIDE), shape![128]);
+        let address_b: Tile<u32, { [128] }> = bitcast(address_b);
+        let selected = unsafe { read_tile(index_words, address_b, mask & lt_tile(address_b, broadcast_scalar(extent_b, shape![128])), 0u32) };
+        let selected: Tile<i32, { [128] }> = bitcast(selected);
+        let in_range = ge_tile(selected, broadcast_scalar(0i32, shape![128])) & lt_tile(selected, broadcast_scalar(signed(axis_length), shape![128]));
+        let address_a = destination_base + selected * broadcast_scalar(signed(GATHER_STRIDE), shape![128]);
+        let address_a: Tile<u32, { [128] }> = bitcast(address_a);
+        let valid = mask & in_range & lt_tile(address_a, broadcast_scalar(extent_a, shape![128]));
+        let value = unsafe { read_tile(values, value_base + broadcast_scalar(position * suffix, shape![128]), mask, 0u32) };
+        let destination = pointer.offset_tile(address_a);
+        let (previous, read_token): (Tile<u32, { [128] }>, Token) = unsafe {
+            load_ptr_tko(destination, ordering::Weak, None::<scope::TileBlock>, Some(valid), Some(0u32), Some(token), Latency::<0>)
+        };
+        let operation = _rank >> 24u32;
+        let next: Tile<u32, { [128] }> = if operation == 0u32 { value }
+        else if ORDERED_INTEGER {
+            if operation == 1u32 { previous * value }
+            else {
+                let a: Tile<i32, { [128] }> = bitcast(previous);
+                let b: Tile<i32, { [128] }> = bitcast(value);
+                let result = if operation == 2u32 { min_tile(a, b) } else { max_tile(a, b) };
+                bitcast(result)
+            }
+        } else {
+            let a: Tile<f32, { [128] }> = bitcast(previous);
+            let b: Tile<f32, { [128] }> = bitcast(value);
+            let result = if operation == 1u32 { mulf(a, b, rounding::NearestEven, ftz::Disabled) }
+                else if operation == 2u32 { minf(a, b, nan::Disabled, ftz::Disabled) }
+                else { maxf(a, b, nan::Disabled, ftz::Disabled) };
+            bitcast(result)
+        };
+        token = unsafe { store_ptr_tko(destination, next, ordering::Weak, None::<scope::TileBlock>, Some(valid), Some(read_token), Latency::<0>) };
+        invalid = invalid | select(mask & eq_tile(in_range, broadcast_scalar(false, shape![128])), broadcast_scalar(1u32, shape![128]), broadcast_scalar(0u32, shape![128]));
+    }
+    let invalid: Tile<u32, { [] }> = reduce_sum(invalid, 0i32);
+    let invalid: u32 = tile_to_scalar(invalid);
+    if invalid != 0u32 {
+        let pointer: PointerTile<*mut u32, { [] }> = pointer_to_tile(errors);
+        let pointer: PointerTile<*mut u32, { [1] }> = pointer.reshape(shape![1]);
+        let (_old, _token): (Tile<u32, { [1] }>, Token) = unsafe {
+            atomic_rmw_tko(pointer, broadcast_scalar(1u32, shape![1]), atomic::Or, ordering::Relaxed, scope::Device, None, Some(token))
+        };
+    }
+}

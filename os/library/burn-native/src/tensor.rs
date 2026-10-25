@@ -1,5 +1,6 @@
 use crate::{NativeDevice, layout::Layout};
 use alloc::{sync::Arc, vec::Vec};
+use burn_backend::tensor::IndexingUpdateOp;
 use burn_backend::{BoolStore, DType, Shape, Slice, TensorData, TensorMetadata};
 use d3os_compute::{
     Error, Result,
@@ -320,6 +321,24 @@ impl NativeTensor {
         let operation = match self.dtype {
             DType::F32 => Scatter::FloatAdd,
             DType::I32 => Scatter::IntAdd,
+            _ => return Err(Error::InvalidParameter),
+        };
+        self.scatter(axis, indices, values, operation)
+    }
+
+    pub fn scatter_update(&self, axis: usize, indices: &Self, values: &Self, update: IndexingUpdateOp) -> Result<Self> {
+        use IndexingUpdateOp::*;
+        let operation = match (self.dtype, update) {
+            (DType::F32, Add) => Scatter::FloatAdd,
+            (DType::I32, Add) => Scatter::IntAdd,
+            (DType::F32, Assign) => Scatter::FloatAssign,
+            (DType::I32, Assign) => Scatter::IntAssign,
+            (DType::F32, Mul) => Scatter::FloatMultiply,
+            (DType::I32, Mul) => Scatter::IntMultiply,
+            (DType::F32, Min) => Scatter::FloatMin,
+            (DType::I32, Min) => Scatter::IntMin,
+            (DType::F32, Max) => Scatter::FloatMax,
+            (DType::I32, Max) => Scatter::IntMax,
             _ => return Err(Error::InvalidParameter),
         };
         self.scatter(axis, indices, values, operation)

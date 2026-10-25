@@ -73,21 +73,28 @@ def stage_burn_program(root, binary, destination):
     return libdevice
 
 
-def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_finite=False, sort_compile_log=False, compaction_aligned=False):
+def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_finite=False, sort_compile_log=False, compaction_aligned=False, quantized_empty_case=None, scatter_finite=False):
     purposes = {
         "quantization": "shared API conformance; no performance measurement",
+        "quantized_empty": "empty quantized API diagnostic and record round trip; execution errors retained; no performance measurement",
         "capabilities": "declared dtype flags; no execution conformance",
         "erf": "public erf and GELU conformance; no performance measurement",
         "integer": "public integer division and floor remainder conformance; no performance measurement",
         "integer_matrix": "public I32 matrix product conformance; no performance measurement",
         "scan": "public cumulative operations and gradients; no performance measurement",
         "cross": "public FP32 vector products and gradients; no performance measurement",
+        "scatter_updates": "ordered scatter assignment/product/min/max and gradients; unique indices; no performance measurement",
         "compaction": "public dynamic-shape selection conformance; pinned Burn reads argwhere masks on the host; no GPU compaction performance comparison",
         "sort": "public ordering API conformance; pinned Burn uses host sorting with CUDA storage; no GPU sorting performance comparison",
     }
     purpose = "erf error profile and GELU conformance; strict failures reported" if erf_profile else purposes[kind]
     program = f"/burn-{kind}"
     arguments = " --profile" if erf_profile else " --nonempty" if nonempty else ""
+    if scatter_finite:
+        arguments += " --finite"
+        purpose += "; finite floating-point corpus; IEEE diagnostic retained separately"
+    if quantized_empty_case:
+        arguments += f" {quantized_empty_case}"
     if compaction_aligned:
         arguments += " --packed-aligned"
         purpose += "; aligned Q8 packed input/output only; compact-tail failure retained separately"
@@ -1189,6 +1196,11 @@ def main():
     parser.add_argument("--burn-integer", type=Path, help="run public I32 division and floor remainder conformance on Linux CUDA")
     parser.add_argument("--burn-integer-matmul", type=Path, help="run public I32 matrix product conformance on Linux CUDA")
     parser.add_argument("--burn-integer-matmul-nonempty", action="store_true", help="run the nonempty I32 matrix cases separately from empty shapes")
+    parser.add_argument("--burn-scatter-updates", type=Path, help="run ordered scatter updates and gradients on Linux CUDA")
+    parser.add_argument("--burn-scatter-updates-nonempty", action="store_true")
+    parser.add_argument("--burn-scatter-updates-finite", action="store_true")
+    parser.add_argument("--burn-quantized-empty", type=Path, help="diagnose empty quantized construction and selection")
+    parser.add_argument("--burn-quantized-empty-case", choices=("direct", "select", "mask"), default="mask")
     parser.add_argument("--burn-compaction", type=Path, help="compare public argwhere, nonzero, mask selection, and gradients on the CUDA backend")
     parser.add_argument("--burn-compaction-packed-aligned", action="store_true", help="compare aligned Q8 shapes separately from compact packed tails")
     parser.add_argument("--burn-compaction-nonempty", action="store_true", help="run dynamic selection separately from empty tensors")
@@ -1251,7 +1263,7 @@ def main():
     args = parser.parse_args()
     if args.nsight_directory and not args.quantized_profile:
         parser.error("--nsight-directory requires --quantized-profile")
-    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.burn_integer, args.burn_integer_matmul, args.burn_compaction, args.burn_cross, args.burn_scan, args.burn_sort, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
+    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.burn_integer, args.burn_integer_matmul, args.burn_scatter_updates, args.burn_quantized_empty, args.burn_compaction, args.burn_cross, args.burn_scan, args.burn_sort, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
         parser.error("--quantized-profile requires a separate diagnostic guest")
     if args.pin_vcpus and len(os.sched_getaffinity(0)) != 4:
         parser.error("--pin-vcpus requires an inherited affinity of four host CPUs")
@@ -1278,6 +1290,8 @@ def main():
                 bool(args.burn_erf),
                 bool(args.burn_integer),
                 bool(args.burn_integer_matmul),
+                bool(args.burn_scatter_updates),
+                bool(args.burn_quantized_empty),
                 bool(args.burn_compaction),
                 bool(args.burn_cross),
                 bool(args.burn_scan),
@@ -1306,6 +1320,12 @@ def main():
         parser.error("--burn-integer-matmul requires a built conformance executable")
     if args.burn_integer_matmul_nonempty and not args.burn_integer_matmul:
         parser.error("--burn-integer-matmul-nonempty requires --burn-integer-matmul")
+    if args.burn_scatter_updates and not args.burn_scatter_updates.is_file():
+        parser.error("--burn-scatter-updates requires a built conformance executable")
+    if (args.burn_scatter_updates_nonempty or args.burn_scatter_updates_finite) and not args.burn_scatter_updates:
+        parser.error("scatter update domain flags require --burn-scatter-updates")
+    if args.burn_quantized_empty and not args.burn_quantized_empty.is_file():
+        parser.error("--burn-quantized-empty requires a built diagnostic executable")
     if args.burn_compaction and not args.burn_compaction.is_file():
         parser.error("--burn-compaction requires a built conformance executable")
     if args.burn_compaction_packed_aligned and not args.burn_compaction:
@@ -1370,6 +1390,10 @@ def main():
         burn_probe(args.directory / "root", args.burn_integer.resolve(), "integer")
     elif args.burn_integer_matmul:
         burn_probe(args.directory / "root", args.burn_integer_matmul.resolve(), "integer_matrix", nonempty=args.burn_integer_matmul_nonempty)
+    elif args.burn_scatter_updates:
+        burn_probe(args.directory / "root", args.burn_scatter_updates.resolve(), "scatter_updates", nonempty=args.burn_scatter_updates_nonempty, scatter_finite=args.burn_scatter_updates_finite)
+    elif args.burn_quantized_empty:
+        burn_probe(args.directory / "root", args.burn_quantized_empty.resolve(), "quantized_empty", quantized_empty_case=args.burn_quantized_empty_case)
     elif args.burn_compaction:
         burn_probe(args.directory / "root", args.burn_compaction.resolve(), "compaction", nonempty=args.burn_compaction_nonempty, compaction_aligned=args.burn_compaction_packed_aligned)
     elif args.burn_cross:
@@ -1530,6 +1554,16 @@ def main():
         cases, domain, empty = (5, "nonempty", "false") if args.burn_integer_matmul_nonempty else (8, "all", "true")
         if f"BURN_INTEGER_MATMUL_CONFORMANCE_OK os=linux backend=cuda cases={cases} domain={domain} reference=i128 wrapping=exact shared_views=true empty={empty}" not in text:
             raise RuntimeError("Linux CUDA Burn I32 matrix product conformance did not complete")
+    if args.burn_scatter_updates:
+        empty = "false" if args.burn_scatter_updates_nonempty else "true"
+        ieee = "false" if args.burn_scatter_updates_finite else "true"
+        if f"BURN_SCATTER_UPDATES_OK os=linux backend=cuda dtypes=f32,i32 modes=4 axes=all unique_indices=true gradient_cases=12 ieee={ieee} empty={empty} shared_views=true" not in text:
+            raise RuntimeError("Linux ordered scatter conformance did not complete")
+    if args.burn_quantized_empty:
+        rows = [json.loads(line.split("BURN_QUANTIZED_EMPTY_RESULT ", 1)[1]) for line in text.splitlines() if line.startswith("BURN_QUANTIZED_EMPTY_RESULT ")]
+        if len(rows) != 1 or rows[0].get("backend") != "cuda" or rows[0].get("os") != "linux" or rows[0].get("status") not in ("ok", "error") or rows[0].get("case") != args.burn_quantized_empty_case:
+            raise RuntimeError("Linux quantized-empty diagnostic did not report its result")
+        (args.directory / "quantized-empty-result.json").write_text(json.dumps(rows[0], indent=2) + "\n")
     if args.burn_compaction:
         quantized_domain = "packed_aligned" if args.burn_compaction_packed_aligned else "compact_tails"
         empty = "false" if args.burn_compaction_nonempty else "true"

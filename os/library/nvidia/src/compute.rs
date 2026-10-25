@@ -17,7 +17,7 @@ pub mod sort;
 pub mod updates;
 pub mod words;
 
-pub const VERSION: u32 = 29;
+pub const VERSION: u32 = 30;
 /// END_COMMANDS flag: an inner recording scope joins its parent's completion.
 /// The outermost scope always waits. Zero retains synchronous nested scopes.
 pub const DEFER_NESTED_COMPLETION: u64 = 1;
@@ -554,7 +554,12 @@ impl Kernel {
             (Self::Scatter, p) => {
                 extents[..4].copy_from_slice(&indexing::validate_scatter(p)?);
                 mutated = 1 << 2;
-                (p[2], 4, 3, false)
+                let count = if indexing::Scatter::from_raw(p[0] >> 16)?.ordered() {
+                    p[2] / p[8 + p[1] as usize]
+                } else {
+                    p[2]
+                };
+                (count, 4, 3, false)
             }
             (Self::Gather, p) => {
                 extents[..4].copy_from_slice(&indexing::validate(p)?);

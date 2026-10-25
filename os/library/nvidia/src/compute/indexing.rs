@@ -9,13 +9,38 @@ pub enum Scatter {
     FloatAdd = 0,
     IntAdd = 1,
     BoolOr = 2,
+    FloatAssign = 3,
+    IntAssign = 4,
+    FloatMultiply = 3 | (1 << 8),
+    IntMultiply = 4 | (1 << 8),
+    FloatMin = 3 | (2 << 8),
+    IntMin = 4 | (2 << 8),
+    FloatMax = 3 | (3 << 8),
+    IntMax = 4 | (3 << 8),
 }
 
 impl Scatter {
-    pub const ALL: [Self; 3] = [Self::FloatAdd, Self::IntAdd, Self::BoolOr];
+    pub const ALL: [Self; 11] = [
+        Self::FloatAdd,
+        Self::IntAdd,
+        Self::BoolOr,
+        Self::FloatAssign,
+        Self::IntAssign,
+        Self::FloatMultiply,
+        Self::IntMultiply,
+        Self::FloatMin,
+        Self::IntMin,
+        Self::FloatMax,
+        Self::IntMax,
+    ];
+    pub const ENTRIES: [Self; 5] = [Self::FloatAdd, Self::IntAdd, Self::BoolOr, Self::FloatAssign, Self::IntAssign];
 
     pub fn from_raw(raw: u32) -> Result<Self> {
-        Self::ALL.get(raw as usize).copied().ok_or(Error::InvalidField)
+        Self::ALL.iter().find(|&&op| op as u32 == raw).copied().ok_or(Error::InvalidField)
+    }
+
+    pub fn ordered(self) -> bool {
+        self as u32 & 0xff >= 3
     }
 
     pub fn symbol(self) -> &'static str {
@@ -23,17 +48,36 @@ impl Scatter {
             Self::FloatAdd => "burn_scatter_add_f32",
             Self::IntAdd => "burn_scatter_add_i32",
             Self::BoolOr => "burn_scatter_or_bool",
+            Self::FloatAssign | Self::FloatMultiply | Self::FloatMin | Self::FloatMax => "burn_scatter_ordered_f32",
+            Self::IntAssign | Self::IntMultiply | Self::IntMin | Self::IntMax => "burn_scatter_ordered_i32",
         }
     }
 }
 
 /// Scatter shares gather geometry, with the operation in the rank word's high
-/// half. Values are dense; indices and the destination can have signed strides.
+/// half. Values are dense and indices can have signed strides. Atomic modes
+/// accept signed destination strides; ordered modes require a dense destination.
 pub fn validate_scatter(p: &[u32]) -> Result<[u64; 4]> {
     let mut p: [u32; PARAMETERS] = p.try_into().map_err(|_| Error::InvalidField)?;
-    Scatter::from_raw(p[0] >> 16)?;
+    let operation = Scatter::from_raw(p[0] >> 16)?;
     p[0] &= 0xffff;
     let [destination, indices, status, values] = validate(&p)?;
+    if operation.ordered() {
+        // One lane owns each output row. Dense destination strides prove that
+        // separate rows cannot race, including when indices are duplicated.
+        if p[7] == 0 {
+            return Err(Error::InvalidField);
+        }
+        let mut stride = 1u32;
+        for axis in (0..p[0] as usize).rev() {
+            if p[16 + axis] != stride {
+                return Err(Error::InvalidField);
+            }
+            stride = stride
+                .checked_mul(if axis == p[1] as usize { p[7] } else { p[8 + axis] })
+                .ok_or(Error::InvalidField)?;
+        }
+    }
     Ok([values, indices, status, destination])
 }
 

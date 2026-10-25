@@ -17,6 +17,7 @@ mod qwen;
 mod random;
 mod scans;
 mod scatter;
+mod scatter_updates;
 mod selection;
 mod sort;
 mod updates;
@@ -179,6 +180,11 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     ));
     indexing::run(backend).map_err(|e| format!("Burn native indexing: {e}"))?;
     scatter::run(backend).map_err(|e| format!("Burn native scatter: {e}"))?;
+    scatter_updates::run(backend)?;
+    d3os_ai::validation::scatter_updates::run(&device, true, true)?;
+    crate::report(format_args!(
+        "BURN_SCATTER_UPDATES_OK os=d3os backend=native dtypes=f32,i32 modes=4 axes=all unique_indices=true gradient_cases=12 ieee=true empty=true shared_views=true"
+    ));
     convolution::run(backend).map_err(|e| format!("Burn native convolution: {e}"))?;
     linear::run(backend).map_err(|e| format!("Burn native linear: {e}"))?;
     activation::run(backend).map_err(|e| format!("Burn native ReLU: {e}"))?;
@@ -189,6 +195,39 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     selection::run(backend)?;
     quantization::run(backend)?;
     dispatch::run(backend).map_err(|e| format!("Burn public dispatch: {e}"))?;
+    for (name, case) in [
+        ("direct", d3os_ai::validation::quantized_empty::Case::Direct),
+        ("select", d3os_ai::validation::quantized_empty::Case::Select),
+        ("mask", d3os_ai::validation::quantized_empty::Case::Mask),
+    ] {
+        let result = d3os_ai::burn::tensor::try_read_sync(d3os_ai::validation::quantized_empty::run(&device, case))
+            .ok_or_else(|| String::from("native quantized-empty future did not complete"))?;
+        if name == "direct" && !result.as_ref().is_ok_and(|bytes| bytes == &[0, 0, 128, 63]) {
+            return Err(format!("empty static quantized record: {result:?}"));
+        }
+        match result {
+            Ok(bytes) => crate::report(format_args!(
+                "BURN_QUANTIZED_EMPTY_RESULT os=d3os backend=native case={name} status=ok bytes={bytes:?}"
+            )),
+            Err(error) => crate::report(format_args!(
+                "BURN_QUANTIZED_EMPTY_RESULT os=d3os backend=native case={name} status=error error={error}"
+            )),
+        }
+        let mut acknowledged = false;
+        for _ in 0..16 {
+            match device.sync() {
+                Ok(()) => {
+                    acknowledged = true;
+                    break;
+                }
+                Err(error) if !error.is_device_poisoned() => crate::report(format_args!("BURN_QUANTIZED_EMPTY_ACK case={name} error={error:?}")),
+                Err(error) => return Err(format!("quantized-empty poisoned the device: {error:?}")),
+            }
+        }
+        if !acknowledged {
+            return Err(String::from("quantized-empty left unacknowledged execution failures"));
+        }
+    }
     Ok(())
 }
 

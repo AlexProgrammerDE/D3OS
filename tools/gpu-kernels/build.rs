@@ -231,8 +231,30 @@ fn main() {
     println!("cargo:rerun-if-changed=src/burn-scatter-f32.rs.in");
     let scatter = fs::read_to_string("src/burn-scatter.rs.in").expect("read scatter template");
     let float_add = fs::read_to_string("src/burn-scatter-f32.rs.in").expect("read floating-point scatter accumulation");
-    for operation in d3os_nvidia::compute::indexing::Scatter::ALL {
+    println!("cargo:rerun-if-changed=src/burn-scatter-ordered.rs.in");
+    let ordered = fs::read_to_string("src/burn-scatter-ordered.rs.in").expect("read ordered scatter template");
+    for operation in d3os_nvidia::compute::indexing::Scatter::ENTRIES {
         use d3os_nvidia::compute::indexing::Scatter;
+        if operation.ordered() {
+            let axis_count = (0..7).map(|a| format!("if axis == {a}u32 {{ dim{a} }} else ")).collect::<String>() + "{ dim7 }";
+            let index_stride = (0..7).map(|a| format!("if axis == {a}u32 {{ stride_b{a} }} else ")).collect::<String>() + "{ stride_b7 }";
+            let suffix = (1..8)
+                .map(|a| format!("(if axis < {a}u32 {{ dim{a} }} else {{ 1u32 }})"))
+                .collect::<Vec<_>>()
+                .join(" * ");
+            source.push_str(
+                &ordered
+                    .replace("ORDERED_ENTRY", operation.symbol())
+                    .replace("GATHER_PARAMETERS", &parameters)
+                    .replace("GATHER_ADDRESSES", &addresses)
+                    .replace("GATHER_STRIDE", &stride)
+                    .replace("ORDERED_AXIS_COUNT", &axis_count)
+                    .replace("ORDERED_INDEX_STRIDE", &index_stride)
+                    .replace("ORDERED_SUFFIX", &suffix)
+                    .replace("ORDERED_INTEGER", &(operation == Scatter::IntAssign).to_string()),
+            );
+            continue;
+        }
         let update = match operation {
             Scatter::FloatAdd => float_add.clone(),
             Scatter::IntAdd | Scatter::BoolOr => format!(
@@ -240,6 +262,7 @@ fn main() {
                  atomic_rmw_tko(pointer, value, atomic::{}, ordering::Relaxed, scope::Device, Some(valid), None)\n}};",
                 if operation == Scatter::IntAdd { "Add" } else { "Or" },
             ),
+            _ => unreachable!("ordered entries were emitted above"),
         };
         source.push_str(
             &scatter

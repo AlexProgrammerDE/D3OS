@@ -1,6 +1,31 @@
 use d3os_nvidia::compute::Kernel;
 
 #[test]
+fn ordered_scatter_assigns_one_lane_per_disjoint_destination_row() {
+    use d3os_nvidia::compute::indexing::{Scatter, validate_scatter};
+    let mut p = [0u32; 32];
+    p[..8].copy_from_slice(&[2, 1, 129 * 257, 129 * 5, 0, 129 * 257, 256, 5]);
+    p[8..16].fill(1);
+    p[8..10].copy_from_slice(&[129, 257]);
+    p[16..18].copy_from_slice(&[5, 1]);
+    p[24..26].copy_from_slice(&[257, (-1i32) as u32]);
+    for operation in Scatter::ALL.into_iter().filter(|op| op.ordered()) {
+        p[0] = 2 | ((operation as u32) << 16);
+        let work = Kernel::Scatter.work(&p).unwrap();
+        assert_eq!(work.extents[..4], [129 * 257, 129 * 257, 1, 129 * 5]);
+        assert_eq!((work.blocks, work.threads), (2, 128));
+        for (field, value) in [(7, 0), (16, 0), (16, 4), (16, (-5i32) as u32), (17, 0), (17, 2)] {
+            let mut bad = p;
+            bad[field] = value;
+            assert!(validate_scatter(&bad).is_err());
+        }
+    }
+    for raw in [5, 0x103, 0x104, 0x203, 0x204, 0x303, 0x304, 0x403] {
+        assert_eq!(Scatter::from_raw(raw).is_ok(), raw != 5 && raw != 0x403);
+    }
+}
+
+#[test]
 fn argwhere_bounds_prefixes_and_full_coordinate_writes() {
     use d3os_nvidia::compute::argwhere::validate;
     let mut p = [0u32; 16];
@@ -201,7 +226,7 @@ fn scatter_preserves_destination_ranges_and_rejects_writer_aliases() {
     p[8..10].copy_from_slice(&[2, 3]);
     p[16..18].copy_from_slice(&[4, (-1i32) as u32]);
     p[24..26].copy_from_slice(&[(-3i32) as u32, (-1i32) as u32]);
-    for operation in Scatter::ALL {
+    for operation in Scatter::ALL.into_iter().filter(|op| !op.ordered()) {
         p[0] = 2 | ((operation as u32) << 16);
         let work = Kernel::Scatter.work(&p).unwrap();
         assert_eq!(work.extents[..4], [6, 6, 1, 12]);
@@ -217,7 +242,7 @@ fn scatter_preserves_destination_ranges_and_rejects_writer_aliases() {
             assert!(work.validate_aliases(&invalid).is_err());
         }
     }
-    for (index, value) in [(0, 2 | (3 << 16)), (0, 2 | (1 << 8)), (3, 7), (4, 2), (5, 5), (6, 4), (7, 5), (18, 1), (26, 1)] {
+    for (index, value) in [(0, 2 | (5 << 16)), (0, 2 | (1 << 8)), (3, 7), (4, 2), (5, 5), (6, 4), (7, 5), (18, 1), (26, 1)] {
         let mut invalid = p;
         invalid[index] = value;
         assert!(Kernel::Scatter.work(&invalid).is_err());

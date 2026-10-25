@@ -48,17 +48,8 @@ impl IntTensorOps<Self> for Native {
         BackendTensor::apply("int_gather", indices.shape(), tensor.dtype(), &[&tensor, &indices], |v| v[0].gather(dim, v[1]))
     }
     fn int_scatter(dim: usize, tensor: IntTensor<Self>, indices: IntTensor<Self>, value: IntTensor<Self>, update: IndexingUpdateOp) -> IntTensor<Self> {
-        if update != IndexingUpdateOp::Add {
-            return BackendTensor::unsupported(
-                "int_scatter",
-                tensor.shape(),
-                tensor.dtype(),
-                &[&tensor, &indices, &value],
-                "non-additive indexed updates",
-            );
-        }
         BackendTensor::apply("int_scatter", tensor.shape(), tensor.dtype(), &[&tensor, &indices, &value], |v| {
-            v[0].scatter_add(dim, v[1], v[2])
+            v[0].scatter_update(dim, v[1], v[2], update)
         })
     }
     fn int_select(tensor: IntTensor<Self>, dim: usize, indices: IntTensor<Self>) -> IntTensor<Self> {

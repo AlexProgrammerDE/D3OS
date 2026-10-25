@@ -15,10 +15,10 @@ Associated types and source SHA-256 hashes accompany the report.
 
 The current inventory contains 484 methods: 264 native overrides and 220 inherited defaults.
 All required methods have declarations or implementations. This count does not establish runtime support.
-The report also records 107 native helper bodies for manual review of dtype and shape restrictions.
+The report also records 108 native helper bodies for manual review of dtype and shape restrictions.
 
 The tool follows syntactic associated backend calls and expands the pinned `dequant_op_quant!` and `dequant_op_flow!` macros.
-It identifies 34 methods with possible paths to explicit declines or panic declarations.
+It identifies 32 methods with possible paths to explicit declines or panic declarations.
 This number is not an unsupported-operation count. Some paths represent expected invalid-input errors or conditional restrictions.
 
 The analysis does not resolve method types, evaluate conditional compilation, or expand other macros and free helper functions.
@@ -272,18 +272,74 @@ They also check coordinate 16,777,219, beyond FP32's consecutive integer range, 
 Service counters check one readback for argwhere and two for ordinary mask selection, without tensor uploads.
 The readback sizes follow the checked one-word count and bounds buffers.
 
-The current portable bundle contains 210 inference entries and 66 kernel profiles.
+The protocol-29 portable bundle contains 210 inference entries and 66 kernel profiles.
 All 209 prior instruction and constant sections remain byte-identical, and the new entry passes the host spill audit.
 The pinned Linux CUDA backend reads argwhere masks on the host and uses GPU gathers for selection.
 Its public API comparison therefore contains no GPU-compaction performance baseline.
 D3OS also passes the full operator suite, and every guest-compiled module matches its host audit hash.
 These checks add no execution-performance or compile-time parity measurement.
 
+## Native ordered scatter updates
+
+Protocol 30 adds scatter assignment, multiplication, minimum, and maximum for FP32 and I32 tensors.
+Burn routes its float and integer scatter methods through these native operations.
+The existing atomic addition and boolean OR kernels retain their previous implementations.
+
+One GPU lane owns each destination row and processes its update axis in logical order.
+The driver requires dense destination strides to prove that different rows cannot write the same element.
+The native API first copies a strided destination into dense storage and materializes strided update values when necessary.
+Indices retain signed strides, including reversed views.
+Explicit memory tokens order repeated reads and writes within a row.
+
+Integer products wrap modulo 2^32. FP32 products use nearest-even rounding and preserve subnormal values.
+Assignment copies stored bits, including NaN payloads and signed zeros.
+Minimum and maximum use numeric minimum/maximum semantics when one operand is NaN.
+A four-byte status buffer reports negative and out-of-range indices as recoverable errors.
+Tensor payloads remain on the GPU. Empty updates enqueue no kernel.
+
+Burn's public scatter contract requires unique indices within each row.
+The shared corpus respects that requirement for both forward and backward checks.
+It covers all three axes, reversed transposes, shared inputs, and update lengths 1, 127, 128, and 129.
+Twelve independent gradient cases check both input derivatives, including equal-value minimum and maximum cases.
+The public IEEE corpus checks signed zeros, NaNs, infinities, and subnormal products.
+Linux CUDA passes this complete corpus on the physical RTX 4090 Laptop GPU.
+
+The explicit Flex CPU backend passes the finite corpus, including gradients and empty updates.
+Its IEEE run returns positive zero for `min(+0, -0)`, where the strict reference expects negative zero.
+That diagnostic remains separate from the successful Linux CUDA result.
+
+D3OS passes the same complete public corpus on the same physical GPU, with 4 GiB per VM.
+Its raw checks cover all eight dtype/update combinations, 129 destination rows, and 257 updates per row.
+They check neighboring guards, reversed index storage, input preservation, and rejected destination aliasing.
+Repeated-index forward checks confirm logical update order as a native extension.
+They do not extend Burn's unique-index gradient contract.
+Service counters check zero tensor uploads and one index-status read for the native operation.
+A queued consumer also verifies destination lifetime after the source tensors leave scope.
+
+The current bundle contains 212 inference entries and 66 kernel profiles.
+All 210 prior entries retain identical instruction and constant sections.
+The two new entries pass the host spill audit, and all three guest-compiled modules match their host audit hashes.
+The complete D3OS operator suite passes. These results add no workload-throughput or compile-time parity measurement.
+Protocol 30 requires a matching driver, SDK, application image, and portable bundle.
+
+## Empty quantized diagnostics
+
+An empty Q8 tensor with an explicit unit scale round-trips through quantized records on both D3OS and Linux CUDA.
+Its record contains the four F32 scale bytes `[0, 0, 128, 63]` and no payload bytes.
+Both backends retain the empty shape, quantized kind, exact record bytes, and empty dequantized result after reload.
+
+Empty quantized selection and all-false quantized mask selection fail on both GPU backends.
+The pinned Linux CUDA default recalibration reports `ReduceAxisTooSmall` for an empty reduction.
+D3OS reports recoverable `float_argmin` and `float_argmax` errors and acknowledges each error before subsequent work.
+The native operator suite then completes successfully.
+These rejected selections are diagnostics, not successful conformance cases or an additional Linux-supported capability gap.
+Other quantization formats and layouts still require separate coverage.
+
 ## Remaining implementation areas
 
 The unresolved work includes ordinary dtypes, complete integer arithmetic, matrix products for further dtypes, and additional floating-point operations.
-Further sorting and compaction dtypes, non-additive updates, further convolution variants, deformable convolution, and interpolation also require coverage.
-Quantized empty selections and compaction formats beyond the checked Q8 cases remain unverified.
+Further sorting and compaction dtypes, multidimensional indexing, selection updates, further convolution variants, deformable convolution, and interpolation also require coverage.
+Compaction formats beyond the checked Q8 cases remain unverified.
 Broadcast cross-product gradients, graph capture, profiling, memory capabilities, records, and observable errors require matched Linux capability checks.
 The current layout also restricts rank to eight and extents to signed 32-bit values.
 The method inventory records defaults, but each composed path still needs dtype, shape, ownership, and execution checks.
@@ -301,7 +357,7 @@ Build the Linux probes with their default CUDA feature:
 
 ```bash
 cd tools/mnist-benchmark
-cargo build --release --locked --bin capabilities --bin erf --bin integer --bin integer_matrix --bin scan --bin sort --bin cross --bin compaction
+cargo build --release --locked --bin capabilities --bin erf --bin integer --bin integer_matrix --bin scan --bin sort --bin cross --bin compaction --bin scatter_updates --bin quantized_empty
 cd ../..
 ```
 
@@ -362,6 +418,28 @@ python3 tools/nvidia/linux-reference.py \
 For a slow Linux probe, add `--burn-sort-compile-log` and an explicit `--timeout 600` in a fresh directory.
 This enables basic CubeCL compilation diagnostics. Its elapsed time is not an execution-performance measurement.
 
+Run the ordered scatter comparison on Linux CUDA:
+
+```bash
+python3 tools/nvidia/linux-reference.py \
+  --directory target/nvidia/linux-burn-scatter-updates \
+  --burn-scatter-updates tools/mnist-benchmark/target/release/scatter_updates
+```
+
+Run each empty quantized diagnostic in a separate Linux VM:
+
+```bash
+for case in direct select mask; do
+  python3 tools/nvidia/linux-reference.py \
+    --directory "target/nvidia/linux-burn-quantized-empty-$case" \
+    --burn-quantized-empty tools/mnist-benchmark/target/release/quantized_empty \
+    --burn-quantized-empty-case "$case"
+done
+```
+
+The diagnostic's JSON `status` distinguishes success from an execution error.
+A successful launcher exit alone does not establish API support.
+
 Run the D3OS GPU suite with the matching production image and portable kernel bundle:
 
 ```bash
@@ -387,5 +465,9 @@ The vector-product evidence lives under `target/nvidia/burn-backend-validation/c
 The audit directory contains `traits-cross.json`, `cross-comparison.json`, and the retained Flex CPU failure.
 The compaction evidence lives under `target/nvidia/burn-backend-validation/compaction-final/` and `target/nvidia/burn-backend-audit/linux-compaction-native-tails/`.
 The audit directory contains `traits-compaction.json`, `compaction-comparison.json`, and retained format and quantization diagnostics.
+The ordered scatter evidence lives under `target/nvidia/burn-backend-validation/ordered-scatter-first/` and `target/nvidia/burn-backend-audit/linux-scatter-updates-ieee/`.
+The audit directory contains `traits-ordered-scatter.json`, `ordered-scatter-comparison.json`, and `ordered-scatter-section-comparison.json`.
+The empty quantized diagnostics live under `linux-quantized-empty-final-direct/`, `linux-quantized-empty-final-select/`, and `linux-quantized-empty-final-mask/`.
+The native scatter run contains the corresponding D3OS diagnostics.
 Manifests record the shared validation source hashes, executable hashes, and execution backend.
 These generated local artifacts are not Git-tracked. The probes and audit tool are tracked for reproduction.

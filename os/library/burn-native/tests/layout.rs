@@ -204,7 +204,7 @@ fn gather_metadata_uses_the_source_axis_extent_and_both_view_strides() {
     assert_eq!(p[8..11], [7, 3, 131]);
     assert_eq!(p[16..19], [(-1i32) as u32 as usize, 35, (-7i32) as u32 as usize]);
     assert_eq!(p[24..27], [393, 131, (-1i32) as u32 as usize]);
-    for operation in d3os_nvidia::compute::indexing::Scatter::ALL {
+    for operation in d3os_nvidia::compute::indexing::Scatter::ALL.into_iter().filter(|op| !op.ordered()) {
         let scatter = source.scatter_parameters(&indices, 2, operation).unwrap();
         assert_eq!(scatter[0], 3 | ((operation as usize) << 16));
         assert_eq!(scatter[1..], p[1..]);

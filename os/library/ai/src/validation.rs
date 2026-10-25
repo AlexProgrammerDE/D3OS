@@ -6,9 +6,11 @@ pub mod erf;
 pub mod integer;
 pub mod integer_matrix;
 pub mod quantization;
+pub mod quantized_empty;
 pub mod qwen;
 pub mod qwen_state;
 pub mod scan;
+pub mod scatter_updates;
 pub mod sort;
 use alloc::{format, string::String};
 use burn::{
