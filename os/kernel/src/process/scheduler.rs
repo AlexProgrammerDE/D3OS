@@ -533,6 +533,7 @@ impl Scheduler {
         let current_ptr = ptr::from_ref(current.as_ref());
         let next_ptr = ptr::from_ref(next.as_ref());
 
+        Self::spill_fpu_owner(&mut state);
         state.current_thread = Some(next);
         state.kill_pending = false;
         state.retired_thread = Some(current);
@@ -705,6 +706,7 @@ impl Scheduler {
             let current_ptr = ptr::from_ref(current.as_ref());
             let next_ptr = ptr::from_ref(next.as_ref());
 
+            Self::spill_fpu_owner(&mut state);
             state.current_thread = Some(next);
             state.kill_pending = false;
 
@@ -728,20 +730,25 @@ impl Scheduler {
         }
     }
 
+    // A queued or blocked thread can resume on another CPU. Its vector state
+    // must reach memory before the outgoing scheduler releases its lock.
+    fn spill_fpu_owner(state: &mut ReadyState) {
+        if let Some(owner) = state.last_fpu_thread.take() {
+            unsafe { asm!("clts", options(nomem, nostack, preserves_flags)); }
+            owner.store_fpu_context();
+        }
+    }
+
     pub fn switch_fpu_context(&self) {
         let mut state = self.ready_state.lock();
         let current = state.current_thread.as_ref().unwrap();
 
         unsafe { asm!("clts"); }
 
-        if state.last_fpu_thread.is_some() {
-            let last = state.last_fpu_thread.as_ref().unwrap();
-            last.store_fpu_context();
-
-            if current.id() != last.id() {
+        if state.last_fpu_thread.as_ref().is_none_or(|last| last.id() != current.id()) {
+            if let Some(last) = state.last_fpu_thread.as_ref() {
                 last.store_fpu_context();
             }
-
             current.restore_fpu_context();
         }
 
@@ -778,15 +785,8 @@ impl Scheduler {
                     // Move one thread from the tail to the target
                     let thread_opt = self.pop_last(state);
                     if let Some(thread) = thread_opt {
-                        // Check if the migrating thread is the last thread on this core that has used the FPU.
-                        // If so, we need to reset `last_fpu_thread` to None.
-                        // We do not need to store the FPU context of the migrating thread,
-                        // as we always take a thread from the ready queue and never the current thread.
-                        if state.last_fpu_thread.is_some() {
-                            if state.last_fpu_thread.as_ref().unwrap().id() == thread.id() {
-                                state.last_fpu_thread = None;
-                            }
-                        }
+                        // Switching out spills vector state before a thread
+                        // becomes available for migration from this queue.
                         let _tid = thread.id();
                         let w = MessageItem::new_thread(thread);
                         dec_rq_len();
@@ -1024,6 +1024,7 @@ impl Scheduler {
         }
 
         // Switch to next
+        Self::spill_fpu_owner(&mut state);
         next.set_state(ThreadState::Running);
         state.current_thread = Some(Arc::clone(&next));
         state.kill_pending = false;
