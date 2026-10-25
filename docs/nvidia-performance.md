@@ -40,7 +40,8 @@ A remaining gap stays explicit for each workload, even after another workload re
 Compilation remains a separate load phase and never enters average inference, training, or rendering throughput.
 Persistent cache hits must remain separate from cold compilation.
 The current Linux headless software DOOM reference has different presentation costs and cannot establish GPU rendering parity.
-The retained MNIST results establish training and inference correctness, with no matched Linux performance baseline yet.
+MNIST now has GPU timing cohorts and a strict FP32 numerical oracle, with a matrix precision difference in stock Linux CUDA.
+See [MNIST GPU performance](mnist-performance.md) for the work contract, numerical checks, and separate Linux and D3OS results.
 
 ## Measurement method
 

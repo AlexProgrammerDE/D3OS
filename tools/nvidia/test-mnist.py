@@ -15,17 +15,16 @@ runner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
 
 
-def artifact(payload):
+def artifact(payload, kind=1):
     data = (
-        struct.pack("<8sIIQQ", b"D3MNIST1", 1, 36, len(payload), 0)
+        struct.pack("<8sIIQQ", b"D3MNIST1", kind, 36, len(payload), 0)
         + bytes(36)
         + payload
     )
     return data + struct.pack("<I", binascii.crc32(data))
 
 
-def frames(data):
-    name = "mnist.checkpoint"
+def frames(data, name="mnist.checkpoint"):
     result = [
         f"MNIST_ARTIFACT_BEGIN name={name} bytes={len(data)} crc32={binascii.crc32(data):08x}"
     ]
@@ -80,6 +79,28 @@ class ArtifactTransport(unittest.TestCase):
         self.assertEqual((self.output / "mnist.checkpoint").read_bytes(), self.data)
         self.assertEqual(completed["mnist.checkpoint"]["bytes"], len(self.data))
         self.assertEqual(len(partial), 1)
+
+    def test_benchmark_float_and_model_artifacts_preserve_numeric_payloads(self):
+        values = struct.pack("<fff", -1.5, 0.0, 3.125)
+        fixtures = {
+            "inference-64-logits.f32": values,
+            "train-0-losses.f32": values,
+            "train-2-logits.f32": values,
+            "train-1.model": artifact(bytes(range(100)), kind=2),
+        }
+        transcript = "\n".join(line for name, data in fixtures.items() for line in frames(data, name))
+        completed, partial = runner.extract_artifacts(transcript, self.output)
+        self.assertEqual(set(completed), set(fixtures))
+        self.assertEqual(partial, [])
+        for name, data in fixtures.items():
+            self.assertEqual((self.output / name).read_bytes(), data)
+
+    def test_benchmark_floats_reject_partial_values_and_nonfinite_numbers(self):
+        for data in (b"\0" * 3, struct.pack("<f", float("nan")), struct.pack("<f", float("inf"))):
+            with self.subTest(data=data):
+                with self.assertRaises(RuntimeError):
+                    runner.extract_artifacts("\n".join(frames(data, "train-0-losses.f32")), self.output)
+                self.assertFalse((self.output / "train-0-losses.f32").exists())
 
 
 if __name__ == "__main__":

@@ -13,8 +13,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+ARTIFACT_NAME = r"(?:mnist\.(?:checkpoint|model)|inference-(?:1|64|256)-logits\.f32|train-[0-2](?:\.model|-(?:losses|logits)\.f32))"
 PATTERN = re.compile(
-    r"MNIST_ARTIFACT_(BEGIN name=(mnist\.(?:checkpoint|model)) bytes=(\d+) crc32=([0-9a-f]{8})|DATA name=(mnist\.(?:checkpoint|model)) offset=(\d+) hex=([0-9a-f]+)|END name=(mnist\.(?:checkpoint|model)))"
+    rf"MNIST_ARTIFACT_(BEGIN name=({ARTIFACT_NAME}) bytes=(\d+) crc32=([0-9a-f]{{8}})|DATA name=({ARTIFACT_NAME}) offset=(\d+) hex=([0-9a-f]+)|END name=({ARTIFACT_NAME}))"
 )
 
 
@@ -50,15 +51,19 @@ def extract_artifacts(text, output):
             size, checksum, data = pending.pop(name)
             if len(data) != size or binascii.crc32(data) != checksum:
                 raise RuntimeError("artifact transport length or checksum mismatch")
-            kind = 1 if name.endswith("checkpoint") else 2
-            if (
-                len(data) < 72
-                or data[:8] != b"D3MNIST1"
-                or struct.unpack_from("<I", data, 8)[0] != kind
-                or binascii.crc32(data[:-4])
-                != struct.unpack_from("<I", data, len(data) - 4)[0]
-            ):
-                raise RuntimeError("invalid artifact container")
+            if name.endswith(".f32"):
+                if len(data) % 4 or any(not math.isfinite(value[0]) for value in struct.iter_unpack("<f", data)):
+                    raise RuntimeError("invalid float reference artifact")
+            else:
+                kind = 1 if name.endswith("checkpoint") else 2
+                if (
+                    len(data) < 72
+                    or data[:8] != b"D3MNIST1"
+                    or struct.unpack_from("<I", data, 8)[0] != kind
+                    or binascii.crc32(data[:-4])
+                    != struct.unpack_from("<I", data, len(data) - 4)[0]
+                ):
+                    raise RuntimeError("invalid artifact container")
             temporary = output / f"{name}.tmp"
             temporary.write_bytes(data)
             temporary.replace(output / name)

@@ -60,6 +60,52 @@ def stage_compiler(root, inputs=None):
     return compiler
 
 
+def mnist_benchmark(root, binary, data, model):
+    if (root / "mnist-output").exists():
+        raise RuntimeError("MNIST output already exists; use a fresh reference directory")
+    copy_file(root, binary, "/mnist-benchmark")
+    dependencies = subprocess.check_output(["ldd", str(binary)], text=True)
+    if "not found" in dependencies:
+        raise RuntimeError("unresolved Linux MNIST benchmark library")
+    for library in re.findall(r"/[^\s()]+", dependencies):
+        copy_file(root, library)
+    sources = {"mnist.model": model}
+    for name in (
+        "train-images-idx3-ubyte", "train-labels-idx1-ubyte",
+        "t10k-images-idx3-ubyte", "t10k-labels-idx1-ubyte",
+    ):
+        copy_file(root, data / name, Path("/mnist-data") / name)
+        sources[f"data/{name}"] = data / name
+    copy_file(root, model, "/mnist.model")
+    libdevice = ROOT / "target/nvidia/cutile-toolkit/packages/nvidia/cu13/nvvm/libdevice/libdevice.10.bc"
+    copy_file(root, libdevice, "/usr/cuda/nvvm/libdevice/libdevice.10.bc")
+    benchmark = root / "benchmark"
+    benchmark.write_text("""#!/bin/bash
+set -eux
+export CUDA_PATH=/usr/cuda
+export LD_LIBRARY_PATH=/lib64
+export HOME=/tmp
+export XDG_CACHE_HOME=/tmp/cache
+exec /mnist-benchmark /mnist-data /mnist.model /mnist-output
+""")
+    benchmark.chmod(0o755)
+    sources.update({
+        "executable": binary,
+        "cargo_lock": ROOT / "tools/mnist-benchmark/Cargo.lock",
+        "source": ROOT / "tools/mnist-benchmark/src/main.rs",
+        "libdevice": libdevice,
+    })
+    manifest = {
+        "execution_os": "linux", "framework": "burn", "backend": "cuda",
+        "compiler": "CubeCL default LLVM NVPTX",
+        "inputs": {
+            name: {"bytes": path.stat().st_size, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+            for name, path in sources.items()
+        },
+    }
+    (root.parent / "mnist-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+
+
 def compiler_benchmark(root, repeats, cpu_masks, inputs=None):
     stage_compiler(root, inputs)
     for name in ("date", "taskset", "sha256sum", "cp", "time"):
@@ -922,6 +968,12 @@ def main():
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--kernel-benchmark", action="store_true")
     parser.add_argument("--compiler-benchmark", action="store_true")
+    parser.add_argument("--mnist-benchmark", action="store_true")
+    parser.add_argument("--mnist-data", type=Path, default=ROOT / "target/mnist")
+    parser.add_argument(
+        "--mnist-executable", type=Path,
+        default=ROOT / "tools/mnist-benchmark/target/release/d3os-mnist-benchmark",
+    )
     parser.add_argument("--compiler-repeats", type=int, default=3)
     parser.add_argument(
         "--compiler-inputs",
@@ -985,6 +1037,7 @@ def main():
             (
                 args.kernel_benchmark,
                 args.compiler_benchmark,
+                args.mnist_benchmark,
                 bool(args.llama_directory),
                 args.doom_benchmark,
                 args.alexnet_benchmark,
@@ -993,8 +1046,10 @@ def main():
         > 1
     ):
         parser.error("select only one Linux reference workload")
-    if bool(args.llama_directory) != bool(args.model):
+    if not args.mnist_benchmark and bool(args.llama_directory) != bool(args.model):
         parser.error("--llama-directory and --model must be supplied together")
+    if args.mnist_benchmark and (args.model is None or not args.mnist_executable.is_file()):
+        parser.error("--mnist-benchmark requires --model and a built --mnist-executable")
     if args.matched_qwen_input and not args.llama_directory:
         parser.error("--matched-qwen-input requires --llama-directory and --model")
     if args.large_qwen and (not args.llama_directory or args.matched_qwen_input):
@@ -1017,7 +1072,12 @@ def main():
     except BlockingIOError:
         parser.error("this Linux guest directory is already in use")
     prepare(args.directory, args.kernel)
-    if args.compiler_benchmark:
+    if args.mnist_benchmark:
+        mnist_benchmark(
+            args.directory / "root", args.mnist_executable.resolve(),
+            args.mnist_data.resolve(), args.model.resolve(),
+        )
+    elif args.compiler_benchmark:
         compiler_benchmark(
             args.directory / "root", args.compiler_repeats,
             args.compiler_cpus or ("0", "0-3"), args.compiler_inputs,
@@ -1145,6 +1205,8 @@ def main():
         raise RuntimeError("Linux kernel benchmark did not pass")
     if args.compiler_benchmark and "LINUX_COMPILER_BENCH_OK" not in text:
         raise RuntimeError("Linux compiler benchmark did not pass")
+    if args.mnist_benchmark and "LINUX_MNIST_BENCH_OK backend=cuda" not in text:
+        raise RuntimeError("Linux CUDA MNIST benchmark did not pass")
     if args.alexnet_benchmark:
         validate_alexnet(text)
     if args.llama_directory:

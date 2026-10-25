@@ -1,0 +1,23 @@
+[package]
+name = "d3os-mnist-benchmark"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[features]
+default = ["cuda"]
+cuda = ["burn/cuda", "burn/fusion", "burn/autotune"]
+cpu = ["d3os-ai/cpu"]
+
+[dependencies]
+burn = { version = "=0.22.1", default-features = false, features = ["std", "extension"] }
+d3os-ai = { path = "../../os/library/ai", features = ["training"] }
+burn-pack = { version = "=0.22.1", default-features = false, features = ["std"] }
+serde_json = "1"
+
+[patch.crates-io]
+burn-optim = { path = "../../third_party/burn-optim" }
+burn-dispatch = { path = "../../third_party/burn-dispatch" }
+burn-backend-extension = { path = "../../third_party/burn-backend-extension" }
+gemm-common = { path = "../../third_party/gemm-common" }

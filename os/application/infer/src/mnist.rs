@@ -1,11 +1,11 @@
 //! Train, checkpoint, and reload a Burn classifier inside D3OS.
 use super::{read_file, report};
-use alloc::{format, string::String};
+use alloc::{format, string::String, vec::Vec};
 use core::fmt::Write;
 use d3os_ai::{
     burn::module::Module,
     mnist::{
-        artifact,
+        Mnist, artifact,
         data::Dataset,
         training::{Config, Trainer, evaluate},
     },
@@ -207,5 +207,132 @@ pub(super) fn infer() -> Result<(), String> {
         actual.accuracy(),
         actual.predictions_crc32
     ));
+    Ok(())
+}
+
+fn benchmark_logits(model: &Mnist, data: &Dataset<'_>, samples: usize, batch_size: usize) -> Result<Vec<f32>, String> {
+    let model = model.valid();
+    let device = model.devices().into_iter().next().ok_or("MNIST model has no device")?;
+    let mut output = Vec::with_capacity(samples * 10);
+    for offset in (0..samples).step_by(batch_size) {
+        let indices: Vec<_> = (offset..(offset + batch_size).min(samples)).collect();
+        let (input, _) = data.batch(&indices, &device)?;
+        let values = model.forward(input).try_into_vec_as::<f32>().map_err(|e| format!("MNIST benchmark logits: {e:?}"))?;
+        output.extend(values);
+    }
+    Ok(output)
+}
+
+fn export_values(name: &str, values: &[f32]) -> Result<(), String> {
+    if values.iter().any(|value| !value.is_finite()) {
+        return Err(format!("non-finite MNIST benchmark reference: {name}"));
+    }
+    let bytes: Vec<u8> = values.iter().flat_map(|value| value.to_le_bytes()).collect();
+    export(name, &bytes)
+}
+
+/// Fixed work shared with the Linux Burn reference. No checkpoint or export work
+/// enters a timed interval. Each training repetition starts with fresh Adam state.
+pub(super) fn benchmark() -> Result<(), String> {
+    const WARMUP_STEPS: usize = 4;
+    const TIMED_STEPS: usize = 64;
+    const REPEATS: usize = 3;
+    const INFERENCE_BATCHES: [usize; 3] = [1, 64, 256];
+    let images = read_file("/fwcfg/mnist.train-images")?;
+    let labels = read_file("/fwcfg/mnist.train-labels")?;
+    let test_images = read_file("/fwcfg/mnist.test-images")?;
+    let test_labels = read_file("/fwcfg/mnist.test-labels")?;
+    let training = dataset(&images, &labels, 60_000)?;
+    let testing = dataset(&test_images, &test_labels, 10_000)?;
+    let initial = read_file("/fwcfg/mnist.model")?;
+    let start = time::systime().num_milliseconds();
+    let device = d3os_ai::native_device().map_err(|e| format!("MNIST GPU: {e}"))?;
+    let backend = Nvidia::new().map_err(|e| format!("MNIST compute: {e}"))?;
+    let model = artifact::load(&initial, &device)?;
+    device.sync().map_err(|e| format!("MNIST model load: {e:?}"))?;
+    let load_ms = time::systime().num_milliseconds() - start;
+    let config = Config { seed: 42, batch_size: 64, learning_rate: 0.0001 };
+    let contract = serde_json::json!({
+        "execution_os": "d3os", "framework": "burn", "burn_version": "0.22.1",
+        "backend": "nvidia", "precision": "fp32", "model": "conv16-conv32-fc64-fc10",
+        "cpu_isa": "x86-64-v3",
+        "training_samples": training.len(), "test_samples": testing.len(),
+        "training_fingerprint": training.fingerprint(), "test_fingerprint": testing.fingerprint(),
+        "seed": config.seed, "batch_size": config.batch_size, "learning_rate": config.learning_rate,
+        "optimizer": {"name": "adam", "beta_1": 0.9, "beta_2": 0.999, "epsilon": 0.00001, "amsgrad": false},
+        "warmup_steps": WARMUP_STEPS, "timed_steps": TIMED_STEPS, "repeats": REPEATS,
+        "inference_batches": INFERENCE_BATCHES, "model_load_ms": load_ms,
+        "training_scope": "input_normalization_upload_forward_backward_eight_gradients_adam_sync_loss_read",
+        "inference_scope": "full_test_split_normalization_upload_forward_argmax_accuracy_sync_prediction_read",
+        "timing_excludes": ["model_load", "compilation", "autotuning", "warmup", "export", "reference_dump", "logging"]
+    });
+    report(format_args!("MNIST_BENCH_CONTRACT {contract}"));
+    for batch_size in INFERENCE_BATCHES {
+        let start = time::systime().num_milliseconds();
+        let expected = backend
+            .with_commands(|| Ok::<_, Error>(evaluate(&model, &testing, batch_size)))
+            .map_err(|e| format!("MNIST warmup scope: {e}"))??;
+        let warmup_ms = time::systime().num_milliseconds() - start;
+        if expected.accuracy() < 0.99 {
+            return Err(format!("MNIST starting model accuracy is below 99 percent: {}", expected.accuracy()));
+        }
+        report(format_args!("MNIST_BENCH_WARMUP os=d3os backend=nvidia mode=inference batch={batch_size} elapsed_ms={warmup_ms}"));
+        for run in 0..REPEATS {
+            let start = time::systime().num_milliseconds();
+            let result = backend
+                .with_commands(|| Ok::<_, Error>(evaluate(&model, &testing, batch_size)))
+                .map_err(|e| format!("MNIST inference benchmark scope: {e}"))??;
+            let elapsed_ms = time::systime().num_milliseconds() - start;
+            if elapsed_ms <= 0 || result.correct != expected.correct || result.predictions_crc32 != expected.predictions_crc32 {
+                return Err(String::from("MNIST inference timing or repeated predictions changed"));
+            }
+            report(format_args!(
+                "MNIST_BENCH os=d3os framework=burn backend=nvidia precision=fp32 mode=inference run={run} batch={batch_size} samples={} correct={} predictions_crc32={:08x} elapsed_ms={elapsed_ms} images_per_second={:.6}",
+                result.samples, result.correct, result.predictions_crc32, result.samples as f64 * 1000.0 / elapsed_ms as f64
+            ));
+        }
+        let values = backend
+            .with_commands(|| Ok::<_, Error>(benchmark_logits(&model, &testing, testing.len(), batch_size)))
+            .map_err(|e| format!("MNIST inference reference scope: {e}"))??;
+        export_values(&format!("inference-{batch_size}-logits.f32"), &values)?;
+    }
+    let device = device.autodiff();
+    for run in 0..REPEATS {
+        let mut trainer = Trainer::from_artifact(&initial, &training, &device, config)?;
+        let mut losses = Vec::with_capacity(TIMED_STEPS);
+        let start = time::systime().num_milliseconds();
+        for _ in 0..WARMUP_STEPS {
+            trainer = backend
+                .with_commands(|| Ok::<_, Error>(trainer.step(&training)))
+                .map_err(|e| format!("MNIST training warmup scope: {e}"))??.0;
+        }
+        let warmup_ms = time::systime().num_milliseconds() - start;
+        let start = time::systime().num_milliseconds();
+        let mut samples = 0;
+        for _ in 0..TIMED_STEPS {
+            let (next, step) = backend
+                .with_commands(|| Ok::<_, Error>(trainer.step(&training)))
+                .map_err(|e| format!("MNIST training benchmark scope: {e}"))??;
+            trainer = next;
+            samples += step.samples;
+            losses.push(step.loss);
+        }
+        let elapsed_ms = time::systime().num_milliseconds() - start;
+        if elapsed_ms <= 0 {
+            return Err(String::from("MNIST training interval is below timer resolution"));
+        }
+        report(format_args!(
+            "MNIST_BENCH os=d3os framework=burn backend=nvidia precision=fp32 mode=train run={run} batch={} warmup_steps={WARMUP_STEPS} timed_steps={TIMED_STEPS} samples={samples} warmup_ms={warmup_ms} elapsed_ms={elapsed_ms} images_per_second={:.6} steps_per_second={:.6} final_step={} final_epoch={} final_offset={}",
+            config.batch_size, samples as f64 * 1000.0 / elapsed_ms as f64, TIMED_STEPS as f64 * 1000.0 / elapsed_ms as f64,
+            trainer.progress().steps, trainer.progress().epoch, trainer.progress().offset
+        ));
+        export_values(&format!("train-{run}-losses.f32"), &losses)?;
+        let values = backend
+            .with_commands(|| Ok::<_, Error>(benchmark_logits(trainer.model(), &testing, 256, 64)))
+            .map_err(|e| format!("MNIST training reference scope: {e}"))??;
+        export_values(&format!("train-{run}-logits.f32"), &values)?;
+        export(&format!("train-{run}.model"), &artifact::export(trainer.model())?)?;
+    }
+    report(format_args!("INFERENCE_OK mnist mode=bench os=d3os backend=nvidia"));
     Ok(())
 }
