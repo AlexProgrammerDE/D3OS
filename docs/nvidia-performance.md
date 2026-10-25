@@ -882,6 +882,62 @@ Evidence is under `target/nvidia/qwen-prefill-optimization/adaptive-m32-9b/`, `a
 The same parent directory retains the rejected `k64-9b/` and `m32-9b/` experiments.
 Accepted portable inputs and host audits are under `target/nvidia/qwen-adaptive-m32-kernels/` and now populate the default kernel directory.
 
+### Profile native quantized kernels on Linux
+
+The Linux reference guest can collect hardware counters for the exact cuTile kernels used by D3OS.
+This diagnostic runs through Linux `libcuda`; the profiler and execution library remain inside that guest.
+The guest compiles the portable Tile IR and checks the resulting binary against the native bundle's host audit.
+D3OS continues to receive portable inputs and compile them inside D3OS.
+
+The probe extracts an actual checkpoint tensor and creates a deterministic FP32 input vector.
+Its independent CPU oracle uses GGUF dequantization and FP64 accumulation, then stores FP32 outputs.
+Both an ordinary control launch and the profiled launch must pass every output comparison and all buffer guards.
+The operator tolerance remains `0.0002 + 0.0002 * abs(reference)`.
+Buffer data starts at a 256-byte boundary, matching native allocation alignment.
+
+Prepare the checkpoint probes before starting a GPU timing run:
+
+```bash
+python3 tools/nvidia/prepare-nsight-compute.py
+
+OPENBLAS_NUM_THREADS=4 taskset -c 8,10,12,14 \
+  python3 tools/nvidia/prepare-quantized-probe.py \
+  ~/.cache/d3os/large-qwen/Qwen3.6-27B-Q3_K_M.gguf \
+  blk.0.ffn_gate.weight target/nvidia/quantized-probes/q3-gate
+
+OPENBLAS_NUM_THREADS=4 taskset -c 8,10,12,14 \
+  python3 tools/nvidia/prepare-quantized-probe.py \
+  ~/.cache/d3os/large-qwen/Qwen3.6-27B-Q3_K_M.gguf \
+  blk.0.ssm_out.weight target/nvidia/quantized-probes/q4-ssm
+
+taskset -c 8,10,12,14 python3 tools/nvidia/linux-reference.py \
+  --quantized-profile target/nvidia/quantized-probes/q3-gate \
+  target/nvidia/quantized-probes/q4-ssm \
+  --memory-mib 4096 --timeout 480 \
+  --directory target/nvidia/quantized-counter-profile/baseline
+```
+
+Each output directory must be fresh. Pass `--compiler-inputs PATH` to profile another portable kernel bundle.
+The preparer verifies the pinned Nsight Compute archive's size and SHA-256 without installing a host GPU driver.
+Input manifests record the model, tensor, dimensions, raw weights, input vector, and oracle hashes.
+The diagnostic retains compressed Nsight reports, raw CSV counters, compiler hashes, and validation logs.
+Its parser rejects missing counters, unexpected units, multiple launches, and mismatched kernel geometry.
+
+Nsight performs kernel replay with boost clock control and cache flushing after 256 warmup launches.
+These are instrumented Linux GPU diagnostics, excluded from ordinary D3OS and Linux throughput comparisons.
+NVIDIA documents these measurement effects in its [profiling guide](https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html).
+
+The initial Q3_K gate projection has 17,408 outputs and 5,120 inputs.
+The Q4_K recurrent output projection has 5,120 outputs and 6,144 inputs.
+Their respective integer ALU utilization is 84.69 and 76.28 percent of peak.
+DRAM utilization is 39.31 and 49.48 percent, while math-pipeline throttle stalls average 3.32 and 2.61 cycles per issued instruction.
+These counters identify integer decoding work as the main target for these two kernels.
+They do not establish the bottleneck for every model tensor.
+NVIDIA's [compute triage guide](https://docs.nvidia.com/nsight-compute/ComputeTriage/) explains how to interpret these pipeline counters.
+
+The accepted baseline reports are under `target/nvidia/quantized-counter-profile/baseline-q3-q4-final/`.
+Earlier failed profiler and exporter attempts remain in separate directories and are excluded from accepted results.
+
 ### Audit the Linux projection precision
 
 The Linux large-model reference now accepts `--trace-cuda-kernels` for a separate diagnostic run.

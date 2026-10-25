@@ -2,6 +2,7 @@
 """Prepare an isolated Linux reference guest from installed kernel/driver files."""
 
 import argparse
+import csv
 import fcntl
 import hashlib
 import importlib.util
@@ -223,6 +224,155 @@ def llama_libraries(root, directory):
             )
             for library in re.findall(r"/[^\s()]+", dependencies):
                 copy_file(root, library, Path("/lib64") / Path(library).name)
+
+
+def quantized_profile(root, directories, nsight, inputs):
+    target = nsight / "target/linux-desktop-glibc_2_11_3-x64"
+    if not (target / "ncu").is_file():
+        raise ValueError("Nsight directory must contain the pinned Linux x86-64 CLI")
+    destination = root / "quantized-probe"
+    source = ROOT / "tools/nvidia/linux-quantized-probe.c"
+    subprocess.run([
+        "gcc", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
+        str(source), "-ldl", "-lm", "-o", str(destination),
+    ], check=True)
+    runtime = root / "opt/nsight/target/linux-desktop-glibc_2_11_3-x64"
+    shutil.copytree(target, runtime, dirs_exist_ok=True)
+    shutil.copytree(nsight / "sections", root / "opt/nsight/sections", dirs_exist_ok=True)
+    environment = dict(os.environ, LD_LIBRARY_PATH=str(runtime))
+    for binary in [destination, *runtime.iterdir()]:
+        if not binary.is_file():
+            continue
+        dependencies = subprocess.check_output(["ldd", str(binary)], text=True, env=environment)
+        if "not found" in dependencies:
+            raise ValueError(f"unresolved profiler dependency: {binary}")
+        for library in re.findall(r"/[^\s()]+", dependencies):
+            if not Path(library).is_relative_to(runtime):
+                copy_file(root, library)
+    executable(root, "sha256sum")
+    executable(root, "dmesg")
+    for name in ("sh", "uname", "cp"):
+        executable(root, name)
+    copy_file(root, "/etc/os-release")
+    (root / "etc/passwd").write_text("root:x:0:0:root:/tmp:/bin/bash\n")
+    (root / "etc/group").write_text("root:x:0:\n")
+    inputs = inputs or ROOT / "target/nvidia/kernels"
+    stage_compiler(root, inputs)
+    portable = inputs / "inference.tilebc"
+    expected = json.loads((portable.parent / "manifest.json").read_text())["kernels"]["inference"]["host_audit"]["sha256"]
+    sections = ("SpeedOfLight", "SchedulerStats", "WarpStateStats", "MemoryWorkloadAnalysis_Tables", "LaunchStats", "Occupancy")
+    ncu = "/opt/nsight/target/linux-desktop-glibc_2_11_3-x64/ncu"
+    commands = [
+        "#!/bin/bash", "set -eux", "export HOME=/tmp", "export TMPDIR=/tmp",
+        "export LD_LIBRARY_PATH=/opt/nsight/target/linux-desktop-glibc_2_11_3-x64:/lib64",
+        "mkdir -p /dev/shm /profiles", "mount -t tmpfs tmpfs /dev/shm", "cd /profiles", "ulimit -c unlimited",
+        "echo /tmp/core.%p >/proc/sys/kernel/core_pattern",
+        f"{ncu} --version", 'capability=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader,nounits)',
+        'target=sm_${capability/./}',
+        '/usr/cuda/bin/tileiras --gpu-name="$target" --opt-level=3 /usr/share/nvidia/inference.tilebc -o /inference.cubin',
+        'hash=$(sha256sum /inference.cubin)', f'test "${{hash%% *}}" = {shlex.quote(expected)}',
+        'echo "LINUX_QUANTIZED_MODULE_SHA256 hash=${hash%% *} code_generation_os=linux"',
+    ]
+    cases = []
+    for index, directory in enumerate(directories):
+        manifest = json.loads((directory / "manifest.json").read_text())
+        inner, outputs, format_code = (int(manifest[name]) for name in ("inner", "outputs", "format"))
+        formats = {8: (32, 34), 11: (256, 110), 12: (256, 144), 13: (256, 176), 14: (256, 210)}
+        if format_code not in formats or inner <= 0 or outputs <= 0 or inner * outputs > 0xFFFFFFFF:
+            raise ValueError("invalid quantized probe shape or format")
+        block, block_bytes = formats[format_code]
+        if inner % block:
+            raise ValueError("quantized rows must contain complete blocks")
+        sizes = {"weights.bin": inner * outputs // block * block_bytes, "input.bin": inner * 4, "reference.bin": outputs * 4}
+        if manifest["files"].keys() != sizes.keys():
+            raise ValueError("quantized probe requires weights, input, and reference")
+        for name, data in manifest["files"].items():
+            path = directory / name
+            with path.open("rb") as file:
+                digest = hashlib.file_digest(file, "sha256").hexdigest()
+            if path.stat().st_size != sizes[name] or data["bytes"] != sizes[name] or digest != data["sha256"]:
+                raise ValueError(f"quantized input checksum mismatch: {path}")
+            copy_file(root, path, f"/probes/{index}/{name}")
+        prefix = f"/profiles/case{index}"
+        arguments = [
+            ncu, "--profile-from-start", "off", "--clock-control", "boost", "--cache-control", "all",
+            "--replay-mode", "kernel", "--kernel-name-base", "function", "--force-overwrite", "-o", prefix,
+        ]
+        for section in sections:
+            arguments.extend(["--section", section])
+        probe = [
+            "/quantized-probe", f"/probes/{index}/weights.bin", f"/probes/{index}/input.bin",
+            f"/probes/{index}/reference.bin", str(inner), str(outputs), str(format_code),
+        ]
+        commands.append(shlex.join(probe))
+        arguments.extend(probe)
+        arguments.append("profile")
+        command = shlex.join(arguments)
+        commands.extend([
+            f'if ! {command} >{prefix}.log 2>&1; then cat {prefix}.log; dmesg; for core in /tmp/core.*; do if [ -f "$core" ]; then cp "$core" /profiles/; fi; done; exit 1; fi',
+            f"cat {prefix}.log",
+            f"{ncu} --import {prefix}.ncu-repz --page raw --csv --print-units base >{prefix}.csv",
+        ])
+        cases.append(manifest)
+    commands.append("echo LINUX_QUANTIZED_PROFILE_OK")
+    benchmark = root / "benchmark"
+    benchmark.write_text("\n".join(commands) + "\n")
+    benchmark.chmod(0o755)
+    (root.parent / "quantized-profile-manifest.json").write_text(json.dumps({
+        "execution_os": "linux", "backend": "native D3OS cuTile kernels", "instrumented": True,
+        "ordinary_performance_comparison": False, "clock_control": "boost", "cache_control": "all",
+        "buffer_alignment_bytes": 256, "warmup_launches": 256, "guest_cpus": 4,
+        "host_affinity": sorted(os.sched_getaffinity(0)),
+        "replay_mode": "kernel", "sections": sections, "cases": cases,
+        "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        "binary_sha256": hashlib.sha256(destination.read_bytes()).hexdigest(),
+        "input_sha256": hashlib.sha256(portable.read_bytes()).hexdigest(), "expected_cubin_sha256": expected,
+        "profiler": json.loads((nsight / "d3os-package.json").read_text()),
+    }, indent=2) + "\n")
+
+
+def validate_quantized_profile(directory):
+    manifest = json.loads((directory / "quantized-profile-manifest.json").read_text())
+    formats = {8: "q8_0", 11: "q3k", 12: "q4k", 13: "q5k", 14: "q6k"}
+    results = []
+    for index, case in enumerate(manifest["cases"]):
+        path = directory / f"root/profiles/case{index}.csv"
+        with path.open(newline="") as file:
+            rows = list(csv.reader(file))
+        if len(rows) != 3 or len(rows[0]) != len(set(rows[0])) or any(len(row) != len(rows[0]) for row in rows):
+            raise ValueError("expected exactly one profiled launch with unique metric columns")
+        names, units, values = rows
+        fields = dict(zip(names, values))
+        entry = f"vector_project_{formats[case['format']]}"
+        if (fields.get("Kernel Name") != entry or fields.get("Block Size") != "(128, 1, 1)"
+                or fields.get("Grid Size") != f"({(case['outputs'] + 3) // 4}, 1, 1)"):
+            raise ValueError("counter report targets a different kernel or launch shape")
+        metrics = {}
+        for name, unit, value in zip(names, units, values):
+            if "__" not in name or value in ("", "N/A"):
+                continue
+            try:
+                number = float(value.replace(",", ""))
+            except ValueError:
+                continue
+            if not math.isfinite(number):
+                raise ValueError(f"nonfinite GPU metric: {name}")
+            metrics[name] = {"value": number, "unit": unit}
+        required = {
+            "gpu__time_duration.sum": "ns",
+            "dram__bytes_read.sum": "byte",
+            "sm__pipe_alu_cycles_active.avg.pct_of_peak_sustained_elapsed": "%",
+        }
+        for name, unit in required.items():
+            if name not in metrics or metrics[name]["value"] <= 0 or metrics[name]["unit"] != unit:
+                raise ValueError(f"missing hardware counter or incorrect unit: {name}")
+        report = directory / f"root/profiles/case{index}.ncu-repz"
+        results.append({"case": case, "launch": {name: fields[name] for name in names[:12]}, "metrics": metrics,
+                        "csv_sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "report_sha256": hashlib.sha256(report.read_bytes()).hexdigest()})
+    result = {"execution_os": "linux", "backend": "native D3OS cuTile kernels", "instrumented": True,
+              "ordinary_performance_comparison": False, "cases": results}
+    (directory / "quantized-profile-results.json").write_text(json.dumps(result, indent=2) + "\n")
+    return result
 
 
 def llama_benchmark(root, directory, model):
@@ -967,6 +1117,8 @@ def main():
     parser.add_argument("--kernel", default=platform.release())
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--kernel-benchmark", action="store_true")
+    parser.add_argument("--quantized-profile", type=Path, nargs="+", help="checkpoint probe directories for Linux-only GPU hardware counters")
+    parser.add_argument("--nsight-directory", type=Path, help="pinned Nsight Compute archive root; default downloads the pinned package")
     parser.add_argument("--compiler-benchmark", action="store_true")
     parser.add_argument("--mnist-benchmark", action="store_true")
     parser.add_argument("--mnist-data", type=Path, default=ROOT / "target/mnist")
@@ -978,7 +1130,7 @@ def main():
     parser.add_argument(
         "--compiler-inputs",
         type=Path,
-        help="portable kernel input directory for --compiler-benchmark; default: target/nvidia/kernels",
+        help="portable inputs for compiler benchmarks or quantized profiles; default: target/nvidia/kernels",
     )
     parser.add_argument(
         "--compiler-cpus",
@@ -1018,13 +1170,17 @@ def main():
     parser.add_argument("--doom-benchmark", action="store_true")
     parser.add_argument("--alexnet-benchmark", action="store_true")
     args = parser.parse_args()
+    if args.nsight_directory and not args.quantized_profile:
+        parser.error("--nsight-directory requires --quantized-profile")
+    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
+        parser.error("--quantized-profile requires a separate diagnostic guest")
     if args.pin_vcpus and len(os.sched_getaffinity(0)) != 4:
         parser.error("--pin-vcpus requires an inherited affinity of four host CPUs")
     if args.compiler_cpus and not args.compiler_benchmark:
         parser.error("--compiler-cpus requires --compiler-benchmark")
     if args.compiler_inputs is not None:
-        if not args.compiler_benchmark:
-            parser.error("--compiler-inputs requires --compiler-benchmark")
+        if not (args.compiler_benchmark or args.quantized_profile):
+            parser.error("--compiler-inputs requires --compiler-benchmark or --quantized-profile")
         args.compiler_inputs = args.compiler_inputs.resolve()
         if not args.compiler_inputs.is_dir():
             parser.error("--compiler-inputs must be a directory")
@@ -1072,7 +1228,15 @@ def main():
     except BlockingIOError:
         parser.error("this Linux guest directory is already in use")
     prepare(args.directory, args.kernel)
-    if args.mnist_benchmark:
+    if args.quantized_profile:
+        nsight = args.nsight_directory
+        if nsight is None:
+            spec = importlib.util.spec_from_file_location("nsight_package", Path(__file__).with_name("prepare-nsight-compute.py"))
+            package = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(package)
+            nsight = package.prepare(ROOT / "target/nvidia/nsight-compute")
+        quantized_profile(args.directory / "root", [p.resolve() for p in args.quantized_profile], nsight.resolve(), args.compiler_inputs)
+    elif args.mnist_benchmark:
         mnist_benchmark(
             args.directory / "root", args.mnist_executable.resolve(),
             args.mnist_data.resolve(), args.model.resolve(),
@@ -1203,6 +1367,11 @@ def main():
         )
     if args.kernel_benchmark and "LINUX_KERNEL_BENCH_OK" not in text:
         raise RuntimeError("Linux kernel benchmark did not pass")
+    if args.quantized_profile:
+        if "LINUX_QUANTIZED_PROFILE_OK" not in text or text.count("LINUX_QUANTIZED_PROBE_OK") != 2 * len(args.quantized_profile):
+            raise RuntimeError("Linux quantized hardware profile did not pass")
+        validate_quantized_profile(args.directory)
+        print("LINUX_QUANTIZED_COUNTERS_VALIDATED", flush=True)
     if args.compiler_benchmark and "LINUX_COMPILER_BENCH_OK" not in text:
         raise RuntimeError("Linux compiler benchmark did not pass")
     if args.mnist_benchmark and "LINUX_MNIST_BENCH_OK backend=cuda" not in text:
