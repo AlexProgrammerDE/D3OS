@@ -133,7 +133,10 @@ unsafe fn vector_project_k<const FORMAT: u32>(a: *const f32, b: *const f32, outp
     let first = block_id() * 4u32;
     let lane = lanes::<128>() % broadcast_scalar(32u32, shape![128]);
     let col = lanes::<128>() / broadcast_scalar(32u32, shape![128]) + broadcast_scalar(first, shape![128]);
-    let mask = lt_tile(col, broadcast_scalar(cols, shape![128]));
+    // Inactive output lanes read a valid weight row; their stores stay masked.
+    // Unconditional packed loads avoid padding work throughout the reduction.
+    let col = select(lt_tile(col, broadcast_scalar(cols, shape![128])), col, broadcast_scalar(cols - 1u32, shape![128]));
+    let mask = broadcast_scalar(true, shape![128]);
     let half = lane / broadcast_scalar(16u32, shape![128]);
     let blocks = inner / 256u32;
     let bytes = if FORMAT == 11u32 {

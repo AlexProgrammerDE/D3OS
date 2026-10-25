@@ -882,6 +882,55 @@ Evidence is under `target/nvidia/qwen-prefill-optimization/adaptive-m32-9b/`, `a
 The same parent directory retains the rejected `k64-9b/` and `m32-9b/` experiments.
 Accepted portable inputs and host audits are under `target/nvidia/qwen-adaptive-m32-kernels/` and now populate the default kernel directory.
 
+### Remove masked-load padding from quantized decode
+
+The single-token Q3_K, Q4_K, Q5_K, and Q6_K kernels now clamp inactive output lanes to the last valid weight row.
+Their packed weight loads become unconditional, while output stores retain their original bounds masks.
+The native launch contract rejects zero dimensions and incomplete quantization blocks.
+Consequently, these extra reads stay inside valid storage, including projections with fewer than four outputs.
+FP32 activations, accumulation order, output values, and numerical tolerances remain unchanged.
+
+This removes repeated padding work inside the decoding loop.
+Only four of the 181 inference executable sections change; all other executable sections and constant banks remain byte-identical.
+The launch grid and protocol 20 remain unchanged, and all register-spill and Tensor Core audits pass.
+
+The Linux hardware-counter diagnostic uses the same checkpoint tensors and measurement settings before and after the change:
+
+| Instrumented Linux GPU kernel | Previous duration | Revised duration | Registers per thread, before to after |
+| --- | ---: | ---: | ---: |
+| Q3_K gate, 17,408 by 5,120 | 169.472 us | 156.800 us | 64 to 69 |
+| Q4_K recurrent output, 5,120 by 6,144 | 62.304 us | 60.064 us | 64 to 70 |
+
+These diagnostic GPU intervals shorten by 7.48 and 3.60 percent respectively.
+The extra registers reduce occupancy, but both absolute execution intervals improve.
+Instrumented Linux kernel durations remain separate from ordinary D3OS model throughput.
+
+Fresh D3OS VMs compare the preceding bundle against this change on the same GPU.
+Both use four vCPUs, 15,360 MiB of RAM, host affinity `8,10,12,14`, FP32 activations and cache, and the same teacher-forced trace.
+The following ordinary warm samples exclude compilation, loading, reference checks, and device instrumentation.
+
+| Qwen3.6-27B Q3_K_M measurement | Previous D3OS GPU | Revised D3OS GPU | Retained Linux CUDA GPU |
+| --- | ---: | ---: | ---: |
+| Decode samples | 14.429, 14.376 tokens/s | 15.322, 15.184 tokens/s | Mean 34.3745 tokens/s |
+| Mean decode | 14.4025 tokens/s | 15.2530 tokens/s | 34.3745 tokens/s |
+| Mean prompt processing | 764 ms | 757 ms | 93.213 ms |
+
+Native decode improves by 5.91 percent in this comparison.
+The small prompt difference does not establish a prompt optimization; the batched kernels are unchanged.
+Native decode remains at 44.37 percent of the retained Linux rate, and the Linux activation-precision difference still applies.
+The performance goal remains open.
+
+Both native runs pass the complete GPU operator suite, including all five quantized formats and guarded output tails.
+Each run also passes all 32,033,280 FP32 reference logits with zero tolerance failures.
+The maximum absolute error remains `0.000034809113`, the checksum remains `14424479105642919525`, and the existing two greedy differences remain unchanged.
+Separate native cold compilation takes 89.731 seconds for the control and 90.609 seconds for the revision.
+These single compiler samples do not establish a compilation improvement or regression.
+
+Ordinary model evidence is under `target/nvidia/qwen-prefill-optimization/masked-control-27b/` and `unmasked-27b/`.
+Their summary is `unmasked-comparison.json` in the same parent directory.
+Counter evidence is under `target/nvidia/quantized-counter-profile/unmasked-q3-q4/`, with its preceding baseline described below.
+The revised portable inputs and audits are under `target/nvidia/quantized-unmasked-kernels/` and populate the default kernel directory.
+
 ### Profile native quantized kernels on Linux
 
 The Linux reference guest can collect hardware counters for the exact cuTile kernels used by D3OS.
