@@ -780,6 +780,61 @@ This final boot runs without the concurrent host IR export.
 Its logs are under `target/nvidia/q8-optimization/final-validation/`.
 The default kernel bundle now uses these validated portable inputs.
 
+### Read adjacent packed weights for prompt processing
+
+Quantized prompt projections now decode adjacent values within each packed weight row.
+They transpose the decoded tile before Tensor Core multiplication.
+This preserves the reduction order, FP32 activations, TF32x3 products, and resident model storage.
+The change adds no intermediate allocation and leaves single-token vector kernels unchanged.
+
+The host instruction audit finds exactly five changed executable sections, one batched projection for each quantized format.
+Every other inference entry remains byte-identical, including the decode, BF16, AlexNet, MNIST, and DOOM kernels.
+The changed entries retain Tensor Core instructions without register spills.
+Each D3OS VM compiles its portable inputs internally and reproduces the audited machine-code hashes.
+
+Fresh baseline and revised D3OS VMs use four KVM CPUs, host affinity `8,10,12,14`, and 15360 MiB of RAM.
+Each model uses its existing weights, 37 prompt tokens, 128 teacher-forced decode steps, and a 2048-token FP32 cache.
+The host runs one GPU VM at a time, without concurrent builds during timing.
+The following means use two ordinary warm samples per model and bundle.
+Compilation, loading, operator checks, numerical validation, and device instrumentation remain outside those intervals.
+
+| D3OS GPU prompt processing | Previous packed reads | Adjacent packed reads | Speedup |
+| --- | ---: | ---: | ---: |
+| Qwen3.5-9B Q8_0 | 428.000 ms | 209.000 ms | 2.048 times |
+| Qwen3.6-27B Q3_K_M | 1,733.500 ms | 1,045.500 ms | 1.658 times |
+
+Separate instrumented profiles support the ordinary timing improvement.
+Quantized projection device time falls from 408.194 to 199.004 ms for 9B, and from 1,854.827 to 1,077.995 ms for 27B.
+These serialized device profiles remain excluded from the ordinary means.
+
+Both bundles pass the complete GPU operator suite, including all five quantized formats, partial tiles, and buffer guards.
+Each model also passes all 32,033,280 independent FP32 logit comparisons with zero tolerance failures.
+Maximum absolute errors remain `0.000025749207` for 9B and `0.000034809113` for 27B.
+Both model selection checksums remain unchanged.
+The existing greedy differences from Linux also remain unchanged: one for 9B and two for 27B.
+
+Decode performance does not improve in these samples.
+The 9B means are 48.8925 tokens/s before and 48.9200 after.
+The 27B means are 14.0895 tokens/s before and 13.5565 after, despite identical single-token kernel code.
+The recorded timing difference remains explicit, without attributing it to an unmeasured cause.
+
+Fresh Linux llama.cpp CUDA 9B samples average 43.143 ms for prompt processing and 58.303 tokens/s for decode.
+Fresh Linux 27B samples average 93.213 ms and 34.3745 tokens/s respectively.
+Both models retain the prompt and decode token IDs from the native reference inputs.
+The revised D3OS prompt intervals remain 4.844 times longer than Linux for 9B and 11.216 times longer for 27B.
+Linux quantizes activations during projection, while D3OS retains FP32 activations and the original numerical tolerances.
+The Linux throughput target and its arithmetic difference both remain explicit.
+
+The baseline native boots compile their full portable bundles in 83.992 and 84.311 seconds.
+The revised native boots take 95.664 and 104.326 seconds, measured separately from execution.
+These load-time observations do not establish compilation parity or isolate the cause of the difference.
+A matched Linux cold-compilation comparison of the revised bundle remains required.
+
+Baseline 9B evidence is under `target/nvidia/q8-optimization/prefill-before-20261025/`.
+The other native cohorts and fresh Linux baselines are under `target/nvidia/qwen-prefill-optimization/`.
+Portable inputs, host instruction audits, and the executable-section comparison are under `target/nvidia/qwen-prefill-coalesced-kernels/`.
+The previous portable bundle remains under `target/nvidia/qwen-prefill-original-kernels/`.
+
 ### Audit the Linux projection precision
 
 The Linux large-model reference now accepts `--trace-cuda-kernels` for a separate diagnostic run.

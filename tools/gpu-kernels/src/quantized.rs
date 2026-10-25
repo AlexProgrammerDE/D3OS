@@ -1,8 +1,12 @@
 unsafe fn read_quantized_matrix<const FORMAT: u32, const R: i32, const C: i32, const F: i32>(
     p: *const f32, index: Tile<u32, { [R, C] }>, mask: Tile<bool, { [R, C] }>, flat: Shape<{ [F] }>,
 ) -> Tile<f32, { [R, C] }> {
-    let result = unsafe { read_quantized_512::<FORMAT>(p, index.reshape(flat).reshape(shape![512]), mask.reshape(flat).reshape(shape![512])) };
-    result.reshape(shape![R, C])
+    // Packed weights are row-major [output, inner], while MMA consumes
+    // [inner, output]. Decode adjacent weights before transposing the tile.
+    let index = index.transpose().reshape(flat).reshape(shape![512]);
+    let mask = mask.transpose().reshape(flat).reshape(shape![512]);
+    let result = unsafe { read_quantized_512::<FORMAT>(p, index, mask) };
+    result.reshape(shape![C, R]).transpose()
 }
 unsafe fn unpack_quantized<const FORMAT: u32>(input: *const f32, output: *mut f32, n: u32) {
     let i = indices();
