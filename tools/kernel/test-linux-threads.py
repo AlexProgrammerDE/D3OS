@@ -22,13 +22,14 @@ def main():
     parser.add_argument("--accel", choices=("kvm", "tcg"), default="tcg")
     parser.add_argument("--cpus", type=int, default=4)
     parser.add_argument("--repeat", type=int, default=3)
+    parser.add_argument("--memory-mib", type=int, default=2048)
     parser.add_argument("--timeout", type=int, default=180)
     parser.add_argument("--bios", type=Path)
     parser.add_argument("--kernel-image", type=Path)
     parser.add_argument("--directory", type=Path)
     args = parser.parse_args()
-    if not 2 <= args.cpus <= 64 or not 1 <= args.repeat <= 100 or args.timeout < 10:
-        parser.error("use 2 to 64 CPUs, 1 to 100 repetitions, and at least 10 seconds")
+    if not 2 <= args.cpus <= 64 or not 1 <= args.repeat <= 100 or args.timeout < 10 or args.memory_mib < 256:
+        parser.error("use 2 to 64 CPUs, 1 to 100 repetitions, at least 256 MiB, and at least 10 seconds")
     harness = module("harness", ROOT / "tools/inference/test-qemu.py")
     compiler = module("compiler", ROOT / "tools/nvidia/guest-compiler.py")
     directory = (args.directory or ROOT / f"target/linux-threads-{args.accel}-{args.cpus}").resolve()
@@ -61,8 +62,7 @@ def main():
     command = [
         "qemu-system-x86_64", "-machine", "q35", "-accel", args.accel,
         "-cpu", "host" if args.accel == "kvm" else "Haswell,fsgsbase",
-        # Concurrent glibc arena reservations are eagerly backed by D3OS today.
-        "-smp", str(args.cpus), "-m", "2048M",
+        "-smp", str(args.cpus), "-m", str(args.memory_mib),
         *harness.firmware_options(bios.resolve(), directory),
         "-drive", f"format=raw,file={image}", "-display", "none",
         "-device", "virtio-vga", "-serial", f"file:{serial}",
@@ -94,8 +94,9 @@ def main():
             for run in range(1, args.repeat + 1):
                 qmp.type_command("threadexit")
                 wait("LINUX_THREAD_EXIT_OK", run)
+                wait("LINUX_RESERVATION_OK", run)
                 time.sleep(0.2)
-            print(f"LINUX_THREAD_EXIT_SUITE_OK accelerator={args.accel} cpus={args.cpus} runs={args.repeat} serial={serial}")
+            print(f"LINUX_THREAD_EXIT_SUITE_OK accelerator={args.accel} cpus={args.cpus} memory_mib={args.memory_mib} runs={args.repeat} serial={serial}")
         finally:
             if qmp is not None:
                 try:

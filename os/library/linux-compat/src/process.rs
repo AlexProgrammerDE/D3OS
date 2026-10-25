@@ -100,12 +100,18 @@ const STACK_SIZE: usize = 2 * 1024 * 1024;
 const MMAP: u64 = 0x400_0000_0000;
 const HEAP: u64 = 0x200_0000_0000;
 
+#[derive(Clone, Copy)]
+struct PageMapping {
+    protection: u32,
+    backed: bool,
+}
+
 pub struct LinuxProcess<H: Host> {
     host: H,
     id: u32,
     cwd: String,
     executable: String,
-    pages: BTreeMap<u64, u32>,
+    pages: BTreeMap<u64, PageMapping>,
     files: BTreeMap<u64, File>,
     consoles: BTreeMap<u64, u64>,
     next_map: u64,
@@ -420,8 +426,8 @@ impl<H: Host> LinuxProcess<H> {
             return Err(-14);
         }
         for page in (address & !(PAGE - 1)..end).step_by(PAGE as usize) {
-            let protection = self.pages.get(&page).ok_or(-14isize)?;
-            if protection & if write { 2 } else { 1 } == 0 {
+            let mapping = self.pages.get(&page).ok_or(-14isize)?;
+            if mapping.protection & if write { 2 } else { 1 } == 0 {
                 return Err(-14);
             }
         }
@@ -473,22 +479,41 @@ impl<H: Host> LinuxProcess<H> {
                 if !replace {
                     return Err(-17);
                 }
-                self.host.unmap_page(p)?;
-                self.pages.remove(&p);
+                self.unmap(p)?;
             }
-            self.host.allocate_page(p)?;
-            self.pages.insert(p, protection);
+            let backed = protection != 0;
+            if backed {
+                self.host.allocate_page(p)?;
+            }
+            self.pages.insert(p, PageMapping { protection, backed });
         }
         Ok(())
     }
 
-    fn protect(&self, address: u64, length: u64, protection: u32) -> Result<()> {
+    fn unmap(&mut self, address: u64) -> Result<()> {
+        if let Some(mapping) = self.pages.get(&address) {
+            if mapping.backed {
+                self.host.unmap_page(address)?;
+            }
+            self.pages.remove(&address);
+        }
+        Ok(())
+    }
+
+    fn protect(&mut self, address: u64, length: u64, protection: u32) -> Result<()> {
         let end = address.checked_add(length).and_then(page_up).ok_or(-22isize)?;
         for p in (address..end).step_by(PAGE as usize) {
-            if !self.pages.contains_key(&p) {
-                return Err(-12);
+            let mapping = self.pages.get_mut(&p).ok_or(-12isize)?;
+            // Anonymous PROT_NONE mappings reserve addresses only. An already
+            // backed page retains its contents when access is removed.
+            if !mapping.backed && protection != 0 {
+                self.host.allocate_page(p)?;
+                mapping.backed = true;
             }
-            self.host.protect_page(p, protection)?;
+            if mapping.backed {
+                self.host.protect_page(p, protection)?;
+            }
+            mapping.protection = protection;
         }
         Ok(())
     }
@@ -510,9 +535,6 @@ impl<H: Host> LinuxProcess<H> {
             let start = segment.address & !(PAGE - 1);
             let end = page_up(segment.address + segment.memory_size).ok_or(-8isize)?;
             let protection = (segment.flags & 4) >> 2 | segment.flags & 2 | (segment.flags & 1) << 2;
-            for p in (start..end).step_by(PAGE as usize) {
-                self.pages.insert(p, protection);
-            }
             self.protect(start, end - start, protection)?;
         }
         Ok((elf.entry, elf.phdr, elf.phnum))
@@ -593,7 +615,9 @@ impl<H: Host> LinuxProcess<H> {
             self.next_map = address.checked_add(size).and_then(|n| n.checked_add(PAGE)).ok_or(-12isize)?;
         }
         let file = if flags & 0x20 == 0 { Some(self.file(fd)?.handle) } else { None };
-        self.map(address, size, protection as u32, fixed)?;
+        // File mappings need backing even for PROT_NONE so their initial
+        // contents survive a later permission change without reading again.
+        self.map(address, size, if file.is_some() { 3 } else { protection as u32 }, fixed)?;
         if let Some(handle) = file {
             let old = self.host.seek(handle, 0, SeekOrigin::Current).map_err(errno)?;
             self.host
@@ -789,10 +813,6 @@ impl<H: Host> LinuxProcess<H> {
                     return Err(-22);
                 }
                 self.protect(x, y, z as u32)?;
-                let end = page_up(x.checked_add(y).ok_or(-22isize)?).ok_or(-22isize)?;
-                for p in (x..end).step_by(PAGE as usize) {
-                    self.pages.insert(p, z as u32);
-                }
                 Ok(0)
             }
             11 => {
@@ -801,9 +821,7 @@ impl<H: Host> LinuxProcess<H> {
                 }
                 let end = page_up(x.checked_add(y).ok_or(-22isize)?).ok_or(-22isize)?;
                 for p in (x..end).step_by(PAGE as usize) {
-                    if self.pages.remove(&p).is_some() {
-                        self.host.unmap_page(p)?;
-                    }
+                    self.unmap(p)?;
                 }
                 Ok(0)
             }
@@ -821,9 +839,7 @@ impl<H: Host> LinuxProcess<H> {
                 }
                 if end < old_end {
                     for p in (end..old_end).step_by(PAGE as usize) {
-                        if self.pages.remove(&p).is_some() {
-                            self.host.unmap_page(p)?;
-                        }
+                        self.unmap(p)?;
                     }
                 }
                 self.brk = x;

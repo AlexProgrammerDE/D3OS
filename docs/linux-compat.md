@@ -82,6 +82,12 @@ This permits low Linux user mappings without replacing live kernel code or alloc
 The kernel heap is 128 MiB to accommodate compiler loading and process metadata.
 If the ramdisk overlaps that window, it moves into separate physical frames outside the kernel heap.
 
+Anonymous `PROT_NONE` mappings reserve virtual addresses without physical backing.
+`mprotect` allocates zeroed pages when access first becomes nonzero.
+Existing backed pages retain their contents when access becomes `PROT_NONE`.
+File mappings load their contents into physical backing even when they initially deny access.
+Accessible mappings still receive physical backing eagerly.
+
 The loader reads executables through the naming service, including files created after boot.
 It borrows immutable ramdisk files directly, avoiding a second heap copy of large executables.
 Linux `exit` and `exit_group` release descriptors and use normal D3OS process cleanup.

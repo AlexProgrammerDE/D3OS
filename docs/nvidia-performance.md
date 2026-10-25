@@ -299,6 +299,37 @@ MNIST checkpoint resume and fresh-VM inference preserve all 10,000 predictions, 
 These are D3OS regression measurements, with no new matched Linux sample.
 The logs are under `target/nvidia/compile-parity-q8/fpu-workloads/`.
 
+### Back anonymous reservations only when access is enabled
+
+Anonymous `PROT_NONE` mappings now reserve addresses without allocating physical pages.
+`mprotect` allocates zeroed pages when access first becomes nonzero.
+Removing access from an existing allocation preserves its backing and contents.
+File mappings still receive backing before the file contents load, including mappings that initially deny access.
+Fixed-address replacement and unmapping handle both reserved and backed pages.
+This change does not implement demand paging for accessible mappings.
+
+The thread fixture now reserves 1 GiB, enables eight separated pages, and verifies initial zeroes and contents after permission changes.
+It also checks inaccessible file mappings, syscall access rejection, mixed fixed-address replacement, and unmapping with holes.
+The prior kernel panics out of physical memory in the 512 MiB KVM trial.
+The patched kernel passes three fixture invocations under KVM and three under TCG, each with four CPUs and 512 MiB.
+Those runs retain all vector-register, cleanup-handler, and thread-join checks.
+The final fixture also unmaps a backed page while access remains disabled.
+Evidence is under `target/nvidia/compile-parity-q8/reservation-before/`, `reservation-final-kvm/`, and `reservation-final-tcg/`.
+
+A fresh Linux VM repeats cold compilation with the corrected 14-asset runtime and the same four pinned CPUs and 4 GiB memory.
+Its three totals are 75.376, 75.328, and 79.686 seconds, with a mean of 76.797 seconds.
+All nine generated binaries match the host audits. Its vector module takes 39–48 ms, so the D3OS startup gap remains explicit.
+These Linux results are under `target/nvidia/compile-parity-q8/linux-unwinder-final/`.
+
+Three fresh D3OS boots after deferred backing record 79.260, 74.867, and 75.464 seconds, with a mean of 76.530 seconds.
+All staged assets match the fresh Linux runtime, including the input and compiler hashes.
+All three GPU binaries match their audits in every boot, and all eight AlexNet layer references pass each time.
+The earlier D3OS mean was 86.954 seconds. Host clock variation still limits attribution of the wall-time change.
+The current D3OS and Linux full-bundle totals are comparable within this cohort's variation.
+However, D3OS vector compilation takes 283–370 ms versus 39–48 ms in Linux, and matched direct PTX timing remains open.
+Compilation parity therefore remains incomplete.
+The D3OS evidence, saved kernel, and source changes are under `target/nvidia/compile-parity-q8/pinned-reservation-final/`.
+
 ## Compile portable kernels inside D3OS
 
 The host now exports Tile IR instead of injecting GPU machine code.

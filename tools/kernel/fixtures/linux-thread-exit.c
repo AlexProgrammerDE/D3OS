@@ -1,7 +1,11 @@
+#include <errno.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <sys/mman.h>
+#include <unistd.h>
 
 enum { THREADS = 8, ROUNDS = 8 };
 
@@ -69,7 +73,98 @@ static int fail(int code) {
     return code;
 }
 
+static int check_reservation(void) {
+    const size_t page = 4096;
+    const size_t size = 1UL << 30;
+    unsigned char *memory = mmap(NULL, size, PROT_NONE,
+                                 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (memory == MAP_FAILED) {
+        return fail(5);
+    }
+    for (size_t offset = 0; offset < size; offset += size / 8) {
+        if (mprotect(memory + offset, page, PROT_READ | PROT_WRITE)) {
+            return fail(6);
+        }
+        for (size_t index = 0; index < page; ++index) {
+            if (memory[offset + index] != 0) {
+                return fail(7);
+            }
+            memory[offset + index] = (unsigned char)(index + offset / (size / 8));
+        }
+        if (mprotect(memory + offset, page, PROT_NONE) ||
+            mprotect(memory + offset, page, PROT_READ)) {
+            return fail(8);
+        }
+        for (size_t index = 0; index < page; ++index) {
+            if (memory[offset + index] != (unsigned char)(index + offset / (size / 8))) {
+                return fail(9);
+            }
+        }
+    }
+    int fd = open("/tmp/reservation", O_CREAT | O_TRUNC | O_RDWR, 0600);
+    const unsigned char expected[] = {31, 41, 59, 26};
+    if (fd < 0 || write(fd, expected, sizeof(expected)) != (ssize_t)sizeof(expected)) {
+        return fail(10);
+    }
+    unsigned char *file = mmap(memory + page, page, PROT_NONE,
+                               MAP_PRIVATE | MAP_FIXED, fd, 0);
+    if (file != memory + page) {
+        return fail(11);
+    }
+    errno = 0;
+    if (write(fd, file, 1) != -1 || errno != EFAULT) {
+        return fail(12);
+    }
+    errno = 0;
+    if (write(fd, memory + page * 2, 1) != -1 || errno != EFAULT) {
+        return fail(13);
+    }
+    if (lseek(fd, 0, SEEK_SET) != 0) {
+        return fail(14);
+    }
+    errno = 0;
+    if (read(fd, memory, 1) != -1 || errno != EFAULT) {
+        return fail(15);
+    }
+    if (mprotect(file, page, PROT_READ)) {
+        return fail(16);
+    }
+    for (size_t index = 0; index < sizeof(expected); ++index) {
+        if (file[index] != expected[index]) {
+            return fail(17);
+        }
+    }
+    close(fd);
+    unlink("/tmp/reservation");
+
+    // Replace both an untouched reservation and existing physical backing.
+    unsigned char *replacement = mmap(memory, page * 3, PROT_READ | PROT_WRITE,
+                                      MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+    if (replacement != memory) {
+        return fail(18);
+    }
+    for (size_t index = 0; index < page * 3; ++index) {
+        if (replacement[index] != 0) {
+            return fail(19);
+        }
+    }
+    if (mprotect(memory + size / 8, page, PROT_NONE) ||
+        munmap(memory + page, page) || munmap(memory, size)) {
+        return fail(20);
+    }
+    errno = 0;
+    if (mprotect(memory, page, PROT_READ) != -1 || errno != ENOMEM) {
+        return fail(21);
+    }
+    fprintf(stderr, "LINUX_RESERVATION_OK reserved_bytes=%zu touched_pages=8 file_prot_none=preserved replacement=zeroed\n", size);
+    return 0;
+}
+
 int main(void) {
+    int reservation = check_reservation();
+    if (reservation) {
+        return reservation;
+    }
     for (int round = 0; round < ROUNDS; ++round) {
         pthread_t threads[THREADS];
         struct context contexts[THREADS];
