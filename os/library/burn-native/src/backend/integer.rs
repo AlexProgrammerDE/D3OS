@@ -77,82 +77,52 @@ impl IntTensorOps<Self> for Native {
     }
     fn int_equal(lhs: IntTensor<Self>, rhs: IntTensor<Self>, out_dtype: BoolDType) -> BoolTensor<Self> {
         binary("int_equal", &lhs, &rhs, out_dtype.into(), |a, b| {
-            if DType::from(out_dtype) != DType::Bool(burn_backend::BoolStore::U32) {
-                return Err(Error::InvalidParameter);
-            }
-            a.word_binary(b, WordOp::Equal)
+            a.compare(b, Predicate::Equal, out_dtype.into())
         })
     }
     fn int_equal_elem(lhs: IntTensor<Self>, rhs: Scalar, out_dtype: BoolDType) -> BoolTensor<Self> {
         one("int_equal_elem", &lhs, out_dtype.into(), |a| {
-            if DType::from(out_dtype) != DType::Bool(burn_backend::BoolStore::U32) {
-                return Err(Error::InvalidParameter);
-            }
-            a.word_scalar(WordOp::Equal, rhs.elem::<i32>() as u32)
+            a.compare_scalar(rhs, Predicate::Equal, out_dtype.into())
         })
     }
     fn int_greater(lhs: IntTensor<Self>, rhs: IntTensor<Self>, out_dtype: BoolDType) -> BoolTensor<Self> {
         binary("int_greater", &lhs, &rhs, out_dtype.into(), |a, b| {
-            if DType::from(out_dtype) != DType::Bool(burn_backend::BoolStore::U32) {
-                return Err(Error::InvalidParameter);
-            }
-            a.word_binary(b, WordOp::Greater)
+            a.compare(b, Predicate::Greater, out_dtype.into())
         })
     }
     fn int_greater_elem(lhs: IntTensor<Self>, rhs: Scalar, out_dtype: BoolDType) -> BoolTensor<Self> {
         one("int_greater_elem", &lhs, out_dtype.into(), |a| {
-            if DType::from(out_dtype) != DType::Bool(burn_backend::BoolStore::U32) {
-                return Err(Error::InvalidParameter);
-            }
-            a.word_scalar(WordOp::Greater, rhs.elem::<i32>() as u32)
+            a.compare_scalar(rhs, Predicate::Greater, out_dtype.into())
         })
     }
     fn int_greater_equal(lhs: IntTensor<Self>, rhs: IntTensor<Self>, out_dtype: BoolDType) -> BoolTensor<Self> {
         binary("int_greater_equal", &lhs, &rhs, out_dtype.into(), |a, b| {
-            if DType::from(out_dtype) != DType::Bool(burn_backend::BoolStore::U32) {
-                return Err(Error::InvalidParameter);
-            }
-            a.word_binary(b, WordOp::GreaterEqual)
+            a.compare(b, Predicate::GreaterEqual, out_dtype.into())
         })
     }
     fn int_greater_equal_elem(lhs: IntTensor<Self>, rhs: Scalar, out_dtype: BoolDType) -> BoolTensor<Self> {
         one("int_greater_equal_elem", &lhs, out_dtype.into(), |a| {
-            if DType::from(out_dtype) != DType::Bool(burn_backend::BoolStore::U32) {
-                return Err(Error::InvalidParameter);
-            }
-            a.word_scalar(WordOp::GreaterEqual, rhs.elem::<i32>() as u32)
+            a.compare_scalar(rhs, Predicate::GreaterEqual, out_dtype.into())
         })
     }
     fn int_lower(lhs: IntTensor<Self>, rhs: IntTensor<Self>, out_dtype: BoolDType) -> BoolTensor<Self> {
         binary("int_lower", &lhs, &rhs, out_dtype.into(), |a, b| {
-            if DType::from(out_dtype) != DType::Bool(burn_backend::BoolStore::U32) {
-                return Err(Error::InvalidParameter);
-            }
-            a.word_binary(b, WordOp::Less)
+            a.compare(b, Predicate::Less, out_dtype.into())
         })
     }
     fn int_lower_elem(lhs: IntTensor<Self>, rhs: Scalar, out_dtype: BoolDType) -> BoolTensor<Self> {
         one("int_lower_elem", &lhs, out_dtype.into(), |a| {
-            if DType::from(out_dtype) != DType::Bool(burn_backend::BoolStore::U32) {
-                return Err(Error::InvalidParameter);
-            }
-            a.word_scalar(WordOp::Less, rhs.elem::<i32>() as u32)
+            a.compare_scalar(rhs, Predicate::Less, out_dtype.into())
         })
     }
     fn int_lower_equal(lhs: IntTensor<Self>, rhs: IntTensor<Self>, out_dtype: BoolDType) -> BoolTensor<Self> {
         binary("int_lower_equal", &lhs, &rhs, out_dtype.into(), |a, b| {
-            if DType::from(out_dtype) != DType::Bool(burn_backend::BoolStore::U32) {
-                return Err(Error::InvalidParameter);
-            }
-            a.word_binary(b, WordOp::LessEqual)
+            a.compare(b, Predicate::LessEqual, out_dtype.into())
         })
     }
     fn int_lower_equal_elem(lhs: IntTensor<Self>, rhs: Scalar, out_dtype: BoolDType) -> BoolTensor<Self> {
         one("int_lower_equal_elem", &lhs, out_dtype.into(), |a| {
-            if DType::from(out_dtype) != DType::Bool(burn_backend::BoolStore::U32) {
-                return Err(Error::InvalidParameter);
-            }
-            a.word_scalar(WordOp::LessEqual, rhs.elem::<i32>() as u32)
+            a.compare_scalar(rhs, Predicate::LessEqual, out_dtype.into())
         })
     }
     fn int_add(lhs: IntTensor<Self>, rhs: IntTensor<Self>) -> IntTensor<Self> {

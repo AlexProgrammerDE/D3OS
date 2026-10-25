@@ -73,7 +73,7 @@ def stage_burn_program(root, binary, destination):
     return libdevice
 
 
-def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_finite=False, sort_compile_log=False, compaction_aligned=False, quantized_empty_case=None, scatter_finite=False, select_updates=False, nd_unique=False, nd_nonempty=False, nd_scalar_grad=False, nd_no_scalar=False, storage_flex_direct=False, storage_no_flex32=False, conversions_no_flex32=False, remainder_finite=False, remainder_wide=False, inverse_finite=False, inverse_diagnostic=False, interpolate_case="normal", spatial_empty=False, spatial_case=None, spatial_exact=False, spatial_empty_backward=False, deform_empty=False, deform_exact=False, deform_case=None, deform_forward_only=False):
+def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_finite=False, sort_compile_log=False, compaction_aligned=False, quantized_empty_case=None, scatter_finite=False, select_updates=False, nd_unique=False, nd_nonempty=False, nd_scalar_grad=False, nd_no_scalar=False, storage_flex_direct=False, storage_no_flex32=False, conversions_no_flex32=False, remainder_finite=False, remainder_wide=False, inverse_finite=False, inverse_diagnostic=False, interpolate_case="normal", spatial_empty=False, spatial_case=None, spatial_exact=False, spatial_empty_backward=False, deform_empty=False, deform_exact=False, deform_case=None, deform_forward_only=False, predicate_no_flex32=False, predicate_finite=False):
     purposes = {
         "quantization": "shared API conformance; no performance measurement",
         "quantized_empty": "empty quantized API diagnostic and record round trip; execution errors retained; no performance measurement",
@@ -81,6 +81,7 @@ def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_fi
         "erf": "public erf and GELU conformance; no performance measurement",
         "integer": "public integer division and floor remainder conformance; no performance measurement",
         "integer_power": "public exact wrapping I32 powers; independent I128 reference; no performance measurement",
+        "predicate": "ordinary numeric predicates and both boolean widths; independent decoded references; no performance measurement",
         "integer_matrix": "public I32 matrix product conformance; no performance measurement",
         "scan": "public cumulative operations and gradients; no performance measurement",
         "cross": "public FP32 vector products and gradients; no performance measurement",
@@ -99,6 +100,9 @@ def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_fi
     purpose = "erf error profile and GELU conformance; strict failures reported" if erf_profile else purposes[kind]
     program = f"/burn-{kind}"
     arguments = " --profile" if erf_profile else " --nonempty" if nonempty else ""
+    if kind == "predicate":
+        if predicate_no_flex32: arguments += " --no-flex32"
+        if predicate_finite: arguments += " --finite"
     if kind == "deform":
         if deform_forward_only: arguments += " --forward-only"
         if deform_empty: arguments += " --empty"
@@ -1260,6 +1264,9 @@ def main():
     parser.add_argument("--burn-capabilities", type=Path, help="query Burn dtype usage declarations on the Linux CUDA device")
     parser.add_argument("--burn-erf", type=Path, help="run public erf and GELU conformance on Linux CUDA")
     parser.add_argument("--burn-erf-profile", action="store_true", help="report erf numerical errors separately from GELU conformance")
+    parser.add_argument("--burn-predicate", type=Path, help="run packed ordinary predicates and boolean logic on Linux CUDA")
+    parser.add_argument("--burn-predicate-no-flex32", action="store_true", help="exclude Flex32 uploads from the predicate corpus")
+    parser.add_argument("--burn-predicate-finite", action="store_true", help="isolate finite predicate input values from IEEE edge diagnostics")
     parser.add_argument("--burn-integer-power", type=Path, help="run exact public I32 integer power conformance on Linux CUDA")
     parser.add_argument("--burn-integer", type=Path, help="run public I32 division and floor remainder conformance on Linux CUDA")
     parser.add_argument("--burn-integer-matmul", type=Path, help="run public I32 matrix product conformance on Linux CUDA")
@@ -1360,7 +1367,7 @@ def main():
     args = parser.parse_args()
     if args.nsight_directory and not args.quantized_profile:
         parser.error("--nsight-directory requires --quantized-profile")
-    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.burn_integer_power, args.burn_integer, args.burn_integer_matmul, args.burn_scatter_updates, args.burn_nd_indexing, args.burn_storage, args.burn_conversions, args.burn_remainder, args.burn_inverse, args.burn_spatial_convolution, args.burn_deform, args.burn_interpolate, args.burn_quantized_empty, args.burn_compaction, args.burn_cross, args.burn_scan, args.burn_sort, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
+    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.burn_predicate, args.burn_integer_power, args.burn_integer, args.burn_integer_matmul, args.burn_scatter_updates, args.burn_nd_indexing, args.burn_storage, args.burn_conversions, args.burn_remainder, args.burn_inverse, args.burn_spatial_convolution, args.burn_deform, args.burn_interpolate, args.burn_quantized_empty, args.burn_compaction, args.burn_cross, args.burn_scan, args.burn_sort, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
         parser.error("--quantized-profile requires a separate diagnostic guest")
     if args.pin_vcpus and len(os.sched_getaffinity(0)) != 4:
         parser.error("--pin-vcpus requires an inherited affinity of four host CPUs")
@@ -1385,6 +1392,7 @@ def main():
                 bool(args.burn_quantization),
                 bool(args.burn_capabilities),
                 bool(args.burn_erf),
+                bool(args.burn_predicate),
                 bool(args.burn_integer_power),
                 bool(args.burn_integer),
                 bool(args.burn_integer_matmul),
@@ -1420,6 +1428,10 @@ def main():
         parser.error("--burn-erf requires a built conformance executable")
     if args.burn_capabilities and not args.burn_capabilities.is_file():
         parser.error("--burn-capabilities requires a built capabilities executable")
+    if args.burn_predicate and not args.burn_predicate.is_file():
+        parser.error("--burn-predicate requires a built conformance executable")
+    if (args.burn_predicate_no_flex32 or args.burn_predicate_finite) and not args.burn_predicate:
+        parser.error("predicate domain flags require --burn-predicate")
     if args.burn_integer_power and not args.burn_integer_power.is_file():
         parser.error("--burn-integer-power requires a built conformance executable")
     if args.burn_integer and not args.burn_integer.is_file():
@@ -1532,6 +1544,8 @@ def main():
         burn_probe(args.directory / "root", args.burn_capabilities.resolve(), "capabilities")
     elif args.burn_erf:
         burn_probe(args.directory / "root", args.burn_erf.resolve(), "erf", erf_profile=args.burn_erf_profile)
+    elif args.burn_predicate:
+        burn_probe(args.directory / "root", args.burn_predicate.resolve(), "predicate", predicate_no_flex32=args.burn_predicate_no_flex32, predicate_finite=args.burn_predicate_finite)
     elif args.burn_integer_power:
         burn_probe(args.directory / "root", args.burn_integer_power.resolve(), "integer_power")
     elif args.burn_integer:
@@ -1712,6 +1726,26 @@ def main():
             raise RuntimeError("Linux CUDA Burn erf/GELU check did not complete")
     if args.burn_capabilities and "BURN_CAPABILITIES_OK os=linux backend=cuda rows=226 flags_only=true" not in text:
         raise RuntimeError("Linux CUDA Burn capability query did not complete")
+    if args.burn_predicate:
+        flex = not args.burn_predicate_no_flex32
+        finite = args.burn_predicate_finite
+        numeric = 13 if flex else 12
+        comparisons = 108 * numeric + 24
+        scalar_edges = 112 + (5 if flex else 4) * (14 if finite else 19)
+        scalars = 12 * (scalar_edges + 16 * numeric) + 48
+        classifications = 54 * (5 if flex else 4) + 12
+        boolean = 160
+        sources = 18 * numeric + 36
+        patterns = 128768 if finite else 131072
+        flex_label = "direct" if flex else "excluded_upstream_failure"
+        domain = "finite_only" if finite else "full"
+        expected = (f"BURN_PREDICATE_CONFORMANCE_OK os=linux backend=cuda numeric_dtypes={numeric} bool_dtypes=2 "
+                    f"cases={comparisons+scalars+classifications+boolean} comparisons={comparisons} scalars={scalars} "
+                    f"classifications={classifications} boolean={boolean} source_checks={sources} half_patterns={patterns} values=")
+        suffix = (f" bool_storage=explicit_u8_u32 canonical_bytes=true flex32={flex_label} ieee={domain} "
+                  "views=reversed,transposed,offset,broadcast tails=1,127,128,129,257 empty=true reference=host_types")
+        if not re.search(re.escape(expected) + r"[1-9][0-9]*" + re.escape(suffix), text):
+            raise RuntimeError("Linux CUDA Burn predicate conformance did not complete with the expected corpus")
     if args.burn_integer_power and "BURN_INTEGER_POWER_OK os=linux backend=cuda cases=94 reference=i128 wrapping=exact exponent=u32_bits signed_views=true broadcast=true shared=true empty=true" not in text:
         raise RuntimeError("Linux CUDA Burn integer power conformance did not complete")
     if args.burn_integer and "BURN_INTEGER_CONFORMANCE_OK os=linux backend=cuda operations=div,remainder tensor=true scalar=true shared_views=true" not in text:

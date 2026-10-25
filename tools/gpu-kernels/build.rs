@@ -314,6 +314,16 @@ fn main() {
                 .replace("BURN_OP", &format!("{}u32", op as u32)),
         );
     }
+    println!("cargo:rerun-if-changed=src/burn-predicate.rs.in");
+    source.push_str(
+        &fs::read_to_string("src/burn-predicate.rs.in")
+            .expect("read predicate source")
+            .replace(
+                "BURN_PARAMETERS",
+                &parameters.replace("extent_a:", "_extent_a:").replace("extent_b:", "_extent_b:"),
+            )
+            .replace("BURN_ADDRESSES", &addresses),
+    );
     println!("cargo:rerun-if-changed=src/burn-storage.rs.in");
     let storage = fs::read_to_string("src/burn-storage.rs.in").expect("read ordinary storage source");
     let geometry = (0..8)

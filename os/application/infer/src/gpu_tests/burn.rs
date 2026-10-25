@@ -30,6 +30,7 @@ mod spatial_convolution;
 mod storage;
 mod updates;
 mod words;
+mod predicate;
 use abi::elementwise::Elementwise;
 use abi::reduction::Reduction;
 use alloc::{format, string::String, vec::Vec};
@@ -208,6 +209,13 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     }
     integers::run(backend).map_err(|e| format!("Burn native integer reductions: {e}"))?;
     words::run(backend).map_err(|e| format!("Burn native words: {e}"))?;
+    predicate::run(backend)?;
+    let result = d3os_ai::validation::predicate::run(&device, &d3os_ai::validation::predicate::Options::default())?;
+    crate::report(format_args!(
+        "BURN_PREDICATE_CONFORMANCE_OK os=d3os backend=native numeric_dtypes={} bool_dtypes=2 cases={} comparisons={} scalars={} classifications={} boolean={} source_checks={} half_patterns={} values={} bool_storage=explicit_u8_u32 canonical_bytes=true flex32=direct ieee=full views=reversed,transposed,offset,broadcast tails=1,127,128,129,257 empty=true reference=host_types",
+        result.numeric_dtypes, result.cases(), result.comparison_cases, result.scalar_cases, result.classification_cases,
+        result.boolean_cases, result.source_checks, result.half_patterns, result.values,
+    ));
     scans::run(backend)?;
     sort::run(backend)?;
     compaction::run(backend)?;

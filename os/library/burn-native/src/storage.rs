@@ -38,6 +38,25 @@ pub(crate) fn word_sized(dtype: DType) -> bool {
     width(dtype) == Ok(Width::Four)
 }
 
+pub(crate) fn scalar_bits(dtype: DType, value: Scalar) -> Result<u64> {
+    Ok(match dtype {
+        DType::F64 => value.elem::<f64>().to_bits(),
+        DType::F32 | DType::Flex32 => u64::from(value.elem::<f32>().to_bits()),
+        DType::F16 => u64::from(value.elem::<f16>().to_bits()),
+        DType::BF16 => u64::from(value.elem::<bf16>().to_bits()),
+        DType::I64 => value.elem::<i64>() as u64,
+        DType::I32 => u64::from(value.elem::<i32>() as u32),
+        DType::I16 => u64::from(value.elem::<i16>() as u16),
+        DType::I8 => u64::from(value.elem::<i8>() as u8),
+        DType::U64 => value.elem::<u64>(),
+        DType::U32 => u64::from(value.elem::<u32>()),
+        DType::U16 => u64::from(value.elem::<u16>()),
+        DType::U8 => u64::from(value.elem::<u8>()),
+        DType::Bool(BoolStore::U8 | BoolStore::U32) => u64::from(value.elem::<bool>()),
+        _ => return Err(Error::InvalidParameter),
+    })
+}
+
 impl NativeTensor {
     pub(crate) fn fill_bits(shape: Shape, dtype: DType, bits: u64) -> Result<Self> {
         let width = width(dtype)?;
@@ -68,22 +87,7 @@ impl NativeTensor {
 
     /// Numeric scalar metadata uses the destination dtype before GPU fill.
     pub fn full_scalar(shape: Shape, dtype: DType, value: Scalar) -> Result<Self> {
-        let bits = match dtype {
-            DType::F64 => value.elem::<f64>().to_bits(),
-            DType::F32 | DType::Flex32 => u64::from(value.elem::<f32>().to_bits()),
-            DType::F16 => u64::from(value.elem::<f16>().to_bits()),
-            DType::BF16 => u64::from(value.elem::<bf16>().to_bits()),
-            DType::I64 => value.elem::<i64>() as u64,
-            DType::I32 => u64::from(value.elem::<i32>() as u32),
-            DType::I16 => u64::from(value.elem::<i16>() as u16),
-            DType::I8 => u64::from(value.elem::<i8>() as u8),
-            DType::U64 => value.elem::<u64>(),
-            DType::U32 => u64::from(value.elem::<u32>()),
-            DType::U16 => u64::from(value.elem::<u16>()),
-            DType::U8 => u64::from(value.elem::<u8>()),
-            DType::Bool(BoolStore::U8 | BoolStore::U32) => u64::from(value.elem::<bool>()),
-            _ => return Err(Error::InvalidParameter),
-        };
+        let bits = scalar_bits(dtype, value)?;
         Self::fill_bits(shape, dtype, bits)
     }
 

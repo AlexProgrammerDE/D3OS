@@ -87,21 +87,19 @@ impl BoolTensorOps<Self> for Native {
         })
     }
     fn bool_equal(lhs: BoolTensor<Self>, rhs: BoolTensor<Self>) -> BoolTensor<Self> {
-        binary("bool_equal", &lhs, &rhs, lhs.dtype(), |a, b| a.word_binary(b, WordOp::BoolEqual))
+        binary("bool_equal", &lhs, &rhs, lhs.dtype(), |a, b| a.compare(b, Predicate::Equal, a.dtype()))
     }
     fn bool_equal_elem(lhs: BoolTensor<Self>, rhs: Scalar) -> BoolTensor<Self> {
-        one("bool_equal_elem", &lhs, lhs.dtype(), |a| {
-            a.word_scalar(WordOp::BoolEqual, u32::from(rhs.elem::<bool>()))
-        })
+        one("bool_equal_elem", &lhs, lhs.dtype(), |a| a.compare_scalar(rhs, Predicate::Equal, a.dtype()))
     }
     fn bool_not(tensor: BoolTensor<Self>) -> BoolTensor<Self> {
-        one("bool_not", &tensor, tensor.dtype(), |t| t.word_unary(WordOp::BoolNot))
+        one("bool_not", &tensor, tensor.dtype(), |t| t.classify(Predicate::Not, t.dtype()))
     }
     fn bool_and(lhs: BoolTensor<Self>, rhs: BoolTensor<Self>) -> BoolTensor<Self> {
-        binary("bool_and", &lhs, &rhs, lhs.dtype(), |a, b| a.word_binary(b, WordOp::BoolAnd))
+        binary("bool_and", &lhs, &rhs, lhs.dtype(), |a, b| a.compare(b, Predicate::And, a.dtype()))
     }
     fn bool_or(lhs: BoolTensor<Self>, rhs: BoolTensor<Self>) -> BoolTensor<Self> {
-        binary("bool_or", &lhs, &rhs, lhs.dtype(), |a, b| a.word_binary(b, WordOp::BoolOr))
+        binary("bool_or", &lhs, &rhs, lhs.dtype(), |a, b| a.compare(b, Predicate::Or, a.dtype()))
     }
     fn bool_swap_dims(tensor: BoolTensor<Self>, dim1: usize, dim2: usize) -> BoolTensor<Self> {
         view("bool_swap_dims", &tensor, layout(&tensor).and_then(|l| l.swap_dims(dim1, dim2)))

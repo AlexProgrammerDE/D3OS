@@ -172,7 +172,7 @@ The GPU operations include FP32 arithmetic and math, reductions, exact tensor fi
 Another 32 entries implement I32 arithmetic, signed comparisons, bitwise operations, boolean logic, masks, and conversions.
 These operations support strided views and broadcasting. Input tensors remain shared and immutable.
 Full writers avoid a separate output clear. Empty logical outputs require no element work.
-The matching SDK and driver use native compute protocol version 38 and the 239-entry portable inference bundle.
+The matching SDK and driver use native compute protocol version 39 and the 240-entry portable inference bundle.
 
 The D3OS GPU self-test passes reversed and transposed views, overlapping windows, broadcast batches, subviews, empty dimensions, and neighboring guards.
 Matrix references use independent FP64 accumulation. Math references use independent libm functions and include 2,816 FP32 edge values.
@@ -299,6 +299,10 @@ Multidimensional gather/scatter now pass native FP32/I32 checks, including scala
 The [coverage report](burn-backend-coverage.md) records their shapes, numerical semantics, Linux failures, and remaining dtype restrictions.
 The gaps include further dtype arithmetic, quantized conversion variants, additional FP32 math, further compaction formats, and scalar autodiff.
 Complete Burn quantization and further convolution dtypes also remain incomplete.
+Ordinary numeric comparisons and floating-point classification now support U8 and U32 boolean outputs.
+Both boolean widths also support equality, inequality, AND, OR, XOR, and NOT.
+The matched comparison passes 6,898 public cases on D3OS and 6,316 on Linux with its unsupported Flex32 uploads excluded.
+U8 boolean masking, compaction, updates, and concatenation remain incomplete.
 I32 tensor and generic scalar powers now use resident wrapping integer arithmetic without a floating-point intermediate.
 The exponent bits follow the same unsigned interpretation as the pinned Linux backend.
 FP32 deformable convolution now provides input, offset, weight, modulation-mask, and bias gradients on the native GPU.

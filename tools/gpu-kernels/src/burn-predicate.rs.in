@@ -1,0 +1,83 @@
+unsafe fn predicate_read(input: *const u32, index: Tile<u32, {[128]}>, format: u32, valid: Tile<bool, {[128]}>) -> Tile<u64, {[128]}> {
+    let width = cast_width(format);
+    if width == 3u32 {
+        let low = unsafe { read_tile(input, index * broadcast_scalar(2u32, shape![128]), valid, 0u32) };
+        let high = unsafe { read_tile(input, index * broadcast_scalar(2u32, shape![128]) + broadcast_scalar(1u32, shape![128]), valid, 0u32) };
+        exti(low) | (exti(high) << broadcast_scalar(32u64, shape![128]))
+    } else {
+        let per_word = 4u32 >> width;
+        let word = unsafe { read_tile(input, index / broadcast_scalar(per_word, shape![128]), valid, 0u32) };
+        let shift = index % broadcast_scalar(per_word, shape![128]) * broadcast_scalar(8u32 << width, shape![128]);
+        exti((word >> shift) & broadcast_scalar(unsigned(-1i32) >> (32u32 - (8u32 << width)), shape![128]))
+    }
+}
+fn predicate_key(mut bits: Tile<u64, {[128]}>, format: u32) -> (Tile<u64, {[128]}>, Tile<bool, {[128]}>, Tile<bool, {[128]}>) {
+    let zero = broadcast_scalar(0u64, shape![128]);
+    let mut key = select(ne_tile(bits, zero), broadcast_scalar(1u64, shape![128]), zero);
+    let mut nan = broadcast_scalar(false, shape![128]);
+    let mut infinite = broadcast_scalar(false, shape![128]);
+    if format <= 4u32 {
+        let sign_bit = if format == 0u32 { 1u64 << 63u32 } else if format <= 2u32 { 1u64 << 31u32 } else { 1u64 << 15u32 };
+        let infinity = if format == 0u32 { 0x7ffu64 << 52u32 } else if format <= 2u32 { 0x7f800000u64 } else if format == 3u32 { 0x7c00u64 } else { 0x7f80u64 };
+        let sign = broadcast_scalar(sign_bit, shape![128]);
+        let magnitude = bits & broadcast_scalar(sign_bit - 1u64, shape![128]);
+        nan = gt_tile(magnitude, broadcast_scalar(infinity, shape![128]));
+        infinite = eq_tile(magnitude, broadcast_scalar(infinity, shape![128]));
+        bits = select(eq_tile(magnitude, zero), zero, bits);
+        let negative = ne_tile(bits & sign, zero);
+        let mask = broadcast_scalar(sign_bit | (sign_bit - 1u64), shape![128]);
+        key = select(negative, bits ^ mask, bits | sign);
+    } else if format < 13u32 {
+        let sign = if format <= 8u32 { 1u64 << ((8u32 << cast_width(format)) - 1u32) } else { 0u64 };
+        key = bits ^ broadcast_scalar(sign, shape![128]);
+    }
+    (key, nan, infinite)
+}
+fn predicate_value(left: Tile<u64, {[128]}>, right: Tile<u64, {[128]}>, format: u32, operation: u32) -> Tile<bool, {[128]}> {
+    let (a, nan_a, inf_a) = predicate_key(left, format);
+    let (b, nan_b, _inf_b) = predicate_key(right, format);
+    let ordered = eq_tile(nan_a | nan_b, broadcast_scalar(false, shape![128]));
+    let zero = broadcast_scalar(0u64, shape![128]);
+    if operation == 0u32 { ordered & eq_tile(a, b) }
+    else if operation == 1u32 { ordered & gt_tile(a, b) }
+    else if operation == 2u32 { ordered & ge_tile(a, b) }
+    else if operation == 3u32 { ordered & lt_tile(a, b) }
+    else if operation == 4u32 { ordered & le_tile(a, b) }
+    else if operation == 5u32 { ne_tile(a, zero) & ne_tile(b, zero) }
+    else if operation == 6u32 { ne_tile(a, zero) | ne_tile(b, zero) }
+    else if operation == 7u32 { ne_tile(a, zero) ^ ne_tile(b, zero) }
+    else if operation == 8u32 { eq_tile(a, zero) }
+    else if operation == 9u32 { nan_a }
+    else if operation == 10u32 { inf_a }
+    else { eq_tile(nan_a | inf_a, broadcast_scalar(false, shape![128])) }
+}
+#[cutile::entry()]
+unsafe fn burn_predicate(a: *const u32, b: *const u32, output: *mut u32, BURN_PARAMETERS) {
+    let word = indices();
+    let format = (operation >> 8u32) & 255u32;
+    let op = operation & 255u32;
+    let scalar_rhs = operation & 131072u32 != 0u32;
+    let per_word = if operation & 65536u32 != 0u32 { 4u32 } else { 1u32 };
+    let words = (count + per_word - 1u32) / per_word;
+    let mut result = broadcast_scalar(0u32, shape![128]);
+    for slot in 0u32..per_word {
+        let i = word * broadcast_scalar(per_word, shape![128]) + broadcast_scalar(slot, shape![128]);
+        let valid = lt_tile(i, broadcast_scalar(count, shape![128]));
+        let mut linear = i;
+        let mut address_a = broadcast_scalar(signed(offset_a), shape![128]);
+        let mut address_b = broadcast_scalar(signed(offset_b), shape![128]);
+        BURN_ADDRESSES
+        let address_a: Tile<u32, {[128]}> = bitcast(address_a);
+        let address_b: Tile<u32, {[128]}> = bitcast(address_b);
+        let left = unsafe { predicate_read(a, address_a, format, valid) };
+        let right = if scalar_rhs {
+            let low: Tile<u64, {[128]}> = exti(broadcast_scalar(scalar, shape![128]));
+            let high: Tile<u64, {[128]}> = exti(broadcast_scalar(offset_b, shape![128]));
+            low | (high << broadcast_scalar(32u64, shape![128]))
+        } else if op >= 8u32 { broadcast_scalar(0u64, shape![128]) }
+        else { unsafe { predicate_read(b, address_b, format, valid) } };
+        let value = predicate_value(left, right, format, op) & valid;
+        result = result | (select(value, broadcast_scalar(1u32, shape![128]), broadcast_scalar(0u32, shape![128])) << broadcast_scalar(slot * 8u32, shape![128]));
+    }
+    unsafe { write_tile(output, word, result, lt_tile(word, broadcast_scalar(words, shape![128]))) };
+}

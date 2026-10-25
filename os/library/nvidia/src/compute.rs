@@ -11,6 +11,7 @@ pub mod indexing;
 pub mod interpolate;
 pub mod optimizer;
 pub mod pooling;
+pub mod predicate;
 pub mod quantization;
 pub mod random;
 pub mod range;
@@ -22,7 +23,7 @@ pub mod storage;
 pub mod updates;
 pub mod words;
 
-pub const VERSION: u32 = 38;
+pub const VERSION: u32 = 39;
 /// END_COMMANDS flag: an inner recording scope joins its parent's completion.
 /// The outermost scope always waits. Zero retains synchronous nested scopes.
 pub const DEFER_NESTED_COMPLETION: u64 = 1;
@@ -56,7 +57,7 @@ pub struct MemoryProfile {
     pub device_cached_bytes: u64,
     pub device_retired_bytes: u64,
 }
-pub const KERNEL_COUNT: usize = 74;
+pub const KERNEL_COUNT: usize = 75;
 
 /// CPU service costs by request operation, including queue work within it.
 #[derive(Clone, Copy, Debug, Default)]
@@ -188,9 +189,10 @@ pub enum Kernel {
     DeformWindows = 71,
     DeformCoordinates = 72,
     DeformInput = 73,
+    TensorPredicate = 74,
 }
 
-const _: () = assert!(Kernel::DeformInput as usize + 1 == KERNEL_COUNT);
+const _: () = assert!(Kernel::TensorPredicate as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -256,6 +258,7 @@ impl Kernel {
                 | Self::TensorSort
                 | Self::ArgWhere
                 | Self::TensorStorage
+                | Self::TensorPredicate
                 | Self::TensorCast
                 | Self::Interpolate
                 | Self::DeformWindows
@@ -367,6 +370,7 @@ impl Kernel {
             71 => Self::DeformWindows,
             72 => Self::DeformCoordinates,
             73 => Self::DeformInput,
+            74 => Self::TensorPredicate,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -447,6 +451,7 @@ impl Kernel {
             Self::DeformWindows => "burn_deform_windows",
             Self::DeformCoordinates => "burn_deform_coordinates",
             Self::DeformInput => "burn_deform_input",
+            Self::TensorPredicate => "burn_predicate",
         }
     }
 
@@ -669,6 +674,10 @@ impl Kernel {
                 }
                 extents[..2].copy_from_slice(&sizes);
                 (count, 2, 1, false)
+            }
+            (Self::TensorPredicate, p) => {
+                extents[..3].copy_from_slice(&predicate::validate(p)?);
+                (u32::try_from(extents[2]).map_err(|_| Error::InvalidField)?, 3, 2, false)
             }
             (Self::TensorCast, p) => {
                 let (source, output) = cast::validate(p)?;

@@ -9,6 +9,7 @@ pub mod integer_matrix;
 pub mod interpolate;
 pub mod inverse;
 pub mod nd_indexing;
+pub mod predicate;
 pub mod quantization;
 pub mod quantized_empty;
 pub mod qwen;

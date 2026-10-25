@@ -92,6 +92,7 @@ def audit(family, sass):
             "burn_i32_divide",
             "burn_i32_remainder",
             "burn_i32_power",
+            "burn_predicate",
             "burn_i32_matmul",
             "burn_cumsum",
             "burn_cumprod",

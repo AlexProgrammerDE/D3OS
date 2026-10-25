@@ -13,9 +13,9 @@ It also includes float, integer, boolean, quantized, module, activation, transac
 Each method records its signature, source location, conditional compilation attributes, and implementation or inherited default.
 Associated types and source SHA-256 hashes accompany the report.
 
-The current inventory contains 484 methods: 275 native overrides and 209 inherited defaults.
+The current inventory contains 484 methods: 277 native overrides and 207 inherited defaults.
 All required methods have declarations or implementations. This count does not establish runtime support.
-The report also records 126 native helper bodies for manual review of dtype and shape restrictions.
+The report also records 130 native helper bodies for manual review of dtype and shape restrictions.
 
 The tool follows syntactic associated backend calls and expands the pinned `dequant_op_quant!` and `dequant_op_flow!` macros.
 It identifies 8 methods with possible paths to explicit declines or panic declarations.
@@ -37,7 +37,7 @@ Linux CUDA declares storage support missing from D3OS for these 12 formats:
 
 Burn's `Storage` flag requires conversion to and from other supported dtypes as well as physical storage.
 Ordinary numeric casts now execute on the GPU, as described below.
-Quantized conversions and additional boolean-producing paths remain incomplete for the new formats.
+Quantized conversions and further boolean consumers remain incomplete for the new formats.
 The usage flags stay disabled until the complete conversion contract passes.
 Both backends decline the separate `Bool(Native)` declaration.
 
@@ -155,6 +155,48 @@ Linux CUDA passes the shared corpus with Flex32 excluded explicitly.
 
 These checks cover ordinary casts, not full dtype arithmetic, quantized conversion variants, or accelerated matrix products for the additional formats.
 The capability declarations remain conservative. This checkpoint contains no matched execution-performance or compile-time parity measurement.
+
+## Packed ordinary predicates
+
+Protocol 39 adds resident predicates for all 13 ordinary numeric formats and both boolean storage widths.
+The matching driver, SDK, image, and portable bundle contain 240 inference entries and 75 compute profiles.
+The new complete writer packs canonical U8 or U32 boolean results and clears unused tail bytes.
+Logical offsets and signed strides retain element units. The driver checks physical word bounds for each input and output.
+The 32-word parameter layout retains both words of a 64-bit scalar without changing the request structure.
+
+Numeric comparisons cover equality, inequality, greater, greater-or-equal, less, and less-or-equal through Burn's public backend API.
+Scalar comparisons use the source dtype before encoding their bits.
+Boolean equality, inequality, AND, OR, XOR, and NOT preserve the requested storage width.
+Floating-point classification covers NaNs, infinities, and the public composition for finite values.
+
+The kernel compares unsigned bit keys for floats and full-width integer representations.
+It normalizes signed zero and excludes unordered NaN operands from ordered comparisons and equality.
+This avoids rounding adjacent I64/U64 values through floating point and preserves subnormal comparisons.
+FP32/I32 comparisons and U32 boolean logic retain the existing one-word fast paths.
+FP32 classification also uses the existing specialized entries.
+
+The independent reference decodes host storage types and uses their ordinary comparisons and classification.
+Its unit checks include adjacent 64-bit integers beyond FP64 precision, signed boundaries, NaNs, infinities, signed zeros, and subnormals.
+The shared corpus includes scalar operands, Cartesian edge pairs, empty tensors, reversed/transposed/offset views, and broadcast operands.
+It checks both boolean widths at tail lengths 1, 127, 128, 129, and 257.
+Both half formats also cover every one of their 65,536 storage patterns.
+The raw native corpus checks 382 direct dispatches, 382 tensor cases, and 431 rejected contracts.
+It includes neighboring guards, zero tails, complete writers, resident counters, queued lifetimes, and ranks zero and eight.
+
+D3OS passes all 6,898 public cases across 13 numeric formats and both boolean widths.
+It also passes the raw/native contract cases, every rejection check, and the existing operator and quantization regressions.
+All three modules compiled inside D3OS match their host audit hashes.
+The new entry passes the spill audit without local loads or stores.
+All 239 earlier instruction entries and their constant sections remain byte-identical.
+
+Linux CUDA passes 6,316 public cases with Flex32 excluded, including all half patterns and the complete IEEE corpus.
+Its full corpus fails the direct Flex32 upload in the pinned backend.
+The initial non-Flex32 GPU run passed, but the first harness expected too few cases because it omitted empty broadcasts.
+The corrected harness and separate final run pass. Both records remain available.
+
+The review found a remaining composition limitation: packed U8 booleans cannot directly feed the existing masking and compaction consumers.
+Packed boolean updates and concatenation also require further implementation.
+Dtype capability declarations remain conservative. These checks do not establish execution-performance or compile-time parity.
 
 ## Inverse FP32 math
 
@@ -799,7 +841,7 @@ Other quantization formats and layouts still require separate coverage.
 
 ## Remaining implementation areas
 
-The unresolved work includes ordinary dtype arithmetic, quantized and boolean-producing conversions, complete integer arithmetic, further matrix dtypes, and additional floating-point operations.
+The unresolved work includes ordinary dtype arithmetic, quantized conversions, further boolean consumers, complete integer arithmetic, further matrix dtypes, and additional floating-point operations.
 Further sorting and compaction dtypes also require coverage.
 Further convolution dtypes and numerical domains beyond the checked finite corpus remain unresolved.
 Compaction formats beyond the checked Q8 cases remain unverified.
@@ -822,7 +864,7 @@ Build the Linux probes with their default CUDA feature:
 
 ```bash
 cd tools/mnist-benchmark
-cargo build --release --locked --bin capabilities --bin erf --bin integer --bin integer_power --bin integer_matrix --bin scan --bin sort --bin cross --bin compaction --bin scatter_updates --bin quantized_empty --bin nd_indexing --bin storage --bin conversions --bin remainder --bin inverse --bin interpolate --bin spatial_convolution --bin deform
+cargo build --release --locked --bin capabilities --bin erf --bin integer --bin integer_power --bin predicate --bin integer_matrix --bin scan --bin sort --bin cross --bin compaction --bin scatter_updates --bin quantized_empty --bin nd_indexing --bin storage --bin conversions --bin remainder --bin inverse --bin interpolate --bin spatial_convolution --bin deform
 cd ../..
 ```
 
@@ -1027,6 +1069,18 @@ For empty diagnostics, use fresh directories with `--burn-spatial-empty` and `--
 The `--burn-spatial-case` option selects one of the 14 shape groups for isolated diagnosis.
 D3OS retains both complete numerical corpora and both empty checks.
 
+Run the ordinary predicate comparison:
+
+```bash
+python3 tools/nvidia/linux-reference.py \
+  --directory target/nvidia/linux-burn-predicate \
+  --burn-predicate tools/mnist-benchmark/target/release/predicate
+```
+
+For the separate corpus without Flex32 uploads, add `--burn-predicate-no-flex32` and use a fresh directory.
+For an isolated finite diagnostic, add `--burn-predicate-finite` and use another directory.
+The finite diagnostic retains signed zeros and subnormals.
+
 Run the exact integer-power comparison:
 
 ```bash
@@ -1132,3 +1186,6 @@ The pointer-inference compiler diagnostic remains under `deform-pointer-inferenc
 
 The integer-power evidence uses `target/nvidia/burn-backend-validation/power-first/` and `target/nvidia/burn-backend-audit/linux-power/`.
 The audit directory contains `traits-power-final.json`, `power-comparison.json`, and `power-section-comparison.json`.
+
+The predicate evidence uses `target/nvidia/burn-backend-validation/predicate-first/` and the `target/nvidia/burn-backend-audit/linux-predicate-` prefix.
+The audit directory contains `traits-predicate-final.json`, `predicate-comparison.json`, and `predicate-section-comparison.json`.

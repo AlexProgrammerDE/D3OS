@@ -13,6 +13,7 @@ pub mod interpolate;
 pub mod layout;
 mod linear;
 pub mod pooling;
+mod predicate;
 pub mod quantization;
 pub mod random;
 pub mod range;

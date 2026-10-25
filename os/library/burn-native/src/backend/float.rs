@@ -139,82 +139,60 @@ impl FloatTensorOps<Self> for Native {
     }
     fn float_equal(lhs: FloatTensor<Self>, rhs: FloatTensor<Self>, out_dtype: BoolDType) -> BoolTensor<Self> {
         binary("float_equal", &lhs, &rhs, out_dtype.into(), |a, b| {
-            if DType::from(out_dtype) != DType::Bool(burn_backend::BoolStore::U32) {
-                return Err(Error::InvalidParameter);
-            }
-            a.binary(b, Elementwise::Equal)
+            a.compare(b, Predicate::Equal, out_dtype.into())
         })
     }
     fn float_equal_elem(lhs: FloatTensor<Self>, rhs: Scalar, out_dtype: BoolDType) -> BoolTensor<Self> {
         one("float_equal_elem", &lhs, out_dtype.into(), |a| {
-            if DType::from(out_dtype) != DType::Bool(burn_backend::BoolStore::U32) {
-                return Err(Error::InvalidParameter);
-            }
-            a.scalar(Elementwise::Equal, rhs.elem::<f32>())
+            a.compare_scalar(rhs, Predicate::Equal, out_dtype.into())
         })
     }
     fn float_greater(lhs: FloatTensor<Self>, rhs: FloatTensor<Self>, out_dtype: BoolDType) -> BoolTensor<Self> {
         binary("float_greater", &lhs, &rhs, out_dtype.into(), |a, b| {
-            if DType::from(out_dtype) != DType::Bool(burn_backend::BoolStore::U32) {
-                return Err(Error::InvalidParameter);
-            }
-            a.binary(b, Elementwise::Greater)
+            a.compare(b, Predicate::Greater, out_dtype.into())
         })
     }
     fn float_greater_elem(lhs: FloatTensor<Self>, rhs: Scalar, out_dtype: BoolDType) -> BoolTensor<Self> {
         one("float_greater_elem", &lhs, out_dtype.into(), |a| {
-            if DType::from(out_dtype) != DType::Bool(burn_backend::BoolStore::U32) {
-                return Err(Error::InvalidParameter);
-            }
-            a.scalar(Elementwise::Greater, rhs.elem::<f32>())
+            a.compare_scalar(rhs, Predicate::Greater, out_dtype.into())
         })
     }
     fn float_greater_equal(lhs: FloatTensor<Self>, rhs: FloatTensor<Self>, out_dtype: BoolDType) -> BoolTensor<Self> {
         binary("float_greater_equal", &lhs, &rhs, out_dtype.into(), |a, b| {
-            if DType::from(out_dtype) != DType::Bool(burn_backend::BoolStore::U32) {
-                return Err(Error::InvalidParameter);
-            }
-            a.binary(b, Elementwise::GreaterEqual)
+            a.compare(b, Predicate::GreaterEqual, out_dtype.into())
         })
     }
     fn float_greater_equal_elem(lhs: FloatTensor<Self>, rhs: Scalar, out_dtype: BoolDType) -> BoolTensor<Self> {
         one("float_greater_equal_elem", &lhs, out_dtype.into(), |a| {
-            if DType::from(out_dtype) != DType::Bool(burn_backend::BoolStore::U32) {
-                return Err(Error::InvalidParameter);
-            }
-            a.scalar(Elementwise::GreaterEqual, rhs.elem::<f32>())
+            a.compare_scalar(rhs, Predicate::GreaterEqual, out_dtype.into())
         })
     }
     fn float_lower(lhs: FloatTensor<Self>, rhs: FloatTensor<Self>, out_dtype: BoolDType) -> BoolTensor<Self> {
         binary("float_lower", &lhs, &rhs, out_dtype.into(), |a, b| {
-            if DType::from(out_dtype) != DType::Bool(burn_backend::BoolStore::U32) {
-                return Err(Error::InvalidParameter);
-            }
-            a.binary(b, Elementwise::Less)
+            a.compare(b, Predicate::Less, out_dtype.into())
         })
     }
     fn float_lower_elem(lhs: FloatTensor<Self>, rhs: Scalar, out_dtype: BoolDType) -> BoolTensor<Self> {
         one("float_lower_elem", &lhs, out_dtype.into(), |a| {
-            if DType::from(out_dtype) != DType::Bool(burn_backend::BoolStore::U32) {
-                return Err(Error::InvalidParameter);
-            }
-            a.scalar(Elementwise::Less, rhs.elem::<f32>())
+            a.compare_scalar(rhs, Predicate::Less, out_dtype.into())
         })
     }
     fn float_lower_equal(lhs: FloatTensor<Self>, rhs: FloatTensor<Self>, out_dtype: BoolDType) -> BoolTensor<Self> {
         binary("float_lower_equal", &lhs, &rhs, out_dtype.into(), |a, b| {
-            if DType::from(out_dtype) != DType::Bool(burn_backend::BoolStore::U32) {
-                return Err(Error::InvalidParameter);
-            }
-            a.binary(b, Elementwise::LessEqual)
+            a.compare(b, Predicate::LessEqual, out_dtype.into())
         })
     }
     fn float_lower_equal_elem(lhs: FloatTensor<Self>, rhs: Scalar, out_dtype: BoolDType) -> BoolTensor<Self> {
         one("float_lower_equal_elem", &lhs, out_dtype.into(), |a| {
-            if DType::from(out_dtype) != DType::Bool(burn_backend::BoolStore::U32) {
-                return Err(Error::InvalidParameter);
-            }
-            a.scalar(Elementwise::LessEqual, rhs.elem::<f32>())
+            a.compare_scalar(rhs, Predicate::LessEqual, out_dtype.into())
+        })
+    }
+    fn float_is_nan(tensor: FloatTensor<Self>, out_dtype: BoolDType) -> BoolTensor<Self> {
+        one("float_is_nan", &tensor, out_dtype.into(), |t| t.classify(Predicate::IsNan, out_dtype.into()))
+    }
+    fn float_is_inf(tensor: FloatTensor<Self>, out_dtype: BoolDType) -> BoolTensor<Self> {
+        one("float_is_inf", &tensor, out_dtype.into(), |t| {
+            t.classify(Predicate::IsInfinite, out_dtype.into())
         })
     }
     fn float_sum(tensor: FloatTensor<Self>) -> FloatTensor<Self> {

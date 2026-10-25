@@ -1268,3 +1268,76 @@ fn deform_geometry_validates_crossing_group_partitions_and_paired_outputs() {
     assert_eq!(deform::geometry(&empty).unwrap().columns, 0);
     assert!(Kernel::DeformWindows.work(&empty).is_err());
 }
+
+#[test]
+fn packed_predicates_check_logical_views_physical_extents_and_aliases() {
+    use d3os_nvidia::compute::{
+        cast::Format,
+        predicate::{self, Predicate},
+    };
+    let mut p = [0u32; 32];
+    p[..8].copy_from_slice(&[6, 2, 0, 0, 5, 2, 6, 5]);
+    p[8..16].fill(1);
+    p[8..10].copy_from_slice(&[2, 3]);
+    p[16..18].copy_from_slice(&[(-3i32) as u32, (-1i32) as u32]);
+    p[25] = 1;
+    for format in Format::ALL {
+        for packed in [false, true] {
+            p[2] = Predicate::Equal as u32 | ((format as u32) << 8) | if packed { predicate::PACKED_BOOL } else { 0 };
+            let w = Kernel::TensorPredicate.work(&p).unwrap();
+            assert_eq!(w.extents[..3], [format.width().words(6), format.width().words(5), if packed { 2 } else { 6 }]);
+            assert_eq!((w.blocks, w.pointers, w.output), (1, 3, 2));
+            assert!(Kernel::TensorPredicate.allocates_output());
+            assert!(w.validate_aliases(&[0x1000, 0x2000, 0x3000]).is_ok());
+            assert!(w.validate_aliases(&[0x1000, 0x2000, 0x1004]).is_err());
+        }
+    }
+    for (at, value) in [
+        (0, 0),
+        (0, 5),
+        (1, 9),
+        (2, 12),
+        (2, 15 << 8),
+        (2, 1 << 18),
+        (4, 6),
+        (5, 5),
+        (6, 5),
+        (7, 2),
+        (18, 1),
+        (26, 1),
+    ] {
+        let mut invalid = p;
+        invalid[at] = value;
+        assert!(Kernel::TensorPredicate.work(&invalid).is_err());
+    }
+}
+
+#[test]
+fn predicate_scalar_union_retains_u64_and_rejects_noncanonical_unused_geometry() {
+    use d3os_nvidia::compute::{
+        cast::Format,
+        predicate::{self, Predicate},
+    };
+    let mut p = [0u32; 32];
+    p[..8].copy_from_slice(&[129, 1, (Format::U64 as u32) << 8 | predicate::SCALAR_RHS, u32::MAX, 128, u32::MAX, 129, 0]);
+    p[8..16].fill(1);
+    p[8] = 129;
+    p[16] = (-1i32) as u32;
+    assert_eq!(predicate::validate(&p).unwrap(), [258, 1, 129]);
+    for (at, value) in [
+        (2, p[2] | Predicate::Not as u32),
+        (7, 1),
+        (24, 1),
+        (2, (Format::I32 as u32) << 8 | predicate::SCALAR_RHS),
+    ] {
+        let mut invalid = p;
+        invalid[at] = value;
+        assert!(predicate::validate(&invalid).is_err());
+    }
+    p[2] = Predicate::IsNan as u32 | (Format::F64 as u32) << 8;
+    p[3] = 0;
+    p[5] = 0;
+    assert_eq!(predicate::validate(&p).unwrap(), [258, 1, 129]);
+    p[2] = Predicate::IsNan as u32 | (Format::I64 as u32) << 8;
+    assert!(predicate::validate(&p).is_err());
+}
