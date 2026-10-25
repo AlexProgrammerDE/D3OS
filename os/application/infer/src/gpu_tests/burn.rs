@@ -7,6 +7,7 @@ mod cross;
 mod dispatch;
 mod indexing;
 mod integers;
+mod interpolate;
 mod inverse;
 mod linear;
 mod math;
@@ -149,6 +150,15 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     ));
     crate::report(format_args!(
         "BURN_ERF_CONFORMANCE_OK os=d3os backend=native erf_ulp=8 erf=forward,backward gelu=forward,backward shared_views=verified"
+    ));
+    interpolate::run(backend)?;
+    let forwards = d3os_ai::validation::interpolate::check_forward(&device, true)?;
+    let gradients = d3os_ai::validation::interpolate::check_gradients(&device, &d3os_ai::validation::interpolate::MODES)?;
+    let empty = d3os_ai::validation::interpolate::check_empty(&device)?;
+    let ieee = d3os_ai::validation::interpolate::check_ieee(&device)?;
+    crate::report(format_args!(
+        "BURN_INTERPOLATE_OK os=d3os backend=native modes=5 align_corners=both forward={} gradient_modes=5 gradients={} empty={} ieee={} reference=f64 signed_views=true wide_coordinates=true",
+        forwards, gradients, empty, ieee
     ));
     inverse::run(backend)?;
     for (domain, name) in [

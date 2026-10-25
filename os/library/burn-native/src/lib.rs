@@ -8,6 +8,7 @@ mod compaction;
 pub mod convolution;
 mod device;
 mod indexing;
+pub mod interpolate;
 pub mod layout;
 mod linear;
 pub mod pooling;

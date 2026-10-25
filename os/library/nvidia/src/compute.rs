@@ -7,6 +7,7 @@ pub mod cast;
 pub mod convolution;
 pub mod elementwise;
 pub mod indexing;
+pub mod interpolate;
 pub mod optimizer;
 pub mod pooling;
 pub mod quantization;
@@ -19,7 +20,7 @@ pub mod storage;
 pub mod updates;
 pub mod words;
 
-pub const VERSION: u32 = 34;
+pub const VERSION: u32 = 35;
 /// END_COMMANDS flag: an inner recording scope joins its parent's completion.
 /// The outermost scope always waits. Zero retains synchronous nested scopes.
 pub const DEFER_NESTED_COMPLETION: u64 = 1;
@@ -53,7 +54,7 @@ pub struct MemoryProfile {
     pub device_cached_bytes: u64,
     pub device_retired_bytes: u64,
 }
-pub const KERNEL_COUNT: usize = 68;
+pub const KERNEL_COUNT: usize = 69;
 
 /// CPU service costs by request operation, including queue work within it.
 #[derive(Clone, Copy, Debug, Default)]
@@ -179,9 +180,10 @@ pub enum Kernel {
     ArgWhere = 65,
     TensorStorage = 66,
     TensorCast = 67,
+    Interpolate = 68,
 }
 
-const _: () = assert!(Kernel::TensorCast as usize + 1 == KERNEL_COUNT);
+const _: () = assert!(Kernel::Interpolate as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -248,6 +250,7 @@ impl Kernel {
                 | Self::ArgWhere
                 | Self::TensorStorage
                 | Self::TensorCast
+                | Self::Interpolate
                 | Self::Im2col
                 | Self::MaxPool
                 | Self::Project
@@ -347,6 +350,7 @@ impl Kernel {
             65 => Self::ArgWhere,
             66 => Self::TensorStorage,
             67 => Self::TensorCast,
+            68 => Self::Interpolate,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -421,12 +425,16 @@ impl Kernel {
             Self::ArgWhere => "burn_argwhere",
             Self::TensorStorage => "burn_storage_copy",
             Self::TensorCast => "burn_cast",
+            Self::Interpolate => "burn_interpolate_nearest",
         }
     }
 
     /// Select the cuTile specialization without changing the public request ABI.
     pub fn entry(self, parameters: &[u32]) -> &'static str {
         match (self, parameters) {
+            (Self::Interpolate, p) if p.len() == interpolate::PARAMETERS => {
+                interpolate::Mode::from_raw(p[6]).map_or(self.symbol(), |mode| mode.symbol(p[14] != 0))
+            }
             (Self::TensorStorage, p) if p.len() == storage::PARAMETERS => storage::Mode::from_raw(p[2] >> 8).map_or(self.symbol(), |mode| mode.symbol()),
             (Self::TensorSort, p) if p.len() == sort::PARAMETERS => sort::Mode::from_raw(p[2]).map_or(self.symbol(), |mode| mode.symbol()),
             (Self::TensorScan, p) if p.len() == scan::PARAMETERS => scan::Scan::from_raw(p[2]).map_or(self.symbol(), |op| op.symbol()),
@@ -595,6 +603,14 @@ impl Kernel {
             (Self::TensorReduction, p) => {
                 extents[..2].copy_from_slice(&reduction::validate(p)?);
                 (product(&[p[0], 128])?, 2, 1, false)
+            }
+            (Self::Interpolate, p) => {
+                let (sizes, count) = interpolate::validate(p)?;
+                if count == 0 {
+                    return Err(Error::InvalidField);
+                }
+                extents[..2].copy_from_slice(&sizes);
+                (count, 2, 1, false)
             }
             (Self::TensorCast, p) => {
                 let (source, output) = cast::validate(p)?;

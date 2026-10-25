@@ -15,10 +15,10 @@ Associated types and source SHA-256 hashes accompany the report.
 
 The current inventory contains 484 methods: 264 native overrides and 220 inherited defaults.
 All required methods have declarations or implementations. This count does not establish runtime support.
-The report also records 116 native helper bodies for manual review of dtype and shape restrictions.
+The report also records 119 native helper bodies for manual review of dtype and shape restrictions.
 
 The tool follows syntactic associated backend calls and expands the pinned `dequant_op_quant!` and `dequant_op_flow!` macros.
-It identifies 16 methods with possible paths to explicit declines or panic declarations.
+It identifies 14 methods with possible paths to explicit declines or panic declarations.
 This number is not an unsupported-operation count. Some paths represent expected invalid-input errors or conditional restrictions.
 
 The analysis does not resolve method types, evaluate conditional compilation, or expand other macros and free helper functions.
@@ -207,6 +207,53 @@ The diagnostic mode checks every operation and reports each strict result indepe
 Diagnostic completion does not establish strict conformance. Both Linux domains retain `strict_conformance=false`.
 
 These checks contain no execution-performance or compile-time parity measurement.
+
+## Native interpolation
+
+Protocol 35 adds FP32 NCHW interpolation with nearest, nearest-exact, bilinear, bicubic, and Lanczos3 modes.
+All five modes include native backward operations and both `align_corners` settings.
+Nearest modes ignore `align_corners`, as in the pinned Linux backend.
+The matching driver, SDK, application image, and portable bundle use 233 inference entries and 69 compute profiles.
+All 223 earlier instruction entries and their constant sections remain byte-identical.
+
+The forward operation resizes width, then height. The backward operation applies the transposes in reverse order.
+Each backward lane gathers its contributing gradients without floating-point atomics or host activation transfers.
+Both directions read signed and broadcast views and write complete dense outputs.
+Identity axes retain shared storage. Empty batch or channel dimensions require no element launch or output allocation.
+Spatial dimensions must remain nonzero.
+
+Exact rational transforms use 64-bit coordinate arithmetic.
+This avoids overflow and nearest-neighbor errors when coordinate products exceed 32 bits.
+Bilinear and bicubic filters clamp boundary samples. Bicubic uses Keys coefficients with alpha `-0.75`.
+Lanczos3 discards samples outside the input and normalizes the retained weights.
+
+The independent reference constructs FP64 resampling matrices and their transposes.
+The public corpus contains 100 forward cases, 80 gradient cases, 20 empty cases, and four exact nearest IEEE cases.
+It covers signed views, transposed spatial axes, singletons, identity axes, upsampling, downsampling, and retained inputs.
+Wide cases resize 65,537 elements to 65,539 and reverse that transformation.
+The raw native suite adds 40 guarded mode/axis/direction/broadcast cases.
+It also checks full writers, queued input lifetime, resident counters, invalid launch metadata, and empty operations.
+Two host oracle tests anchor nearest mappings, singleton corner alignment, and known cubic forward/transpose coefficients.
+
+The initial Lanczos3 export failed the spill audit because general sine lowering used local scratch memory.
+Its source, portable input, machine code, and instruction dumps remain under `interpolate-sin-spill/`.
+The replacement reflects its bounded angle into `[0, pi/2]` and evaluates a degree-13 sine polynomial with FMA.
+A triple-angle identity supplies the Lanczos product. This change does not replace general sine operations.
+All ten new entries pass the spill audit without local loads or stores.
+
+Linux CUDA passes the shared compact corpus: 80 forward cases across all five modes and 32 nearest-mode gradient cases.
+Its wide nearest diagnostic fails at output index 65,536, returning `-1.625` instead of `2.0`.
+Its separate empty diagnostic panics in the CubeCL autotuner.
+Its exact nearest IEEE diagnostic changes negative zero to positive zero.
+Bilinear, bicubic, and Lanczos3 backward probes each report explicit unsupported-operation errors on the pinned Linux backend.
+The additional D3OS backward modes extend that baseline.
+These failed Linux diagnostics remain separate from the passing compact result.
+
+The first D3OS run panicked during compiler startup when a scheduler inbox filled, before interpolation execution.
+The [scheduler correction](nvidia-performance.md#scheduler-inbox-saturation-during-compilation) replaces that bounded delivery path.
+D3OS passes the complete public interpolation corpus, all raw native checks, and the existing operator and quantization regressions.
+All three modules compiled inside D3OS match their host audit hashes.
+These correctness checks do not establish execution-performance or compile-time parity.
 
 ## Native floating-point remainder
 
@@ -624,7 +671,7 @@ Other quantization formats and layouts still require separate coverage.
 ## Remaining implementation areas
 
 The unresolved work includes ordinary dtype arithmetic, quantized and boolean-producing conversions, complete integer arithmetic, further matrix dtypes, and additional floating-point operations.
-Further sorting and compaction dtypes, further convolution variants, deformable convolution, and interpolation also require coverage.
+Further sorting and compaction dtypes, further convolution variants, and deformable convolution also require coverage.
 Compaction formats beyond the checked Q8 cases remain unverified.
 Broadcast cross-product gradients, graph capture, profiling, memory capabilities, records, and observable errors require matched Linux capability checks.
 The current layout also restricts rank to eight and extents to signed 32-bit values.
@@ -645,7 +692,7 @@ Build the Linux probes with their default CUDA feature:
 
 ```bash
 cd tools/mnist-benchmark
-cargo build --release --locked --bin capabilities --bin erf --bin integer --bin integer_matrix --bin scan --bin sort --bin cross --bin compaction --bin scatter_updates --bin quantized_empty --bin nd_indexing --bin storage --bin conversions --bin remainder --bin inverse
+cargo build --release --locked --bin capabilities --bin erf --bin integer --bin integer_matrix --bin scan --bin sort --bin cross --bin compaction --bin scatter_updates --bin quantized_empty --bin nd_indexing --bin storage --bin conversions --bin remainder --bin inverse --bin interpolate
 cd ../..
 ```
 
@@ -808,6 +855,26 @@ done
 The diagnostic's JSON `status` distinguishes success from an execution error.
 A successful launcher exit alone does not establish API support.
 
+Run the full Linux interpolation diagnostic and retain its wide-coordinate error:
+
+```bash
+python3 tools/nvidia/linux-reference.py \
+  --directory target/nvidia/linux-burn-interpolate-wide \
+  --burn-interpolate tools/mnist-benchmark/target/release/interpolate
+```
+
+Run the accepted compact comparison in a separate VM:
+
+```bash
+python3 tools/nvidia/linux-reference.py \
+  --directory target/nvidia/linux-burn-interpolate-compact \
+  --burn-interpolate tools/mnist-benchmark/target/release/interpolate \
+  --burn-interpolate-case compact
+```
+
+The compact flag excludes only the two wide-coordinate shape groups. D3OS retains all ten groups.
+For isolated diagnostics, use fresh directories with cases `empty`, `ieee`, `linear_backward`, `cubic_backward`, and `lanczos3_backward`.
+
 Run the D3OS GPU suite with the matching production image and portable kernel bundle:
 
 ```bash
@@ -864,3 +931,8 @@ The strict Linux failures remain under `linux-inverse-ieee/` and `linux-inverse-
 The audit directory contains `traits-inverse.json`, `inverse-comparison.json`, and `inverse-section-comparison.json`.
 Manifests record the shared validation source hashes, executable hashes, and execution backend.
 These generated local artifacts are not Git-tracked. The probes and audit tool are tracked for reproduction.
+
+The interpolation evidence lives under `target/nvidia/burn-backend-validation/interpolate-final/`.
+Its Linux counterparts use the `target/nvidia/burn-backend-audit/linux-interpolate-` prefix.
+The audit directory contains `traits-interpolate-final.json`, `interpolate-comparison.json`, and `interpolate-section-comparison.json`.
+The original scheduler panic and initial Lanczos scratch export remain in separate diagnostic directories.

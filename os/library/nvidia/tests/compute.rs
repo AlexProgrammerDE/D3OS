@@ -1097,3 +1097,87 @@ fn grouped_recurrence_uses_shared_key_channels_and_separate_value_states() {
     }
     assert!(Kernel::DeltaUpdate.work(&[32, 128, 128, u32::MAX, 16]).is_err());
 }
+
+#[test]
+fn interpolation_contract_checks_transpose_views_and_reduced_coordinates() {
+    use d3os_nvidia::compute::interpolate::{self, Mode};
+    for mode in Mode::ALL {
+        for axis in [2usize, 3] {
+            for backward in [false, true] {
+                let mut p = [0u32; 32];
+                p[..8].copy_from_slice(&[2, 3, 5, 7, 11, axis as u32, mode as u32, 0]);
+                p[14] = u32::from(backward);
+                let mut shape = [2, 3, 5, 7];
+                if backward {
+                    shape[axis] = 11;
+                }
+                let extent = shape.iter().product::<u32>();
+                p[8] = extent;
+                p[9] = extent - 1;
+                p[10..14].copy_from_slice(&[
+                    (0i32 - (shape[1] * shape[2] * shape[3]) as i32) as u32,
+                    (0i32 - (shape[2] * shape[3]) as i32) as u32,
+                    (0i32 - shape[3] as i32) as u32,
+                    (-1i32) as u32,
+                ]);
+                let transform = interpolate::transform(p[axis], p[4], mode, false).unwrap();
+                p[15..18].copy_from_slice(&transform);
+                let expected = if backward {
+                    210
+                } else if axis == 2 {
+                    462
+                } else {
+                    330
+                };
+                let (sizes, count) = interpolate::validate(&p).unwrap();
+                assert_eq!(sizes, [u64::from(extent), expected]);
+                assert_eq!(u64::from(count), expected);
+                let work = Kernel::Interpolate.work(&p).unwrap();
+                assert_eq!((work.pointers, work.output, work.in_place), (2, 1, false));
+                assert!(Kernel::Interpolate.allocates_output());
+                assert_eq!(Kernel::Interpolate.entry(&p), mode.symbol(backward));
+                for (field, value) in [
+                    (5, 1),
+                    (6, 5),
+                    (7, 2),
+                    (8, extent - 1),
+                    (9, extent),
+                    (14, 2),
+                    (15, p[15] ^ 1),
+                    (16, p[16] ^ 1),
+                    (17, 0),
+                    (18, 1),
+                ] {
+                    let mut bad = p;
+                    bad[field] = value;
+                    assert!(Kernel::Interpolate.work(&bad).is_err(), "field={field}");
+                }
+            }
+        }
+    }
+    for input in [1u32, 2, 65537, i32::MAX as u32 - 1, i32::MAX as u32] {
+        for output in [1u32, 3, 65539, i32::MAX as u32] {
+            for mode in Mode::ALL {
+                for align in [false, true] {
+                    let [a, b, d] = interpolate::transform(input, output, mode, align).unwrap();
+                    for j in [0, output / 2, output - 1] {
+                        let actual = (i128::from(j) * i128::from(a) + i128::from(b as i32))
+                            * match mode {
+                                Mode::Nearest => i128::from(output),
+                                Mode::NearestExact => 2 * i128::from(output),
+                                _ if align => i128::from((output - 1).max(1)),
+                                _ => 2 * i128::from(output),
+                            };
+                        let numerator = match mode {
+                            Mode::Nearest => i128::from(j) * i128::from(input),
+                            Mode::NearestExact => (2 * i128::from(j) + 1) * i128::from(input),
+                            _ if align => i128::from(j) * i128::from(input - 1),
+                            _ => (2 * i128::from(j) + 1) * i128::from(input) - i128::from(output),
+                        };
+                        assert_eq!(actual, numerator * i128::from(d));
+                    }
+                }
+            }
+        }
+    }
+}

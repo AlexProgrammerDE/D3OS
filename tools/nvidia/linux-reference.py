@@ -73,7 +73,7 @@ def stage_burn_program(root, binary, destination):
     return libdevice
 
 
-def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_finite=False, sort_compile_log=False, compaction_aligned=False, quantized_empty_case=None, scatter_finite=False, select_updates=False, nd_unique=False, nd_nonempty=False, nd_scalar_grad=False, nd_no_scalar=False, storage_flex_direct=False, storage_no_flex32=False, conversions_no_flex32=False, remainder_finite=False, remainder_wide=False, inverse_finite=False, inverse_diagnostic=False):
+def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_finite=False, sort_compile_log=False, compaction_aligned=False, quantized_empty_case=None, scatter_finite=False, select_updates=False, nd_unique=False, nd_nonempty=False, nd_scalar_grad=False, nd_no_scalar=False, storage_flex_direct=False, storage_no_flex32=False, conversions_no_flex32=False, remainder_finite=False, remainder_wide=False, inverse_finite=False, inverse_diagnostic=False, interpolate_case="normal"):
     purposes = {
         "quantization": "shared API conformance; no performance measurement",
         "quantized_empty": "empty quantized API diagnostic and record round trip; execution errors retained; no performance measurement",
@@ -83,6 +83,7 @@ def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_fi
         "integer_matrix": "public I32 matrix product conformance; no performance measurement",
         "scan": "public cumulative operations and gradients; no performance measurement",
         "cross": "public FP32 vector products and gradients; no performance measurement",
+        "interpolate": "public interpolation forward and nearest gradients; independent FP64 references; no performance measurement",
         "inverse": "public inverse FP32 math and gradients, independent libm references; no performance measurement",
         "remainder": "public FP32 floor remainder and gradients; independent libm reference; no performance measurement",
         "conversions": "ordinary numeric conversions, independent binary rounding reference, signed views and empty shapes; no performance measurement",
@@ -95,6 +96,14 @@ def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_fi
     purpose = "erf error profile and GELU conformance; strict failures reported" if erf_profile else purposes[kind]
     program = f"/burn-{kind}"
     arguments = " --profile" if erf_profile else " --nonempty" if nonempty else ""
+    if kind == "interpolate" and interpolate_case != "normal":
+        if interpolate_case == "compact":
+            arguments += " --compact"
+        elif interpolate_case in ("empty", "ieee"):
+            arguments += f" --{interpolate_case}-only"
+        else:
+            arguments += " --gradient-mode " + interpolate_case.removesuffix("_backward")
+        purpose += "; isolated capability diagnostic: " + interpolate_case
     if inverse_diagnostic:
         arguments += " --diagnostic"
         purpose += "; strict failures reported per operation, diagnostic completion is not conformance"
@@ -1241,6 +1250,8 @@ def main():
     parser.add_argument("--burn-integer", type=Path, help="run public I32 division and floor remainder conformance on Linux CUDA")
     parser.add_argument("--burn-integer-matmul", type=Path, help="run public I32 matrix product conformance on Linux CUDA")
     parser.add_argument("--burn-integer-matmul-nonempty", action="store_true", help="run the nonempty I32 matrix cases separately from empty shapes")
+    parser.add_argument("--burn-interpolate", type=Path, help="run public interpolation conformance on Linux CUDA")
+    parser.add_argument("--burn-interpolate-case", choices=("normal", "compact", "empty", "ieee", "linear_backward", "cubic_backward", "lanczos3_backward"), default="normal")
     parser.add_argument("--burn-inverse", type=Path, help="run public inverse FP32 math and gradients")
     parser.add_argument("--burn-inverse-diagnostic", action="store_true")
     parser.add_argument("--burn-inverse-finite", action="store_true")
@@ -1325,7 +1336,7 @@ def main():
     args = parser.parse_args()
     if args.nsight_directory and not args.quantized_profile:
         parser.error("--nsight-directory requires --quantized-profile")
-    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.burn_integer, args.burn_integer_matmul, args.burn_scatter_updates, args.burn_nd_indexing, args.burn_storage, args.burn_conversions, args.burn_remainder, args.burn_inverse, args.burn_quantized_empty, args.burn_compaction, args.burn_cross, args.burn_scan, args.burn_sort, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
+    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.burn_integer, args.burn_integer_matmul, args.burn_scatter_updates, args.burn_nd_indexing, args.burn_storage, args.burn_conversions, args.burn_remainder, args.burn_inverse, args.burn_interpolate, args.burn_quantized_empty, args.burn_compaction, args.burn_cross, args.burn_scan, args.burn_sort, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
         parser.error("--quantized-profile requires a separate diagnostic guest")
     if args.pin_vcpus and len(os.sched_getaffinity(0)) != 4:
         parser.error("--pin-vcpus requires an inherited affinity of four host CPUs")
@@ -1358,6 +1369,7 @@ def main():
                 bool(args.burn_conversions),
                 bool(args.burn_remainder),
                 bool(args.burn_inverse),
+                bool(args.burn_interpolate),
                 bool(args.burn_quantized_empty),
                 bool(args.burn_compaction),
                 bool(args.burn_cross),
@@ -1387,6 +1399,10 @@ def main():
         parser.error("--burn-integer-matmul requires a built conformance executable")
     if args.burn_integer_matmul_nonempty and not args.burn_integer_matmul:
         parser.error("--burn-integer-matmul-nonempty requires --burn-integer-matmul")
+    if args.burn_interpolate and not args.burn_interpolate.is_file():
+        parser.error("--burn-interpolate requires a built conformance executable")
+    if args.burn_interpolate_case != "normal" and not args.burn_interpolate:
+        parser.error("interpolation case requires --burn-interpolate")
     if args.burn_inverse and not args.burn_inverse.is_file():
         parser.error("--burn-inverse requires a built conformance executable")
     if (args.burn_inverse_finite or args.burn_inverse_diagnostic) and not args.burn_inverse:
@@ -1483,6 +1499,8 @@ def main():
         burn_probe(args.directory / "root", args.burn_integer.resolve(), "integer")
     elif args.burn_integer_matmul:
         burn_probe(args.directory / "root", args.burn_integer_matmul.resolve(), "integer_matrix", nonempty=args.burn_integer_matmul_nonempty)
+    elif args.burn_interpolate:
+        burn_probe(args.directory / "root", args.burn_interpolate.resolve(), "interpolate", interpolate_case=args.burn_interpolate_case)
     elif args.burn_inverse:
         burn_probe(args.directory / "root", args.burn_inverse.resolve(), "inverse", inverse_finite=args.burn_inverse_finite, inverse_diagnostic=args.burn_inverse_diagnostic)
     elif args.burn_remainder:
@@ -1657,6 +1675,18 @@ def main():
         cases, domain, empty = (5, "nonempty", "false") if args.burn_integer_matmul_nonempty else (8, "all", "true")
         if f"BURN_INTEGER_MATMUL_CONFORMANCE_OK os=linux backend=cuda cases={cases} domain={domain} reference=i128 wrapping=exact shared_views=true empty={empty}" not in text:
             raise RuntimeError("Linux CUDA Burn I32 matrix product conformance did not complete")
+    if args.burn_interpolate:
+        markers = {
+            "normal": "BURN_INTERPOLATE_OK os=linux backend=cuda modes=5 align_corners=both forward=100 gradient_modes=2 gradients=32 reference=f64 signed_views=true wide_coordinates=true",
+            "compact": "BURN_INTERPOLATE_OK os=linux backend=cuda modes=5 align_corners=both forward=80 gradient_modes=2 gradients=32 reference=f64 signed_views=true wide_coordinates=false",
+            "empty": "BURN_INTERPOLATE_EMPTY_OK os=linux backend=cuda cases=20",
+            "ieee": "BURN_INTERPOLATE_IEEE_OK os=linux backend=cuda cases=4 bits=exact",
+            "linear_backward": "BURN_INTERPOLATE_GRADIENT_OK os=linux backend=cuda mode=Linear cases=16",
+            "cubic_backward": "BURN_INTERPOLATE_GRADIENT_OK os=linux backend=cuda mode=Cubic cases=16",
+            "lanczos3_backward": "BURN_INTERPOLATE_GRADIENT_OK os=linux backend=cuda mode=Lanczos3 cases=16",
+        }
+        if markers[args.burn_interpolate_case] not in text:
+            raise RuntimeError("Linux interpolation conformance did not complete")
     if args.burn_inverse:
         domain, count, pairs = ("finite", 512, 548) if args.burn_inverse_finite else ("ieee", 11084, 11280)
         marker = f"BURN_INVERSE_OK os=linux backend=cuda domain={domain} unary_ops=6 unary_inputs={count} atan2_pairs={pairs} ulp=8 gradients=12 signed_views=true broadcast=true empty=true"

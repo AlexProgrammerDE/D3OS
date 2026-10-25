@@ -1,0 +1,58 @@
+#[cutile::entry()]
+unsafe fn INTERPOLATE_ENTRY(input:*const u32,output:*mut u32,INTERPOLATE_PARAMETERS) {
+    let limit=if axis==2u32 {height}else{width};
+    let dh=if INTERPOLATE_BACKWARD==0u32 && axis==2u32 {target}else{height};
+    let dw=if INTERPOLATE_BACKWARD==0u32 && axis==3u32 {target}else{width};
+    let count=batch*channels*dh*dw;
+    let raw=indices();let mask=lt_tile(raw,broadcast_scalar(count,shape![128]));
+    let index=select(mask,raw,broadcast_scalar(0u32,shape![128]));
+    let x=index%broadcast_scalar(dw,shape![128]);let y=index/broadcast_scalar(dw,shape![128])%broadcast_scalar(dh,shape![128]);
+    let c=index/broadcast_scalar(dw*dh,shape![128])%broadcast_scalar(channels,shape![128]);let n=index/broadcast_scalar(dw*dh*channels,shape![128]);
+    let position=if axis==2u32 {y}else{x};
+    let n:Tile<i32,{[128]}>=bitcast(n);let c:Tile<i32,{[128]}>=bitcast(c);let x:Tile<i32,{[128]}>=bitcast(x);let y:Tile<i32,{[128]}>=bitcast(y);
+    let base=broadcast_scalar(signed(offset),shape![128])+n*broadcast_scalar(signed(stride_n),shape![128])+c*broadcast_scalar(signed(stride_c),shape![128])+if axis==2u32 {x*broadcast_scalar(signed(stride_w),shape![128])}else{y*broadcast_scalar(signed(stride_h),shape![128])};
+    let stride=broadcast_scalar(signed(if axis==2u32 {stride_h}else{stride_w}),shape![128]);
+    let result:Tile<u32,{[128]}>=if INTERPOLATE_BACKWARD==0u32 {
+        let (coordinate,phase)=interp_coordinate(position,scale,bias,divisor);
+        if INTERPOLATE_MODE<2u32 {
+            let (at,_valid)=interp_candidate(coordinate,0u32,0u32,limit);
+            let address:Tile<u32,{[128]}>=bitcast(base+at*stride);
+            unsafe {read_tile(input,address,mask&lt_tile(address,broadcast_scalar(extent,shape![128])),0u32)}
+        } else {
+            let mut sum=broadcast_scalar(0f32,shape![128]);let mut normalizer=broadcast_scalar(0f32,shape![128]);
+            for tap in 0..INTERPOLATE_TAPS {
+                let (at,valid)=interp_candidate(coordinate,tap,INTERPOLATE_RADIUS,limit);
+                let weight=interp_weight(INTERPOLATE_MODE,interp_distance(phase,tap,INTERPOLATE_RADIUS));
+                let active=if INTERPOLATE_MODE==4u32 {mask&valid}else{mask};
+                let weight=if INTERPOLATE_MODE==4u32 {select(valid,weight,broadcast_scalar(0f32,shape![128]))}else{weight};
+                let address:Tile<u32,{[128]}>=bitcast(base+at*stride);
+                let bits=unsafe {read_tile(input,address,active&lt_tile(address,broadcast_scalar(extent,shape![128])),0u32)};
+                let value:Tile<f32,{[128]}>=bitcast(bits);
+                let term=mulf(value,weight,rounding::NearestEven,ftz::Disabled);
+                sum=addf(sum,select(ne_tile(weight,broadcast_scalar(0f32,shape![128])),term,broadcast_scalar(0f32,shape![128])),rounding::NearestEven,ftz::Disabled);
+                normalizer=addf(normalizer,weight,rounding::NearestEven,ftz::Disabled);
+            }
+            let value=if INTERPOLATE_MODE==4u32 {select(gt_tile(absf(normalizer),broadcast_scalar(1e-7f32,shape![128])),divf(sum,normalizer,rounding::NearestEven,ftz::Disabled),broadcast_scalar(0f32,shape![128]))}else{sum};
+            bitcast(value)
+        }
+    } else {
+        let begin=interp_bound(position,0i32-signed(INTERPOLATE_TAPS-1u32-INTERPOLATE_RADIUS),scale,bias,divisor,target,limit);
+        let end=interp_bound(position,signed(INTERPOLATE_RADIUS+1u32),scale,bias,divisor,target,limit);
+        let begin=if scale==0u32 {broadcast_scalar(0u32,shape![128])}else if INTERPOLATE_MODE!=4u32 {select(eq_tile(position,broadcast_scalar(0u32,shape![128])),broadcast_scalar(0u32,shape![128]),begin)}else{begin};
+        let end=if scale==0u32 {broadcast_scalar(target,shape![128])}else if INTERPOLATE_MODE!=4u32 {select(eq_tile(position,broadcast_scalar(limit-1u32,shape![128])),broadcast_scalar(target,shape![128]),end)}else{end};
+        let steps=pool_span(begin,end);
+        let mut sum=broadcast_scalar(0f32,shape![128]);let mut step=0u32;
+        while step<steps {
+            let j=begin+broadcast_scalar(step,shape![128]);let at=min_tile(j,broadcast_scalar(target-1u32,shape![128]));
+            let weight=interp_coefficient(position,at,limit,INTERPOLATE_MODE,INTERPOLATE_TAPS,INTERPOLATE_RADIUS,scale,bias,divisor);
+            let at:Tile<i32,{[128]}>=bitcast(at);let address:Tile<u32,{[128]}>=bitcast(base+at*stride);
+            let active=mask&lt_tile(j,end)&ne_tile(weight,broadcast_scalar(0f32,shape![128]));
+            let bits=unsafe {read_tile(input,address,active&lt_tile(address,broadcast_scalar(extent,shape![128])),0u32)};
+            let value:Tile<f32,{[128]}>=bitcast(bits);
+            sum=addf(sum,mulf(value,select(active,weight,broadcast_scalar(0f32,shape![128])),rounding::NearestEven,ftz::Disabled),rounding::NearestEven,ftz::Disabled);
+            step=step+1u32;
+        }
+        bitcast(sum)
+    };
+    unsafe {write_tile(output,raw,result,mask)};
+}

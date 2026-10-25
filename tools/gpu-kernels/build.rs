@@ -14,6 +14,7 @@ fn main() {
         "burn-range.rs",
         "burn-random-common.rs",
         "burn-pooling-common.rs",
+        "burn-interpolate-common.rs",
         "quantized.rs",
         "quantized-vector.rs",
         "quad.rs",
@@ -118,6 +119,51 @@ fn main() {
                     .replace("POOL_ENTRY", mode.symbol(backward))
                     .replace("POOL_PARAMETERS", &parameters)
                     .replace("POOL_MODE", &format!("{}u32", mode as u32)),
+            );
+        }
+    }
+    println!("cargo:rerun-if-changed=src/burn-interpolate.rs.in");
+    let interpolation = fs::read_to_string("src/burn-interpolate.rs.in").expect("read interpolation source");
+    let mut names = [
+        "batch",
+        "channels",
+        "height",
+        "width",
+        "target",
+        "axis",
+        "_mode",
+        "_align",
+        "extent",
+        "offset",
+        "stride_n",
+        "stride_c",
+        "stride_h",
+        "stride_w",
+        "_backward",
+        "scale",
+        "bias",
+        "divisor",
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    names.extend((18..32).map(|i| format!("_reserved{i}")));
+    let parameters = names.iter().map(|n| format!("{n}:u32")).collect::<Vec<_>>().join(",");
+    for mode in d3os_nvidia::compute::interpolate::Mode::ALL {
+        let (taps, radius) = match mode {
+            d3os_nvidia::compute::interpolate::Mode::Nearest | d3os_nvidia::compute::interpolate::Mode::NearestExact => (1, 0),
+            d3os_nvidia::compute::interpolate::Mode::Bilinear => (2, 0),
+            d3os_nvidia::compute::interpolate::Mode::Bicubic => (4, 1),
+            d3os_nvidia::compute::interpolate::Mode::Lanczos3 => (6, 2),
+        };
+        for backward in [false, true] {
+            source.push_str(
+                &interpolation
+                    .replace("INTERPOLATE_ENTRY", mode.symbol(backward))
+                    .replace("INTERPOLATE_PARAMETERS", &parameters)
+                    .replace("INTERPOLATE_MODE", &format!("{}u32", mode as u32))
+                    .replace("INTERPOLATE_BACKWARD", if backward { "1u32" } else { "0u32" })
+                    .replace("INTERPOLATE_TAPS", &format!("{taps}u32"))
+                    .replace("INTERPOLATE_RADIUS", &format!("{radius}u32")),
             );
         }
     }

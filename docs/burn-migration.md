@@ -172,7 +172,7 @@ The GPU operations include FP32 arithmetic and math, reductions, exact tensor fi
 Another 31 entries implement I32 arithmetic, signed comparisons, bitwise operations, boolean logic, masks, and conversions.
 These operations support strided views and broadcasting. Input tensors remain shared and immutable.
 Full writers avoid a separate output clear. Empty logical outputs require no element work.
-The matching SDK and driver use native compute protocol version 34 and the 223-entry portable inference bundle.
+The matching SDK and driver use native compute protocol version 35 and the 233-entry portable inference bundle.
 
 The D3OS GPU self-test passes reversed and transposed views, overlapping windows, broadcast batches, subviews, empty dimensions, and neighboring guards.
 Matrix references use independent FP64 accumulation. Math references use independent libm functions and include 2,816 FP32 edge values.
@@ -298,7 +298,10 @@ Vector-selection updates also support all five modes through resident scatter an
 Multidimensional gather/scatter now pass native FP32/I32 checks, including scalar forward results and duplicate addition.
 The [coverage report](burn-backend-coverage.md) records their shapes, numerical semantics, Linux failures, and remaining dtype restrictions.
 The gaps include further dtype arithmetic, quantized conversion variants, additional FP32 math, further compaction formats, and scalar autodiff.
-Complete Burn quantization, three-dimensional convolutions, transposed convolutions, and interpolation also remain incomplete.
+Complete Burn quantization, three-dimensional convolutions, transposed convolutions, and deformable convolutions also remain incomplete.
+FP32 interpolation now supports all five modes and both corner settings, including native gradients.
+The shared checks pass 100 forward cases, 80 gradients, 20 empty cases, and four exact nearest IEEE cases.
+The raw GPU checks also cover guards, broadcast views, full writers, queued input lifetime, and invalid launches.
 The native backend also uses Burn's `GraphUnsupported` primitive, so captured graph replay remains a gap.
 Its advertised dtype capabilities cover F32, I32 storage, U32 boolean storage, and the quantization storage described below.
 Physical storage and ordinary numeric casts also support the other ordinary formats.

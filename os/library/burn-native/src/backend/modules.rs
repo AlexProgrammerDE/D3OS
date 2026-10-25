@@ -132,11 +132,14 @@ impl ModuleOps<Self> for Native {
             }),
         }
     }
-    fn interpolate(x: FloatTensor<Self>, _output_size: [usize; 2], _options: InterpolateOptions) -> FloatTensor<Self> {
-        BackendTensor::unsupported("interpolate", x.shape(), DType::F32, &[&x], "interpolate")
+    fn interpolate(x: FloatTensor<Self>, output_size: [usize; 2], options: InterpolateOptions) -> FloatTensor<Self> {
+        let shape = crate::interpolate::Interpolation::new(x.shape(), output_size, &options).map_or_else(|_| x.shape(), |p| p.output_shape().clone());
+        BackendTensor::apply("interpolate", shape, DType::F32, &[&x], |v| v[0].interpolate(output_size, &options))
     }
-    fn interpolate_backward(x: FloatTensor<Self>, grad: FloatTensor<Self>, _output_size: [usize; 2], _options: InterpolateOptions) -> FloatTensor<Self> {
-        BackendTensor::unsupported("interpolate_backward", x.shape(), DType::F32, &[&x, &grad], "interpolate_backward")
+    fn interpolate_backward(x: FloatTensor<Self>, grad: FloatTensor<Self>, output_size: [usize; 2], options: InterpolateOptions) -> FloatTensor<Self> {
+        BackendTensor::apply("interpolate_backward", x.shape(), DType::F32, &[&x, &grad], |v| {
+            v[0].interpolate_backward(v[1], output_size, &options)
+        })
     }
     fn attention(
         query: FloatTensor<Self>, key: FloatTensor<Self>, value: FloatTensor<Self>, mask: Option<BoolTensor<Self>>, attn_bias: Option<FloatTensor<Self>>,

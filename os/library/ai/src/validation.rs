@@ -5,6 +5,7 @@ pub mod cross;
 pub mod erf;
 pub mod integer;
 pub mod integer_matrix;
+pub mod interpolate;
 pub mod inverse;
 pub mod nd_indexing;
 pub mod quantization;
