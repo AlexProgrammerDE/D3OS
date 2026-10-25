@@ -1,7 +1,7 @@
 //! A convolutional classifier for normalized NCHW MNIST images.
 pub mod artifact;
 pub mod data;
-#[cfg(all(feature = "training", feature = "native"))]
+#[cfg(feature = "training")]
 pub mod training;
 
 use burn::{

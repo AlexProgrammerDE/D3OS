@@ -100,10 +100,19 @@ pub fn export(model: &Mnist) -> Result<Vec<u8>, String> {
     encode(INFERENCE, &[], &weights, &[])
 }
 
-pub fn load(bytes: &[u8], device: &Device) -> Result<Mnist, String> {
+fn inference_parts(bytes: &[u8]) -> Result<Parts<'_>, String> {
     let parts = decode(bytes, INFERENCE)?;
     if !parts.metadata.is_empty() || !parts.optimizer.is_empty() {
         return Err(String::from("inference artifact contains training state"));
     }
-    load_weights(parts.weights, &device.clone().without_autodiff()).map(|model| model.valid())
+    Ok(parts)
+}
+
+pub fn load(bytes: &[u8], device: &Device) -> Result<Mnist, String> {
+    load_weights(inference_parts(bytes)?.weights, &device.clone().without_autodiff()).map(|model| model.valid())
+}
+
+#[cfg(feature = "training")]
+pub(super) fn load_trainable(bytes: &[u8], device: &Device) -> Result<Mnist, String> {
+    load_weights(inference_parts(bytes)?.weights, device)
 }

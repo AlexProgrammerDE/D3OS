@@ -1,16 +1,19 @@
-//! Native training, deterministic progress, and complete Adam checkpoints.
+//! Shared Burn training and deterministic progress, with native Adam checkpoints.
 use super::{
     Mnist, artifact,
     data::{Dataset, SampleOrder},
 };
+#[cfg(feature = "native")]
 use crate::native::{NativeDevice, random::RandomState};
 use alloc::{format, string::String, vec::Vec};
 use burn::{
     module::Module,
     nn::loss::CrossEntropyLossConfig,
     optim::{AdamConfig, GradientsParams, ModuleOptimizer},
-    tensor::{Bytes, Device},
+    tensor::Device,
 };
+#[cfg(feature = "native")]
+use burn::tensor::Bytes;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Config {
@@ -74,13 +77,27 @@ fn adam() -> ModuleOptimizer {
 
 impl Trainer {
     pub fn new(dataset: &Dataset<'_>, device: &Device, config: Config) -> Result<Self, String> {
+        Self::initialize(dataset, device, config, || Ok(Mnist::new(device)))
+    }
+
+    /// Start with the artifact's weights, a fresh Adam state, and a fresh sample order.
+    pub fn from_artifact(bytes: &[u8], dataset: &Dataset<'_>, device: &Device, config: Config) -> Result<Self, String> {
+        Self::initialize(dataset, device, config, || artifact::load_trainable(bytes, device))
+    }
+
+    fn initialize(
+        dataset: &Dataset<'_>,
+        device: &Device,
+        config: Config,
+        model: impl FnOnce() -> Result<Mnist, String>,
+    ) -> Result<Self, String> {
         config.validate()?;
         if !device.is_autodiff() {
             return Err(String::from("MNIST training requires an autodiff device"));
         }
         device.seed(config.seed);
         Ok(Self {
-            model: Mnist::new(device),
+            model: model()?,
             optimizer: adam(),
             device: device.clone(),
             config,
@@ -147,6 +164,7 @@ impl Trainer {
     }
 
     /// Save only at a completed step boundary, with no concurrent random users.
+    #[cfg(feature = "native")]
     pub fn checkpoint(&self) -> Result<Vec<u8>, String> {
         self.device.sync().map_err(|e| format!("MNIST checkpoint boundary: {e:?}"))?;
         let weights = self
@@ -174,6 +192,7 @@ impl Trainer {
         artifact::encode(artifact::CHECKPOINT, &metadata, &weights, &optimizer)
     }
 
+    #[cfg(feature = "native")]
     pub fn restore(bytes: &[u8], dataset: &Dataset<'_>, device: &Device) -> Result<Self, String> {
         if !device.is_autodiff() {
             return Err(String::from("MNIST resume requires an autodiff device"));

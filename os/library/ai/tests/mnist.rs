@@ -1,12 +1,14 @@
-#![cfg(all(feature = "cpu", feature = "training", feature = "native"))]
+#![cfg(all(feature = "cpu", feature = "training"))]
 use d3os_ai::{
     burn::{module::Module, tensor::Device},
     mnist::{
         artifact,
         data::{Dataset, SampleOrder},
-        training::{Config, Trainer, evaluate},
+        training::{Config, Trainer},
     },
 };
+#[cfg(feature = "native")]
+use d3os_ai::mnist::training::evaluate;
 
 fn fixture(count: u32) -> (Vec<u8>, Vec<u8>) {
     let mut images = Vec::new();
@@ -63,6 +65,34 @@ fn epoch_shuffle_matches_independent_splitmix_reference_and_covers_the_tail() {
 }
 
 #[test]
+fn inference_artifact_retains_weights_and_enables_fresh_autodiff_training() {
+    let (images, labels) = fixture(3);
+    let data = Dataset::parse(&images, &labels).unwrap();
+    let device = Device::flex().autodiff();
+    let source = Trainer::new(&data, &device, Config { seed: 17, batch_size: 2, ..Config::default() }).unwrap();
+    let source = source.step(&data).unwrap().0;
+    let bytes = artifact::export(source.model()).unwrap();
+    let config = Config { seed: 42, batch_size: 2, ..Config::default() };
+    let imported = Trainer::from_artifact(&bytes, &data, &device, config).unwrap();
+    let (input, _) = data.batch(&[0, 1], &device.clone().without_autodiff()).unwrap();
+    let expected = source.model().valid().forward(input.clone()).try_into_vec_as::<f32>().unwrap();
+    let actual = imported.model().valid().forward(input.clone()).try_into_vec_as::<f32>().unwrap();
+    assert!(expected.iter().zip(&actual).all(|(a, b)| (a - b).abs() < 2e-6));
+    assert_eq!(imported.progress().steps, 0);
+
+    let (updated, step) = imported.step(&data).unwrap();
+    assert!(step.loss.is_finite());
+    assert_eq!(step.samples, 2);
+    let after = updated.model().valid().forward(input).try_into_vec_as::<f32>().unwrap();
+    assert!(after.iter().zip(actual).any(|(a, b)| (a - b).abs() > 1e-6));
+    assert!(Trainer::from_artifact(&bytes, &data, &device.clone().without_autodiff(), config).is_err());
+    let mut corrupted = bytes;
+    *corrupted.last_mut().unwrap() ^= 1;
+    assert!(Trainer::from_artifact(&corrupted, &data, &device, config).is_err());
+}
+
+#[test]
+#[cfg(feature = "native")]
 fn convolutional_adam_resume_preserves_progress_updates_and_exported_predictions() {
     let (images, labels) = fixture(5);
     let data = Dataset::parse(&images, &labels).unwrap();

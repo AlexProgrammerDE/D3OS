@@ -257,6 +257,11 @@ A physical D3OS run completes seven epochs and reaches 99.26 percent test accura
 The final model uses five epochs at learning rate 0.001 and two at 0.0001, without resetting Adam state.
 A fresh VM loads the exported model and reproduces all 10,000 test predictions.
 See [Train MNIST inside D3OS](mnist-training.howto.md) for commands and validation evidence.
+The shared MNIST trainer now builds with the `training` feature independently of the native backend.
+`Trainer::from_artifact` loads the same checked inference weights with fresh Adam state and a fresh deterministic sample order.
+This API supports matched Linux and D3OS starting conditions. It does not resume a training checkpoint.
+Complete checkpoint restore still preserves native random state and Adam state through the existing native API.
+CPU tests cover imported weights, a subsequent gradient update, and invalid artifact rejection with and without the native feature.
 AlexNet, all three Qwen profiles, and MNIST now use Burn. Performance optimization remains open.
 The AlexNet migration preserves every value of all eight original layer references with absolute and relative tolerances of `2e-4`.
 The host CPU reference and physical D3OS GPU both return class 258.
