@@ -155,7 +155,21 @@ fn case(
     {
         return Err(Error::DeviceFault);
     }
+    let before_gradient = after[abi::Kernel::Matmul as usize].calls;
     let (dx, dw, db) = input.tensor.conv2d_backward(&weights.tensor, &gradient.tensor, biased, &options)?;
+    let both_gradient = backend.profile()?[abi::Kernel::Matmul as usize].calls;
+    let dx_only = input.tensor.conv2d_input_backward(&weights.tensor, &gradient.tensor, &options)?;
+    let input_gradient = backend.profile()?[abi::Kernel::Matmul as usize].calls;
+    let dw_only = input.tensor.conv2d_weight_backward(&weights.tensor, &gradient.tensor, &options)?;
+    let weight_gradient = backend.profile()?[abi::Kernel::Matmul as usize].calls;
+    if !input.tensor.layout().is_empty()
+        && !gradient.tensor.layout().is_empty()
+        && (both_gradient - before_gradient != 2 * options.groups as u64
+            || input_gradient - both_gradient != options.groups as u64
+            || weight_gradient - input_gradient != options.groups as u64)
+    {
+        return Err(Error::DeviceFault);
+    }
     let after = backend.service_profile()?;
     if [abi::UPLOAD, abi::DOWNLOAD]
         .iter()
@@ -170,6 +184,8 @@ fn case(
     compare(&output, &reference.output)?;
     compare(&dx, &reference.dx)?;
     compare(&dw, &reference.dw)?;
+    compare(&dx_only, &reference.dx)?;
+    compare(&dw_only, &reference.dw)?;
     if let Some(db) = db {
         compare(&db, &reference.db)?;
     }

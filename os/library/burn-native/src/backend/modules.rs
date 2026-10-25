@@ -146,12 +146,12 @@ impl ModuleOps<Self> for Native {
     }
     fn conv2d_x_backward(x: FloatTensor<Self>, weight: FloatTensor<Self>, output_grad: FloatTensor<Self>, options: ConvOptions<2>) -> FloatTensor<Self> {
         BackendTensor::apply("conv2d_x_backward", x.shape(), DType::F32, &[&x, &weight, &output_grad], |v| {
-            v[0].conv2d_backward(v[1], v[2], false, &options).map(|g| g.0)
+            v[0].conv2d_input_backward(v[1], v[2], &options)
         })
     }
     fn conv2d_weight_backward(x: FloatTensor<Self>, weight: FloatTensor<Self>, output_grad: FloatTensor<Self>, options: ConvOptions<2>) -> FloatTensor<Self> {
         BackendTensor::apply("conv2d_weight_backward", weight.shape(), DType::F32, &[&x, &weight, &output_grad], |v| {
-            v[0].conv2d_backward(v[1], v[2], false, &options).map(|g| g.1)
+            v[0].conv2d_weight_backward(v[1], v[2], &options)
         })
     }
 }

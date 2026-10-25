@@ -114,6 +114,46 @@ impl Conv2d {
         abi::validate(&p).map_err(|_| Error::InvalidParameter)?;
         Ok(p.map(|v| v as usize))
     }
+
+    fn gradient_matrix(&self, gradient: &NativeTensor) -> Result<NativeTensor> {
+        let p = self.geometry.map(|v| v as usize);
+        let [n, g, _, s]: [usize; 4] = self.columns_shape().as_slice().try_into().unwrap();
+        let spatial_batch = n.checked_mul(s).ok_or(Error::SizeOverflow)?;
+        let view = dense(gradient)?.reshape(Shape::new([n, g, p[17] / g, s]))?.permute(&[1, 2, 0, 3])?;
+        // Collapse samples and output positions into one GEMM dimension, so
+        // a group needs one Tensor Core launch rather than one per sample.
+        dense(&view)?.reshape(Shape::new([g, p[17] / g, spatial_batch]))
+    }
+
+    fn input_gradient(&self, input: &NativeTensor, weights: &NativeTensor, dy: &NativeTensor) -> Result<NativeTensor> {
+        let layout = Layout::contiguous(self.input.clone())?;
+        if layout.is_empty() {
+            return Ok(NativeTensor { buffer: input.buffer.clone(), layout, dtype: DType::F32 });
+        }
+        let p = self.geometry.map(|v| v as usize);
+        let [n, g, k, s]: [usize; 4] = self.columns_shape().as_slice().try_into().unwrap();
+        let matrix = dense(weights)?.reshape(Shape::new([g, p[17] / g, k]))?.permute(&[0, 2, 1])?;
+        let columns = matrix.matmul(dy)?.reshape(Shape::new([g, k, n, s]))?.permute(&[2, 0, 1, 3])?;
+        let columns = dense(&columns)?;
+        let buffer = Nvidia.produce_words(layout.len(), Kernel::Conv2dFold, &[(&columns.buffer, 0)], &p)?;
+        Ok(NativeTensor { buffer: Arc::new(buffer), layout, dtype: DType::F32 })
+    }
+
+    fn weight_gradient(&self, input: &NativeTensor, dy: &NativeTensor) -> Result<NativeTensor> {
+        let [n, g, k, s]: [usize; 4] = self.columns_shape().as_slice().try_into().unwrap();
+        let spatial_batch = n.checked_mul(s).ok_or(Error::SizeOverflow)?;
+        let layout = Layout::contiguous(self.columns_shape())?;
+        let columns = if layout.is_empty() {
+            NativeTensor { buffer: input.buffer.clone(), layout, dtype: DType::F32 }
+        } else {
+            let parameters = self.windows_parameters(&input.layout)?;
+            let buffer = Nvidia.produce_words(layout.len(), Kernel::Conv2dWindows, &[(&input.buffer, 0)], &parameters)?;
+            NativeTensor { buffer: Arc::new(buffer), layout, dtype: DType::F32 }
+        };
+        let view = columns.permute(&[1, 0, 3, 2])?;
+        let matrix = dense(&view)?.reshape(Shape::new([g, spatial_batch, k]))?;
+        dy.matmul(&matrix)?.reshape(self.weights.clone())
+    }
 }
 
 fn view(layout: &Layout) -> [u32; 6] {
@@ -194,9 +234,7 @@ impl NativeTensor {
         })
     }
 
-    /// Return input, weight, and optional bias gradients. Every intermediate
-    /// stays on the GPU; fold sums overlapping windows without atomic updates.
-    pub fn conv2d_backward(&self, weights: &Self, gradient: &Self, bias: bool, options: &ConvOptions<2>) -> Result<(Self, Self, Option<Self>)> {
+    fn backward_plan(&self, weights: &Self, gradient: &Self, options: &ConvOptions<2>) -> Result<Conv2d> {
         if [self.dtype, weights.dtype, gradient.dtype].iter().any(|&d| d != DType::F32) {
             return Err(Error::InvalidParameter);
         }
@@ -204,44 +242,28 @@ impl NativeTensor {
         if gradient.layout.shape() != plan.output_shape() {
             return Err(Error::ShapeMismatch);
         }
-        let parameters = plan.windows_parameters(&self.layout)?;
+        Ok(plan)
+    }
+
+    pub fn conv2d_input_backward(&self, weights: &Self, gradient: &Self, options: &ConvOptions<2>) -> Result<Self> {
+        let plan = self.backward_plan(weights, gradient, options)?;
+        Nvidia.record_commands(|| plan.input_gradient(self, weights, &plan.gradient_matrix(gradient)?))
+    }
+
+    pub fn conv2d_weight_backward(&self, weights: &Self, gradient: &Self, options: &ConvOptions<2>) -> Result<Self> {
+        let plan = self.backward_plan(weights, gradient, options)?;
+        Nvidia.record_commands(|| plan.weight_gradient(self, &plan.gradient_matrix(gradient)?))
+    }
+
+    /// Return input, weight, and optional bias gradients. Every intermediate
+    /// stays on the GPU; fold sums overlapping windows without atomic updates.
+    pub fn conv2d_backward(&self, weights: &Self, gradient: &Self, bias: bool, options: &ConvOptions<2>) -> Result<(Self, Self, Option<Self>)> {
+        let plan = self.backward_plan(weights, gradient, options)?;
         Nvidia.record_commands(|| {
             let p = plan.geometry.map(|v| v as usize);
-            let [n, g, k, s]: [usize; 4] = plan.columns_shape().as_slice().try_into().unwrap();
-            let o = p[17] / g;
-            let dy = dense(gradient)?.reshape(Shape::new([n, g, o, s]))?;
-            let matrix = dense(weights)?.reshape(Shape::new([1, g, o, k]))?.permute(&[0, 1, 3, 2])?;
-            let columns_gradient = matrix.matmul(&dy)?;
-            let input_gradient = if self.layout.is_empty() {
-                Self {
-                    buffer: self.buffer.clone(),
-                    layout: Layout::contiguous(plan.input.clone())?,
-                    dtype: DType::F32,
-                }
-            } else {
-                let buffer = Nvidia.produce_words(self.layout.len(), Kernel::Conv2dFold, &[(&columns_gradient.buffer, 0)], &p)?;
-                Self {
-                    buffer: Arc::new(buffer),
-                    layout: Layout::contiguous(plan.input.clone())?,
-                    dtype: DType::F32,
-                }
-            };
-            let columns = if self.layout.is_empty() {
-                Self {
-                    buffer: self.buffer.clone(),
-                    layout: Layout::contiguous(plan.columns_shape())?,
-                    dtype: DType::F32,
-                }
-            } else {
-                let layout = Layout::contiguous(plan.columns_shape())?;
-                let buffer = Nvidia.produce_words(layout.len(), Kernel::Conv2dWindows, &[(&self.buffer, 0)], &parameters)?;
-                Self {
-                    buffer: Arc::new(buffer),
-                    layout,
-                    dtype: DType::F32,
-                }
-            };
-            let weight_gradient = dy.matmul(&columns.permute(&[0, 1, 3, 2])?)?.reduce(0, Reduction::Sum)?.reshape(plan.weights)?;
+            let dy = plan.gradient_matrix(gradient)?;
+            let input_gradient = plan.input_gradient(self, weights, &dy)?;
+            let weight_gradient = plan.weight_gradient(self, &dy)?;
             let bias_gradient = if bias {
                 Some(
                     gradient

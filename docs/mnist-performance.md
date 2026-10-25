@@ -66,6 +66,28 @@ Accepted GPU evidence is under `target/nvidia/mnist-parity/linux-matched-v3/` an
 The strict numerical evidence is under `cpu-reference/`.
 `comparison-baseline-oracle.json` separates the GPU timing target from the CPU numerical oracle.
 
+## Batch convolution gradients
+
+The native gradient path now combines samples and output positions into one matrix dimension.
+Each requested gradient needs one Tensor Core matrix launch per group, instead of one per sample and group.
+Burn's input-gradient and weight-gradient callbacks also compute only their requested result.
+The combined gradient API shares its prepared output-gradient matrix between both products.
+Every intermediate remains on the GPU, and fold still sums overlapping windows without atomic updates.
+
+Three fresh training repetitions record 163, 157, and 158 ms for 64 steps, with a mean of 159.333 ms.
+This D3OS cohort is 1.613 times faster than the initial 257 ms mean, reducing elapsed time by 38.0 percent.
+It remains 1.810 times the retained stock Linux CUDA mean of 88.054 ms, with the arithmetic difference described above.
+The change therefore reduces the training gap without establishing parity.
+
+All 448,062 strict FP32 oracle values still pass with zero tolerance failures.
+The complete NVIDIA operator suite also passes grouped, dilated, strided, empty-batch, and finite-difference convolution checks.
+The operator checks count matrix launches for combined and separately requested gradients.
+Inference means remain 1,594.667, 47.333, and 31.000 ms at batches 1, 64, and 256, respectively.
+Every inference pass preserves 99.26 percent accuracy and prediction CRC32 `ce40d6c3`.
+
+Evidence is under `target/nvidia/mnist-parity/d3os-batched-backward/` and `backward-operators/`.
+The numerical and timing comparison is `comparison-batched-backward.json`.
+
 ## Reproduce the comparison
 
 Build the production D3OS image and prepare the normal NVIDIA firmware and portable kernel inputs first.
