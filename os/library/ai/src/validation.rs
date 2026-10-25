@@ -1,4 +1,5 @@
 //! Independent gradient and checkpoint checks that also run inside D3OS.
+pub mod quantization;
 pub mod qwen;
 pub mod qwen_state;
 use alloc::{format, string::String};

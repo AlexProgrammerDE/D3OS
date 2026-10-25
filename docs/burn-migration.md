@@ -431,8 +431,51 @@ The matching SDK and driver require protocol 21.
 Evidence is under `target/nvidia/burn-quantization-validation/first/`.
 The checked portable bundle is under `target/nvidia/burn-quantization-kernels/` and now populates the default kernel directory.
 These results establish native integer quantization functionality, not complete backend or Linux performance parity.
-Matched Linux quantization conformance, floating-point formats, additional scale dtypes, two-level scales, and efficient quantized matrix execution remain required.
+The common integer cases also pass the matched Linux conformance check below.
+Floating-point formats, additional scale dtypes, two-level scales, and efficient quantized matrix execution remain required.
 Qwen still uses its existing packed-GGUF extensions and FP32 activations until that execution work is integrated and validated.
+
+### Matched integer conformance
+
+The shared validator at `os/library/ai/src/validation/quantization.rs` runs through the public Burn API on Linux CUDA and D3OS's native GPU backend.
+Both guests use Burn 0.22.1 and the same physical RTX 4090 Laptop GPU, with one VM at a time.
+The archived manifests confirm that both runners use the same validator source by SHA-256.
+
+All six integer formats pass the same independent nearest-even rounding and packed-byte references on both GPUs.
+The common checks cover dequantization, transposition, outer-axis packing, serialization and reload, and dynamic calibration with endpoint and zero inputs.
+Eight-bit reshapes also pass on both backends.
+These are correctness checks, with no throughput measurement.
+
+The first Linux trial exposed an upstream limitation rather than a D3OS failure.
+Its CUDA backend cannot reshape sub-byte quantized values when the buffer needs to be rewritten.
+The retained error is `Reshape with sub-byte values is not supported when the buffer must be recomputed`.
+The shared validator therefore checks reshaping for eight-bit values.
+D3OS separately retains reshape checks for all six formats, including packed two- and four-bit values.
+Its additional rectangular-block, flip, empty-tensor, byte-tail, residency, and guard checks also pass.
+
+Build the Linux runner from its own directory, after building the current D3OS production image:
+
+```bash
+cd tools/mnist-benchmark
+cargo build --release --locked --bin quantization
+cd ../..
+
+taskset -c 8,10,12,14 python3 tools/nvidia/linux-reference.py \
+  --burn-quantization tools/mnist-benchmark/target/release/quantization \
+  --memory-mib 4096 --timeout 180 \
+  --directory target/nvidia/burn-quantization-conformance/linux-new
+
+taskset -c 8,10,12,14 python3 tools/nvidia/run-qemu.py \
+  --firmware target/nvidia/firmware --kernels target/nvidia/kernels \
+  --memory-mib 4096 --boot-check --inference gpu-self-test --timeout 180
+```
+
+The Linux launcher requires the CUDA success marker; a CPU runner cannot satisfy this check.
+The accepted Linux evidence is under `target/nvidia/burn-quantization-conformance/linux-supported-integer/`.
+The first failed Linux trial remains in `linux-integer/` in the same parent directory.
+Native evidence is under `target/nvidia/burn-quantization-validation/shared-integer/`.
+The comparison summary is `target/nvidia/burn-quantization-conformance/integer-comparison.json`.
+This common-case conformance result does not establish full quantization or backend parity.
 
 ## Portable runtime validation
 

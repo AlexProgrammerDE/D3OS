@@ -18,24 +18,18 @@ fn check<const D: usize>(tensor: Tensor<D>, expected: &[f32]) -> Result<(), Stri
     Ok(())
 }
 
-fn packed(values: &[i32], bits: usize) -> Vec<u8> {
-    values
-        .chunks(32 / bits)
-        .flat_map(|chunk| {
-            chunk
-                .iter()
-                .enumerate()
-                .fold(0u32, |word, (i, &value)| word | ((value as u32 & ((1 << bits) - 1)) << (i * bits)))
-                .to_le_bytes()
-        })
-        .collect()
-}
-
 fn public(backend: &Nvidia, device: &Device) -> Result<(), String> {
-    let input = [-9., -8., -7.5, -7., -2.5, -1.5, -0.5, 0.5, 1.5, 2.5, 6.5, 7., 7.5, 8., 9., 0.];
-    let rounded = [-9i32, -8, -8, -7, -2, -2, 0, 0, 2, 2, 6, 7, 8, 8, 9, 0];
-    let values: Vec<_> = input.into_iter().cycle().take(32).collect();
-    let source = Tensor::<2>::from_data(TensorData::new(values.clone(), [2, 16]), device);
+    d3os_ai::validation::quantization::integer(device)?;
+    let scheme = QuantScheme::default().with_value(QuantValue::Q4S);
+    let source = Tensor::<2>::from_data(TensorData::new((0..32).map(|i| i as f32 % 7.0 - 3.0).collect(), [2, 16]), device);
+    let scales = Tensor::<1>::from_floats([1.], device);
+    let before = backend.service_profile().map_err(|e| format!("quantization profile: {e}"))?;
+    let q = source.clone().quantize(&scheme, QuantizationParameters { scales, global: None });
+    let decoded = q.clone().dequantize();
+    let after = backend.service_profile().map_err(|e| format!("quantization profile: {e}"))?;
+    if before[abi::DOWNLOAD as usize].calls != after[abi::DOWNLOAD as usize].calls || decoded.device() != *device {
+        return Err(String::from("quantization transferred activations to the host or changed device"));
+    }
     for value in [
         QuantValue::Q8S,
         QuantValue::Q8F,
@@ -44,51 +38,19 @@ fn public(backend: &Nvidia, device: &Device) -> Result<(), String> {
         QuantValue::Q2S,
         QuantValue::Q2F,
     ] {
-        let scheme = QuantScheme::default().with_value(value);
         let (low, high) = value.range();
-        let expected: Vec<_> = rounded.into_iter().cycle().take(32).map(|n| n.clamp(low as i32, high as i32)).collect();
-        let floats: Vec<_> = expected.iter().map(|&n| n as f32).collect();
-        let scales = Tensor::<1>::from_floats([1.], device);
-        let before = backend.service_profile().map_err(|e| format!("quantization profile: {e}"))?;
-        let q = source.clone().quantize(&scheme, QuantizationParameters { scales, global: None });
-        let decoded = q.clone().dequantize();
-        let after = backend.service_profile().map_err(|e| format!("quantization profile: {e}"))?;
-        if before[abi::DOWNLOAD as usize].calls != after[abi::DOWNLOAD as usize].calls || decoded.device() != *device {
-            return Err(String::from("quantization transferred activations to the host or changed device"));
-        }
-        check(decoded, &floats)?;
-        check(q.clone().flip([0, 1]), &floats.iter().rev().copied().collect::<Vec<_>>())?;
-        let transposed: Vec<_> = (0..16).flat_map(|col| [floats[col], floats[16 + col]]).collect();
-        check(q.clone().transpose(), &transposed)?;
-        let outer_scheme = scheme.with_store(QuantStore::PackedU32(1));
-        let outer = source.clone().transpose().quantize(
-            &outer_scheme,
+        let expected: Vec<_> = (0..32).map(|i| (i as f32 % 7.0 - 3.0).clamp(low, high)).collect();
+        let q = source.clone().quantize(
+            &QuantScheme::default().with_value(value),
             QuantizationParameters {
                 scales: Tensor::<1>::from_floats([1.], device),
                 global: None,
             },
         );
-        check(outer, &transposed)?;
-
-        check(q.clone().reshape([1, 32]), &floats)?;
-        let mut bytes = packed(&expected, value.size_bits());
-        bytes.extend_from_slice(&1f32.to_le_bytes());
-        let data = q.clone().try_into_data().map_err(|e| format!("quantized save: {e:?}"))?;
-        if data.as_bytes() != bytes || data.dtype() != DType::QFloat(scheme) {
-            return Err(format!("quantized packed serialization mismatch: {value:?}"));
-        }
-        check(Tensor::<2>::from_data(data, device), &floats)?;
-        let data = q.transpose().try_into_data().map_err(|e| format!("quantized view save: {e:?}"))?;
-        check(Tensor::<2>::from_data(data, device), &transposed)?;
-        if value.is_symmetric() {
-            let endpoints: Vec<_> = (0..32).map(|i| if i % 2 == 0 { high } else { -high }).collect();
-            let x = Tensor::<2>::from_data(TensorData::new(endpoints.clone(), [2, 16]), device);
-            check(x.quantize_dynamic(&scheme), &endpoints)?;
-            check(Tensor::<2>::zeros([2, 16], device).quantize_dynamic(&scheme), &[0.; 32])?;
-        }
+        check(q.reshape([1, 32]), &expected)?;
     }
-    check(source, &values)?;
-
+    let reversed: Vec<_> = (0..32).rev().map(|i| i as f32 % 7.0 - 3.0).collect();
+    check(q.flip([0, 1]), &reversed)?;
     let scheme = QuantScheme::default().with_value(QuantValue::Q4S).per_block([2, 4], ScaleDtype::F32);
     let scales = [0.5, 1., 2., 4.];
     let values: Vec<_> = (0..32).map(|i| (i as i32 % 7 - 3) as f32 * scales[(i % 16) / 4]).collect();
@@ -148,7 +110,7 @@ fn guards(backend: &Nvidia) -> Result<(), Error> {
         )?;
         let mut actual = vec![0; words + 2];
         backend.read_words_into(&output, 0, &mut actual)?;
-        let reference = packed(&[1; 17], bits);
+        let reference = d3os_ai::validation::quantization::packed_reference(&[1; 17], bits);
         let bytes: Vec<_> = actual[1..words + 1].iter().flat_map(|n| n.to_le_bytes()).collect();
         if actual[0] != GUARD || actual[words + 1] != GUARD || bytes != reference {
             return Err(Error::DeviceFault);
