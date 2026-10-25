@@ -134,7 +134,7 @@ impl FloatTensorOps<Self> for Native {
     }
     fn float_mask_fill(tensor: FloatTensor<Self>, mask: BoolTensor<Self>, value: Scalar) -> FloatTensor<Self> {
         BackendTensor::apply("float_mask_fill", tensor.shape(), tensor.dtype(), &[&tensor, &mask], |v| {
-            v[0].mask_fill(v[1], value.elem::<f32>())
+            v[0].mask_fill_scalar(v[1], value)
         })
     }
     fn float_equal(lhs: FloatTensor<Self>, rhs: FloatTensor<Self>, out_dtype: BoolDType) -> BoolTensor<Self> {

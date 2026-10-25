@@ -12,6 +12,8 @@ mod indexing;
 pub mod interpolate;
 pub mod layout;
 mod linear;
+mod packed_gather;
+mod packed_updates;
 pub mod pooling;
 mod predicate;
 pub mod quantization;

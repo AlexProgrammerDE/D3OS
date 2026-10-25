@@ -15,7 +15,7 @@ Associated types and source SHA-256 hashes accompany the report.
 
 The current inventory contains 484 methods: 277 native overrides and 207 inherited defaults.
 All required methods have declarations or implementations. This count does not establish runtime support.
-The report also records 130 native helper bodies for manual review of dtype and shape restrictions.
+The report also records 134 native helper bodies for manual review of dtype and shape restrictions.
 
 The tool follows syntactic associated backend calls and expands the pinned `dequant_op_quant!` and `dequant_op_flow!` macros.
 It identifies 8 methods with possible paths to explicit declines or panic declarations.
@@ -37,7 +37,7 @@ Linux CUDA declares storage support missing from D3OS for these 12 formats:
 
 Burn's `Storage` flag requires conversion to and from other supported dtypes as well as physical storage.
 Ordinary numeric casts now execute on the GPU, as described below.
-Quantized conversions and further boolean consumers remain incomplete for the new formats.
+Quantized conversions, further index formats, and arithmetic remain incomplete for the new formats.
 The usage flags stay disabled until the complete conversion contract passes.
 Both backends decline the separate `Bool(Native)` declaration.
 
@@ -92,7 +92,9 @@ Its full operator and quantization regression suites also pass after compilation
 All three generated modules match their host audit hashes.
 Native validation also checks neighboring guards, nonzero source padding, zero output padding, and queued source lifetimes.
 Its service counters check resident execution and output allocation without a separate clear.
-Negative checks reject F16, BF16, F64, I64, and U64 arithmetic and gathers without a GPU launch.
+The original storage checkpoint rejected F16, BF16, F64, I64, and U64 gathers.
+The movement checkpoint replaces that obsolete rejection with exact-byte positive checks.
+Arithmetic checks for these formats still reject unsupported work without a GPU launch.
 
 These additions provide storage, fills, views, materialization, and tensor record reloads.
 General arithmetic, matrix products, and accelerated execution for the additional formats remain incomplete.
@@ -194,9 +196,68 @@ Its full corpus fails the direct Flex32 upload in the pinned backend.
 The initial non-Flex32 GPU run passed, but the first harness expected too few cases because it omitted empty broadcasts.
 The corrected harness and separate final run pass. Both records remain available.
 
-The review found a remaining composition limitation: packed U8 booleans cannot directly feed the existing masking and compaction consumers.
-Packed boolean updates and concatenation also require further implementation.
+The stored-value movement checkpoint extends masking, compaction, concatenation, and view assignment to these packed boolean results.
+Indexed assignment and additional index dtypes remain separate work.
 Dtype capability declarations remain conservative. These checks do not establish execution-performance or compile-time parity.
+
+## Packed stored-value movement
+
+Protocol 40 extends gather/select, masked selection/fill, view assignment, concatenation, and padding across all 15 ordinary storage formats.
+The matching driver, SDK, image, and portable bundle contain 244 inference entries and 79 compute profiles.
+All 240 previous instruction entries and their constant sections remain byte-identical.
+The four new entries pass the spill audit without local loads or stores.
+
+Gathers retain I32 index values, signed source/index strides, and exact stored bits.
+Narrow lanes own complete output words, including zero tail padding.
+A 64-bit lane loads each selected value once and writes both output words.
+Only the four-byte bounds flag returns to the host. Invalid device indices remain recoverable errors.
+
+Partial assignment retains the existing proof that logical destinations do not overlap.
+Byte and half-word destinations can still share a physical word.
+Raw-word compare-and-swap merges each field into initialized storage without losing neighboring updates.
+Four-byte values retain the existing writer. Eight-byte values write their two private words directly.
+Slice assignment preserves the original destination and overlapping source snapshots through a private GPU copy.
+Concatenation starts from initialized packed storage. Padding starts from a typed exact fill.
+
+Masked selection supports all three inputs' broadcasts and either U8 or U32 masks.
+Expanded noncontiguous masks require a resident GPU copy.
+Contiguous U8 masks use a word-base pointer and byte remainder, including offsets that do not align with a word.
+Scalar fills retain both words of their destination-typed metadata. They do not truncate F64/I64/U64 values through FP32 or I32.
+Full writers initialize every packed output byte, including the last word's unused bytes.
+
+BoolU8 scatter/select OR uses word atomics with byte-field contributions, so duplicates and neighboring destinations remain safe.
+False update values still require valid indices.
+BoolU8 argwhere uses the existing resident I32 conversion and prefix scan, with one four-byte count readback.
+True and false scalar masks produce shapes `[1, 0]` and `[0, 0]` without coordinate writes.
+The existing four-byte fast paths remain in use.
+
+`NativeTensor::pad` now accepts U64 raw fill bits. Existing U32 variables require `u64::from(fill)` at the call site.
+Burn's public constant-padding value remains FP32 because `PadMode::Constant` defines that input type.
+Burn exposes no separate boolean pad operation. Numeric constant, edge, and reflect padding compose the resident movement operations.
+
+The independent shared reference manipulates opaque byte records rather than decoded numeric values.
+Its complete corpus contains 4,793 public cases, 2,994 source checks, and 1,273,900 output values across all 15 formats.
+The raw corpus contains 60 gather, 400 mask, 120 assignment, 50 boolean-scatter, and 14 queued-lifetime cases.
+Native checks add 165 movement cases, eight boolean/compaction cases, 32 empty/error cases, and four scalar argwhere cases.
+The checks cover NaN payloads, signed zero, wide integer bits, byte offsets, partial tails, ranks zero/eight, and source ownership.
+D3OS passes the complete shared corpus and every raw/native check, including the four scalar argwhere cases.
+All earlier operator and quantization regressions also pass.
+All three modules compiled inside D3OS match their host audit hashes.
+
+Linux's full corpus retains its unsupported Flex32 upload failure.
+The separate corpus without Flex32 fails at empty boolean OR scatter because the pinned CUDA kernel divides by a zero dimension.
+Skipping only empty boolean scatter reveals incorrect mixed-width boolean mask selection.
+The pinned boolean wrapper passes the data storage type as the mask type.
+A separate diagnostic restricts boolean where/fill to matching stores while retaining both mask widths for numeric tensors.
+The isolated Linux diagnostic passes 4,328 cases, 2,792 source checks, and 1,147,836 output values.
+It excludes Flex32 uploads, four empty boolean OR cases, and only mixed-store boolean where/fill operations.
+Numeric where/fill still checks both mask stores. Mask selection retains mixed-width stores and all other empty cases.
+The three failed diagnostics and passing subset use the same frozen reference source and Linux executable.
+Every diagnostic remains separate from the complete D3OS corpus and its expected totals.
+
+Wider ND reads, indexed assignment, additional index formats, and arithmetic updates remain outside this checkpoint.
+General dtype arithmetic, full quantized contracts, graph capture, and other execution capabilities also remain incomplete.
+These correctness checks do not establish execution-performance or compile-time parity.
 
 ## Inverse FP32 math
 
@@ -841,7 +902,7 @@ Other quantization formats and layouts still require separate coverage.
 
 ## Remaining implementation areas
 
-The unresolved work includes ordinary dtype arithmetic, quantized conversions, further boolean consumers, complete integer arithmetic, further matrix dtypes, and additional floating-point operations.
+The unresolved work includes ordinary dtype arithmetic, quantized conversions, further index formats, complete integer arithmetic, further matrix dtypes, and additional floating-point operations.
 Further sorting and compaction dtypes also require coverage.
 Further convolution dtypes and numerical domains beyond the checked finite corpus remain unresolved.
 Compaction formats beyond the checked Q8 cases remain unverified.
@@ -864,7 +925,7 @@ Build the Linux probes with their default CUDA feature:
 
 ```bash
 cd tools/mnist-benchmark
-cargo build --release --locked --bin capabilities --bin erf --bin integer --bin integer_power --bin predicate --bin integer_matrix --bin scan --bin sort --bin cross --bin compaction --bin scatter_updates --bin quantized_empty --bin nd_indexing --bin storage --bin conversions --bin remainder --bin inverse --bin interpolate --bin spatial_convolution --bin deform
+cargo build --release --locked --bin capabilities --bin erf --bin integer --bin integer_power --bin predicate --bin movement --bin integer_matrix --bin scan --bin sort --bin cross --bin compaction --bin scatter_updates --bin quantized_empty --bin nd_indexing --bin storage --bin conversions --bin remainder --bin inverse --bin interpolate --bin spatial_convolution --bin deform
 cd ../..
 ```
 
@@ -1069,6 +1130,20 @@ For empty diagnostics, use fresh directories with `--burn-spatial-empty` and `--
 The `--burn-spatial-case` option selects one of the 14 shape groups for isolated diagnosis.
 D3OS retains both complete numerical corpora and both empty checks.
 
+Run the complete stored-value movement comparison:
+
+```bash
+python3 tools/nvidia/linux-reference.py \
+  --directory target/nvidia/linux-burn-movement \
+  --burn-movement tools/mnist-benchmark/target/release/movement
+```
+
+Use fresh directories for each retained diagnostic.
+The isolated comparison adds `--burn-movement-no-flex32`, `--burn-movement-skip-empty-bool-scatter`, and `--burn-movement-matching-bool-masks`.
+Those flags preserve all other empty cases, both numeric mask stores, and mixed-width mask selection.
+The runner's `--expected-summary` mode computes corpus metadata without initializing CUDA.
+It reports counts, not a GPU execution result.
+
 Run the ordinary predicate comparison:
 
 ```bash
@@ -1189,3 +1264,7 @@ The audit directory contains `traits-power-final.json`, `power-comparison.json`,
 
 The predicate evidence uses `target/nvidia/burn-backend-validation/predicate-first/` and the `target/nvidia/burn-backend-audit/linux-predicate-` prefix.
 The audit directory contains `traits-predicate-final.json`, `predicate-comparison.json`, and `predicate-section-comparison.json`.
+
+The movement evidence uses `target/nvidia/burn-backend-validation/movement-first/` and the `target/nvidia/burn-backend-audit/linux-movement-` prefix.
+The audit directory contains `traits-movement-final.json`, `movement-comparison.json`, and `movement-section-comparison.json`.
+Each Linux directory retains its shared source, executable, runner, expected summary, launcher, and hash manifest.

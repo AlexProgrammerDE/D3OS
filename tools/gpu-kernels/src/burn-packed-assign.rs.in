@@ -1,0 +1,13 @@
+#[cutile::entry()]
+unsafe fn burn_packed_assign(a: *mut u32, b: *const u32, BURN_PARAMETERS) {
+    let i = indices();
+    let valid = lt_tile(i, broadcast_scalar(count, shape![128]));
+    let mut linear = i;
+    let mut address_a = broadcast_scalar(signed(offset_a), shape![128]);
+    let mut address_b = broadcast_scalar(signed(offset_b), shape![128]);
+    BURN_ADDRESSES
+    let address_a: Tile<u32, {[128]}> = bitcast(address_a);
+    let address_b: Tile<u32, {[128]}> = bitcast(address_b);
+    let value = unsafe { packed_read_width(b, address_b, operation, valid) };
+    unsafe { packed_set(a, address_a, value, operation, valid) };
+}

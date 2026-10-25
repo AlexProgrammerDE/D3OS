@@ -159,7 +159,7 @@ fn strided(backend: &Nvidia, dtype: DType) -> Result<(), Error> {
         _ => 1,
     };
     let before = backend.service_profile()?;
-    let padded = input.pad(&[(1, 2), (2, 0), (1, 1)], fill)?;
+    let padded = input.pad(&[(1, 2), (2, 0), (1, 1)], u64::from(fill))?;
     transfers_unchanged(&before, &backend.service_profile()?)?;
     let out_shape = [132, 5, 5];
     let expected: Vec<_> = (0..132 * 5 * 5)

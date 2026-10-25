@@ -1,0 +1,39 @@
+#[cutile::entry()]
+unsafe fn burn_packed_mask(a: *const u32, b: *const u32, condition: *const u32, output: *mut u32, BURN_PARAMETERS) {
+    let width = operation & 3u32;
+    let mask_width = if operation & 256u32 != 0u32 { 0u32 } else { 2u32 };
+    let scalar_rhs = operation & 512u32 != 0u32;
+    let remainder = (operation >> 10u32) & 3u32;
+    let word = indices();
+    let per_word = if width == 3u32 { 1u32 } else { 4u32 >> width };
+    let mut result = broadcast_scalar(0u32, shape![128]);
+    for slot in 0u32..per_word {
+        let i = word * broadcast_scalar(per_word, shape![128]) + broadcast_scalar(slot, shape![128]);
+        let valid = lt_tile(i, broadcast_scalar(count, shape![128]));
+        let mut linear = i;
+        let mut address_a = broadcast_scalar(signed(offset_a), shape![128]);
+        let mut address_b = broadcast_scalar(signed(offset_b), shape![128]);
+        BURN_ADDRESSES
+        let address_a: Tile<u32, {[128]}> = bitcast(address_a);
+        let address_b: Tile<u32, {[128]}> = bitcast(address_b);
+        let left = unsafe { packed_read_width(a, address_a, width, valid) };
+        let right = if scalar_rhs {
+            let low: Tile<u64, {[128]}> = exti(broadcast_scalar(scalar, shape![128]));
+            let high: Tile<u64, {[128]}> = exti(broadcast_scalar(offset_b, shape![128]));
+            low | (high << broadcast_scalar(32u64, shape![128]))
+        } else { unsafe { packed_read_width(b, address_b, width, valid) } };
+        let mask = unsafe { packed_read_width(condition, i + broadcast_scalar(remainder, shape![128]), mask_width, valid) };
+        let selected = select(ne_tile(mask, broadcast_scalar(0u64, shape![128])), right, left);
+        let selected = select(valid, selected, broadcast_scalar(0u64, shape![128]));
+        if width == 3u32 {
+            unsafe { write_tile(output, word * broadcast_scalar(2u32, shape![128]), packed_low(selected), valid) };
+            unsafe { write_tile(output, word * broadcast_scalar(2u32, shape![128]) + broadcast_scalar(1u32, shape![128]), packed_low(selected >> broadcast_scalar(32u64, shape![128])), valid) };
+        } else {
+            result = result | (packed_low(selected) << broadcast_scalar(slot * (8u32 << width), shape![128]));
+        }
+    }
+    if width != 3u32 {
+        let words = (count + per_word - 1u32) / per_word;
+        unsafe { write_tile(output, word, result, lt_tile(word, broadcast_scalar(words, shape![128]))) };
+    }
+}

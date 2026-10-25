@@ -10,6 +10,8 @@ pub mod elementwise;
 pub mod indexing;
 pub mod interpolate;
 pub mod optimizer;
+pub mod packed_gather;
+pub mod packed_updates;
 pub mod pooling;
 pub mod predicate;
 pub mod quantization;
@@ -23,7 +25,7 @@ pub mod storage;
 pub mod updates;
 pub mod words;
 
-pub const VERSION: u32 = 39;
+pub const VERSION: u32 = 40;
 /// END_COMMANDS flag: an inner recording scope joins its parent's completion.
 /// The outermost scope always waits. Zero retains synchronous nested scopes.
 pub const DEFER_NESTED_COMPLETION: u64 = 1;
@@ -57,7 +59,7 @@ pub struct MemoryProfile {
     pub device_cached_bytes: u64,
     pub device_retired_bytes: u64,
 }
-pub const KERNEL_COUNT: usize = 75;
+pub const KERNEL_COUNT: usize = 79;
 
 /// CPU service costs by request operation, including queue work within it.
 #[derive(Clone, Copy, Debug, Default)]
@@ -190,9 +192,13 @@ pub enum Kernel {
     DeformCoordinates = 72,
     DeformInput = 73,
     TensorPredicate = 74,
+    PackedGather = 75,
+    PackedAssign = 76,
+    PackedMaskWhere = 77,
+    PackedBoolScatter = 78,
 }
 
-const _: () = assert!(Kernel::TensorPredicate as usize + 1 == KERNEL_COUNT);
+const _: () = assert!(Kernel::PackedBoolScatter as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -258,6 +264,8 @@ impl Kernel {
                 | Self::TensorSort
                 | Self::ArgWhere
                 | Self::TensorStorage
+                | Self::PackedGather
+                | Self::PackedMaskWhere
                 | Self::TensorPredicate
                 | Self::TensorCast
                 | Self::Interpolate
@@ -371,6 +379,10 @@ impl Kernel {
             72 => Self::DeformCoordinates,
             73 => Self::DeformInput,
             74 => Self::TensorPredicate,
+            75 => Self::PackedGather,
+            76 => Self::PackedAssign,
+            77 => Self::PackedMaskWhere,
+            78 => Self::PackedBoolScatter,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -452,6 +464,10 @@ impl Kernel {
             Self::DeformCoordinates => "burn_deform_coordinates",
             Self::DeformInput => "burn_deform_input",
             Self::TensorPredicate => "burn_predicate",
+            Self::PackedGather => "burn_packed_gather",
+            Self::PackedAssign => "burn_packed_assign",
+            Self::PackedMaskWhere => "burn_packed_mask",
+            Self::PackedBoolScatter => "burn_packed_bool_scatter",
         }
     }
 
@@ -674,6 +690,24 @@ impl Kernel {
                 }
                 extents[..2].copy_from_slice(&sizes);
                 (count, 2, 1, false)
+            }
+            (Self::PackedGather, p) => {
+                extents[..4].copy_from_slice(&packed_gather::validate(p)?);
+                mutated = 1 << 2;
+                (packed_gather::work_items(p)?, 4, 3, false)
+            }
+            (Self::PackedAssign, p) => {
+                extents[..2].copy_from_slice(&packed_updates::validate_assign(p)?);
+                (p[0], 2, 0, false)
+            }
+            (Self::PackedMaskWhere, p) => {
+                extents[..4].copy_from_slice(&packed_updates::validate_mask(p)?);
+                (packed_updates::mask_work_items(p)?, 4, 3, false)
+            }
+            (Self::PackedBoolScatter, p) => {
+                extents[..4].copy_from_slice(&packed_updates::validate_bool_scatter(p)?);
+                mutated = 1 << 2;
+                (p[2], 4, 3, false)
             }
             (Self::TensorPredicate, p) => {
                 extents[..3].copy_from_slice(&predicate::validate(p)?);

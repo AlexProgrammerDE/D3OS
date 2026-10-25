@@ -7,7 +7,7 @@ use d3os_nvidia::compute::{Kernel, argwhere, scan::Scan};
 
 impl NativeTensor {
     pub fn argwhere(&self) -> Result<Self> {
-        if self.dtype != DType::Bool(BoolStore::U32) {
+        if !matches!(self.dtype, DType::Bool(BoolStore::U8 | BoolStore::U32)) {
             return Err(Error::InvalidParameter);
         }
         let rank = self.layout.shape().num_dims();
@@ -33,6 +33,13 @@ impl NativeTensor {
             }
             if selected[0] == 0 {
                 return empty();
+            }
+            if rank == 0 {
+                return Ok(Self {
+                    buffer: self.buffer.clone(),
+                    layout: Layout::contiguous(Shape::new([selected[0] as usize, 0]))?,
+                    dtype: DType::I32,
+                });
             }
             let layout = Layout::contiguous(Shape::new([selected[0] as usize, rank]))?;
             let mut parameters = [0u32; argwhere::PARAMETERS];

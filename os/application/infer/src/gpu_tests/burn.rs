@@ -30,6 +30,7 @@ mod spatial_convolution;
 mod storage;
 mod updates;
 mod words;
+mod movement;
 mod predicate;
 use abi::elementwise::Elementwise;
 use abi::reduction::Reduction;
@@ -209,6 +210,13 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     }
     integers::run(backend).map_err(|e| format!("Burn native integer reductions: {e}"))?;
     words::run(backend).map_err(|e| format!("Burn native words: {e}"))?;
+    movement::run(backend)?;
+    let summary = d3os_ai::burn::tensor::try_read_sync(d3os_ai::validation::movement::run(&device, &d3os_ai::validation::movement::Options::default()))
+        .ok_or_else(|| String::from("native movement future did not complete"))??;
+    crate::report(format_args!(
+        "BURN_MOVEMENT_CONFORMANCE_OK os=d3os backend=native dtypes={} cases={} gather={} select={} mask_where={} mask_fill={} slice_assign={} cat={} pad={} mask_select={} argwhere={} bool_scatter_or={} source_checks={} values={} bool_storage=explicit_u8_u32 exact_bytes=true flex32=direct empty_bool_scatter=checked bool_masks=all_stores views=offset,step,reversed,transposed,broadcast overlap=true tails=1,127,128,129,257 empty=true reference=byte_records",
+        summary.dtypes,summary.cases(),summary.gather,summary.select,summary.mask_where,summary.mask_fill,summary.slice_assign,summary.cat,summary.pad,summary.mask_select,summary.argwhere,summary.bool_scatter_or,summary.source_checks,summary.values,
+    ));
     predicate::run(backend)?;
     let result = d3os_ai::validation::predicate::run(&device, &d3os_ai::validation::predicate::Options::default())?;
     crate::report(format_args!(

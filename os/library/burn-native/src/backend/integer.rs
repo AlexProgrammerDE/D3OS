@@ -44,7 +44,7 @@ impl IntTensorOps<Self> for Native {
     }
     fn int_mask_fill(tensor: IntTensor<Self>, mask: BoolTensor<Self>, value: Scalar) -> IntTensor<Self> {
         BackendTensor::apply("int_mask_fill", tensor.shape(), tensor.dtype(), &[&tensor, &mask], |v| {
-            v[0].mask_fill_i32(v[1], value.elem::<i32>())
+            v[0].mask_fill_scalar(v[1], value)
         })
     }
     fn int_gather(dim: usize, tensor: IntTensor<Self>, indices: IntTensor<Self>) -> IntTensor<Self> {

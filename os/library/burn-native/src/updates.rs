@@ -1,4 +1,5 @@
 use crate::{NativeTensor, layout::Layout};
+use crate::{packed_updates::assignment, storage::width};
 use alloc::{sync::Arc, vec, vec::Vec};
 use burn_backend::{BoolStore, DType, Shape, Slice};
 use d3os_compute::{Error, Result, nvidia::Nvidia};
@@ -8,7 +9,10 @@ impl NativeTensor {
     /// Select exact stored words from `value` where `mask` is true. All three
     /// inputs broadcast, and unselected NaNs cannot affect the selected value.
     pub fn mask_where(&self, mask: &Self, value: &Self) -> Result<Self> {
-        if !crate::storage::word_sized(self.dtype) || self.dtype != value.dtype || mask.dtype != DType::Bool(BoolStore::U32) {
+        if !crate::storage::word_sized(self.dtype) || mask.dtype != DType::Bool(BoolStore::U32) {
+            return self.packed_mask(mask, value, None);
+        }
+        if self.dtype != value.dtype {
             return Err(Error::InvalidParameter);
         }
         let shape = crate::layout::broadcast(&crate::layout::broadcast(self.layout.shape(), value.layout.shape())?, mask.layout.shape())?;
@@ -43,7 +47,8 @@ impl NativeTensor {
     /// Copy the logical destination on the GPU, then replace a checked slice.
     /// The original tensor and every shared or overlapping source remain intact.
     pub fn slice_assign(&self, slices: &[Slice], value: &Self) -> Result<Self> {
-        if !crate::storage::word_sized(self.dtype) || self.dtype != value.dtype {
+        let width = width(self.dtype)?;
+        if self.dtype != value.dtype {
             return Err(Error::InvalidParameter);
         }
         let target = Layout::contiguous(self.layout.shape().clone())?.slice(slices)?;
@@ -51,10 +56,10 @@ impl NativeTensor {
         if target.is_empty() {
             return Ok(self.clone());
         }
-        let parameters = target.assignment_parameters(&source)?;
+        let (kernel, parameters) = assignment(&target, &source, width)?;
         Nvidia.record_commands(|| {
             let output = self.copy()?;
-            Nvidia.dispatch_words(Kernel::ViewAssign, &[(&output.buffer, 0), (&value.buffer, 0)], &parameters)?;
+            Nvidia.dispatch_words(kernel, &[(&output.buffer, 0), (&value.buffer, 0)], &parameters)?;
             Ok(output)
         })
     }
@@ -63,9 +68,7 @@ impl NativeTensor {
     /// not dispatch writes. Every source is validated before output allocation.
     pub fn cat(tensors: &[Self], axis: usize) -> Result<Self> {
         let first = tensors.first().ok_or(Error::InvalidParameter)?;
-        if !crate::storage::word_sized(first.dtype) {
-            return Err(Error::InvalidParameter);
-        }
+        let width = width(first.dtype)?;
         let mut shape = first.layout.shape().to_vec();
         let length = shape.get_mut(axis).ok_or(Error::InvalidParameter)?;
         *length = 0;
@@ -94,16 +97,17 @@ impl NativeTensor {
             if !tensor.layout.is_empty() {
                 let mut slices = vec![Slice::full(); axis + 1];
                 slices[axis] = Slice::new(start as isize, Some(end as isize), 1);
-                writes.push((tensor, layout.slice(&slices)?.assignment_parameters(&tensor.layout)?));
+                let (kernel, parameters) = assignment(&layout.slice(&slices)?, &tensor.layout, width)?;
+                writes.push((tensor, kernel, parameters));
             }
             start = end;
         }
         Nvidia.record_commands(|| {
             // This partial-writer path starts from initialized storage. No
             // uninitialized allocation is exposed if any later dispatch fails.
-            let buffer = Nvidia.allocate_words(layout.len())?;
-            for (source, parameters) in writes {
-                Nvidia.dispatch_words(Kernel::ViewAssign, &[(&buffer, 0), (&source.buffer, 0)], &parameters)?;
+            let buffer = Nvidia.allocate_words(width.words(layout.len() as u32) as usize)?;
+            for (source, kernel, parameters) in writes {
+                Nvidia.dispatch_words(kernel, &[(&buffer, 0), (&source.buffer, 0)], &parameters)?;
             }
             Ok(Self {
                 buffer: Arc::new(buffer),
@@ -113,9 +117,10 @@ impl NativeTensor {
         })
     }
 
-    /// Add explicit padding to every dimension with an exact raw fill word.
-    pub fn pad(&self, padding: &[(usize, usize)], word: u32) -> Result<Self> {
-        if !crate::storage::word_sized(self.dtype) || padding.len() != self.layout.shape().num_dims() || (matches!(self.dtype, DType::Bool(_)) && word > 1) {
+    /// Add explicit padding to every dimension with exact raw fill bits.
+    pub fn pad(&self, padding: &[(usize, usize)], word: u64) -> Result<Self> {
+        let width = width(self.dtype)?;
+        if padding.len() != self.layout.shape().num_dims() || (matches!(self.dtype, DType::Bool(_)) && word > 1) {
             return Err(Error::InvalidParameter);
         }
         let dimensions: Vec<_> = self
@@ -141,12 +146,12 @@ impl NativeTensor {
                 .zip(self.layout.shape().iter())
                 .map(|(&(before, _), &d)| Slice::new(before as isize, Some((before + d) as isize), 1))
                 .collect();
-            Some(layout.slice(&slices)?.assignment_parameters(&self.layout)?)
+            Some(assignment(&layout.slice(&slices)?, &self.layout, width)?)
         };
         Nvidia.record_commands(|| {
-            let output = Self::full(layout.shape().clone(), self.dtype, word)?;
-            if let Some(parameters) = parameters {
-                Nvidia.dispatch_words(Kernel::ViewAssign, &[(&output.buffer, 0), (&self.buffer, 0)], &parameters)?;
+            let output = Self::fill_bits(layout.shape().clone(), self.dtype, word)?;
+            if let Some((kernel, parameters)) = parameters {
+                Nvidia.dispatch_words(kernel, &[(&output.buffer, 0), (&self.buffer, 0)], &parameters)?;
             }
             Ok(output)
         })

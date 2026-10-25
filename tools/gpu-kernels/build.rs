@@ -5,6 +5,7 @@ fn main() {
     let mut source = String::from("#[cutile::module] pub mod kernels { use cutile::core::*;\n");
     for file in [
         "common.rs",
+        "burn-packed-common.rs",
         "burn-math.rs",
         "burn-erf.rs",
         "burn-remainder.rs",
@@ -314,6 +315,21 @@ fn main() {
                 .replace("BURN_OP", &format!("{}u32", op as u32)),
         );
     }
+    for file in ["burn-packed-assign.rs.in", "burn-packed-mask.rs.in"] {
+        println!("cargo:rerun-if-changed=src/{file}");
+        source.push_str(
+            &fs::read_to_string(format!("src/{file}"))
+                .expect("read packed update source")
+                .replace(
+                    "BURN_PARAMETERS",
+                    &parameters
+                        .replace("extent_a:", "_extent_a:")
+                        .replace("extent_b:", "_extent_b:")
+                        .replace("scalar:", if file == "burn-packed-assign.rs.in" { "_scalar:" } else { "scalar:" }),
+                )
+                .replace("BURN_ADDRESSES", &addresses),
+        );
+    }
     println!("cargo:rerun-if-changed=src/burn-predicate.rs.in");
     source.push_str(
         &fs::read_to_string("src/burn-predicate.rs.in")
@@ -405,6 +421,16 @@ fn main() {
             .replace("GATHER_ADDRESSES", &addresses)
             .replace("GATHER_STRIDE", &stride),
     );
+    for file in ["burn-packed-gather.rs.in", "burn-packed-bool-scatter.rs.in"] {
+        println!("cargo:rerun-if-changed=src/{file}");
+        source.push_str(
+            &fs::read_to_string(format!("src/{file}"))
+                .expect("read packed indexing source")
+                .replace("GATHER_PARAMETERS", &parameters.replace("_rank:", "rank_width:"))
+                .replace("GATHER_ADDRESSES", &addresses)
+                .replace("GATHER_STRIDE", &stride),
+        );
+    }
     println!("cargo:rerun-if-changed=src/burn-scatter.rs.in");
     println!("cargo:rerun-if-changed=src/burn-scatter-f32.rs.in");
     let scatter = fs::read_to_string("src/burn-scatter.rs.in").expect("read scatter template");

@@ -122,12 +122,10 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     if actual != words(&raw) {
         return Err(String::from("packed storage queued source lifetime"));
     }
-    let indices = NativeTensor::from_data(TensorData::new(vec![0i32, 1, 2], [3])).map_err(|e| format!("{e}"))?;
     for dtype in [DType::F16, DType::BF16, DType::F64, DType::I64, DType::U64] {
         let source = NativeTensor::from_data(TensorData::from_bytes_vec(vec![0; 3 * dtype.size()], Shape::new([3]), dtype)).map_err(|e| format!("{e}"))?;
         let before = backend.queue_profile().map_err(|e| format!("{e}"))?;
         if !matches!(source.binary(&source, Elementwise::Add), Err(Error::InvalidParameter))
-            || !matches!(source.gather(0, &indices), Err(Error::InvalidParameter))
             || backend.queue_profile().map_err(|e| format!("{e}"))?.launches != before.launches
         {
             return Err(String::from("unsupported typed arithmetic dispatched a word kernel"));

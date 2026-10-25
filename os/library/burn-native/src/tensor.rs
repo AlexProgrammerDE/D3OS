@@ -167,8 +167,11 @@ impl NativeTensor {
     }
 
     pub fn mask_fill(&self, mask: &Self, value: f32) -> Result<Self> {
-        if self.dtype != DType::F32 || mask.dtype != DType::Bool(BoolStore::U32) {
+        if self.dtype != DType::F32 {
             return Err(Error::InvalidParameter);
+        }
+        if mask.dtype != DType::Bool(BoolStore::U32) {
+            return self.mask_fill_scalar(mask, value.into());
         }
         self.elementwise(mask, Elementwise::MaskFill, value.to_bits(), false, DType::F32)
     }
@@ -230,10 +233,22 @@ impl NativeTensor {
     }
 
     pub fn mask_fill_i32(&self, mask: &Self, value: i32) -> Result<Self> {
+        if self.dtype != DType::I32 {
+            return Err(Error::InvalidParameter);
+        }
+        if mask.dtype != DType::Bool(BoolStore::U32) {
+            return self.mask_fill_scalar(mask, value.into());
+        }
         self.words(mask, WordOp::IntMaskFill, value as u32, false)
     }
 
     pub fn mask_fill_bool(&self, mask: &Self, value: bool) -> Result<Self> {
+        if !self.dtype.is_bool() {
+            return Err(Error::InvalidParameter);
+        }
+        if self.dtype != DType::Bool(BoolStore::U32) || mask.dtype != DType::Bool(BoolStore::U32) {
+            return self.mask_fill_scalar(mask, value.into());
+        }
         self.words(mask, WordOp::BoolMaskFill, u32::from(value), false)
     }
 
@@ -265,7 +280,10 @@ impl NativeTensor {
     /// Read arbitrary elements on the GPU. Only the four-byte bounds result
     /// crosses to the host; invalid device indices leave inputs unchanged.
     pub fn gather(&self, axis: usize, indices: &Self) -> Result<Self> {
-        if !crate::storage::word_sized(self.dtype) || indices.dtype != DType::I32 {
+        if !crate::storage::word_sized(self.dtype) {
+            return self.packed_gather(axis, indices);
+        }
+        if indices.dtype != DType::I32 {
             return Err(Error::InvalidParameter);
         }
         let layout = Layout::contiguous(self.layout.gather_shape(&indices.layout, axis)?)?;
@@ -342,6 +360,9 @@ impl NativeTensor {
     }
 
     pub fn scatter_or(&self, axis: usize, indices: &Self, values: &Self) -> Result<Self> {
+        if self.dtype == DType::Bool(BoolStore::U8) {
+            return self.packed_scatter_or(axis, indices, values);
+        }
         if self.dtype != DType::Bool(BoolStore::U32) {
             return Err(Error::InvalidParameter);
         }

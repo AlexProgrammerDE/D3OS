@@ -55,7 +55,7 @@ impl BoolTensorOps<Self> for Native {
     }
     fn bool_mask_fill(tensor: BoolTensor<Self>, mask: BoolTensor<Self>, value: Scalar) -> BoolTensor<Self> {
         BackendTensor::apply("bool_mask_fill", tensor.shape(), tensor.dtype(), &[&tensor, &mask], |v| {
-            v[0].mask_fill_bool(v[1], value.elem::<bool>())
+            v[0].mask_fill_scalar(v[1], value)
         })
     }
     fn bool_gather(dim: usize, tensor: BoolTensor<Self>, indices: IntTensor<Self>) -> BoolTensor<Self> {

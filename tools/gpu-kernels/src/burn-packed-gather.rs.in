@@ -1,0 +1,53 @@
+#[cutile::entry()]
+unsafe fn burn_packed_gather(source: *const u32, index_words: *const u32, errors: *mut u32, output: *mut u32, GATHER_PARAMETERS) {
+    let width = rank_width >> 8u32;
+    let per_word = if width == 3u32 { 1u32 } else { 4u32 >> width };
+    let work = if width == 3u32 { count } else { (count + per_word - 1u32) / per_word };
+    let i = indices();
+    let mask = lt_tile(i, broadcast_scalar(work, shape![128]));
+    let mut packed = broadcast_scalar(0u32, shape![128]);
+    let mut bad = broadcast_scalar(0u32, shape![128]);
+    let low_mask = (broadcast_scalar(1u64, shape![128]) << broadcast_scalar(32u64, shape![128])) - broadcast_scalar(1u64, shape![128]);
+    for slot in 0u32..per_word {
+        let logical = if width == 3u32 { i } else { i * broadcast_scalar(per_word, shape![128]) + broadcast_scalar(slot, shape![128]) };
+        let active = mask & lt_tile(logical, broadcast_scalar(count, shape![128]));
+        let mut linear = logical;
+        let mut address_a = broadcast_scalar(signed(offset_a), shape![128]);
+        let mut address_b = broadcast_scalar(signed(offset_b), shape![128]);
+        GATHER_ADDRESSES
+        let address_b: Tile<u32, { [128] }> = bitcast(address_b);
+        let index_valid = active & lt_tile(address_b, broadcast_scalar(extent_b, shape![128]));
+        let selected = unsafe { read_tile(index_words, address_b, index_valid, 0u32) };
+        let selected: Tile<i32, { [128] }> = bitcast(selected);
+        let valid = ge_tile(selected, broadcast_scalar(0i32, shape![128])) & lt_tile(selected, broadcast_scalar(signed(axis_length), shape![128]));
+        let stride = GATHER_STRIDE;
+        let address_a = address_a + selected * broadcast_scalar(signed(stride), shape![128]);
+        let address_a: Tile<u32, { [128] }> = bitcast(address_a);
+        let source_valid = index_valid & valid & lt_tile(address_a, broadcast_scalar(extent_a, shape![128]));
+        let value = unsafe { packed_read_width(source, address_a, width, source_valid) };
+        let value = select(source_valid, value, broadcast_scalar(0u64, shape![128]));
+        let low: Tile<u32, { [128] }> = trunci(value & low_mask, overflow::NoUnsignedWrap);
+        if width == 3u32 {
+            let high: Tile<u32, { [128] }> = trunci(value >> broadcast_scalar(32u64, shape![128]), overflow::NoUnsignedWrap);
+            let word = i * broadcast_scalar(2u32, shape![128]);
+            unsafe { write_tile(output, word, low, mask) };
+            unsafe { write_tile(output, word + broadcast_scalar(1u32, shape![128]), high, mask) };
+        } else {
+            packed = packed | (low << broadcast_scalar(slot * (8u32 << width), shape![128]));
+        }
+        let invalid = active & eq_tile(source_valid, broadcast_scalar(false, shape![128]));
+        bad = bad | select(invalid, broadcast_scalar(1u32, shape![128]), broadcast_scalar(0u32, shape![128]));
+    }
+    if width != 3u32 {
+        unsafe { write_tile(output, i, packed, mask) };
+    }
+    let bad: Tile<u32, { [] }> = reduce_sum(bad, 0i32);
+    let bad: u32 = tile_to_scalar(bad);
+    if bad != 0u32 {
+        let pointer: PointerTile<*mut u32, { [] }> = pointer_to_tile(errors);
+        let pointer: PointerTile<*mut u32, { [1] }> = pointer.reshape(shape![1]);
+        let (_old, _token): (Tile<u32, { [1] }>, Token) = unsafe {
+            atomic_rmw_tko(pointer, broadcast_scalar(1u32, shape![1]), atomic::Or, ordering::Relaxed, scope::Device, None, None)
+        };
+    }
+}
