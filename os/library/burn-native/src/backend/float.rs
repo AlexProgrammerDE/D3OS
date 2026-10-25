@@ -358,25 +358,19 @@ impl FloatTensorOps<Self> for Native {
         })
     }
     fn float_topk_with_indices(tensor: BackendTensor, dim: usize, k: usize, index_dtype: IntDType) -> (BackendTensor, BackendTensor) {
-        topk_pair("float_topk_with_indices", &tensor, dim, k, index_dtype)
+        topk_pair("float_topk_with_indices", &tensor, dim, k, index_dtype.into())
     }
     fn float_argtopk(tensor: BackendTensor, dim: usize, k: usize, out_dtype: IntDType) -> BackendTensor {
         BackendTensor::apply("float_argtopk", topk_shape(&tensor, dim, k), out_dtype.into(), &[&tensor], |v| {
-            if out_dtype != IntDType::I32 {
-                return Err(Error::InvalidParameter);
-            }
-            v[0].topk(dim, k).map(|(_, indices)| indices)
+            v[0].topk(dim, k)?.1.cast(out_dtype.into())
         })
     }
     fn float_sort_with_indices(tensor: BackendTensor, dim: usize, descending: bool, indices_dtype: IntDType) -> (BackendTensor, BackendTensor) {
-        sorted_pair("float_sort_with_indices", &tensor, dim, descending, indices_dtype)
+        sorted_pair("float_sort_with_indices", &tensor, dim, descending, indices_dtype.into())
     }
     fn float_argsort(tensor: BackendTensor, dim: usize, descending: bool, out_dtype: IntDType) -> BackendTensor {
         one("float_argsort", &tensor, out_dtype.into(), |t| {
-            if out_dtype != IntDType::I32 {
-                return Err(Error::InvalidParameter);
-            }
-            t.sort(dim, descending).map(|(_, indices)| indices)
+            t.sort(dim, descending)?.1.cast(out_dtype.into())
         })
     }
 }

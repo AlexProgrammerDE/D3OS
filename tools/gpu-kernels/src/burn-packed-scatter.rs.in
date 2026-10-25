@@ -1,0 +1,94 @@
+// Loop-carried write tokens preserve duplicate ordering across every field.
+#[cutile::entry()]
+unsafe fn burn_packed_scatter_assign(values: *const u32, index_words: *const u32, errors: *mut u32, output: *mut u32, GATHER_PARAMETERS) {
+    let width = rank_width >> 8u32;
+    let axis_count = ORDERED_AXIS_COUNT;
+    let suffix = ORDERED_SUFFIX;
+    let rows = count / axis_count;
+    let destination_words = if width == 3u32 { extent_a * 2u32 } else { (extent_a + (4u32 >> width) - 1u32) / (4u32 >> width) };
+    let value_words = if width == 3u32 { count * 2u32 } else { (count + (4u32 >> width) - 1u32) / (4u32 >> width) };
+    let row = indices();
+    let mask = lt_tile(row, broadcast_scalar(rows, shape![128]));
+    let value_base = (row / broadcast_scalar(suffix, shape![128])) * broadcast_scalar(axis_count * suffix, shape![128]) + row % broadcast_scalar(suffix, shape![128]);
+    let mut linear = value_base;
+    let mut address_a = broadcast_scalar(signed(offset_a), shape![128]);
+    let mut address_b = broadcast_scalar(signed(offset_b), shape![128]);
+    GATHER_ADDRESSES
+    let destination_base = address_a;
+    let index_base = address_b;
+    let status: PointerTile<*mut u32, {[]}> = pointer_to_tile(errors);
+    let status: PointerTile<*mut u32, {[1]}> = status.reshape(shape![1]);
+    let (_initial, initial_token): (Tile<u32, {[1]}>, Token) = unsafe { atomic_rmw_tko(status, broadcast_scalar(0u32, shape![1]), atomic::Or, ordering::Relaxed, scope::Device, None, None) };
+    let mut token = initial_token;
+    let mut invalid = broadcast_scalar(0u32, shape![128]);
+    for position in 0u32..axis_count {
+        let address_b = index_base + broadcast_scalar(signed(position) * signed(ORDERED_INDEX_STRIDE), shape![128]);
+        let address_b: Tile<u32, {[128]}> = bitcast(address_b);
+        let index_valid = mask & lt_tile(address_b, broadcast_scalar(extent_b, shape![128]));
+        let selected = unsafe { read_tile(index_words, address_b, index_valid, 0u32) };
+        let selected: Tile<i32, {[128]}> = bitcast(selected);
+        let in_range = ge_tile(selected, broadcast_scalar(0i32, shape![128])) & lt_tile(selected, broadcast_scalar(signed(axis_length), shape![128]));
+        let address_a = destination_base + selected * broadcast_scalar(signed(GATHER_STRIDE), shape![128]);
+        let address_a: Tile<u32, {[128]}> = bitcast(address_a);
+        let logical_valid = index_valid & in_range & lt_tile(address_a, broadcast_scalar(extent_a, shape![128]));
+        let value_index = value_base + broadcast_scalar(position * suffix, shape![128]);
+        let destination_physical = if width == 3u32 {
+            lt_tile(address_a * broadcast_scalar(2u32, shape![128]) + broadcast_scalar(1u32, shape![128]), broadcast_scalar(destination_words, shape![128]))
+        } else {
+            lt_tile(address_a / broadcast_scalar(4u32 >> width, shape![128]), broadcast_scalar(destination_words, shape![128]))
+        };
+        let value_physical = if width == 3u32 {
+            lt_tile(value_index * broadcast_scalar(2u32, shape![128]) + broadcast_scalar(1u32, shape![128]), broadcast_scalar(value_words, shape![128]))
+        } else {
+            lt_tile(value_index / broadcast_scalar(4u32 >> width, shape![128]), broadcast_scalar(value_words, shape![128]))
+        };
+        let value_valid = mask & lt_tile(value_index, broadcast_scalar(count, shape![128])) & value_physical;
+        let valid = logical_valid & destination_physical & value_valid;
+        let value = unsafe { packed_read_width(values, value_index, width, value_valid) };
+        let base: PointerTile<*mut u32, {[]}> = pointer_to_tile(output);
+        let base: PointerTile<*mut u32, {[1]}> = base.reshape(shape![1]);
+        let base: PointerTile<*mut u32, {[128]}> = base.broadcast(shape![128]);
+        let index = address_a;
+        let bits = value;
+        let low = packed_low(bits);
+        if width == 3u32 {
+            let pointer = base.offset_tile(index * broadcast_scalar(2u32, shape![128]));
+            token = unsafe { store_ptr_tko(pointer, low, ordering::Weak, None::<scope::TileBlock>, Some(valid), Some(token), Latency::<0>) };
+            let pointer = base.offset_tile(index * broadcast_scalar(2u32, shape![128]) + broadcast_scalar(1u32, shape![128]));
+            let high = packed_low(bits >> broadcast_scalar(32u64, shape![128]));
+            token = unsafe { store_ptr_tko(pointer, high, ordering::Weak, None::<scope::TileBlock>, Some(valid), Some(token), Latency::<0>) };
+        } else if width == 2u32 {
+            let pointer = base.offset_tile(index);
+            token = unsafe { store_ptr_tko(pointer, low, ordering::Weak, None::<scope::TileBlock>, Some(valid), Some(token), Latency::<0>) };
+        } else {
+            let per_word = 4u32 >> width;
+            let word = index / broadcast_scalar(per_word, shape![128]);
+            let shift = index % broadcast_scalar(per_word, shape![128]) * broadcast_scalar(8u32 << width, shape![128]);
+            let field = broadcast_scalar(unsigned(-1i32) >> (32u32 - (8u32 << width)), shape![128]);
+            let field_mask = field << shift;
+            let value = (low & field) << shift;
+            let pointer = base.offset_tile(word);
+            let (initial, initial_token): (Tile<u32, {[128]}>, Token) = unsafe { atomic_rmw_tko(pointer, broadcast_scalar(0u32, shape![128]), atomic::Or, ordering::Relaxed, scope::Device, Some(valid), Some(token)) };
+            let mut expected = initial;
+            token = initial_token;
+            let mut active = valid;
+            let mut remaining = 1u32;
+            while remaining != 0u32 {
+                let replacement = (expected & (field_mask ^ broadcast_scalar(unsigned(-1i32), shape![128]))) | value;
+                let (observed, next_token): (Tile<u32, {[128]}>, Token) = unsafe { atomic_cas_tko(pointer, expected, replacement, ordering::Relaxed, scope::Device, Some(active), Some(token)) };
+                active = active & ne_tile(observed, expected);
+                expected = observed;
+                token = next_token;
+                let pending = select(active, broadcast_scalar(1u32, shape![128]), broadcast_scalar(0u32, shape![128]));
+                let pending: Tile<u32, {[]}> = reduce_sum(pending, 0i32);
+                remaining = tile_to_scalar(pending);
+            }
+        }
+        invalid = invalid | select(mask & eq_tile(valid, broadcast_scalar(false, shape![128])), broadcast_scalar(1u32, shape![128]), broadcast_scalar(0u32, shape![128]));
+    }
+    let invalid: Tile<u32, {[]}> = reduce_sum(invalid, 0i32);
+    let invalid: u32 = tile_to_scalar(invalid);
+    if invalid != 0u32 {
+        let (_old, _token): (Tile<u32, {[1]}>, Token) = unsafe { atomic_rmw_tko(status, broadcast_scalar(1u32, shape![1]), atomic::Or, ordering::Relaxed, scope::Device, None, Some(token)) };
+    }
+}

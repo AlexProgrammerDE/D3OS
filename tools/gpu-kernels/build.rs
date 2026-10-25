@@ -431,6 +431,23 @@ fn main() {
                 .replace("GATHER_STRIDE", &stride),
         );
     }
+    println!("cargo:rerun-if-changed=src/burn-packed-scatter.rs.in");
+    let axis_count = (0..7).map(|a| format!("if axis == {a}u32 {{ dim{a} }} else ")).collect::<String>() + "{ dim7 }";
+    let index_stride = (0..7).map(|a| format!("if axis == {a}u32 {{ stride_b{a} }} else ")).collect::<String>() + "{ stride_b7 }";
+    let suffix = (1..8)
+        .map(|a| format!("(if axis < {a}u32 {{ dim{a} }} else {{ 1u32 }})"))
+        .collect::<Vec<_>>()
+        .join(" * ");
+    source.push_str(
+        &fs::read_to_string("src/burn-packed-scatter.rs.in")
+            .expect("read packed ordered scatter")
+            .replace("GATHER_PARAMETERS", &parameters.replace("_rank:", "rank_width:"))
+            .replace("GATHER_ADDRESSES", &addresses)
+            .replace("GATHER_STRIDE", &stride)
+            .replace("ORDERED_AXIS_COUNT", &axis_count)
+            .replace("ORDERED_INDEX_STRIDE", &index_stride)
+            .replace("ORDERED_SUFFIX", &suffix),
+    );
     println!("cargo:rerun-if-changed=src/burn-scatter.rs.in");
     println!("cargo:rerun-if-changed=src/burn-scatter-f32.rs.in");
     let scatter = fs::read_to_string("src/burn-scatter.rs.in").expect("read scatter template");

@@ -8,8 +8,8 @@ pub mod integer;
 pub mod integer_matrix;
 pub mod interpolate;
 pub mod inverse;
-pub mod nd_indexing;
 pub mod movement;
+pub mod nd_indexing;
 pub mod predicate;
 pub mod quantization;
 pub mod quantized_empty;
@@ -19,8 +19,8 @@ pub mod remainder;
 pub mod scan;
 pub mod scatter_updates;
 pub mod sort;
-pub mod storage;
 pub mod spatial_convolution;
+pub mod storage;
 use alloc::{format, string::String};
 use burn::{
     module::{Module, Param},
@@ -191,3 +191,5 @@ pub fn mnist_checkpoint(device: &Device) -> Result<(), String> {
 }
 
 pub mod conversions;
+
+pub mod indexed;

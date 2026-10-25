@@ -609,6 +609,7 @@ fn native_invalid(backend: &Nvidia, dtype: DType) -> Result<usize, Error> {
     let bad_mask = upload(&[1], &[1], DType::U8)?;
     let wrong_shape = upload(&native_bytes(8, dtype, 0), &[2, 4], dtype)?;
     let wrong_dtype = NativeTensor::from_data(TensorData::new(vec![0i32; 6], [2, 3]))?;
+    let invalid_indices = NativeTensor::from_data(TensorData::new(vec![0f32; 6], [2, 3]))?;
     let empty_ids = NativeTensor::from_data(TensorData::new(Vec::<i32>::new(), [0, 3]))?;
     let before = backend.service_profile()?;
     let launches = backend.queue_profile()?.launches;
@@ -622,7 +623,7 @@ fn native_invalid(backend: &Nvidia, dtype: DType) -> Result<usize, Error> {
     ];
     for result in [
         source.gather(2, &wrong_dtype),
-        source.gather(1, &source),
+        source.gather(1, &invalid_indices),
         source.gather(1, &empty_ids),
         source.select(1, &wrong_dtype),
         source.mask_where(&bad_mask, &value),

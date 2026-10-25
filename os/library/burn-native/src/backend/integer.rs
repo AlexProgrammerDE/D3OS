@@ -213,10 +213,10 @@ impl IntTensorOps<Self> for Native {
         one("int_cummax", &tensor, tensor.dtype(), |t| t.scan(dim, Scan::Max))
     }
     fn int_argmax(tensor: IntTensor<Self>, dim: usize) -> IntTensor<Self> {
-        reduce("int_argmax", &tensor, Some(dim), Reduction::ArgMax, DType::I32)
+        reduce("int_argmax", &tensor, Some(dim), Reduction::ArgMax, tensor.dtype())
     }
     fn int_argmin(tensor: IntTensor<Self>, dim: usize) -> IntTensor<Self> {
-        reduce("int_argmin", &tensor, Some(dim), Reduction::ArgMin, DType::I32)
+        reduce("int_argmin", &tensor, Some(dim), Reduction::ArgMin, tensor.dtype())
     }
     fn int_min(tensor: IntTensor<Self>) -> IntTensor<Self> {
         reduce("int_min", &tensor, None, Reduction::Min, DType::I32)
@@ -336,18 +336,18 @@ impl IntTensorOps<Self> for Native {
         })
     }
     fn int_topk_with_indices(tensor: BackendTensor, dim: usize, k: usize) -> (BackendTensor, BackendTensor) {
-        topk_pair("int_topk_with_indices", &tensor, dim, k, burn_backend::IntDType::I32)
+        topk_pair("int_topk_with_indices", &tensor, dim, k, tensor.dtype())
     }
     fn int_argtopk(tensor: BackendTensor, dim: usize, k: usize) -> BackendTensor {
-        BackendTensor::apply("int_argtopk", topk_shape(&tensor, dim, k), DType::I32, &[&tensor], |v| {
-            v[0].topk(dim, k).map(|(_, indices)| indices)
+        BackendTensor::apply("int_argtopk", topk_shape(&tensor, dim, k), tensor.dtype(), &[&tensor], |v| {
+            v[0].topk(dim, k)?.1.cast(tensor.dtype())
         })
     }
     fn int_sort_with_indices(tensor: BackendTensor, dim: usize, descending: bool) -> (BackendTensor, BackendTensor) {
-        sorted_pair("int_sort_with_indices", &tensor, dim, descending, burn_backend::IntDType::I32)
+        sorted_pair("int_sort_with_indices", &tensor, dim, descending, tensor.dtype())
     }
     fn int_argsort(tensor: BackendTensor, dim: usize, descending: bool) -> BackendTensor {
-        one("int_argsort", &tensor, DType::I32, |t| t.sort(dim, descending).map(|(_, indices)| indices))
+        one("int_argsort", &tensor, tensor.dtype(), |t| t.sort(dim, descending)?.1.cast(tensor.dtype()))
     }
     fn int_arange_step(range: core::ops::Range<i64>, step: usize, _device: &NativeDevice, dtype: IntDType) -> BackendTensor {
         let plan = crate::range::RangePlan::new(range, step);

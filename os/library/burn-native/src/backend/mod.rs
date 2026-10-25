@@ -93,19 +93,14 @@ fn cast(op: &'static str, tensor: &BackendTensor, dtype: DType) -> BackendTensor
     one(op, tensor, dtype, |t| t.cast(dtype))
 }
 
-fn sorted_pair(op: &'static str, tensor: &BackendTensor, axis: usize, descending: bool, index_dtype: burn_backend::IntDType) -> (BackendTensor, BackendTensor) {
-    BackendTensor::pair(
-        op,
-        [tensor.shape(), tensor.shape()],
-        [tensor.dtype(), index_dtype.into()],
-        &[tensor],
-        |values| {
-            if index_dtype != burn_backend::IntDType::I32 {
-                return Err(Error::InvalidParameter);
-            }
-            values[0].sort(axis, descending)
-        },
-    )
+fn sorted_pair(op: &'static str, tensor: &BackendTensor, axis: usize, descending: bool, index_dtype: DType) -> (BackendTensor, BackendTensor) {
+    BackendTensor::pair(op, [tensor.shape(), tensor.shape()], [tensor.dtype(), index_dtype], &[tensor], |values| {
+        if !index_dtype.is_int() && !index_dtype.is_uint() {
+            return Err(Error::InvalidParameter);
+        }
+        let (values, indices) = values[0].sort(axis, descending)?;
+        Ok((values, indices.cast(index_dtype)?))
+    })
 }
 
 fn topk_shape(tensor: &BackendTensor, axis: usize, k: usize) -> Shape {
@@ -116,13 +111,14 @@ fn topk_shape(tensor: &BackendTensor, axis: usize, k: usize) -> Shape {
     shape
 }
 
-fn topk_pair(op: &'static str, tensor: &BackendTensor, axis: usize, k: usize, index_dtype: burn_backend::IntDType) -> (BackendTensor, BackendTensor) {
+fn topk_pair(op: &'static str, tensor: &BackendTensor, axis: usize, k: usize, index_dtype: DType) -> (BackendTensor, BackendTensor) {
     let shape = topk_shape(tensor, axis, k);
-    BackendTensor::pair(op, [shape.clone(), shape], [tensor.dtype(), index_dtype.into()], &[tensor], |values| {
-        if index_dtype != burn_backend::IntDType::I32 {
+    BackendTensor::pair(op, [shape.clone(), shape], [tensor.dtype(), index_dtype], &[tensor], |values| {
+        if !index_dtype.is_int() && !index_dtype.is_uint() {
             return Err(Error::InvalidParameter);
         }
-        values[0].topk(axis, k)
+        let (values, indices) = values[0].topk(axis, k)?;
+        Ok((values, indices.cast(index_dtype)?))
     })
 }
 
@@ -153,7 +149,7 @@ fn reduce(op: &'static str, tensor: &BackendTensor, axis: Option<usize>, reducti
         *d = 1;
     }
     BackendTensor::apply(op, shape, dtype, &[tensor], |v| {
-        if let Some(axis) = axis {
+        let reduced = if let Some(axis) = axis {
             v[0].reduce(axis, reduction)
         } else {
             Nvidia.record_commands(|| {
@@ -163,7 +159,8 @@ fn reduce(op: &'static str, tensor: &BackendTensor, axis: Option<usize>, reducti
                 }
                 tensor.reshape(Shape::new([1]))
             })
-        }
+        }?;
+        if reduction.index() { reduced.cast(dtype) } else { Ok(reduced) }
     })
 }
 

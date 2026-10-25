@@ -121,10 +121,7 @@ impl BoolTensorOps<Self> for Native {
     }
     async fn bool_argwhere(tensor: BackendTensor, out_dtype: IntDType) -> BackendTensor {
         BackendTensor::apply("bool_argwhere", Shape::new([0, tensor.rank()]), out_dtype.into(), &[&tensor], |v| {
-            if out_dtype != IntDType::I32 {
-                return Err(Error::InvalidParameter);
-            }
-            v[0].argwhere()
+            v[0].argwhere()?.cast(out_dtype.into())
         })
     }
 }

@@ -97,6 +97,7 @@ def audit(family, sass):
             "burn_packed_assign",
             "burn_packed_mask",
             "burn_packed_bool_scatter",
+            "burn_packed_scatter_assign",
             "burn_i32_matmul",
             "burn_cumsum",
             "burn_cumprod",

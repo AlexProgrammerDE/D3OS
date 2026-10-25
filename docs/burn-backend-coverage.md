@@ -15,7 +15,7 @@ Associated types and source SHA-256 hashes accompany the report.
 
 The current inventory contains 484 methods: 277 native overrides and 207 inherited defaults.
 All required methods have declarations or implementations. This count does not establish runtime support.
-The report also records 134 native helper bodies for manual review of dtype and shape restrictions.
+The report also records 136 native helper bodies for manual review of dtype and shape restrictions.
 
 The tool follows syntactic associated backend calls and expands the pinned `dequant_op_quant!` and `dequant_op_flow!` macros.
 It identifies 8 methods with possible paths to explicit declines or panic declarations.
@@ -37,7 +37,7 @@ Linux CUDA declares storage support missing from D3OS for these 12 formats:
 
 Burn's `Storage` flag requires conversion to and from other supported dtypes as well as physical storage.
 Ordinary numeric casts now execute on the GPU, as described below.
-Quantized conversions, further index formats, and arithmetic remain incomplete for the new formats.
+Quantized conversions and general arithmetic remain incomplete for the new formats.
 The usage flags stay disabled until the complete conversion contract passes.
 Both backends decline the separate `Bool(Native)` declaration.
 
@@ -197,7 +197,7 @@ The initial non-Flex32 GPU run passed, but the first harness expected too few ca
 The corrected harness and separate final run pass. Both records remain available.
 
 The stored-value movement checkpoint extends masking, compaction, concatenation, and view assignment to these packed boolean results.
-Indexed assignment and additional index dtypes remain separate work.
+The protocol-41 section below covers indexed assignment and integer index formats.
 Dtype capability declarations remain conservative. These checks do not establish execution-performance or compile-time parity.
 
 ## Packed stored-value movement
@@ -255,9 +255,74 @@ Numeric where/fill still checks both mask stores. Mask selection retains mixed-w
 The three failed diagnostics and passing subset use the same frozen reference source and Linux executable.
 Every diagnostic remains separate from the complete D3OS corpus and its expected totals.
 
-Wider ND reads, indexed assignment, additional index formats, and arithmetic updates remain outside this checkpoint.
+The protocol-41 section below extends ND reads, indexed assignment, and integer index formats. Wider arithmetic updates remain separate work.
 General dtype arithmetic, full quantized contracts, graph capture, and other execution capabilities also remain incomplete.
 These correctness checks do not establish execution-performance or compile-time parity.
+
+## Typed indexed payloads and integer indices
+
+Protocol 41 adds packed indexed assignment with 245 inference entries and 80 compute profiles.
+Gather and select retain all 15 ordinary payload formats.
+Native ND gather also accepts these formats, including both boolean stores.
+Burn's public boolean bridge rejects ND operations on both backends.
+The public corpus therefore excludes boolean ND operations, while native checks cover boolean ND gather separately.
+
+Indexed assignment, vector assignment, and ND assignment accept all 13 ordinary numeric payload formats.
+Other update modes still require F32 or I32 values. Boolean OR retains its separate contract.
+The existing F32/I32 assignment routes remain unchanged.
+The new kernel assigns one lane to each destination row outside the indexed axis.
+A loop-carried token orders repeated destinations within each row.
+Narrow values use word-level CAS to preserve neighboring fields and initialized tail bytes.
+
+Eight-byte values retain both raw words. Logical and unsigned physical bounds guard every payload access.
+The driver requires a dense destination and rejects overlap involving either writer.
+Native operations copy the destination and snapshot noncontiguous or nonzero-offset values before dispatch.
+
+Gather, select, scatter, and ND coordinates accept all eight integer index formats.
+Original-dtype comparisons reject negative and oversized values before their resident I32 conversion.
+Invalid I64/U64 values therefore cannot alias valid positions through discarded high bits.
+I8/I16/U8/U16 indices avoid thresholds that their original formats cannot represent.
+Only the existing isolated bounds result crosses to the host.
+ND indexing retains independent coordinate checks before linearization.
+
+Float argmin/argmax, argsort, sort/top-k index pairs, argtopk, and boolean argwhere honor their requested integer output dtype.
+The native ordering and reduction value domains still require F32/I32.
+Output casts preserve the existing integer narrowing rule: low bits remain, including when an index exceeds the requested format.
+Pooling index outputs and their backward sentinel rules remain I32-only.
+General typed arithmetic, quantized contracts, and execution capabilities remain separate work.
+
+D3OS passes 52,306 public cases, 223,260 source-preservation checks, and 4,507,438 output values on the passed-through RTX 4090 Laptop GPU.
+The corpus uses independent byte records and checks actual output dtype, shape, and bytes.
+It covers ranks one through eight, signed views, shared storage, large unique ND updates, and valid empty trailing slices.
+ND coordinate tensors remain nonempty, as Burn requires.
+
+| D3OS public operation group | Cases |
+| --- | ---: |
+| Gather and vector select | 10,080 |
+| ND gather and ND assignment | 28,912 |
+| One-axis and vector assignment | 8,736 |
+| Extrema indices, ordering indices, and boolean coordinates | 4,578 |
+| Total | 52,306 |
+
+The guarded suite also passes 160 raw checks and 122 native API checks.
+These checks cover packed tails, nonzero offsets, cross-block CAS, queued input drops, and original-width index bounds.
+Native scalar-fill checks retain an F64 value one ULP above one through both boolean mask stores.
+Public assignment comparisons use unique destinations. Guarded native checks separately establish deterministic duplicate ordering.
+The final full suite passes all earlier regression gates, and all three guest compiler hashes match their host audits.
+All 244 earlier entries retain 527 identical instruction and constant sections.
+Nine host reference tests and the production image build also pass.
+
+The first D3OS run passed indexing, then stopped at an older negative fixture that treated integer indices as unsupported.
+The corrected fixture uses F32 indices and retains its zero-launch contract.
+The complete rerun passes this fixture and the unchanged positive indexing corpus.
+
+The retained Linux run stops at the pinned CubeCL rank-zero readback panic.
+The diagnostic without scalar ND results stops at the unsupported direct Flex32 upload.
+The diagnostic without both domains runs out of its 4 GiB guest RAM allocation after 725 seconds.
+These records report no tensor mismatch before their failure. They do not establish complete Linux conformance.
+A larger 12 GiB Linux diagnostic remains pending.
+All Linux records use the same frozen reference, runner, executable, and launcher hashes.
+These are correctness checks, with no execution-performance or compile-time parity claim.
 
 ## Inverse FP32 math
 
@@ -1191,7 +1256,7 @@ Run the D3OS GPU suite with the matching production image and portable kernel bu
 ```bash
 python3 tools/nvidia/run-qemu.py --firmware target/nvidia/firmware \
   --kernels target/nvidia/kernels --memory-mib 4096 \
-  --boot-check --inference gpu-self-test --timeout 300
+  --boot-check --inference gpu-self-test --timeout 900
 ```
 
 The retained native evidence lives under `target/nvidia/burn-backend-validation/erf-final/`.
@@ -1268,3 +1333,29 @@ The audit directory contains `traits-predicate-final.json`, `predicate-compariso
 The movement evidence uses `target/nvidia/burn-backend-validation/movement-first/` and the `target/nvidia/burn-backend-audit/linux-movement-` prefix.
 The audit directory contains `traits-movement-final.json`, `movement-comparison.json`, and `movement-section-comparison.json`.
 Each Linux directory retains its shared source, executable, runner, expected summary, launcher, and hash manifest.
+
+The final typed-index evidence lives under `target/nvidia/burn-backend-validation/indexed-final/`.
+The first negative-fixture diagnostic remains under `indexed-first/`, including its passing public indexing marker and overall failure.
+The Linux records use the `target/nvidia/burn-backend-audit/linux-indexed-` prefix.
+The audit directory contains `traits-indexed-final.json`, `indexed-comparison.json`, and `indexed-section-comparison.json`.
+
+Build the Linux indexed runner from its pinned toolchain directory:
+
+```bash
+cd tools/mnist-benchmark
+cargo build --release --locked --bin indexed
+cd ../..
+```
+
+Run the larger Linux diagnostic with the two retained upstream domains excluded:
+
+```bash
+python3 tools/nvidia/linux-reference.py \
+  --directory target/nvidia/linux-burn-indexed-diagnostic \
+  --burn-indexed tools/mnist-benchmark/target/release/indexed \
+  --burn-indexed-no-flex32 --burn-indexed-skip-scalar-nd \
+  --memory-mib 12288 --timeout 2400
+```
+
+For the complete Linux diagnostic, omit both domain flags and use a fresh directory.
+The runner's `--expected-summary` command returns CPU metadata before device construction. It does not run GPU checks.

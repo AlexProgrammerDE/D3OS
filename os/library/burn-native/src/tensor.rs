@@ -280,6 +280,8 @@ impl NativeTensor {
     /// Read arbitrary elements on the GPU. Only the four-byte bounds result
     /// crosses to the host; invalid device indices leave inputs unchanged.
     pub fn gather(&self, axis: usize, indices: &Self) -> Result<Self> {
+        let indices = indices.checked_indices()?;
+        let indices = &indices;
         if !crate::storage::word_sized(self.dtype) {
             return self.packed_gather(axis, indices);
         }
@@ -315,7 +317,8 @@ impl NativeTensor {
     }
 
     pub fn select(&self, axis: usize, indices: &Self) -> Result<Self> {
-        self.gather(axis, &self.selection_indices(axis, indices)?)
+        let indices = indices.checked_indices()?;
+        self.gather(axis, &self.selection_indices(axis, &indices)?)
     }
 
     fn selection_indices(&self, axis: usize, indices: &Self) -> Result<Self> {
@@ -343,6 +346,10 @@ impl NativeTensor {
 
     pub fn scatter_update(&self, axis: usize, indices: &Self, values: &Self, update: IndexingUpdateOp) -> Result<Self> {
         use IndexingUpdateOp::*;
+        let indices = indices.checked_indices()?;
+        if update == Assign && !matches!(self.dtype, DType::F32 | DType::I32) {
+            return self.packed_scatter_assign(axis, &indices, values);
+        }
         let operation = match (self.dtype, update) {
             (DType::F32, Add) => Scatter::FloatAdd,
             (DType::I32, Add) => Scatter::IntAdd,
@@ -356,10 +363,12 @@ impl NativeTensor {
             (DType::I32, Max) => Scatter::IntMax,
             _ => return Err(Error::InvalidParameter),
         };
-        self.scatter(axis, indices, values, operation)
+        self.scatter(axis, &indices, values, operation)
     }
 
     pub fn scatter_or(&self, axis: usize, indices: &Self, values: &Self) -> Result<Self> {
+        let indices = indices.checked_indices()?;
+        let indices = &indices;
         if self.dtype == DType::Bool(BoolStore::U8) {
             return self.packed_scatter_or(axis, indices, values);
         }
@@ -370,14 +379,18 @@ impl NativeTensor {
     }
 
     pub fn select_update(&self, axis: usize, indices: &Self, values: &Self, update: IndexingUpdateOp) -> Result<Self> {
-        self.scatter_update(axis, &self.selection_indices(axis, indices)?, values, update)
+        let indices = indices.checked_indices()?;
+        self.scatter_update(axis, &self.selection_indices(axis, &indices)?, values, update)
     }
 
     pub fn select_or(&self, axis: usize, indices: &Self, values: &Self) -> Result<Self> {
-        self.scatter_or(axis, &self.selection_indices(axis, indices)?, values)
+        let indices = indices.checked_indices()?;
+        self.scatter_or(axis, &self.selection_indices(axis, &indices)?, values)
     }
 
     fn scatter(&self, axis: usize, indices: &Self, values: &Self, operation: Scatter) -> Result<Self> {
+        let indices = indices.checked_indices()?;
+        let indices = &indices;
         if indices.dtype != DType::I32 || values.dtype != self.dtype {
             return Err(Error::InvalidParameter);
         }

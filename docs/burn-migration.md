@@ -172,7 +172,7 @@ The GPU operations include FP32 arithmetic and math, reductions, exact tensor fi
 Another 32 entries implement I32 arithmetic, signed comparisons, bitwise operations, boolean logic, masks, and conversions.
 These operations support strided views and broadcasting. Input tensors remain shared and immutable.
 Full writers avoid a separate output clear. Empty logical outputs require no element work.
-The matching SDK and driver use native compute protocol version 40 and the 244-entry portable inference bundle.
+The matching SDK and driver use native compute protocol version 41 and the 245-entry portable inference bundle.
 
 The D3OS GPU self-test passes reversed and transposed views, overlapping windows, broadcast batches, subviews, empty dimensions, and neighboring guards.
 Matrix references use independent FP64 accumulation. Math references use independent libm functions and include 2,816 FP32 edge values.
@@ -306,7 +306,13 @@ Packed movement now extends ordinary gather/select, mask selection/fill, slice a
 BoolU8 compaction and indexed OR also execute on the native GPU.
 D3OS passes 4,793 public byte-record checks and the complete guarded/native movement corpus.
 Linux passes an isolated 4,328-case comparison with its three retained upstream failures excluded explicitly.
-Wider ND indexing, indexed assignment, and additional index formats remain incomplete.
+ND reads and numeric indexed assignment now preserve all ordinary payload widths.
+All eight integer input index formats use resident validation before I32 conversion.
+Requested ordering, extrema, and coordinate index formats use resident output casts.
+D3OS passes 52,306 public cases and 282 guarded raw/native checks for this extension.
+The complete earlier regression suite also passes.
+Linux retains scalar-readback, Flex32-upload, and 4 GiB guest-memory failures. Its larger-memory comparison remains pending.
+Pooling index outputs remain I32-only. Typed arithmetic updates and broader value domains also remain incomplete.
 I32 tensor and generic scalar powers now use resident wrapping integer arithmetic without a floating-point intermediate.
 The exponent bits follow the same unsigned interpretation as the pinned Linux backend.
 FP32 deformable convolution now provides input, offset, weight, modulation-mask, and bias gradients on the native GPU.

@@ -11,6 +11,7 @@ pub mod indexing;
 pub mod interpolate;
 pub mod optimizer;
 pub mod packed_gather;
+pub mod packed_scatter;
 pub mod packed_updates;
 pub mod pooling;
 pub mod predicate;
@@ -25,7 +26,7 @@ pub mod storage;
 pub mod updates;
 pub mod words;
 
-pub const VERSION: u32 = 40;
+pub const VERSION: u32 = 41;
 /// END_COMMANDS flag: an inner recording scope joins its parent's completion.
 /// The outermost scope always waits. Zero retains synchronous nested scopes.
 pub const DEFER_NESTED_COMPLETION: u64 = 1;
@@ -59,7 +60,7 @@ pub struct MemoryProfile {
     pub device_cached_bytes: u64,
     pub device_retired_bytes: u64,
 }
-pub const KERNEL_COUNT: usize = 79;
+pub const KERNEL_COUNT: usize = 80;
 
 /// CPU service costs by request operation, including queue work within it.
 #[derive(Clone, Copy, Debug, Default)]
@@ -196,9 +197,10 @@ pub enum Kernel {
     PackedAssign = 76,
     PackedMaskWhere = 77,
     PackedBoolScatter = 78,
+    PackedScatterAssign = 79,
 }
 
-const _: () = assert!(Kernel::PackedBoolScatter as usize + 1 == KERNEL_COUNT);
+const _: () = assert!(Kernel::PackedScatterAssign as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -383,6 +385,7 @@ impl Kernel {
             76 => Self::PackedAssign,
             77 => Self::PackedMaskWhere,
             78 => Self::PackedBoolScatter,
+            79 => Self::PackedScatterAssign,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -468,6 +471,7 @@ impl Kernel {
             Self::PackedAssign => "burn_packed_assign",
             Self::PackedMaskWhere => "burn_packed_mask",
             Self::PackedBoolScatter => "burn_packed_bool_scatter",
+            Self::PackedScatterAssign => "burn_packed_scatter_assign",
         }
     }
 
@@ -703,6 +707,11 @@ impl Kernel {
             (Self::PackedMaskWhere, p) => {
                 extents[..4].copy_from_slice(&packed_updates::validate_mask(p)?);
                 (packed_updates::mask_work_items(p)?, 4, 3, false)
+            }
+            (Self::PackedScatterAssign, p) => {
+                extents[..4].copy_from_slice(&packed_scatter::validate(p)?);
+                mutated = 1 << 2;
+                (packed_scatter::work_items(p)?, 4, 3, false)
             }
             (Self::PackedBoolScatter, p) => {
                 extents[..4].copy_from_slice(&packed_updates::validate_bool_scatter(p)?);

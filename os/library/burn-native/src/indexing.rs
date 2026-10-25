@@ -20,7 +20,8 @@ impl NativeTensor {
     // invalid tuple such as [1, -1] can otherwise alias a valid preceding row.
     fn nd_linear_indices(&self, indices: &Self, width: usize) -> Result<Self> {
         let tuples = indices.layout.len() / width;
-        let indices = dense_reshape(indices, Shape::new([tuples, width]))?;
+        let indices = indices.checked_indices()?;
+        let indices = dense_reshape(&indices, Shape::new([tuples, width]))?;
         let mut linear: Option<Self> = None;
         let mut invalid: Option<Self> = None;
         for axis in 0..width {
@@ -48,7 +49,8 @@ impl NativeTensor {
     /// Gather slices addressed by leading coordinate tuples. Shape metadata
     /// stays on the CPU; coordinates and tensor payloads stay on the GPU.
     pub fn gather_nd(&self, indices: &Self) -> Result<Self> {
-        if !matches!(self.dtype, DType::F32 | DType::I32) || indices.dtype != DType::I32 {
+        crate::storage::width(self.dtype)?;
+        if !indices.dtype.is_int() && !indices.dtype.is_uint() {
             return Err(Error::InvalidParameter);
         }
         let shape = nd_shape(self.layout.shape(), indices.layout.shape())?;
@@ -76,7 +78,12 @@ impl NativeTensor {
     /// Update ND slices through a private dense destination and the checked
     /// scatter operation. Non-additive duplicates have no Burn API guarantee.
     pub fn scatter_nd(&self, indices: &Self, values: &Self, update: IndexingUpdateOp) -> Result<Self> {
-        if !matches!(self.dtype, DType::F32 | DType::I32) || indices.dtype != DType::I32 || values.dtype != self.dtype {
+        let numeric = self.dtype.is_float() || self.dtype.is_int() || self.dtype.is_uint();
+        if !numeric
+            || (!indices.dtype.is_int() && !indices.dtype.is_uint())
+            || values.dtype != self.dtype
+            || (update != IndexingUpdateOp::Assign && !matches!(self.dtype, DType::F32 | DType::I32))
+        {
             return Err(Error::InvalidParameter);
         }
         let shape = nd_shape(self.layout.shape(), indices.layout.shape())?;

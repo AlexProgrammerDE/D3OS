@@ -6,6 +6,7 @@ mod convolution;
 mod cross;
 mod deform;
 mod dispatch;
+mod indexed;
 mod indexing;
 mod integers;
 mod interpolate;
@@ -14,9 +15,11 @@ mod linear;
 mod math;
 mod matrix;
 mod memory;
+mod movement;
 mod nd_indexing;
 mod optimizer;
 mod pooling;
+mod predicate;
 mod quantization;
 mod qwen;
 mod random;
@@ -30,8 +33,6 @@ mod spatial_convolution;
 mod storage;
 mod updates;
 mod words;
-mod movement;
-mod predicate;
 use abi::elementwise::Elementwise;
 use abi::reduction::Reduction;
 use alloc::{format, string::String, vec::Vec};
@@ -210,19 +211,50 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     }
     integers::run(backend).map_err(|e| format!("Burn native integer reductions: {e}"))?;
     words::run(backend).map_err(|e| format!("Burn native words: {e}"))?;
+    indexed::run(backend)?;
+    let summary = d3os_ai::burn::tensor::try_read_sync(d3os_ai::validation::indexed::run(&device, &d3os_ai::validation::indexed::Options::default()))
+        .ok_or_else(|| String::from("native indexed future did not complete"))??;
+    let expected = d3os_ai::validation::indexed::expected_summary(&d3os_ai::validation::indexed::Options::default());
+    if summary != expected {
+        return Err(format!("indexed totals: {summary:?}, expected {expected:?}"));
+    }
+    crate::report(format_args!(
+        "BURN_INDEXED_CONFORMANCE_OK os=d3os backend=native totals={} exact_bytes=true reference=byte_records ranks=1..8 views=offset,step,reversed,transposed overlap=true unique_assign=true tails=0,1,127,128,129,257 input_index_dtypes=all8 requested_output_dtypes=all8 bool_storage=explicit_u8_u32 bool_nd=unsupported_shared_api invalid_indices=raw_only flex32=direct scalar_nd=checked",
+        serde_json::json!({"dtypes":summary.dtypes,"index_dtypes":summary.index_dtypes,"cases":summary.cases(),"unsupported_bool_nd":summary.unsupported_bool_nd,"gather":summary.gather,"select":summary.select,"gather_nd":summary.gather_nd,"scatter_assign":summary.scatter_assign,"select_assign":summary.select_assign,"scatter_nd_assign":summary.scatter_nd_assign,"argmin":summary.argmin,"argmax":summary.argmax,"sort_pairs":summary.sort_pairs,"topk_pairs":summary.topk_pairs,"argsort":summary.argsort,"argtopk":summary.argtopk,"argwhere":summary.argwhere,"source_checks":summary.source_checks,"values":summary.values})
+    ));
     movement::run(backend)?;
     let summary = d3os_ai::burn::tensor::try_read_sync(d3os_ai::validation::movement::run(&device, &d3os_ai::validation::movement::Options::default()))
         .ok_or_else(|| String::from("native movement future did not complete"))??;
     crate::report(format_args!(
         "BURN_MOVEMENT_CONFORMANCE_OK os=d3os backend=native dtypes={} cases={} gather={} select={} mask_where={} mask_fill={} slice_assign={} cat={} pad={} mask_select={} argwhere={} bool_scatter_or={} source_checks={} values={} bool_storage=explicit_u8_u32 exact_bytes=true flex32=direct empty_bool_scatter=checked bool_masks=all_stores views=offset,step,reversed,transposed,broadcast overlap=true tails=1,127,128,129,257 empty=true reference=byte_records",
-        summary.dtypes,summary.cases(),summary.gather,summary.select,summary.mask_where,summary.mask_fill,summary.slice_assign,summary.cat,summary.pad,summary.mask_select,summary.argwhere,summary.bool_scatter_or,summary.source_checks,summary.values,
+        summary.dtypes,
+        summary.cases(),
+        summary.gather,
+        summary.select,
+        summary.mask_where,
+        summary.mask_fill,
+        summary.slice_assign,
+        summary.cat,
+        summary.pad,
+        summary.mask_select,
+        summary.argwhere,
+        summary.bool_scatter_or,
+        summary.source_checks,
+        summary.values,
     ));
     predicate::run(backend)?;
     let result = d3os_ai::validation::predicate::run(&device, &d3os_ai::validation::predicate::Options::default())?;
     crate::report(format_args!(
         "BURN_PREDICATE_CONFORMANCE_OK os=d3os backend=native numeric_dtypes={} bool_dtypes=2 cases={} comparisons={} scalars={} classifications={} boolean={} source_checks={} half_patterns={} values={} bool_storage=explicit_u8_u32 canonical_bytes=true flex32=direct ieee=full views=reversed,transposed,offset,broadcast tails=1,127,128,129,257 empty=true reference=host_types",
-        result.numeric_dtypes, result.cases(), result.comparison_cases, result.scalar_cases, result.classification_cases,
-        result.boolean_cases, result.source_checks, result.half_patterns, result.values,
+        result.numeric_dtypes,
+        result.cases(),
+        result.comparison_cases,
+        result.scalar_cases,
+        result.classification_cases,
+        result.boolean_cases,
+        result.source_checks,
+        result.half_patterns,
+        result.values,
     ));
     scans::run(backend)?;
     sort::run(backend)?;
