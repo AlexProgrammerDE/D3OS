@@ -24,6 +24,42 @@ fn main() {
         source.push_str(&fs::read_to_string(format!("src/{file}")).expect("read tile source"));
         source.push('\n');
     }
+    println!("cargo:rerun-if-changed=src/burn-quantization.rs.in");
+    let quantization = fs::read_to_string("src/burn-quantization.rs.in").expect("read quantization source");
+    let (address, entry) = quantization.split_once("#[cutile::entry()]").expect("quantization entry");
+    let addresses = (0..8)
+        .rev()
+        .map(|axis| {
+            format!(
+                "let dim = unsafe {{ read_tile(metadata, broadcast_scalar({axis}u32, shape![128]), broadcast_scalar(true, shape![128]), 1u32) }};\n\
+         let dim = select(eq_tile(dim, broadcast_scalar(0u32, shape![128])), broadcast_scalar(1u32, shape![128]), dim);\n\
+         let stride = unsafe {{ read_tile(metadata, broadcast_scalar({stride}u32, shape![128]), broadcast_scalar(true, shape![128]), 0u32) }};\n\
+         let stride: Tile<i32, {{ [128] }}> = bitcast(stride);\n\
+         let block = unsafe {{ read_tile(metadata, broadcast_scalar({block}u32, shape![128]), broadcast_scalar(true, shape![128]), 1u32) }};\n\
+         let block = select(eq_tile(block, broadcast_scalar(0u32, shape![128])), broadcast_scalar(1u32, shape![128]), block);\n\
+         let scale_stride = unsafe {{ read_tile(metadata, broadcast_scalar({scale}u32, shape![128]), broadcast_scalar(true, shape![128]), 0u32) }};\n\
+         let coordinate = linear % dim;\n\
+         {advance}\n\
+         scale = scale + (coordinate / block) * scale_stride;\n\
+         let coordinate: Tile<i32, {{ [128] }}> = bitcast(coordinate);\n\
+         address = address + coordinate * stride;\n",
+                stride = 8 + axis,
+                block = 16 + axis,
+                scale = 24 + axis,
+                advance = if axis == 0 { "" } else { "linear = linear / dim;" },
+            )
+        })
+        .collect::<String>();
+    source.push_str(&address.replace("QUANTIZATION_ADDRESSES", &addresses));
+    for operation in [0, 1, 2] {
+        let operation = d3os_nvidia::compute::quantization::Operation::from_raw(operation).expect("quantization operation");
+        source.push_str("#[cutile::entry()]");
+        source.push_str(
+            &entry
+                .replace("QUANTIZATION_ENTRY", operation.symbol())
+                .replace("QUANTIZATION_MODE", &format!("{}u32", operation as u32)),
+        );
+    }
     println!("cargo:rerun-if-changed=src/burn-random.rs.in");
     let random = fs::read_to_string("src/burn-random.rs.in").expect("read random source");
     for mode in d3os_nvidia::compute::random::Mode::ALL {

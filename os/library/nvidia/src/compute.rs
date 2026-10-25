@@ -7,13 +7,14 @@ pub mod elementwise;
 pub mod indexing;
 pub mod optimizer;
 pub mod pooling;
+pub mod quantization;
 pub mod random;
 pub mod range;
 pub mod reduction;
 pub mod updates;
 pub mod words;
 
-pub const VERSION: u32 = 20;
+pub const VERSION: u32 = 21;
 /// END_COMMANDS flag: an inner recording scope joins its parent's completion.
 /// The outermost scope always waits. Zero retains synchronous nested scopes.
 pub const DEFER_NESTED_COMPLETION: u64 = 1;
@@ -47,7 +48,7 @@ pub struct MemoryProfile {
     pub device_cached_bytes: u64,
     pub device_retired_bytes: u64,
 }
-pub const KERNEL_COUNT: usize = 60;
+pub const KERNEL_COUNT: usize = 61;
 
 /// CPU service costs by request operation, including queue work within it.
 #[derive(Clone, Copy, Debug, Default)]
@@ -164,9 +165,10 @@ pub enum Kernel {
     Random = 57,
     Range = 58,
     Adam = 59,
+    TensorQuantized = 60,
 }
 
-const _: () = assert!(Kernel::Adam as usize + 1 == KERNEL_COUNT);
+const _: () = assert!(Kernel::TensorQuantized as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -211,6 +213,7 @@ impl Kernel {
         matches!(
             self,
             Self::TensorElementwise
+                | Self::TensorQuantized
                 | Self::Adam
                 | Self::MaskWhere
                 | Self::Random
@@ -316,6 +319,7 @@ impl Kernel {
             57 => Self::Random,
             58 => Self::Range,
             59 => Self::Adam,
+            60 => Self::TensorQuantized,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -382,12 +386,16 @@ impl Kernel {
             Self::Random => "burn_random_words",
             Self::Range => "burn_i32_range",
             Self::Adam => "burn_adam",
+            Self::TensorQuantized => "burn_quantize",
         }
     }
 
     /// Select the cuTile specialization without changing the public request ABI.
     pub fn entry(self, parameters: &[u32]) -> &'static str {
         match (self, parameters) {
+            (Self::TensorQuantized, p) if p.len() == quantization::PARAMETERS => {
+                quantization::Operation::from_raw(p[4]).map_or(self.symbol(), |op| op.symbol())
+            }
             (Self::Random, p) if p.len() == random::PARAMETERS => random::Mode::from_raw(p[5]).map_or(self.symbol(), |op| op.symbol()),
             (Self::Pool | Self::PoolBackward, p) if p.len() == pooling::PARAMETERS => {
                 pooling::Mode::from_raw(p[31]).map_or(self.symbol(), |op| op.symbol(self == Self::PoolBackward))
@@ -444,6 +452,11 @@ impl Kernel {
         let mut mutated = 0;
         let mut threads = 128;
         let (count, pointers, output, in_place) = match (self, p) {
+            (Self::TensorQuantized, p) => {
+                let (ranges, count) = quantization::validate(p)?;
+                extents[..4].copy_from_slice(&ranges);
+                (count, 4, 3, false)
+            }
             (Self::Adam, p) => {
                 extents[..6].copy_from_slice(&optimizer::validate(p)?);
                 (p[0], 6, 5, false)

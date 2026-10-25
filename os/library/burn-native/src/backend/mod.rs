@@ -22,6 +22,7 @@ use d3os_compute::{Backend as _, Error, nvidia::Nvidia};
 use d3os_nvidia::compute::{elementwise::Elementwise, reduction::Reduction, words::WordOp};
 pub use execution::BackendTensor;
 use execution::{CONTEXT, Cause};
+pub use quantized::BackendQuantizedTensor;
 
 /// D3OS's process-owned native NVIDIA backend.
 #[derive(Clone, Debug, Default)]
@@ -32,7 +33,7 @@ impl BackendTypes for Native {
     type FloatTensorPrimitive = BackendTensor;
     type IntTensorPrimitive = BackendTensor;
     type BoolTensorPrimitive = BackendTensor;
-    type QuantizedTensorPrimitive = BackendTensor;
+    type QuantizedTensorPrimitive = BackendQuantizedTensor;
     type GraphPrimitive = GraphUnsupported;
 }
 
@@ -62,6 +63,7 @@ impl Backend for Native {
             DType::F32 => DTypeUsage::general() | DTypeUsage::Accelerated,
             DType::Bool(burn_backend::BoolStore::U32) => DTypeUsage::general(),
             DType::I32 => DTypeUsage::Storage.into(),
+            DType::QFloat(scheme) if crate::quantization::supported_scheme(&scheme) => DTypeUsage::Storage.into(),
             _ => DTypeUsageSet::empty(),
         }
     }

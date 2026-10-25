@@ -1,0 +1,70 @@
+// View metadata contains eight dimensions, signed input strides, block sizes,
+// and contiguous scale-grid strides. Malformed metadata cannot escape buffers.
+unsafe fn burn_quantization_address(
+    metadata: *const u32, index: Tile<u32, { [128] }>, offset: u32,
+) -> (Tile<u32, { [128] }>, Tile<u32, { [128] }>) {
+    let mut linear = index;
+    let mut address = broadcast_scalar(signed(offset), shape![128]);
+    let mut scale = broadcast_scalar(0u32, shape![128]);
+    QUANTIZATION_ADDRESSES
+    (bitcast(address), scale)
+}
+
+#[cutile::entry()]
+unsafe fn QUANTIZATION_ENTRY(
+    input: *const u32, scales: *const f32, metadata: *const u32, output: *mut u32,
+    count: u32, source: u32, scale_count: u32, bits: u32, _operation: u32, symmetric: u32, offset: u32, _reserved: u32,
+) {
+    let i = indices();
+    let factor = 32u32 / bits;
+    let field_mask = (1u32 << bits) - 1u32;
+    let sign_bit = 1u32 << (bits - 1u32);
+    if QUANTIZATION_MODE == 1u32 {
+        let mask = lt_tile(i, broadcast_scalar(count, shape![128]));
+        let (address, scale_address) = unsafe { burn_quantization_address(metadata, i, offset) };
+        let word = unsafe {
+            read_tile(input, address / broadcast_scalar(factor, shape![128]), mask & lt_tile(address, broadcast_scalar(source, shape![128])), 0u32)
+        };
+        let shift = (address % broadcast_scalar(factor, shape![128])) * broadcast_scalar(bits, shape![128]);
+        let field = (word >> shift) & broadcast_scalar(field_mask, shape![128]);
+        let value = (field ^ broadcast_scalar(sign_bit, shape![128])) - broadcast_scalar(sign_bit, shape![128]);
+        let value: Tile<i32, { [128] }> = bitcast(value);
+        let value: Tile<f32, { [128] }> = itof(value, rounding::NearestEven);
+        let scale = unsafe { read_tile(scales, scale_address, mask & lt_tile(scale_address, broadcast_scalar(scale_count, shape![128])), 0f32) };
+        let result: Tile<u32, { [128] }> = bitcast(value * scale);
+        unsafe { write_tile(output, i, result, mask) };
+    } else {
+        let words = (count + factor - 1u32) / factor;
+        let mask = lt_tile(i, broadcast_scalar(words, shape![128]));
+        let mut packed = broadcast_scalar(0u32, shape![128]);
+        let mut position = 0u32;
+        while position < factor {
+            let logical = i * broadcast_scalar(factor, shape![128]) + broadcast_scalar(position, shape![128]);
+            let valid = mask & lt_tile(logical, broadcast_scalar(count, shape![128]));
+            let (address, scale_address) = unsafe { burn_quantization_address(metadata, logical, offset) };
+            let value: Tile<u32, { [128] }> = if QUANTIZATION_MODE == 0u32 {
+                let word = unsafe { read_tile(input, address, valid & lt_tile(address, broadcast_scalar(source, shape![128])), 0u32) };
+                let value: Tile<f32, { [128] }> = bitcast(word);
+                let scale = unsafe { read_tile(scales, scale_address, valid & lt_tile(scale_address, broadcast_scalar(scale_count, shape![128])), 0f32) };
+                let scaled = divf(value, scale, rounding::NearestEven, ftz::Disabled);
+                let scaled: Tile<f32, { [128] }> = bitcast(burn_round_even(bitcast(scaled)));
+                let high = broadcast_scalar(float_u32(sign_bit - 1u32), shape![128]);
+                let low = broadcast_scalar(0f32 - float_u32(sign_bit - symmetric), shape![128]);
+                let clamped = select(lt_tile(scaled, low), low, select(gt_tile(scaled, high), high, scaled));
+                // NaNs and padding become zero before the conversion's finite domain.
+                let safe = select(valid & eq_tile(clamped, clamped), clamped, broadcast_scalar(0f32, shape![128]));
+                let integer: Tile<i32, { [128] }> = ftoi(safe, rounding::NearestIntToZero);
+                bitcast(integer)
+            } else {
+                let word = unsafe {
+                    read_tile(input, address / broadcast_scalar(factor, shape![128]), valid & lt_tile(address, broadcast_scalar(source, shape![128])), 0u32)
+                };
+                let shift = (address % broadcast_scalar(factor, shape![128])) * broadcast_scalar(bits, shape![128]);
+                select(valid, word >> shift, broadcast_scalar(0u32, shape![128]))
+            };
+            packed = packed | ((value & broadcast_scalar(field_mask, shape![128])) << broadcast_scalar(position * bits, shape![128]));
+            position = position + 1u32;
+        }
+        unsafe { write_tile(output, i, packed, mask) };
+    }
+}

@@ -170,7 +170,7 @@ The GPU operations include FP32 arithmetic and math, reductions, exact tensor fi
 Another 29 entries implement I32 arithmetic, signed comparisons, bitwise operations, boolean logic, masks, and conversions.
 These operations support strided views and broadcasting. Input tensors remain shared and immutable.
 Full writers avoid a separate output clear. Empty logical outputs require no element work.
-The matching SDK and driver use native compute protocol version 20.
+The matching SDK and driver use native compute protocol version 21.
 
 The D3OS GPU self-test passes reversed and transposed views, overlapping windows, broadcast batches, subviews, empty dimensions, and neighboring guards.
 Matrix references use independent FP64 accumulation. Math references use independent libm functions and include 2,816 FP32 edge values.
@@ -287,11 +287,12 @@ AlexNet, Qwen, and all 600 DOOM reference views pass with the matching SDK and k
 
 Operator coverage remains incomplete. Unsupported native operations return execution errors instead of CPU results.
 The gaps include integer division, integer matrix products, scans, some FP32 math, compaction, and sorting.
-Generic Burn quantization, non-additive indexed updates, three-dimensional convolutions, transposed convolutions, and interpolation also remain incomplete.
+Complete Burn quantization, non-additive indexed updates, three-dimensional convolutions, transposed convolutions, and interpolation also remain incomplete.
 The native backend also uses Burn's `GraphUnsupported` primitive, so captured graph replay remains a gap.
-Its advertised dtype capabilities currently cover F32, I32 storage, and U32 boolean storage.
-The public `QTensorOps` quantization and dequantization methods still return unsupported-operation errors.
-Packed GGUF projection support does not close those public API or dtype gaps.
+Its advertised dtype capabilities cover F32, I32 storage, U32 boolean storage, and the integer quantization storage described below.
+The public `QTensorOps` quantization and dequantization methods now execute for six integer formats with F32 scales.
+Floating-point quantization formats, additional scale dtypes, and optimized public quantized matrix products remain open.
+Packed GGUF projection support does not close those remaining public API or dtype gaps.
 Qwen now has public Burn extensions for packed projections, embeddings, gates, and normalization.
 Attention caches and recurrent state now use public Burn tensors.
 The full model, loading, and generation now use these Burn extensions.
@@ -374,6 +375,64 @@ The remaining preparation and generation gaps need fixes in the maintained Burn 
 Large-model native correctness now passes; matched Linux parity remains open.
 
 The retained Linux and D3OS measurements are in [Native NVIDIA performance](nvidia-performance.md).
+
+## Public integer quantization
+
+Burn's public `quantize`, `quantize_dynamic`, `dequantize`, and quantized data import and export now use native GPU storage and cuTile kernels.
+The supported values are `Q8S`, `Q8F`, `Q4S`, `Q4F`, `Q2S`, and `Q2F`.
+The `S` variants use symmetric integer ranges. The `F` variants use the full signed integer range.
+These are integer formats; `Q8F` does not mean FP8.
+
+The backend supports one F32 scale per tensor or per rectangular block.
+Dynamic calibration uses Burn's min/max and scale calculations through resident GPU primitives.
+Public one-dimensional scale tensors are reshaped to their block grid after their element counts are checked.
+The block grid follows each tensor axis, including blocks that do not span the innermost dimension.
+
+Quantized values occupy packed device words, with four, eight, or sixteen values per word.
+Eight-bit values also support Burn's native byte storage format.
+Packed storage can use any supported tensor axis, with that axis preserved through transposition and serialization.
+Packed dimensions must contain complete words, and tensor dimensions must contain complete quantization blocks.
+General reshapes of multidimensional block schemes remain restricted.
+
+Quantized tensors own their values and scales through shared GPU storage.
+Permutations and flips preserve the values required by other tensors.
+Serialization copies packed values on the GPU before reading them and retains the scale grid's storage order.
+Native byte imports accept both compact values and alignment padding before F32 scales.
+Output conversion uses FP32; other output dtypes remain part of the dtype implementation work.
+
+```rust
+use d3os_ai::burn::tensor::{
+    Tensor,
+    quantization::{QuantScheme, QuantValue, ScaleDtype},
+};
+
+let device = d3os_ai::native_device()?;
+let input = Tensor::<2>::ones([4, 32], &device);
+let scheme = QuantScheme::default()
+    .with_value(QuantValue::Q4S)
+    .per_block([1, 32], ScaleDtype::F32);
+let packed = input.quantize_dynamic(&scheme);
+let restored = packed.dequantize();
+```
+
+The D3OS GPU check passes independent nearest-even rounding and packed-byte references for all six formats.
+It covers serialization and reload, shared inputs, transposition, outer-axis packing, flips, simple reshapes, rectangular block scales, dynamic calibration, zero inputs, empty tensors, and native byte tails.
+Guarded raw launches verify partial words and output boundaries for 8-, 4-, and 2-bit values.
+Forged view metadata also remains inside the input and output allocations.
+Quantization and dequantization perform no host activation readback.
+Each launch uploads a small view-metadata buffer; the tensor values and scales remain on the GPU.
+
+The complete pre-existing GPU operator suite also passes.
+All 181 previous inference entries and their compiler constant banks remain byte-identical.
+The portable bundle adds three spill-free entries and retains every Tensor Core instruction audit.
+Its 184-entry inference module is compiled inside D3OS, with all generated module hashes matching the host audits.
+The matching SDK and driver require protocol 21.
+
+Evidence is under `target/nvidia/burn-quantization-validation/first/`.
+The checked portable bundle is under `target/nvidia/burn-quantization-kernels/` and now populates the default kernel directory.
+These results establish native integer quantization functionality, not complete backend or Linux performance parity.
+Matched Linux quantization conformance, floating-point formats, additional scale dtypes, two-level scales, and efficient quantized matrix execution remain required.
+Qwen still uses its existing packed-GGUF extensions and FP32 activations until that execution work is integrated and validated.
 
 ## Portable runtime validation
 

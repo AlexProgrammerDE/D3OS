@@ -96,6 +96,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         compile(&output, "tensor-matmul", &["tensor_matmul_f16", "tensor_matmul_bf16"], toolkit.as_deref())?;
         let mut inference: Vec<&str> = (0..KERNEL_COUNT).map(|id| Kernel::from_raw(id as u32).expect("kernel ID").symbol()).collect();
         inference.extend([
+            "burn_dequantize",
+            "burn_quantized_copy",
             "vector_project_tf32x3",
             "vector_project_bf16_weights",
             "vector_project_paired_bf16_weights",

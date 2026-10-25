@@ -111,6 +111,10 @@ pub struct BackendTensor {
 }
 
 impl BackendTensor {
+    pub(super) fn failure(&self) -> Option<Arc<Failure>> {
+        self.value.as_ref().err().cloned()
+    }
+
     pub(super) fn read_value<T>(&self, operation: &'static str, work: impl FnOnce(&NativeTensor) -> d3os_compute::Result<T>) -> Result<T, ExecutionError> {
         let value = self.value.as_ref().map_err(|failure| failure.report())?;
         if let Some(failure) = CONTEXT.poisoned() {

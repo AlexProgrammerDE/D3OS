@@ -7,9 +7,10 @@ mod integers;
 mod linear;
 mod math;
 mod matrix;
-mod optimizer;
 mod memory;
+mod optimizer;
 mod pooling;
+mod quantization;
 mod qwen;
 mod random;
 mod scatter;
@@ -126,6 +127,7 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     random::run(backend).map_err(|e| format!("Burn native random: {e}"))?;
     qwen::run(backend).map_err(|e| format!("Burn Qwen extensions: {e}"))?;
     selection::run(backend)?;
+    quantization::run(backend)?;
     dispatch::run(backend).map_err(|e| format!("Burn public dispatch: {e}"))?;
     Ok(())
 }

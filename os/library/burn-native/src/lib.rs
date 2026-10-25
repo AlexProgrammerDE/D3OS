@@ -9,6 +9,7 @@ mod device;
 pub mod layout;
 mod linear;
 pub mod pooling;
+pub mod quantization;
 pub mod random;
 pub mod range;
 mod tensor;
