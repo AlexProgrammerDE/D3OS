@@ -323,6 +323,43 @@ fn main() {
                 .replace("REDUCE_OP", &format!("{}u32", (op as u32) % 7)),
         );
     }
+    println!("cargo:rerun-if-changed=src/burn-sort.rs.in");
+    let sort = fs::read_to_string("src/burn-sort.rs.in").expect("read sort template");
+    let (helpers, entry) = sort.split_once("#[cutile::entry()]").expect("sort entry");
+    let mut address_names = vec!["offset".to_owned()];
+    address_names.extend((0..8).map(|a| format!("dim{a}")));
+    address_names.extend((0..8).map(|a| format!("stride{a}")));
+    let address_arguments = address_names.join(", ");
+    let address_parameters = address_names.iter().map(|n| format!("{n}: u32")).collect::<Vec<_>>().join(", ");
+    let addresses = (0..8).rev().map(|axis| {
+        let advance = if axis == 0 { String::new() } else { format!("linear = linear / broadcast_scalar(dim{axis}, shape![128]);") };
+        format!("let coordinate = linear % broadcast_scalar(dim{axis}, shape![128]);\n{advance}\nlet coordinate: Tile<i32, {{ [128] }}> = bitcast(coordinate);\naddress = address + coordinate * broadcast_scalar(signed(stride{axis}), shape![128]);\n")
+    }).collect::<String>();
+    source.push_str(
+        &helpers
+            .replace("SORT_ADDRESS_PARAMETERS", &address_parameters)
+            .replace("SORT_ADDRESSES", &addresses),
+    );
+    let mut sort_parameters = ["count", "_rank", "_mode", "_axis", "offset", "extent", "length", "suffix"]
+        .map(str::to_owned)
+        .to_vec();
+    sort_parameters.extend(address_names.into_iter().skip(1));
+    sort_parameters.extend(["width", "search_steps"].map(str::to_owned));
+    sort_parameters.extend((26..32).map(|a| format!("_reserved{a}")));
+    let sort_parameters = sort_parameters.iter().map(|n| format!("{n}: u32")).collect::<Vec<_>>().join(", ");
+    for mode in d3os_nvidia::compute::sort::Mode::ALL {
+        source.push_str("#[cutile::entry()]");
+        source.push_str(
+            &entry
+                .replace("SORT_ENTRY", mode.symbol())
+                .replace("SORT_PARAMETERS", &sort_parameters)
+                .replace("SORT_ADDRESS_ARGUMENTS", &address_arguments)
+                .replace("SORT_INITIAL", &mode.initial().to_string())
+                .replace("SORT_INTEGER", &mode.integer().to_string())
+                .replace("SORT_DESCENDING", &mode.descending().to_string())
+                .replace("SORT_TOPK", &mode.topk().to_string()),
+        );
+    }
     println!("cargo:rerun-if-changed=src/quantized.rs.in");
     let quantized = fs::read_to_string("src/quantized.rs.in").expect("read quantized template");
     for width in [128, 512] {

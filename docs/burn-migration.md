@@ -288,7 +288,9 @@ All 166 earlier GPU instruction sections remain byte-identical after the eight n
 AlexNet, Qwen, and all 600 DOOM reference views pass with the matching SDK and kernel bundle.
 
 Operator coverage remains incomplete. Unsupported native operations return execution errors instead of CPU results.
-The gaps include integer division, integer matrix products, scans, some FP32 math, compaction, and sorting.
+Resident I32 division and matrix products, FP32 erf, cumulative operations, sorting, argsort, and top-k now pass native GPU checks.
+The [coverage report](burn-backend-coverage.md) records their shapes, numerical semantics, Linux failures, and remaining dtype restrictions.
+The gaps include further ordinary dtypes, additional FP32 math, compaction, and further indexed operations.
 Complete Burn quantization, non-additive indexed updates, three-dimensional convolutions, transposed convolutions, and interpolation also remain incomplete.
 The native backend also uses Burn's `GraphUnsupported` primitive, so captured graph replay remains a gap.
 Its advertised dtype capabilities cover F32, I32 storage, U32 boolean storage, and the quantization storage described below.

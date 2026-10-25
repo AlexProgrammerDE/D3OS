@@ -385,16 +385,35 @@ impl FloatTensorOps<Self> for Native {
     fn float_gather_nd(data: BackendTensor, indices: BackendTensor) -> BackendTensor {
         BackendTensor::unsupported("float_gather_nd", data.shape(), data.dtype(), &[&data, &indices], "multidimensional gather")
     }
-    fn float_sort(tensor: BackendTensor, _dim: usize, _descending: bool) -> BackendTensor {
-        BackendTensor::unsupported("float_sort", tensor.shape(), tensor.dtype(), &[&tensor], "GPU sorting")
+    fn float_sort(tensor: BackendTensor, dim: usize, descending: bool) -> BackendTensor {
+        one("float_sort", &tensor, tensor.dtype(), |t| t.sort(dim, descending).map(|(values, _)| values))
     }
-    fn float_sort_with_indices(tensor: BackendTensor, _dim: usize, _descending: bool, indices_dtype: IntDType) -> (BackendTensor, BackendTensor) {
-        let output = BackendTensor::unsupported("float_sort_with_indices", tensor.shape(), tensor.dtype(), &[&tensor], "GPU sorting");
-        let indices = BackendTensor::unsupported("float_sort_with_indices", tensor.shape(), indices_dtype.into(), &[&output], "GPU sorting");
-        (output, indices)
+    fn float_topk(tensor: BackendTensor, dim: usize, k: usize) -> BackendTensor {
+        BackendTensor::apply("float_topk", topk_shape(&tensor, dim, k), tensor.dtype(), &[&tensor], |v| {
+            v[0].topk(dim, k).map(|(values, _)| values)
+        })
     }
-    fn float_argsort(tensor: BackendTensor, _dim: usize, _descending: bool, out_dtype: IntDType) -> BackendTensor {
-        BackendTensor::unsupported("float_argsort", tensor.shape(), out_dtype.into(), &[&tensor], "GPU sorting")
+    fn float_topk_with_indices(tensor: BackendTensor, dim: usize, k: usize, index_dtype: IntDType) -> (BackendTensor, BackendTensor) {
+        topk_pair("float_topk_with_indices", &tensor, dim, k, index_dtype)
+    }
+    fn float_argtopk(tensor: BackendTensor, dim: usize, k: usize, out_dtype: IntDType) -> BackendTensor {
+        BackendTensor::apply("float_argtopk", topk_shape(&tensor, dim, k), out_dtype.into(), &[&tensor], |v| {
+            if out_dtype != IntDType::I32 {
+                return Err(Error::InvalidParameter);
+            }
+            v[0].topk(dim, k).map(|(_, indices)| indices)
+        })
+    }
+    fn float_sort_with_indices(tensor: BackendTensor, dim: usize, descending: bool, indices_dtype: IntDType) -> (BackendTensor, BackendTensor) {
+        sorted_pair("float_sort_with_indices", &tensor, dim, descending, indices_dtype)
+    }
+    fn float_argsort(tensor: BackendTensor, dim: usize, descending: bool, out_dtype: IntDType) -> BackendTensor {
+        one("float_argsort", &tensor, out_dtype.into(), |t| {
+            if out_dtype != IntDType::I32 {
+                return Err(Error::InvalidParameter);
+            }
+            t.sort(dim, descending).map(|(_, indices)| indices)
+        })
     }
     async fn float_mask_select(tensor: BackendTensor, mask: BackendTensor) -> BackendTensor {
         BackendTensor::unsupported("float_mask_select", Shape::new([0]), tensor.dtype(), &[&tensor, &mask], "GPU compaction")

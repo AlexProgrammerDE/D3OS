@@ -1,6 +1,66 @@
 use d3os_nvidia::compute::Kernel;
 
 #[test]
+fn sort_passes_bound_packed_outputs_and_validate_source_layouts() {
+    use d3os_nvidia::compute::sort::{Mode, validate};
+    let mut initial = [0u32; 32];
+    initial[..8].copy_from_slice(&[1935, 3, 4, 1, 640, 1935, 129, 5]);
+    initial[8..16].fill(1);
+    initial[8..11].copy_from_slice(&[3, 129, 5]);
+    initial[16..19].copy_from_slice(&[645, (-5i32) as u32, 1]);
+    initial[24..26].copy_from_slice(&[1, 1]);
+    let mut dense = initial;
+    dense[4] = 0;
+    dense[17] = 5;
+    dense[24..26].copy_from_slice(&[128, 8]);
+    for mode in Mode::ALL {
+        let mut p = if mode.initial() { initial } else { dense };
+        p[2] = mode as u32;
+        let work = Kernel::TensorSort.work(&p).unwrap();
+        assert_eq!(work.extents[..3], [1935, if mode.initial() { 0 } else { 1935 }, 3870]);
+        assert_eq!((work.threads, work.blocks, work.pointers, work.output), (128, 16, 3, 2));
+        assert!(!work.in_place);
+        assert!(Kernel::TensorSort.allocates_output());
+        assert!(work.validate_aliases(&[0x10000, 0x20000, 0x30000]).is_ok());
+        assert!(work.validate_aliases(&[0x10000, 0x20000, 0x10004]).is_err());
+        if !mode.initial() {
+            assert!(work.validate_aliases(&[0x10000, 0x20000, 0x20004]).is_err());
+        }
+    }
+    for (field, value) in [
+        (0, 1934),
+        (1, 0),
+        (1, 9),
+        (2, 8),
+        (3, 3),
+        (4, 639),
+        (5, 1934),
+        (6, 0),
+        (6, u32::MAX),
+        (7, 4),
+        (9, 128),
+        (11, 2),
+        (19, 1),
+        (24, 0),
+        (24, 3),
+        (24, 2),
+        (25, 2),
+        (26, 1),
+    ] {
+        let mut p = initial;
+        p[field] = value;
+        assert!(validate(&p).is_err());
+    }
+    dense[2] = Mode::FloatAscending as u32;
+    for (field, value) in [(4, 1), (5, 1936), (17, (-5i32) as u32), (24, 512), (25, 7)] {
+        let mut p = dense;
+        p[field] = value;
+        assert!(validate(&p).is_err());
+    }
+    assert!(validate(&initial[..31]).is_err());
+}
+
+#[test]
 fn cumulative_work_checks_signed_views_dense_output_and_chunk_rows() {
     use d3os_nvidia::compute::scan::Scan;
     let mut p = [0u32; 24];

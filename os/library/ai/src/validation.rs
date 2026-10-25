@@ -7,6 +7,7 @@ pub mod quantization;
 pub mod qwen;
 pub mod qwen_state;
 pub mod scan;
+pub mod sort;
 use alloc::{format, string::String};
 use burn::{
     module::{Module, Param},

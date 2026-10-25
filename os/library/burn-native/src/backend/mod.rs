@@ -92,6 +92,39 @@ fn cast(op: &'static str, tensor: &BackendTensor, dtype: DType) -> BackendTensor
     one(op, tensor, dtype, |t| t.cast(dtype))
 }
 
+fn sorted_pair(op: &'static str, tensor: &BackendTensor, axis: usize, descending: bool, index_dtype: burn_backend::IntDType) -> (BackendTensor, BackendTensor) {
+    BackendTensor::pair(
+        op,
+        [tensor.shape(), tensor.shape()],
+        [tensor.dtype(), index_dtype.into()],
+        &[tensor],
+        |values| {
+            if index_dtype != burn_backend::IntDType::I32 {
+                return Err(Error::InvalidParameter);
+            }
+            values[0].sort(axis, descending)
+        },
+    )
+}
+
+fn topk_shape(tensor: &BackendTensor, axis: usize, k: usize) -> Shape {
+    let mut shape = tensor.shape();
+    if let Some(size) = shape.get_mut(axis) {
+        *size = k;
+    }
+    shape
+}
+
+fn topk_pair(op: &'static str, tensor: &BackendTensor, axis: usize, k: usize, index_dtype: burn_backend::IntDType) -> (BackendTensor, BackendTensor) {
+    let shape = topk_shape(tensor, axis, k);
+    BackendTensor::pair(op, [shape.clone(), shape], [tensor.dtype(), index_dtype.into()], &[tensor], |values| {
+        if index_dtype != burn_backend::IntDType::I32 {
+            return Err(Error::InvalidParameter);
+        }
+        values[0].topk(axis, k)
+    })
+}
+
 fn view(op: &'static str, tensor: &BackendTensor, layout: d3os_compute::Result<Layout>) -> BackendTensor {
     let shape = layout.as_ref().map_or_else(|_| tensor.shape(), |l| l.shape().clone());
     BackendTensor::apply(op, shape, tensor.dtype(), &[tensor], |v| v[0].with_layout(layout?))

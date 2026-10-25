@@ -16,6 +16,7 @@ mod random;
 mod scans;
 mod scatter;
 mod selection;
+mod sort;
 mod updates;
 mod words;
 use abi::elementwise::Elementwise;
@@ -144,6 +145,13 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     integers::run(backend).map_err(|e| format!("Burn native integer reductions: {e}"))?;
     words::run(backend).map_err(|e| format!("Burn native words: {e}"))?;
     scans::run(backend)?;
+    sort::run(backend)?;
+    for domain in [d3os_ai::validation::sort::FloatDomain::Ieee, d3os_ai::validation::sort::FloatDomain::Finite] {
+        d3os_ai::validation::sort::run(&device, true, d3os_ai::validation::sort::TopKOrdering::NanFirst, domain)?;
+    }
+    crate::report(format_args!(
+        "BURN_SORT_CONFORMANCE_OK os=d3os backend=native sorting=gpu topk_order=nan_first float_domains=ieee,finite dtypes=f32,i32 sort=true argsort=true topk=true gradients=6 empty=true shared_views=true"
+    ));
     d3os_ai::validation::scan::run(&device, true)?;
     crate::report(format_args!(
         "BURN_SCAN_CONFORMANCE_OK os=d3os backend=native operations=8 reference=i128,f64 lengths=1,127,128,129,257,531 gradients=4 empty=true shared_views=true"

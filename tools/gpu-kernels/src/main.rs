@@ -144,6 +144,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         inference.extend(d3os_nvidia::compute::reduction::Reduction::ALL.iter().skip(1).map(|op| op.symbol()));
         inference.extend(d3os_nvidia::compute::reduction::Reduction::INTEGERS.iter().map(|op| op.symbol()));
         inference.extend(d3os_nvidia::compute::scan::Scan::ALL.iter().skip(1).map(|op| op.symbol()));
+        inference.extend(d3os_nvidia::compute::sort::Mode::ALL.iter().skip(1).map(|mode| mode.symbol()));
         inference.extend(d3os_nvidia::compute::random::Mode::ALL.iter().skip(1).map(|op| op.symbol()));
         inference.extend(d3os_nvidia::compute::words::WordOp::ALL.iter().skip(1).map(|op| op.symbol()));
         inference.extend(d3os_nvidia::compute::indexing::Scatter::ALL.iter().skip(1).map(|op| op.symbol()));

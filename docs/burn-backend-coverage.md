@@ -13,12 +13,12 @@ It also includes float, integer, boolean, quantized, module, activation, transac
 Each method records its signature, source location, conditional compilation attributes, and implementation or inherited default.
 Associated types and source SHA-256 hashes accompany the report.
 
-The current inventory contains 484 methods: 261 native overrides and 223 inherited defaults.
+The current inventory contains 484 methods: 267 native overrides and 217 inherited defaults.
 All required methods have declarations or implementations. This count does not establish runtime support.
-The report also records 101 native helper bodies for manual review of dtype and shape restrictions.
+The report also records 105 native helper bodies for manual review of dtype and shape restrictions.
 
 The tool follows syntactic associated backend calls and expands the pinned `dequant_op_quant!` and `dequant_op_flow!` macros.
-It identifies 57 methods with possible paths to explicit declines or panic declarations.
+It identifies 39 methods with possible paths to explicit declines or panic declarations.
 This number is not an unsupported-operation count. Some paths represent expected invalid-input errors or conditional restrictions.
 
 The analysis does not resolve method types, evaluate conditional compilation, or expand other macros and free helper functions.
@@ -154,13 +154,57 @@ D3OS also passes the raw-bit IEEE, neighboring guard, invalid-bound, and residen
 Empty native scans enqueue no GPU launch. All guest-compiled module hashes match their host audits.
 The complete existing operator suite passes with the expanded bundle.
 
-The portable inference bundle contains 199 entries. All 191 previous instruction and constant sections remain byte-identical.
+The cumulative-operation bundle contains 199 entries. All 191 previous instruction and constant sections remain byte-identical.
 All eight new entries pass the host spill audit.
+
+## Native sorting and top-k
+
+Protocol 28 adds resident FP32 and I32 sorting, sorting with indices, argsort, and top-k.
+Ascending and descending sorts use FP32 total ordering, including signed zeros and NaN payloads.
+Equal keys retain their original axis order. Returned indices use I32 storage.
+Native floating top-k places NaNs first and treats both signed zeros as equal.
+Original axis order resolves top-k ties. This policy remains distinct from the total ordering used by full sorts.
+
+Each merge pass writes every output element, including partial tiles and unmatched tails.
+Gather-based merge partitions keep output addresses independent of index payloads.
+The first pass reads signed or broadcast views directly and initializes original axis indices.
+Subsequent passes alternate between two allocations, each containing values followed by indices.
+The two working allocations contain four words per input element in total, excluding the input.
+A top-k result slices the final allocation through tensor metadata without a host bounds readback.
+This implementation sorts the complete axis even when k is small. Specialized partial selection remains a performance opportunity.
+
+Command recording groups the passes and retains queued buffers through completion.
+Empty results enqueue no GPU launch. Invalid axes remain errors for empty tensors.
+Top-k accepts k equal to the axis length. Burn's public argtopk requires k smaller than that length.
+The paired allocation limits sorting to 1,073,741,823 logical elements, within the existing rank and layout limits.
+Other ordinary dtypes and index dtypes remain unresolved.
+
+The shared checks cover lengths 1, 2, 3, 127, 128, 129, 257, and 1025 across all axes of signed views.
+They check exact stored bits, index permutations, broadcast storage, empty shapes, and retained input values.
+Six independent gradient references cover both directions of sorting and top-k, through values-only and indexed APIs.
+D3OS passes the IEEE and finite-input checks on the physical GPU.
+Its raw checks also pass all ten modes, neighboring guards, invalid bounds, complete writers, and queued buffer lifetime.
+The resident multi-pass checks require exactly two allocations and no tensor upload, download, or separate clear.
+
+The complete existing operator suite passes, and all guest-compiled modules match their host audit hashes.
+
+The pinned Linux backend uses a host fallback for sort and argsort, but runs top-k and its gradients on the GPU.
+Its IEEE run fails: top-k returns the most negative finite FP32 value where the input contains negative infinity.
+The exact output words are `0xff7fffff` instead of `0xff800000`.
+That failed run remains evidence. D3OS does not copy the Linux sentinel result.
+The first Linux finite-input run reached its 300-second deadline without a success marker.
+The diagnostic ended with a guest out-of-memory kill of `burn-sort` at 583 seconds.
+That run used 4 GiB of guest RAM and retained basic CubeCL compilation logs.
+CPU checks and restricted comparisons do not establish complete GPU parity.
+
+The current portable inference bundle contains 209 entries and 65 native kernel profiles.
+All 199 earlier instruction and constant sections remain byte-identical. The ten new entries pass the host spill audit.
+These checks establish correctness for the tested cases. They contain no performance or compilation-time parity measurement.
 
 ## Remaining implementation areas
 
 The unresolved work includes ordinary dtypes, complete integer arithmetic, matrix products for further dtypes, and additional floating-point operations.
-Sorting, compaction, non-additive updates, further convolution variants, deformable convolution, and interpolation also require coverage.
+Further sorting dtypes, compaction, non-additive updates, further convolution variants, deformable convolution, and interpolation also require coverage.
 Graph capture, profiling, memory capabilities, records, and observable errors require matched Linux capability checks.
 The current layout also restricts rank to eight and extents to signed 32-bit values.
 The method inventory records defaults, but each composed path still needs dtype, shape, ownership, and execution checks.
@@ -178,7 +222,7 @@ Build the Linux probes with their default CUDA feature:
 
 ```bash
 cd tools/mnist-benchmark
-cargo build --release --locked --bin capabilities --bin erf --bin integer --bin integer_matrix --bin scan
+cargo build --release --locked --bin capabilities --bin erf --bin integer --bin integer_matrix --bin scan --bin sort
 cd ../..
 ```
 
@@ -200,6 +244,9 @@ python3 tools/nvidia/linux-reference.py \
 python3 tools/nvidia/linux-reference.py \
   --directory target/nvidia/linux-burn-scan \
   --burn-scan tools/mnist-benchmark/target/release/scan
+python3 tools/nvidia/linux-reference.py \
+  --directory target/nvidia/linux-burn-sort \
+  --burn-sort tools/mnist-benchmark/target/release/sort
 ```
 
 If the all-shape matrix check fails, run the nonempty comparison in a separate directory:
@@ -219,6 +266,17 @@ python3 tools/nvidia/linux-reference.py \
   --burn-erf tools/mnist-benchmark/target/release/erf --burn-erf-profile
 ```
 
+If the IEEE sorting check fails, retain its evidence and run the finite corpus in a separate directory:
+
+```bash
+python3 tools/nvidia/linux-reference.py \
+  --directory target/nvidia/linux-burn-sort-finite \
+  --burn-sort tools/mnist-benchmark/target/release/sort --burn-sort-finite
+```
+
+For a slow Linux probe, add `--burn-sort-compile-log` and an explicit `--timeout 600` in a fresh directory.
+This enables basic CubeCL compilation diagnostics. Its elapsed time is not an execution-performance measurement.
+
 Run the D3OS GPU suite with the matching production image and portable kernel bundle:
 
 ```bash
@@ -237,5 +295,8 @@ Its Linux counterparts are `target/nvidia/burn-backend-audit/linux-i32-matrix-al
 The audit directory contains `traits-i32-matrix.json` and `i32-matrix-comparison.json`.
 The cumulative evidence lives under `target/nvidia/burn-backend-validation/scans-first/` and `target/nvidia/burn-backend-audit/linux-scan-final/`.
 The audit directory contains `traits-scan.json` and `scan-comparison.json`.
+The sorting evidence lives under `target/nvidia/burn-backend-validation/sorts-final/`.
+Its Linux counterparts are `target/nvidia/burn-backend-audit/linux-sort-ieee-diagnostic/` and `linux-sort-finite-diagnostic/`.
+The audit directory contains `traits-sort-final.json` and `sort-comparison.json`.
 Manifests record the shared validation source hashes, executable hashes, and execution backend.
 These generated local artifacts are not Git-tracked. The probes and audit tool are tracked for reproduction.

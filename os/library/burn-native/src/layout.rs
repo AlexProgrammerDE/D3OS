@@ -6,6 +6,7 @@ use d3os_nvidia::compute::elementwise::{self, Elementwise};
 use d3os_nvidia::compute::indexing;
 use d3os_nvidia::compute::reduction::{self, Reduction};
 use d3os_nvidia::compute::scan::{self, Scan};
+use d3os_nvidia::compute::sort::{self, Mode as SortMode};
 use d3os_nvidia::compute::words::{self, WordOp};
 
 /// Native kernels use signed 32-bit element indices, including reversed views.
@@ -366,6 +367,21 @@ impl Layout {
         parameters[7] = self.shape[axis + 1..].iter().product::<usize>() as u32;
         scan::validate(&parameters).map_err(|_| Error::InvalidParameter)?;
         Ok(parameters.map(|v| v as usize))
+    }
+
+    pub fn sort_parameters(&self, axis: usize, mode: SortMode, width: usize) -> Result<[usize; 32]> {
+        let scan = self.scan_parameters(axis, Scan::Sum)?;
+        let mut p = [0u32; 32];
+        p[..24].copy_from_slice(&scan.map(|v| v as u32));
+        p[0] = self.len() as u32;
+        p[2] = mode as u32;
+        p[24] = u32::try_from(width).map_err(|_| Error::InvalidParameter)?;
+        if width == 0 {
+            return Err(Error::InvalidParameter);
+        }
+        p[25] = p[24].ilog2() + 1;
+        sort::validate(&p).map_err(|_| Error::InvalidParameter)?;
+        Ok(p.map(|v| v as usize))
     }
 }
 

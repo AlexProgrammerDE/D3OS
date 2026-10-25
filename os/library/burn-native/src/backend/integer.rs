@@ -364,16 +364,27 @@ impl IntTensorOps<Self> for Native {
     fn int_gather_nd(data: BackendTensor, indices: BackendTensor) -> BackendTensor {
         BackendTensor::unsupported("int_gather_nd", data.shape(), data.dtype(), &[&data, &indices], "multidimensional gather")
     }
-    fn int_sort(tensor: BackendTensor, _dim: usize, _descending: bool) -> BackendTensor {
-        BackendTensor::unsupported("int_sort", tensor.shape(), tensor.dtype(), &[&tensor], "GPU sorting")
+    fn int_sort(tensor: BackendTensor, dim: usize, descending: bool) -> BackendTensor {
+        one("int_sort", &tensor, tensor.dtype(), |t| t.sort(dim, descending).map(|(values, _)| values))
     }
-    fn int_sort_with_indices(tensor: BackendTensor, _dim: usize, _descending: bool) -> (BackendTensor, BackendTensor) {
-        let output = BackendTensor::unsupported("int_sort_with_indices", tensor.shape(), tensor.dtype(), &[&tensor], "GPU sorting");
-        let indices = BackendTensor::unsupported("int_sort_with_indices", tensor.shape(), tensor.dtype(), &[&output], "GPU sorting");
-        (output, indices)
+    fn int_topk(tensor: BackendTensor, dim: usize, k: usize) -> BackendTensor {
+        BackendTensor::apply("int_topk", topk_shape(&tensor, dim, k), tensor.dtype(), &[&tensor], |v| {
+            v[0].topk(dim, k).map(|(values, _)| values)
+        })
     }
-    fn int_argsort(tensor: BackendTensor, _dim: usize, _descending: bool) -> BackendTensor {
-        BackendTensor::unsupported("int_argsort", tensor.shape(), tensor.dtype(), &[&tensor], "GPU sorting")
+    fn int_topk_with_indices(tensor: BackendTensor, dim: usize, k: usize) -> (BackendTensor, BackendTensor) {
+        topk_pair("int_topk_with_indices", &tensor, dim, k, burn_backend::IntDType::I32)
+    }
+    fn int_argtopk(tensor: BackendTensor, dim: usize, k: usize) -> BackendTensor {
+        BackendTensor::apply("int_argtopk", topk_shape(&tensor, dim, k), DType::I32, &[&tensor], |v| {
+            v[0].topk(dim, k).map(|(_, indices)| indices)
+        })
+    }
+    fn int_sort_with_indices(tensor: BackendTensor, dim: usize, descending: bool) -> (BackendTensor, BackendTensor) {
+        sorted_pair("int_sort_with_indices", &tensor, dim, descending, burn_backend::IntDType::I32)
+    }
+    fn int_argsort(tensor: BackendTensor, dim: usize, descending: bool) -> BackendTensor {
+        one("int_argsort", &tensor, DType::I32, |t| t.sort(dim, descending).map(|(_, indices)| indices))
     }
     fn int_arange_step(range: core::ops::Range<i64>, step: usize, _device: &NativeDevice, dtype: IntDType) -> BackendTensor {
         let plan = crate::range::RangePlan::new(range, step);

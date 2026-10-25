@@ -73,7 +73,7 @@ def stage_burn_program(root, binary, destination):
     return libdevice
 
 
-def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False):
+def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_finite=False, sort_compile_log=False):
     purposes = {
         "quantization": "shared API conformance; no performance measurement",
         "capabilities": "declared dtype flags; no execution conformance",
@@ -81,10 +81,14 @@ def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False):
         "integer": "public integer division and floor remainder conformance; no performance measurement",
         "integer_matrix": "public I32 matrix product conformance; no performance measurement",
         "scan": "public cumulative operations and gradients; no performance measurement",
+        "sort": "public ordering API conformance; pinned Burn uses host sorting with CUDA storage; no GPU sorting performance comparison",
     }
     purpose = "erf error profile and GELU conformance; strict failures reported" if erf_profile else purposes[kind]
     program = f"/burn-{kind}"
     arguments = " --profile" if erf_profile else " --nonempty" if nonempty else ""
+    if sort_finite:
+        arguments += " --finite"
+        purpose += "; finite float corpus"
     if nonempty:
         purpose += "; nonempty shapes only"
     libdevice = stage_burn_program(root, binary, program)
@@ -107,8 +111,13 @@ exec {program}{arguments}
         "cargo_lock": ROOT / "tools/mnist-benchmark/Cargo.lock",
         "libdevice": libdevice,
     }
+    if sort_compile_log:
+        config = root / "CubeCL.toml"
+        config.write_text('[compilation.logger]\nlevel = "basic"\nstdout = true\n')
+        sources["cubecl_config"] = config
+        purpose += "; basic compilation diagnostics; not performance timing"
     (root.parent / f"burn-{kind}-manifest.json").write_text(json.dumps({
-        "execution_os": "linux", "backend": "cuda GPU", "framework": "burn", "burn_version": "0.22.1",
+        "execution_os": "linux", "backend": "CUDA storage; host sort/argsort fallback; GPU top-k and gradients" if kind == "sort" else "cuda GPU", "framework": "burn", "burn_version": "0.22.1",
         "purpose": purpose,
         "arguments": arguments.split(),
         "inputs": {name: {"bytes": path.stat().st_size, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()} for name, path in sources.items()},
@@ -1177,6 +1186,10 @@ def main():
     parser.add_argument("--burn-integer-matmul-nonempty", action="store_true", help="run the nonempty I32 matrix cases separately from empty shapes")
     parser.add_argument("--burn-scan", type=Path, help="run public cumulative operations and gradients on Linux CUDA")
     parser.add_argument("--burn-scan-nonempty", action="store_true", help="run cumulative checks separately from empty shapes")
+    parser.add_argument("--burn-sort", type=Path, help="compare public ordering APIs; pinned Burn uses a host sort fallback with CUDA storage")
+    parser.add_argument("--burn-sort-finite", action="store_true", help="compare a separate finite float corpus while retaining IEEE diagnostics")
+    parser.add_argument("--burn-sort-compile-log", action="store_true", help="retain basic CubeCL compilation diagnostics for the sort probe")
+    parser.add_argument("--burn-sort-nonempty", action="store_true", help="run ordering checks separately from empty shapes")
     parser.add_argument("--mnist-data", type=Path, default=ROOT / "target/mnist")
     parser.add_argument(
         "--mnist-executable", type=Path,
@@ -1228,7 +1241,7 @@ def main():
     args = parser.parse_args()
     if args.nsight_directory and not args.quantized_profile:
         parser.error("--nsight-directory requires --quantized-profile")
-    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.burn_integer, args.burn_integer_matmul, args.burn_scan, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
+    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.burn_integer, args.burn_integer_matmul, args.burn_scan, args.burn_sort, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
         parser.error("--quantized-profile requires a separate diagnostic guest")
     if args.pin_vcpus and len(os.sched_getaffinity(0)) != 4:
         parser.error("--pin-vcpus requires an inherited affinity of four host CPUs")
@@ -1256,6 +1269,7 @@ def main():
                 bool(args.burn_integer),
                 bool(args.burn_integer_matmul),
                 bool(args.burn_scan),
+                bool(args.burn_sort),
                 bool(args.llama_directory),
                 args.doom_benchmark,
                 args.alexnet_benchmark,
@@ -1284,6 +1298,14 @@ def main():
         parser.error("--burn-scan requires a built conformance executable")
     if args.burn_scan_nonempty and not args.burn_scan:
         parser.error("--burn-scan-nonempty requires --burn-scan")
+    if args.burn_sort and not args.burn_sort.is_file():
+        parser.error("--burn-sort requires a built conformance executable")
+    if args.burn_sort_finite and not args.burn_sort:
+        parser.error("--burn-sort-finite requires --burn-sort")
+    if args.burn_sort_compile_log and not args.burn_sort:
+        parser.error("--burn-sort-compile-log requires --burn-sort")
+    if args.burn_sort_nonempty and not args.burn_sort:
+        parser.error("--burn-sort-nonempty requires --burn-sort")
     if args.burn_quantization and not args.burn_quantization.is_file():
         parser.error("--burn-quantization requires a built conformance executable")
     if args.matched_qwen_input and not args.llama_directory:
@@ -1328,6 +1350,8 @@ def main():
         burn_probe(args.directory / "root", args.burn_integer_matmul.resolve(), "integer_matrix", nonempty=args.burn_integer_matmul_nonempty)
     elif args.burn_scan:
         burn_probe(args.directory / "root", args.burn_scan.resolve(), "scan", nonempty=args.burn_scan_nonempty)
+    elif args.burn_sort:
+        burn_probe(args.directory / "root", args.burn_sort.resolve(), "sort", nonempty=args.burn_sort_nonempty, sort_finite=args.burn_sort_finite, sort_compile_log=args.burn_sort_compile_log)
     elif args.mnist_benchmark:
         mnist_benchmark(
             args.directory / "root", args.mnist_executable.resolve(),
@@ -1484,6 +1508,11 @@ def main():
         empty = "false" if args.burn_scan_nonempty else "true"
         if f"BURN_SCAN_CONFORMANCE_OK os=linux backend=cuda operations=8 reference=i128,f64 lengths=1,127,128,129,257,531 gradients=4 empty={empty} shared_views=true" not in text:
             raise RuntimeError("Linux CUDA Burn cumulative conformance did not complete")
+    if args.burn_sort:
+        domain = "finite" if args.burn_sort_finite else "ieee"
+        empty = "false" if args.burn_sort_nonempty else "true"
+        if f"BURN_SORT_CONFORMANCE_OK os=linux backend=cuda sorting=host_fallback topk_order=nan_first float_domain={domain} dtypes=f32,i32 sort=true argsort=true topk=true gradients=6 empty={empty} shared_views=true" not in text:
+            raise RuntimeError("Linux Burn ordering API conformance did not complete")
     if args.burn_quantization and "BURN_QUANTIZATION_REFERENCE_OK os=linux backend=cuda formats=9 minifloat=e4m3,e5m2,e2m1 boundaries=exhaustive scale_dtypes=5 levels=1,2" not in text:
         raise RuntimeError("Linux CUDA Burn quantization conformance did not pass")
     if args.alexnet_benchmark:

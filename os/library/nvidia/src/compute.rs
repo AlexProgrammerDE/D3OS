@@ -12,10 +12,11 @@ pub mod random;
 pub mod range;
 pub mod reduction;
 pub mod scan;
+pub mod sort;
 pub mod updates;
 pub mod words;
 
-pub const VERSION: u32 = 27;
+pub const VERSION: u32 = 28;
 /// END_COMMANDS flag: an inner recording scope joins its parent's completion.
 /// The outermost scope always waits. Zero retains synchronous nested scopes.
 pub const DEFER_NESTED_COMPLETION: u64 = 1;
@@ -49,7 +50,7 @@ pub struct MemoryProfile {
     pub device_cached_bytes: u64,
     pub device_retired_bytes: u64,
 }
-pub const KERNEL_COUNT: usize = 64;
+pub const KERNEL_COUNT: usize = 65;
 
 /// CPU service costs by request operation, including queue work within it.
 #[derive(Clone, Copy, Debug, Default)]
@@ -171,9 +172,10 @@ pub enum Kernel {
     /// Row-major I32 matrix product with wrapping accumulation.
     IntMatmul = 62,
     TensorScan = 63,
+    TensorSort = 64,
 }
 
-const _: () = assert!(Kernel::TensorScan as usize + 1 == KERNEL_COUNT);
+const _: () = assert!(Kernel::TensorSort as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -236,6 +238,7 @@ impl Kernel {
                 | Self::Matmul
                 | Self::IntMatmul
                 | Self::TensorScan
+                | Self::TensorSort
                 | Self::Im2col
                 | Self::MaxPool
                 | Self::Project
@@ -331,6 +334,7 @@ impl Kernel {
             61 => Self::TensorScale,
             62 => Self::IntMatmul,
             63 => Self::TensorScan,
+            64 => Self::TensorSort,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -401,12 +405,14 @@ impl Kernel {
             Self::TensorScale => "burn_scale_encode",
             Self::IntMatmul => "burn_i32_matmul",
             Self::TensorScan => "burn_cumsum",
+            Self::TensorSort => "burn_sort_f32_ascending",
         }
     }
 
     /// Select the cuTile specialization without changing the public request ABI.
     pub fn entry(self, parameters: &[u32]) -> &'static str {
         match (self, parameters) {
+            (Self::TensorSort, p) if p.len() == sort::PARAMETERS => sort::Mode::from_raw(p[2]).map_or(self.symbol(), |mode| mode.symbol()),
             (Self::TensorScan, p) if p.len() == scan::PARAMETERS => scan::Scan::from_raw(p[2]).map_or(self.symbol(), |op| op.symbol()),
             (Self::TensorScale, [_, _, op]) => quantization::ScaleOperation::from_raw(*op).map_or(self.symbol(), |op| op.symbol()),
             (Self::TensorQuantized, p) if p.len() == quantization::PARAMETERS => {
@@ -468,6 +474,10 @@ impl Kernel {
         let mut mutated = 0;
         let mut threads = 128;
         let (count, pointers, output, in_place) = match (self, p) {
+            (Self::TensorSort, p) => {
+                extents[..3].copy_from_slice(&sort::validate(p)?);
+                (p[0], 3, 2, false)
+            }
             (Self::TensorScan, p) => {
                 extents[..2].copy_from_slice(&scan::validate(p)?);
                 (product(&[p[0], 128])?, 2, 1, false)

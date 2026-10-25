@@ -12,6 +12,7 @@ pub mod pooling;
 pub mod quantization;
 pub mod random;
 pub mod range;
+mod sort;
 mod tensor;
 mod updates;
 

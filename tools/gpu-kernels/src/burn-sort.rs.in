@@ -1,0 +1,86 @@
+fn sort_key<const INTEGER: bool, const DESCENDING: bool, const TOPK: bool>(value: Tile<u32, { [128] }>) -> Tile<u32, { [128] }> {
+    let sign = broadcast_scalar(1u32 << 31u32, shape![128]);
+    let all = broadcast_scalar(unsigned(-1i32), shape![128]);
+    let key: Tile<u32, { [128] }> = if INTEGER { value ^ sign } else {
+        select(ne_tile(value & sign, broadcast_scalar(0u32, shape![128])), value ^ all, value | sign)
+    };
+    let key: Tile<u32, { [128] }> = if TOPK {
+        let magnitude = value & broadcast_scalar(0x7fffffffu32, shape![128]);
+        select(gt_tile(magnitude, broadcast_scalar(0x7f800000u32, shape![128])), all,
+            select(eq_tile(magnitude, broadcast_scalar(0u32, shape![128])), sign, key))
+    } else { key };
+    if DESCENDING { key ^ all } else { key }
+}
+
+fn sort_precedes<const INTEGER: bool, const DESCENDING: bool, const TOPK: bool>(a: Tile<u32, { [128] }>, ai: Tile<u32, { [128] }>, b: Tile<u32, { [128] }>, bi: Tile<u32, { [128] }>) -> Tile<u32, { [128] }> {
+    let ak = sort_key::<INTEGER, DESCENDING, TOPK>(a);
+    let bk = sort_key::<INTEGER, DESCENDING, TOPK>(b);
+    let before = lt_tile(ak, bk) | (eq_tile(ak, bk) & lt_tile(ai, bi));
+    select(before, broadcast_scalar(1u32, shape![128]), broadcast_scalar(0u32, shape![128]))
+}
+
+fn sort_address(mut linear: Tile<u32, { [128] }>, SORT_ADDRESS_PARAMETERS) -> Tile<u32, { [128] }> {
+    let mut address = broadcast_scalar(signed(offset), shape![128]);
+    SORT_ADDRESSES
+    bitcast(address)
+}
+
+#[cutile::entry()]
+unsafe fn SORT_ENTRY(input: *const u32, index_input: *const u32, output: *mut u32, SORT_PARAMETERS) {
+    let i = indices();
+    let zero = broadcast_scalar(0u32, shape![128]);
+    let one = broadcast_scalar(1u32, shape![128]);
+    let mask = lt_tile(i, broadcast_scalar(count, shape![128]));
+    let col = (i / broadcast_scalar(suffix, shape![128])) % broadcast_scalar(length, shape![128]);
+    let base = i - col * broadcast_scalar(suffix, shape![128]);
+    let (value, index): (Tile<u32, { [128] }>, Tile<u32, { [128] }>) = if SORT_INITIAL {
+        let left = col - (col & one);
+        let right = left + one;
+        let ai = sort_address(base + left * broadcast_scalar(suffix, shape![128]), SORT_ADDRESS_ARGUMENTS);
+        let bi = sort_address(base + right * broadcast_scalar(suffix, shape![128]), SORT_ADDRESS_ARGUMENTS);
+        let right_valid = mask & lt_tile(right, broadcast_scalar(length, shape![128]));
+        let a = unsafe { read_tile(input, ai, mask & lt_tile(ai, broadcast_scalar(extent, shape![128])), 0u32) };
+        let b = unsafe { read_tile(input, bi, right_valid & lt_tile(bi, broadcast_scalar(extent, shape![128])), 0u32) };
+        let before: Tile<bool, { [128] }> = ne_tile(sort_precedes::<SORT_INTEGER, SORT_DESCENDING, SORT_TOPK>(a, left, b, right), zero) | eq_tile(right_valid, broadcast_scalar(false, shape![128]));
+        let even: Tile<bool, { [128] }> = eq_tile(col & one, zero);
+        let take_left = eq_tile(even, before);
+        (select(take_left, a, b), select(take_left, left, right))
+    } else {
+        // Merge-path partitions locate the kth output. Each lane writes its
+        // own dense position, even if a low-level caller supplies unsorted runs.
+        let group = (col / broadcast_scalar(width * 2u32, shape![128])) * broadcast_scalar(width * 2u32, shape![128]);
+        let a_len = min_tile(broadcast_scalar(width, shape![128]), broadcast_scalar(length, shape![128]) - group);
+        let b_start = group + a_len;
+        let b_len = min_tile(broadcast_scalar(width, shape![128]), broadcast_scalar(length, shape![128]) - b_start);
+        let k = col - group;
+        let mut low = k - min_tile(k, b_len);
+        let mut high = min_tile(k, a_len);
+        for _step in 0u32..search_steps {
+            let middle = (low + high) / broadcast_scalar(2u32, shape![128]);
+            let y = k - middle;
+            let active = mask & lt_tile(low, high) & lt_tile(middle, a_len) & gt_tile(y, zero);
+            let ai = base + (group + middle) * broadcast_scalar(suffix, shape![128]);
+            let bi = base + (b_start + y - one) * broadcast_scalar(suffix, shape![128]);
+            let a = unsafe { read_tile(input, ai, active, 0u32) };
+            let b = unsafe { read_tile(input, bi, active, 0u32) };
+            let ax = unsafe { read_tile(index_input, ai, active, 0u32) };
+            let bx = unsafe { read_tile(index_input, bi, active, 0u32) };
+            let before: Tile<bool, { [128] }> = ne_tile(sort_precedes::<SORT_INTEGER, SORT_DESCENDING, SORT_TOPK>(a, ax, b, bx), zero);
+            low = select(active & before, middle + one, low);
+            high = select(active & eq_tile(before, broadcast_scalar(false, shape![128])), middle, high);
+        }
+        let y = k - low;
+        let a_valid = mask & lt_tile(low, a_len);
+        let b_valid = mask & lt_tile(y, b_len);
+        let ai = base + (group + low) * broadcast_scalar(suffix, shape![128]);
+        let bi = base + (b_start + y) * broadcast_scalar(suffix, shape![128]);
+        let a = unsafe { read_tile(input, ai, a_valid, 0u32) };
+        let b = unsafe { read_tile(input, bi, b_valid, 0u32) };
+        let ax = unsafe { read_tile(index_input, ai, a_valid, 0u32) };
+        let bx = unsafe { read_tile(index_input, bi, b_valid, 0u32) };
+        let take_left = a_valid & (eq_tile(b_valid, broadcast_scalar(false, shape![128])) | ne_tile(sort_precedes::<SORT_INTEGER, SORT_DESCENDING, SORT_TOPK>(a, ax, b, bx), zero));
+        (select(take_left, a, b), select(take_left, ax, bx))
+    };
+    unsafe { write_tile(output, i, value, mask) };
+    unsafe { write_tile(output, i + broadcast_scalar(count, shape![128]), index, mask) };
+}
