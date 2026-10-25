@@ -18,7 +18,7 @@ All required methods have declarations or implementations. This count does not e
 The report also records 116 native helper bodies for manual review of dtype and shape restrictions.
 
 The tool follows syntactic associated backend calls and expands the pinned `dequant_op_quant!` and `dequant_op_flow!` macros.
-It identifies 25 methods with possible paths to explicit declines or panic declarations.
+It identifies 23 methods with possible paths to explicit declines or panic declarations.
 This number is not an unsupported-operation count. Some paths represent expected invalid-input errors or conditional restrictions.
 
 The analysis does not resolve method types, evaluate conditional compilation, or expand other macros and free helper functions.
@@ -101,8 +101,9 @@ This checkpoint contains no execution-performance or compile-time parity measure
 
 ## Ordinary numeric conversions
 
-Protocol 32 adds one resident conversion kernel for all 15 ordinary formats.
-The matching SDK, driver, application image, and 215-entry portable inference bundle must use this protocol together.
+Protocol 32 introduced one resident conversion kernel for all 15 ordinary formats.
+That version uses a matching SDK, driver, application image, and 215-entry portable inference bundle.
+The current protocol also includes the remainder operation described below.
 The compute profile contains 68 slots.
 All 214 earlier instruction entries and their constant sections remain byte-identical.
 The existing FP32/I32 conversion paths remain in use.
@@ -154,6 +155,50 @@ Linux CUDA passes the shared corpus with Flex32 excluded explicitly.
 
 These checks cover ordinary casts, not full dtype arithmetic, quantized conversion variants, or accelerated matrix products for the additional formats.
 The capability declarations remain conservative. This checkpoint contains no matched execution-performance or compile-time parity measurement.
+
+## Native floating-point remainder
+
+Protocol 33 adds FP32 tensor and scalar remainder through Burn's public API.
+The matching SDK, driver, application image, and 216-entry portable inference bundle must use this protocol together.
+The compute profile retains 68 slots because remainder uses the existing elementwise dispatch.
+
+The GPU kernel uses NVIDIA's Tile IR `remf` operation for the truncated residue.
+Burn's floor modulo then adjusts a nonzero residue whose sign differs from the divisor.
+The correction uses non-FTZ nearest-even addition.
+The [Tile IR remainder specification](https://docs.nvidia.com/cuda/tile-ir/13.4/sections/operations.html#cuda-tile-remf) defines the residue and special cases.
+Floating-point rounding can produce a nonzero result equal to the divisor.
+
+A zero residue retains the dividend's sign.
+Zero divisors, infinite dividends, and NaN operands return NaN.
+An infinite divisor follows the independent libm reduction and sign-correction reference.
+NaN checks compare classification instead of payload bits.
+The shared Linux checks permit either sign of zero. Native raw checks require the dividend's sign.
+
+The complete corpus contains 53,248 input pairs across every FP32 exponent range, including 4,096 deterministic raw-bit pairs.
+Public checks include 15 scalar divisors, reversed transposes, broadcasting in both directions, input preservation, and empty outputs.
+Eight gradient checks cover both operands, broadcast reduction, signed views, and scalar remainder.
+The analytical gradients use one for the dividend and negative floor quotient for the divisor, away from discontinuities.
+
+Linux CUDA passes the ordinary finite corpus: 512 pairs, eight scalar divisors, and all eight gradient checks.
+Its full IEEE diagnostic returns NaN for `0 % infinity`, where the libm-based reference returns zero.
+A separate 40,790-pair finite diagnostic excludes nonfinite operands and zero divisors.
+It fails at `f32::from_bits(1) % -3`, returning the positive dividend instead of the rounded negative divisor.
+The pinned CubeCL C++ lowering computes `x - y * floor(x / y)`.
+Its quotient underflows to negative zero in this case, which loses the floor correction.
+Both failed diagnostics remain separate from the passing ordinary finite result.
+
+D3OS passes the complete IEEE corpus and all eight gradient checks.
+It also passes the identical finite corpus used by Linux CUDA.
+Native checks cover guarded writes at seven lengths, including partial tiles and the full corpus.
+Service counters confirm resident execution and one full-writer allocation without a separate clear.
+
+The queue retains buffers after their source tensors leave scope.
+Empty outputs and invalid inputs launch no GPU work.
+Scalar rank-zero results retain their shape.
+All three modules compiled inside D3OS match their host audit hashes.
+The existing operator and quantization suites also pass.
+All 215 earlier instruction entries and their constant sections remain byte-identical.
+This checkpoint contains no matched execution-performance or compile-time parity measurement.
 
 ## Native erf and GELU validation
 
@@ -548,9 +593,22 @@ Build the Linux probes with their default CUDA feature:
 
 ```bash
 cd tools/mnist-benchmark
-cargo build --release --locked --bin capabilities --bin erf --bin integer --bin integer_matrix --bin scan --bin sort --bin cross --bin compaction --bin scatter_updates --bin quantized_empty --bin nd_indexing --bin storage --bin conversions
+cargo build --release --locked --bin capabilities --bin erf --bin integer --bin integer_matrix --bin scan --bin sort --bin cross --bin compaction --bin scatter_updates --bin quantized_empty --bin nd_indexing --bin storage --bin conversions --bin remainder
 cd ../..
 ```
+
+Run the ordinary finite remainder comparison:
+
+```bash
+python3 tools/nvidia/linux-reference.py \
+  --directory target/nvidia/linux-burn-remainder-finite \
+  --burn-remainder tools/mnist-benchmark/target/release/remainder \
+  --burn-remainder-finite
+```
+
+For the full IEEE diagnostic, use a fresh directory and omit `--burn-remainder-finite`.
+For the wide finite diagnostic, replace that flag with `--burn-remainder-wide`.
+The D3OS `gpu-self-test` always includes the full IEEE corpus.
 
 Run the conversion comparison with the pinned Linux Flex32 failure excluded:
 
@@ -731,5 +789,10 @@ The audit directory contains `traits-cast-final.json`, `cast-comparison.json`, a
 The first rounding failure remains under `cast-first/`, with the old machine code, portable input, and instruction dumps retained.
 The gradient-constructor diagnostic remains under `cast-direct-bf16/`; the replaced Boolean alias check remains under `cast-final/`.
 The Linux Flex32 metadata diagnostic remains under `linux-conversions-flex32/` with its exact shared source archive.
+The remainder evidence lives under `target/nvidia/burn-backend-validation/remainder-remf-final/` and `target/nvidia/burn-backend-audit/linux-remainder-finite-final/`.
+The audit directory contains `traits-remainder-final.json`, `remainder-comparison.json`, and `remainder-section-comparison.json`.
+The failed Linux diagnostics remain under `linux-remainder-ieee/` and `linux-remainder-wide/`.
+The earlier integer-significand implementation passes under `target/nvidia/burn-backend-validation/remainder-final/`.
+Its full IEEE run also remains under `target/nvidia/burn-backend-validation/remainder-first/`.
 Manifests record the shared validation source hashes, executable hashes, and execution backend.
 These generated local artifacts are not Git-tracked. The probes and audit tool are tracked for reproduction.

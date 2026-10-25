@@ -17,6 +17,7 @@ mod pooling;
 mod quantization;
 mod qwen;
 mod random;
+mod remainder;
 mod scans;
 mod scatter;
 mod scatter_updates;
@@ -148,6 +149,17 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     crate::report(format_args!(
         "BURN_ERF_CONFORMANCE_OK os=d3os backend=native erf_ulp=8 erf=forward,backward gelu=forward,backward shared_views=verified"
     ));
+    remainder::run(backend)?;
+    for (domain, name) in [
+        (d3os_ai::validation::remainder::Domain::Ieee, "ieee"),
+        (d3os_ai::validation::remainder::Domain::Finite, "finite"),
+    ] {
+        let report = d3os_ai::validation::remainder::run(&device, domain)?;
+        crate::report(format_args!(
+            "BURN_REMAINDER_OK os=d3os backend=native domain={} pairs={} scalar_cases={} gradients={} reference=libm_fmod_floor finite_bits=exact zero_sign=unspecified signed_views=true broadcast=true empty=true",
+            name, report.pairs, report.scalar_cases, report.gradients
+        ));
+    }
     integers::run(backend).map_err(|e| format!("Burn native integer reductions: {e}"))?;
     words::run(backend).map_err(|e| format!("Burn native words: {e}"))?;
     scans::run(backend)?;

@@ -10,6 +10,7 @@ pub mod quantization;
 pub mod quantized_empty;
 pub mod qwen;
 pub mod qwen_state;
+pub mod remainder;
 pub mod scan;
 pub mod scatter_updates;
 pub mod sort;

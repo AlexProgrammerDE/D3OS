@@ -53,10 +53,12 @@ impl FloatTensorOps<Self> for Native {
         one("float_div_scalar", &lhs, lhs.dtype(), |a| a.scalar(Elementwise::Divide, rhs.elem::<f32>()))
     }
     fn float_remainder(lhs: FloatTensor<Self>, rhs: FloatTensor<Self>) -> FloatTensor<Self> {
-        BackendTensor::unsupported("float_remainder", lhs.shape(), DType::F32, &[&lhs, &rhs], "float_remainder")
+        binary("float_remainder", &lhs, &rhs, lhs.dtype(), |a, b| a.binary(b, Elementwise::Remainder))
     }
-    fn float_remainder_scalar(lhs: FloatTensor<Self>, _rhs: Scalar) -> FloatTensor<Self> {
-        BackendTensor::unsupported("float_remainder_scalar", lhs.shape(), DType::F32, &[&lhs], "float_remainder_scalar")
+    fn float_remainder_scalar(lhs: FloatTensor<Self>, rhs: Scalar) -> FloatTensor<Self> {
+        one("float_remainder_scalar", &lhs, lhs.dtype(), |a| {
+            a.scalar(Elementwise::Remainder, rhs.elem::<f32>())
+        })
     }
     fn float_matmul(lhs: FloatTensor<Self>, rhs: FloatTensor<Self>) -> FloatTensor<Self> {
         BackendTensor::apply(

@@ -41,10 +41,11 @@ pub enum Elementwise {
     Cosh = 31,
     Tan = 32,
     Erf = 33,
+    Remainder = 34,
 }
 
 impl Elementwise {
-    pub const ALL: [Self; 34] = [
+    pub const ALL: [Self; 35] = [
         Self::Copy,
         Self::Add,
         Self::Subtract,
@@ -79,6 +80,7 @@ impl Elementwise {
         Self::Cosh,
         Self::Tan,
         Self::Erf,
+        Self::Remainder,
     ];
 
     pub fn from_raw(raw: u32) -> Result<Self> {
@@ -121,6 +123,7 @@ impl Elementwise {
             Self::Cosh => "burn_cosh",
             Self::Tan => "burn_tan",
             Self::Erf => "burn_erf",
+            Self::Remainder => "burn_remainder",
         }
     }
 
@@ -129,7 +132,7 @@ impl Elementwise {
     }
 
     pub fn binary(self) -> bool {
-        self.comparison() || matches!(self, Self::Add | Self::Subtract | Self::Multiply | Self::Divide | Self::Power)
+        self.comparison() || matches!(self, Self::Add | Self::Subtract | Self::Multiply | Self::Divide | Self::Power | Self::Remainder)
     }
 
     pub fn unary(self) -> bool {

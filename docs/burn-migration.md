@@ -172,7 +172,7 @@ The GPU operations include FP32 arithmetic and math, reductions, exact tensor fi
 Another 31 entries implement I32 arithmetic, signed comparisons, bitwise operations, boolean logic, masks, and conversions.
 These operations support strided views and broadcasting. Input tensors remain shared and immutable.
 Full writers avoid a separate output clear. Empty logical outputs require no element work.
-The matching SDK and driver use native compute protocol version 32 and the 215-entry portable inference bundle.
+The matching SDK and driver use native compute protocol version 33 and the 216-entry portable inference bundle.
 
 The D3OS GPU self-test passes reversed and transposed views, overlapping windows, broadcast batches, subviews, empty dimensions, and neighboring guards.
 Matrix references use independent FP64 accumulation. Math references use independent libm functions and include 2,816 FP32 edge values.
@@ -289,7 +289,8 @@ All 166 earlier GPU instruction sections remain byte-identical after the eight n
 AlexNet, Qwen, and all 600 DOOM reference views pass with the matching SDK and kernel bundle.
 
 Operator coverage remains incomplete. Unsupported native operations return execution errors instead of CPU results.
-Resident I32 division and matrix products, FP32 erf, and cumulative operations now pass native GPU checks.
+Resident I32 division and matrix products, FP32 erf, and cumulative operations pass native GPU checks.
+FP32 tensor and scalar floor remainder now use the resident elementwise path.
 Sorting, argsort, top-k, FP32 cross products, coordinate extraction, and mask selection also pass their checked cases.
 All single-axis scatter update modes pass matched public checks on D3OS and Linux CUDA.
 Vector-selection updates also support all five modes through resident scatter and broadcast index views.
