@@ -1,9 +1,6 @@
 //! Export portable Rust Tile IR, with optional host assembly for compiler audits.
 use cutile::compile_api::KernelCompiler;
-use cutile_ir::{
-    Module,
-    bytecode::{BytecodeVersion, write_bytecode_version},
-};
+use cutile_ir::bytecode::{BytecodeVersion, write_bytecode_version};
 use d3os_nvidia::compute::{KERNEL_COUNT, Kernel};
 use std::{
     path::{Path, PathBuf},
@@ -21,7 +18,7 @@ fn threads(name: &str) -> u32 {
 }
 
 fn compile(output: &Path, family: &str, names: &[&str], toolkit: Option<&Path>) -> Result<(), Box<dyn std::error::Error>> {
-    let mut module = Module::new(family);
+    let mut entries = Vec::with_capacity(names.len());
     for name in names {
         eprintln!("Compiling cuTile {name}");
         let artifact = KernelCompiler::new(kernels::__module_ast_self, "kernels", name)
@@ -31,8 +28,9 @@ fn compile(output: &Path, family: &str, names: &[&str], toolkit: Option<&Path>) 
             .compile()?;
         let mut portable = artifact.into_module();
         link::portable_hints(&mut portable)?;
-        link::append(&mut module, &portable, name)?;
+        entries.push((*name, portable));
     }
+    let module = link::combine(family, &entries)?;
     let ir = output.join(format!("{family}.tilebc"));
     let cubin = output.join(format!("{family}.cubin"));
     std::fs::write(output.join(format!("{family}.mlir")), module.to_mlir_text())?;

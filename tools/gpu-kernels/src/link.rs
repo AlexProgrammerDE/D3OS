@@ -3,7 +3,7 @@ use cutile_ir::{
     Module,
     ir::{Attribute, Block, OpId, Region, RegionId, Value, ValueProducer},
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Apply the fixed CTA contract to every architecture understood by the pinned
 /// Tile IR assembler. The guest chooses machine code; the IR retains its shape.
@@ -100,42 +100,39 @@ impl Import<'_> {
     }
 }
 
-pub fn append(target: &mut Module, source: &Module, export: &str) -> Result<(), Box<dyn std::error::Error>> {
-    if source.functions.len() != 1 || !source.globals.is_empty() {
-        return Err("expected one self-contained cuTile entry without globals".into());
-    }
-    source.verify_dominance()?;
-    source.verify_bytecode_indices()?;
-    if target.functions.iter().any(|&id| {
-        target
-            .op(id)
+/// Link independent entries transactionally, verifying the complete module once.
+pub fn combine(family: &str, entries: &[(&str, Module)]) -> Result<Module, Box<dyn std::error::Error>> {
+    let mut linked = Module::new(family);
+    let mut exports = HashSet::new();
+    for (export, source) in entries {
+        if source.functions.len() != 1 || !source.globals.is_empty() {
+            return Err("expected one self-contained cuTile entry without globals".into());
+        }
+        source.verify_dominance()?;
+        source.verify_bytecode_indices()?;
+        if !exports.insert(export) {
+            return Err("duplicate exported entry".into());
+        }
+        let mut importer = Import {
+            source,
+            target: &mut linked,
+            arguments: HashMap::new(),
+            results: HashMap::new(),
+        };
+        let id = importer.operation(source.functions[0]);
+        let name = importer
+            .target
+            .op_mut(id)
             .attributes
-            .iter()
-            .any(|(key, value)| key == "sym_name" && *value == Attribute::String(export.to_owned()))
-    }) {
-        return Err("duplicate exported entry".into());
+            .iter_mut()
+            .find(|(key, _)| key == "sym_name")
+            .ok_or("entry has no export name")?;
+        name.1 = Attribute::String((*export).to_owned());
+        importer.target.functions.push(id);
     }
-    let mut linked = target.clone();
-    let mut importer = Import {
-        source,
-        target: &mut linked,
-        arguments: HashMap::new(),
-        results: HashMap::new(),
-    };
-    let id = importer.operation(source.functions[0]);
-    let name = importer
-        .target
-        .op_mut(id)
-        .attributes
-        .iter_mut()
-        .find(|(key, _)| key == "sym_name")
-        .ok_or("entry has no export name")?;
-    name.1 = Attribute::String(export.to_owned());
-    importer.target.functions.push(id);
-    importer.target.verify_dominance()?;
-    importer.target.verify_bytecode_indices()?;
-    *target = linked;
-    Ok(())
+    linked.verify_dominance()?;
+    linked.verify_bytecode_indices()?;
+    Ok(linked)
 }
 
 #[cfg(test)]
@@ -159,12 +156,9 @@ mod tests {
     fn importing_nested_regions_remaps_captures_and_multiple_results() {
         let vector = program("vector_add");
         let softmax = program("inference_softmax");
-        let mut linked = Module::new("test");
-        append(&mut linked, &vector, "vector").unwrap();
-        let watermark = linked.num_values();
-        append(&mut linked, &softmax, "softmax").unwrap();
+        let linked = combine("test", &[("vector", vector.clone()), ("softmax", softmax.clone())]).unwrap();
         assert_eq!(linked.functions.len(), 2);
-        assert_eq!(linked.num_values(), watermark + softmax.num_values());
+        assert_eq!(linked.num_values(), vector.num_values() + softmax.num_values());
         linked.verify_dominance().unwrap();
         linked.verify_bytecode_indices().unwrap();
         let bytes = write_bytecode_version(&linked, BytecodeVersion::V13_4).unwrap();
@@ -194,15 +188,13 @@ mod tests {
     }
 
     #[test]
-    fn invalid_or_duplicate_entries_leave_the_destination_unchanged() {
+    fn invalid_or_duplicate_entries_leave_the_sources_unchanged() {
         let source = program("vector_add");
-        let mut target = Module::new("test");
-        append(&mut target, &source, "vector").unwrap();
-        let before = write_bytecode_version(&target, BytecodeVersion::V13_4).unwrap();
-        assert!(append(&mut target, &source, "vector").is_err());
+        let before = write_bytecode_version(&source, BytecodeVersion::V13_4).unwrap();
+        assert!(combine("test", &[("vector", source.clone()), ("vector", source.clone())]).is_err());
         let mut invalid = source.clone();
         invalid.functions.push(invalid.functions[0]);
-        assert!(append(&mut target, &invalid, "invalid").is_err());
-        assert_eq!(before, write_bytecode_version(&target, BytecodeVersion::V13_4).unwrap());
+        assert!(combine("test", &[("vector", source.clone()), ("invalid", invalid)]).is_err());
+        assert_eq!(before, write_bytecode_version(&source, BytecodeVersion::V13_4).unwrap());
     }
 }
