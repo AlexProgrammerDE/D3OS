@@ -92,6 +92,8 @@ taskset -c 8,10,12,14 python3 tools/nvidia/run-qemu.py \
 
 The Linux `--compiler-cpus` option selects compiler CPU masks inside the guest.
 Its default compares CPU 0 with CPUs 0 through 3. Select `0-3` for the primary four-CPU comparison.
+For another portable input bundle, pass its directory to Linux `--compiler-inputs` and D3OS `--kernels`.
+Each family still requires exactly one Tile IR or PTX input. Both compiler manifests record the staged input hashes.
 Each D3OS sample requires a new VM because its compiled modules remain cached for the VM's lifetime.
 Keep compilation, GPU validation, and AlexNet execution as separate phases.
 

@@ -42,13 +42,13 @@ def executable(root, name):
         copy_file(root, library)
 
 
-def stage_compiler(root):
+def stage_compiler(root, inputs=None):
     spec = importlib.util.spec_from_file_location(
         "guest_compiler", Path(__file__).with_name("guest-compiler.py")
     )
     compiler = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(compiler)
-    inputs = ROOT / "target/nvidia/kernels"
+    inputs = inputs or ROOT / "target/nvidia/kernels"
     assets = compiler.prepare(
         inputs,
         ROOT / "target/nvidia/cutile-toolkit/packages/nvidia/cu13",
@@ -60,8 +60,8 @@ def stage_compiler(root):
     return compiler
 
 
-def compiler_benchmark(root, repeats, cpu_masks):
-    stage_compiler(root)
+def compiler_benchmark(root, repeats, cpu_masks, inputs=None):
+    stage_compiler(root, inputs)
     for name in ("date", "taskset", "sha256sum", "cp", "time"):
         executable(root, name)
     benchmark = root / "benchmark"
@@ -924,6 +924,11 @@ def main():
     parser.add_argument("--compiler-benchmark", action="store_true")
     parser.add_argument("--compiler-repeats", type=int, default=3)
     parser.add_argument(
+        "--compiler-inputs",
+        type=Path,
+        help="portable kernel input directory for --compiler-benchmark; default: target/nvidia/kernels",
+    )
+    parser.add_argument(
         "--compiler-cpus",
         choices=("0", "1", "2", "3", "0-3"),
         nargs="+",
@@ -965,6 +970,12 @@ def main():
         parser.error("--pin-vcpus requires an inherited affinity of four host CPUs")
     if args.compiler_cpus and not args.compiler_benchmark:
         parser.error("--compiler-cpus requires --compiler-benchmark")
+    if args.compiler_inputs is not None:
+        if not args.compiler_benchmark:
+            parser.error("--compiler-inputs requires --compiler-benchmark")
+        args.compiler_inputs = args.compiler_inputs.resolve()
+        if not args.compiler_inputs.is_dir():
+            parser.error("--compiler-inputs must be a directory")
     if args.trace_cuda_kernels and not (args.large_qwen and args.llama_directory):
         parser.error("--trace-cuda-kernels requires --large-qwen and --llama-directory")
     affinity = ",".join(str(cpu) for cpu in sorted(os.sched_getaffinity(0)))
@@ -1008,7 +1019,8 @@ def main():
     prepare(args.directory, args.kernel)
     if args.compiler_benchmark:
         compiler_benchmark(
-            args.directory / "root", args.compiler_repeats, args.compiler_cpus or ("0", "0-3")
+            args.directory / "root", args.compiler_repeats,
+            args.compiler_cpus or ("0", "0-3"), args.compiler_inputs,
         )
     elif args.kernel_benchmark:
         kernel_benchmark(args.directory / "root")
