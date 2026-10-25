@@ -81,10 +81,13 @@ impl TerminalEmulator {
     fn run(&mut self) {
         loop {
             self.handle_events();
-            self.output_observer.run();
-            self.input_observer.run();
-            self.cursor.run();
-            self.status_bar.run();
+            let output = self.output_observer.run();
+            let input = self.input_observer.run();
+            let cursor = self.cursor.run();
+            let status = self.status_bar.run();
+            if !(output || input || cursor || status) {
+                sleep(1);
+            }
         }
     }
 

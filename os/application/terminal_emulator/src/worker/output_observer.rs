@@ -1,4 +1,4 @@
-use alloc::{rc::Rc, vec};
+use alloc::rc::Rc;
 use stream::OutputStream;
 use syscall::{SystemCall, syscall};
 
@@ -19,18 +19,14 @@ impl OutputObserver {
 }
 
 impl Worker for OutputObserver {
-    fn run(&mut self) {
-        let mut buffer = vec![0u8; BUFFER_SIZE];
+    fn run(&mut self) -> bool {
+        let mut buffer = [0u8; BUFFER_SIZE];
 
-        let read_bytes = syscall(
-            SystemCall::TerminalReadOutput,
-            &[buffer.as_mut_ptr() as usize, buffer.len()],
-        )
-        .expect("Unable to read output from tty");
+        let read_bytes = syscall(SystemCall::TerminalReadOutput, &[buffer.as_mut_ptr() as usize, buffer.len()]).expect("Unable to read output from tty");
 
-        for byte in &mut buffer[0..read_bytes] {
-            self.terminal.write_byte(*byte);
-            *byte = 0;
+        for &byte in &buffer[..read_bytes] {
+            self.terminal.write_byte(byte);
         }
+        read_bytes != 0
     }
 }

@@ -112,8 +112,8 @@ impl InputObserver {
 }
 
 impl Worker for InputObserver {
-    fn run(&mut self) {
-        let Some(key_event) = self.terminal.read_event_nb() else { return };
+    fn run(&mut self) -> bool {
+        let Some(key_event) = self.terminal.read_event_nb() else { return false };
 
         // Get terminal input state (canonical, fluid, idle)
         let raw_state = syscall(SystemCall::TerminalCheckInputState, &[]).expect("Unable to check input state");
@@ -132,12 +132,12 @@ impl Worker for InputObserver {
                 }
             }
 
-            return;
+            return true;
         };
 
         // Handle reserved keys (e.g. hotkeys)
         let Some(decoded_key) = self.try_intercept_reserved_key(decoded_key) else {
-            return;
+            return true;
         };
 
         // Buffer the decoded key based on the terminal input state
@@ -145,16 +145,17 @@ impl Worker for InputObserver {
             TerminalInputState::Canonical => (self.buffer_canonical(decoded_key), TerminalMode::Canonical),
             TerminalInputState::Fluid => (self.buffer_fluid(decoded_key), TerminalMode::Fluid),
             TerminalInputState::Raw => (self.buffer_raw(key_event), TerminalMode::Raw),
-            TerminalInputState::Idle => return
+            TerminalInputState::Idle => return true
         };
         let Some(buffer) = buffer else {
-            return;
+            return true;
         };
 
         syscall(
             SystemCall::TerminalWriteInput,
             &[buffer.as_ptr() as usize, buffer.len(), mode as usize],
         ).expect("System call TerminalWriteInput failed");
+        true
     }
 }
 

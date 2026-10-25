@@ -259,6 +259,156 @@ The retained Linux prompt samples take about 6.6 ms.
 The large-model execution gaps remain open.
 The final Qwen evidence is in `cleanup-ai-serial.log` and `policy-27b-serial.log` under `target/nvidia/compile-parity/`.
 
+## Terminal input, idle polling, and process aborts
+
+An idle terminal previously polled continuously and allocated a buffer on every output poll.
+Each worker now reports activity. The terminal sleeps for one millisecond when no worker reports activity.
+Output polling uses a fixed 128-byte stack buffer.
+
+These CPU measurements cover the whole QEMU process, including its virtual CPUs and device emulation.
+Both trials use the same kernel, four KVM CPUs, 512 MiB of RAM, and host affinity `8,10,12,14`.
+Each trial contains three five-second idle windows. CPU percentages use one host core as 100 percent.
+
+| D3OS terminal | Host CPU samples | Mean host CPU |
+| --- | --- | ---: |
+| Continuous polling | 101.797%, 101.796%, 101.797% | 101.796% |
+| Sleep when idle | 2.400%, 2.600%, 2.000% | 2.333% |
+
+Shell input and native CPU inference pass after both idle trials.
+These trials include the TTY queue change and precede the sleep-list cleanup fix below.
+This resource reduction does not establish compilation or GPU execution parity.
+The launcher also records host VM CPU time between compilation markers, including GPU validation.
+That counter includes every QEMU thread. It differs from Linux's per-compiler user and system CPU times.
+Evidence and artifact hashes are under `target/nvidia/restored-idle/`.
+
+Repeated input tests exposed a separate queue error.
+The TTY accepted events only while an application waited inside a read call.
+Events disappeared while the application handled an earlier event.
+The TTY now keeps the selected encoding active and queues input between reads.
+A change of encoding clears pending bytes from the previous mode.
+
+The regression sends six key presses and releases while the reader pauses after each event.
+It alternates sequential input and a burst of all six keys.
+The old queue received only the first key's two events in the burst case.
+The fixed queue receives all twelve events.
+Each cycle then exits normally or panics, followed by CPU inference through the same shell.
+
+Ten cycles pass with four KVM CPUs and idle sleeping after the sleep-list fix.
+Every cycle also completes a CPU DOOM timedemo and another shell inference command after exit.
+Thirty cycles without DOOM pass with four KVM CPUs and thirty with four TCG CPUs.
+CI uses the thirty-cycle TCG configuration.
+
+The pinned DOOM engine reports a completed timedemo through its fatal-error handler.
+That handler tried to probe a Linux desktop dialog through the unimplemented `system()` function.
+DOOM now selects console error reporting with `-nogui`, so the handler reaches native process exit.
+
+The native panic handler previously used thread exit, which left sibling threads alive.
+A surviving raw-input reader consumed the shell's next command and panicked while decoding its bytes.
+Native panic handling now exits the whole process, consistent with the target's `panic=abort` configuration.
+The public process-exit API now has a non-returning type.
+
+DOOM also waits for its input worker to start and select raw mode before the engine begins rendering.
+Starting the worker alone did not establish that ordering.
+Without this wait, the first GPU trial lost the first four controls despite matching all 600 reference frames.
+With the wait, three consecutive GPU cycles pass every control and all 600 reference frames.
+Each cycle also exercises low detail, invisibility, texture atlas rollover, and every scheduled cache purge.
+GPU inference passes after each manual exit and each timedemo exit.
+
+Before the sleep-list fix below, D3OS GPU timedemos report 1,607.065, 1,596.763, and 1,607.065 FPS.
+Each timedemo covers 7,117 game ticks, with 155, 156, and 155 real ticks respectively.
+The one-tick spread does not establish a rendering speedup.
+The Linux headless software reference still has different presentation costs, so DOOM FPS parity remains open.
+The three-cycle evidence is under `target/nvidia/restored-doom-input-ready/`.
+The preceding failed control check remains under `target/nvidia/restored-doom/`.
+
+```sh
+python3 tools/nvidia/prepare-doom.py
+python3 tools/kernel/test-terminal-input.py --accel kvm --cpus 4 --repeat 10 --doom-timedemo --directory target/sleep-lock-fixed-doom
+python3 tools/kernel/test-terminal-input.py --accel tcg --cpus 4 --repeat 30 --timeout 240 --directory target/sleep-lock-raw-tcg
+```
+
+The harness accepts `--directory` to preserve separate comparisons.
+Input evidence is under `target/sleep-lock-fixed-doom/`, `target/sleep-lock-after/`, and `target/sleep-lock-raw-tcg/`.
+The proctest Clippy check passes with warnings denied.
+The terminal Clippy check still reports pre-existing lints in its input helpers, module layout, initialization, and process joins.
+
+## Idle-core scheduling fairness
+
+A 27B validation boot failed a Burn timer check before the model benchmark started.
+Both wake counters remained zero at the existing 200 ms deadline.
+The same problem reproduced in a CPU-only VM, without NVIDIA hardware or model assets.
+
+The scheduler balanced queued work before checking whether its current thread was idle.
+An idle CPU could donate a newly arrived worker before executing it.
+That ordering can repeatedly move a new thread between CPUs instead of executing it.
+Idle CPUs now select queued work first. CPUs that already execute an application retain load balancing.
+
+A controlled comparison used identical userspace with two kernel binaries.
+The old kernel failed its first timer check, with both counters at zero.
+The fixed kernel passed 30 repetitions with four KVM CPUs and 30 with four TCG CPUs.
+The rebuilt kernel also passes ten repetitions on each CPU backend after the TTY queue change.
+The 200 ms deadline and wake assertions remain unchanged.
+
+```sh
+python3 tools/inference/test-qemu.py --burn-self-test --accel kvm --cpus 4 --repeat 10
+python3 tools/inference/test-qemu.py --burn-self-test --accel tcg --cpus 4 --repeat 10
+```
+
+CI runs ten TCG repetitions.
+Both QEMU launchers accept `--kernel-image PATH` for controlled kernel comparisons with unchanged userspace.
+The NVIDIA launcher requires `--firmware` with that option.
+The latest timer evidence is under `target/restored-burn-kvm/` and `target/restored-burn-tcg/`.
+
+## Sleep-list lock during process cleanup
+
+A longer mixed input/DOOM run stalled after its ninth input cycle.
+GDB showed one CPU inside `kill_locally`, called through `drain_inbox_into_ready` and `block_and_switch`.
+The other three CPUs were idle.
+The active CPU repeatedly tried to acquire the sleep-list lock with interrupts disabled.
+
+`block_and_switch` held that lock while dispatching inbox commands.
+A kill command also inspects the sleep list, so the CPU tried to acquire its own lock again.
+The scheduler now releases the sleep-list lock before inbox dispatch.
+The ready-state lock still protects the scheduling decision.
+
+The process-exit regression now supports four sleeping workers alongside its existing CPU-bound worker case.
+Each case requires the workers to stop and the live thread count to return to its initial value.
+With identical userspace, the old kernel stalls after four successful sleeping-worker cycles.
+The fixed kernel passes 30 cycles with four KVM CPUs and 30 with four TCG CPUs.
+Both kernels also pass 30 raw-input cycles without DOOM.
+CI covers both busy and sleeping worker exit, plus 30 input/panic cycles with four CPUs.
+
+```sh
+python3 tools/kernel/test-process-exit.py --accel kvm --cpus 4 --repeat 30 --sleeping-workers
+python3 tools/kernel/test-process-exit.py --accel tcg --cpus 4 --repeat 30 --sleeping-workers --timeout 240
+```
+
+Both lifecycle harnesses accept `--kernel-image` and `--directory` for separate kernel comparisons.
+GDB diagnostics use the kernel ELF staged in the failing VM's boot directory.
+This keeps the symbols correct when a later build replaces `loader/kernel.elf`.
+Evidence is under `target/sleeping-exit-before/`, `target/sleeping-exit-after/`, and `target/sleeping-exit-tcg/`.
+The original mixed-workload failure remains under `target/terminal-input-final-kvm/`.
+
+The fixed kernel also passes the original ten-cycle input/DOOM sequence and thirty input/panic cycles under four-CPU TCG.
+The final GPU validation repeats all three DOOM cycles, including every control, 600 reference frames, cache exercises, and GPU inference after both exits.
+Its D3OS GPU timedemos report 1,482.708, 1,556.844, and 1,596.763 FPS.
+This batch overlaps CPU regression tests. These diagnostic samples do not isolate the performance effect of the scheduler change.
+The final boot records 108.768 seconds of compilation and 0.713 seconds of GPU validation, both outside execution timing.
+Compilation parity and matched Linux DOOM FPS parity remain open.
+Evidence is under `target/nvidia/restored-doom-final/`.
+
+The harness now consumes complete serial records before evaluating their fields.
+A partial frame record previously caused a false atlas-counter failure; its completed record contained 6,450 atlas resets.
+The preceding failed harness run remains under `target/nvidia/restored-doom-sleep-lock/`.
+
+The restored Qwen 27B GPU run passes all 32,033,280 logit comparisons, with zero tolerance failures.
+It retains the two recorded greedy-choice differences and the existing decode checksum.
+Its warm D3OS samples are 14.183 and 13.588 tokens/s, with background CPU regression tests active.
+Fresh Linux CUDA samples are 34.229 and 34.237 tokens/s.
+These diagnostic timings do not establish an isolated performance comparison or Linux parity.
+The restored MNIST four-step check also preserves its model bytes and prediction checksum `663f1993`.
+It covers checkpoint export and model reload, without a matched Linux training benchmark.
+
 ## Packed-block quantized projections
 
 The large-model benchmark now accepts `device-timing` and records separate prefill and decode profiles.

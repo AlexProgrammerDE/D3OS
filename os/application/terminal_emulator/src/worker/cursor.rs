@@ -35,11 +35,11 @@ impl Cursor {
 }
 
 impl Worker for Cursor {
-    fn run(&mut self) {
+    fn run(&mut self) -> bool {
         let systime = systime().num_milliseconds();
 
         if systime < self.last_tick + UPDATE_INTERVAL {
-            return;
+            return false;
         }
         self.last_tick = systime;
 
@@ -63,6 +63,7 @@ impl Worker for Cursor {
             draw_character,
         );
         self.visible = !self.visible;
+        true
     }
 }
 

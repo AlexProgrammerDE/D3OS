@@ -21,12 +21,13 @@ impl StatusBar {
 }
 
 impl Worker for StatusBar {
-    fn run(&mut self) {
+    fn run(&mut self) -> bool {
         let systime = systime().num_milliseconds();
         if systime < self.last_tick + UPDATE_INTERVAL {
-            return;
+            return false;
         }
         self.last_tick = systime;
         LFBTerminal::draw_status_bar(&mut self.terminal.display.lock());
+        true
     }
 }

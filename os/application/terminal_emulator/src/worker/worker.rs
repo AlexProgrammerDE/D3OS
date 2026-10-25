@@ -1,3 +1,4 @@
 pub trait Worker {
-    fn run(&mut self);
+    /// Process pending work and report whether anything changed.
+    fn run(&mut self) -> bool;
 }
