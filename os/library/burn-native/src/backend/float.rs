@@ -242,17 +242,17 @@ impl FloatTensorOps<Self> for Native {
     fn float_mean_dim(tensor: FloatTensor<Self>, dim: usize) -> FloatTensor<Self> {
         reduce("float_mean_dim", &tensor, Some(dim), Reduction::Mean, tensor.dtype())
     }
-    fn float_cumsum(tensor: FloatTensor<Self>, _dim: usize) -> FloatTensor<Self> {
-        BackendTensor::unsupported("float_cumsum", tensor.shape(), DType::F32, &[&tensor], "float_cumsum")
+    fn float_cumsum(tensor: FloatTensor<Self>, dim: usize) -> FloatTensor<Self> {
+        one("float_cumsum", &tensor, tensor.dtype(), |t| t.scan(dim, Scan::Sum))
     }
-    fn float_cumprod(tensor: FloatTensor<Self>, _dim: usize) -> FloatTensor<Self> {
-        BackendTensor::unsupported("float_cumprod", tensor.shape(), DType::F32, &[&tensor], "float_cumprod")
+    fn float_cumprod(tensor: FloatTensor<Self>, dim: usize) -> FloatTensor<Self> {
+        one("float_cumprod", &tensor, tensor.dtype(), |t| t.scan(dim, Scan::Product))
     }
-    fn float_cummin(tensor: FloatTensor<Self>, _dim: usize) -> FloatTensor<Self> {
-        BackendTensor::unsupported("float_cummin", tensor.shape(), DType::F32, &[&tensor], "float_cummin")
+    fn float_cummin(tensor: FloatTensor<Self>, dim: usize) -> FloatTensor<Self> {
+        one("float_cummin", &tensor, tensor.dtype(), |t| t.scan(dim, Scan::Min))
     }
-    fn float_cummax(tensor: FloatTensor<Self>, _dim: usize) -> FloatTensor<Self> {
-        BackendTensor::unsupported("float_cummax", tensor.shape(), DType::F32, &[&tensor], "float_cummax")
+    fn float_cummax(tensor: FloatTensor<Self>, dim: usize) -> FloatTensor<Self> {
+        one("float_cummax", &tensor, tensor.dtype(), |t| t.scan(dim, Scan::Max))
     }
     fn float_cast(tensor: FloatTensor<Self>, dtype: FloatDType) -> FloatTensor<Self> {
         cast("float_cast", &tensor, dtype.into())

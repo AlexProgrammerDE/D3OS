@@ -15,10 +15,10 @@ Associated types and source SHA-256 hashes accompany the report.
 
 The current inventory contains 484 methods: 261 native overrides and 223 inherited defaults.
 All required methods have declarations or implementations. This count does not establish runtime support.
-The report also records 99 native helper bodies for manual review of dtype and shape restrictions.
+The report also records 101 native helper bodies for manual review of dtype and shape restrictions.
 
 The tool follows syntactic associated backend calls and expands the pinned `dequant_op_quant!` and `dequant_op_flow!` macros.
-It identifies 69 methods with possible paths to explicit declines or panic declarations.
+It identifies 57 methods with possible paths to explicit declines or panic declarations.
 This number is not an unsupported-operation count. Some paths represent expected invalid-input errors or conditional restrictions.
 
 The analysis does not resolve method types, evaluate conditional compilation, or expand other macros and free helper functions.
@@ -95,7 +95,7 @@ The low-level native suite also checks exceptional inputs, resident execution, p
 Both Linux CUDA and D3OS pass the shared public checks on the physical GPU.
 D3OS also passes the complete operator suite after in-VM compilation, with all module hashes matching their host audits.
 That bundle contains 190 entries. All 188 previous instruction and constant sections remain byte-identical.
-The I32 arithmetic capability declaration remains incomplete because scans and further operations still require implementation.
+The I32 arithmetic capability declaration remains incomplete pending further operation and precision checks.
 
 ## Native integer matrix products
 
@@ -107,7 +107,7 @@ Empty output shapes perform no element work. A zero inner dimension produces ini
 The I32 kernel uses integer SIMD operations. Existing FP32 model kernels retain their Tensor Core implementations.
 The kernel writes every output element and rejects source/output overlap.
 Driver validation bounds all three buffers and rejects malformed dimensions before dispatch.
-The portable bundle contains 191 entries. All 190 previous instruction and constant sections remain byte-identical.
+That portable bundle contains 191 entries. All 190 previous instruction and constant sections remain byte-identical.
 
 The shared reference accumulates exact products in I128 and then converts each result to I32.
 It covers full-range values, overflow, partial tiles, transposes, reversed axes, offset views, broadcast batches, and shared inputs.
@@ -124,9 +124,42 @@ Its additional native checks pass neighboring guards, invalid bounds, signed bro
 All modules compiled inside D3OS match their host audit hashes. The complete existing operator suite also passes.
 This validation adds no performance measurement or claim of full backend parity.
 
+## Native cumulative operations
+
+Protocol 27 adds inclusive cumulative sum, product, minimum, and maximum for FP32 and I32 tensors.
+The output retains the input shape. Signed and broadcast strides remain on the GPU.
+Empty tensors return without a GPU launch, and an invalid axis returns an error even for an empty tensor.
+Each output allocation has a complete writer. Driver validation rejects overlapping input/output storage and invalid address ranges.
+
+The kernels use cuTile parallel scans within 128-element chunks.
+The final prefix of each chunk supplies the carry for the next chunk.
+Each independent scan row runs in one block. The implementation performs linear work along the scan dimension.
+The current launch contract limits scans to 33,554,431 independent rows, in addition to the existing signed 32-bit layout limits.
+The pinned Linux CubeCL source instead reads each earlier element for each output, with quadratic work along that dimension.
+These algorithm descriptions do not establish a measured performance difference.
+
+Integer sums and products wrap exactly at 32 bits. Integer minimum and maximum use signed comparisons.
+Floating minimum and maximum preserve signed zeros and propagate the first NaN payload in the native raw-bit checks.
+Floating sums and products can differ from sequential accumulation because parallel scans change the operation order.
+The shared reference uses F64 accumulation for ordinary finite values and checks nonfinite classifications separately.
+The sum tolerance is `2e-6 * (1 + prefix L1 norm)`. The product tolerance is `2e-5 * (1 + absolute reference)`.
+Finite extrema have zero tolerance. The native IEEE checks also require exact stored bits.
+
+The shared checks cover lengths 1, 127, 128, 129, 257, and 531 across every axis of signed views.
+They include broadcast storage, empty shapes, shared inputs, subnormal values, infinities, and NaNs.
+Independent I128 references check integer wrapping.
+Weighted gradient checks cover all four floating operations, including repeated extrema and one or multiple zeros in cumulative products.
+Linux CUDA, D3OS native GPU, and the explicit Flex CPU reference pass these public checks.
+D3OS also passes the raw-bit IEEE, neighboring guard, invalid-bound, and resident-execution checks.
+Empty native scans enqueue no GPU launch. All guest-compiled module hashes match their host audits.
+The complete existing operator suite passes with the expanded bundle.
+
+The portable inference bundle contains 199 entries. All 191 previous instruction and constant sections remain byte-identical.
+All eight new entries pass the host spill audit.
+
 ## Remaining implementation areas
 
-The unresolved work includes ordinary dtypes, complete integer arithmetic, matrix products, scans, and additional floating-point operations.
+The unresolved work includes ordinary dtypes, complete integer arithmetic, matrix products for further dtypes, and additional floating-point operations.
 Sorting, compaction, non-additive updates, further convolution variants, deformable convolution, and interpolation also require coverage.
 Graph capture, profiling, memory capabilities, records, and observable errors require matched Linux capability checks.
 The current layout also restricts rank to eight and extents to signed 32-bit values.
@@ -145,7 +178,7 @@ Build the Linux probes with their default CUDA feature:
 
 ```bash
 cd tools/mnist-benchmark
-cargo build --release --locked --bin capabilities --bin erf --bin integer --bin integer_matrix
+cargo build --release --locked --bin capabilities --bin erf --bin integer --bin integer_matrix --bin scan
 cd ../..
 ```
 
@@ -164,6 +197,9 @@ python3 tools/nvidia/linux-reference.py \
 python3 tools/nvidia/linux-reference.py \
   --directory target/nvidia/linux-burn-integer-matmul \
   --burn-integer-matmul tools/mnist-benchmark/target/release/integer_matrix
+python3 tools/nvidia/linux-reference.py \
+  --directory target/nvidia/linux-burn-scan \
+  --burn-scan tools/mnist-benchmark/target/release/scan
 ```
 
 If the all-shape matrix check fails, run the nonempty comparison in a separate directory:
@@ -199,5 +235,7 @@ The audit directory also contains the updated `traits-integer.json` and `integer
 The matrix evidence lives under `target/nvidia/burn-backend-validation/i32-matrix-final/`.
 Its Linux counterparts are `target/nvidia/burn-backend-audit/linux-i32-matrix-all/` and `linux-i32-matrix-nonempty/`.
 The audit directory contains `traits-i32-matrix.json` and `i32-matrix-comparison.json`.
+The cumulative evidence lives under `target/nvidia/burn-backend-validation/scans-first/` and `target/nvidia/burn-backend-audit/linux-scan-final/`.
+The audit directory contains `traits-scan.json` and `scan-comparison.json`.
 Manifests record the shared validation source hashes, executable hashes, and execution backend.
 These generated local artifacts are not Git-tracked. The probes and audit tool are tracked for reproduction.

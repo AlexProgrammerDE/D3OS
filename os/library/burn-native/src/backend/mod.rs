@@ -19,6 +19,7 @@ use burn_backend::{
     ops::TransactionOps,
 };
 use d3os_compute::{Backend as _, Error, nvidia::Nvidia};
+use d3os_nvidia::compute::scan::Scan;
 use d3os_nvidia::compute::{elementwise::Elementwise, reduction::Reduction, words::WordOp};
 pub use execution::BackendTensor;
 use execution::{CONTEXT, Cause};

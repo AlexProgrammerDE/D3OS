@@ -239,17 +239,17 @@ impl IntTensorOps<Self> for Native {
     fn int_mean_dim(tensor: IntTensor<Self>, dim: usize) -> IntTensor<Self> {
         reduce("int_mean_dim", &tensor, Some(dim), Reduction::Mean, DType::I32)
     }
-    fn int_cumsum(tensor: IntTensor<Self>, _dim: usize) -> IntTensor<Self> {
-        BackendTensor::unsupported("int_cumsum", tensor.shape(), DType::I32, &[&tensor], "int_cumsum")
+    fn int_cumsum(tensor: IntTensor<Self>, dim: usize) -> IntTensor<Self> {
+        one("int_cumsum", &tensor, tensor.dtype(), |t| t.scan(dim, Scan::Sum))
     }
-    fn int_cumprod(tensor: IntTensor<Self>, _dim: usize) -> IntTensor<Self> {
-        BackendTensor::unsupported("int_cumprod", tensor.shape(), DType::I32, &[&tensor], "int_cumprod")
+    fn int_cumprod(tensor: IntTensor<Self>, dim: usize) -> IntTensor<Self> {
+        one("int_cumprod", &tensor, tensor.dtype(), |t| t.scan(dim, Scan::Product))
     }
-    fn int_cummin(tensor: IntTensor<Self>, _dim: usize) -> IntTensor<Self> {
-        BackendTensor::unsupported("int_cummin", tensor.shape(), DType::I32, &[&tensor], "int_cummin")
+    fn int_cummin(tensor: IntTensor<Self>, dim: usize) -> IntTensor<Self> {
+        one("int_cummin", &tensor, tensor.dtype(), |t| t.scan(dim, Scan::Min))
     }
-    fn int_cummax(tensor: IntTensor<Self>, _dim: usize) -> IntTensor<Self> {
-        BackendTensor::unsupported("int_cummax", tensor.shape(), DType::I32, &[&tensor], "int_cummax")
+    fn int_cummax(tensor: IntTensor<Self>, dim: usize) -> IntTensor<Self> {
+        one("int_cummax", &tensor, tensor.dtype(), |t| t.scan(dim, Scan::Max))
     }
     fn int_argmax(tensor: IntTensor<Self>, dim: usize) -> IntTensor<Self> {
         reduce("int_argmax", &tensor, Some(dim), Reduction::ArgMax, DType::I32)

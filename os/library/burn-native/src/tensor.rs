@@ -5,6 +5,7 @@ use d3os_compute::{
     Error, Result,
     nvidia::{GpuBuffer, Nvidia},
 };
+use d3os_nvidia::compute::scan::Scan;
 use d3os_nvidia::compute::words::{ValueType, WordOp};
 use d3os_nvidia::compute::{Kernel, elementwise::Elementwise, indexing::Scatter, reduction::Reduction};
 
@@ -493,6 +494,33 @@ impl NativeTensor {
             buffer: Arc::new(buffer),
             layout,
             dtype,
+        })
+    }
+
+    /// Inclusive resident prefixes along a checked axis, with a dense output.
+    pub fn scan(&self, axis: usize, operation: Scan) -> Result<Self> {
+        let operation = match self.dtype {
+            DType::F32 if !operation.is_integer() => operation,
+            DType::I32 => operation.integer(),
+            _ => return Err(Error::InvalidParameter),
+        };
+        if axis >= self.layout.shape().num_dims() {
+            return Err(Error::InvalidParameter);
+        }
+        let layout = Layout::contiguous(self.layout.shape().clone())?;
+        if layout.is_empty() {
+            return Ok(Self {
+                buffer: self.buffer.clone(),
+                layout,
+                dtype: self.dtype,
+            });
+        }
+        let parameters = self.layout.scan_parameters(axis, operation)?;
+        let buffer = Nvidia.produce_words(layout.len(), Kernel::TensorScan, &[(&self.buffer, 0)], &parameters)?;
+        Ok(Self {
+            buffer: Arc::new(buffer),
+            layout,
+            dtype: self.dtype,
         })
     }
 

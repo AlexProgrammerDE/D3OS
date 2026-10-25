@@ -1,6 +1,56 @@
 use d3os_nvidia::compute::Kernel;
 
 #[test]
+fn cumulative_work_checks_signed_views_dense_output_and_chunk_rows() {
+    use d3os_nvidia::compute::scan::Scan;
+    let mut p = [0u32; 24];
+    p[..8].copy_from_slice(&[15, 3, 0, 1, 640, 1935, 129, 5]);
+    p[8..16].fill(1);
+    p[8..11].copy_from_slice(&[3, 129, 5]);
+    p[16..19].copy_from_slice(&[645, (-5i32) as u32, 1]);
+    for operation in Scan::ALL {
+        p[2] = operation as u32;
+        let work = Kernel::TensorScan.work(&p).unwrap();
+        assert_eq!(work.extents[..2], [1935, 1935]);
+        assert_eq!((work.threads, work.blocks, work.pointers, work.output), (128, 15, 2, 1));
+        assert!(Kernel::TensorScan.allocates_output());
+        assert!(!work.in_place);
+        assert!(work.validate_aliases(&[0x10000, 0x20000]).is_ok());
+        assert!(work.validate_aliases(&[0x10000, 0x10004]).is_err());
+    }
+    for (index, value) in [
+        (0, 0),
+        (0, 14),
+        (1, 0),
+        (1, 9),
+        (2, 8),
+        (3, 3),
+        (4, 639),
+        (5, 1934),
+        (6, 0),
+        (7, 4),
+        (9, 128),
+        (11, 2),
+        (19, 1),
+    ] {
+        let mut invalid = p;
+        invalid[index] = value;
+        assert!(Kernel::TensorScan.work(&invalid).is_err());
+    }
+    assert!(Kernel::TensorScan.work(&p[..23]).is_err());
+    // Broadcast source storage can be smaller than the dense output.
+    p[16] = 0;
+    p[5] = 645;
+    assert_eq!(Kernel::TensorScan.work(&p).unwrap().extents[..2], [645, 1935]);
+    // Even a broadcast source must respect the common 32-bit launch count.
+    let mut wide = [0u32; 24];
+    wide[..8].copy_from_slice(&[33_554_432, 2, 0, 1, 0, 1, 1, 1]);
+    wide[8..16].fill(1);
+    wide[8] = 33_554_432;
+    assert!(Kernel::TensorScan.work(&wide).is_err());
+}
+
+#[test]
 fn adam_bounds_every_state_component_and_rejects_inconsistent_flags() {
     use d3os_nvidia::compute::optimizer::{AMSGRAD, MAXIMUM, STATE};
     let mut p = [0u32; 9];

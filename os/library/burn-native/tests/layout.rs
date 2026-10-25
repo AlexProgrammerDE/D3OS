@@ -6,6 +6,25 @@ fn offsets(layout: &Layout) -> Vec<usize> {
 }
 
 #[test]
+fn scan_layout_retains_signed_axes_and_dense_prefix_destinations() {
+    use d3os_nvidia::compute::scan::{self, Scan};
+    let view = Layout::contiguous(Shape::new([2, 3, 129]))
+        .unwrap()
+        .permute(&[2, 0, 1])
+        .unwrap()
+        .flip(&[0])
+        .unwrap();
+    for (axis, rows, length, suffix) in [(0, 6, 129, 6), (1, 387, 2, 3), (2, 258, 3, 1)] {
+        let p = view.scan_parameters(axis, Scan::IntMax).unwrap();
+        assert_eq!((p[0], p[4], p[6], p[7]), (rows, 128, length, suffix));
+        assert_eq!(scan::validate(&p.map(|v| v as u32)).unwrap(), [774, 774]);
+    }
+    assert!(view.scan_parameters(3, Scan::Sum).is_err());
+    let empty = Layout::contiguous(Shape::new([2, 0, 129])).unwrap();
+    assert!(empty.scan_parameters(1, Scan::Sum).is_err());
+}
+
+#[test]
 fn composed_transpose_reverse_and_stepped_slice_addresses() {
     let original = Layout::contiguous(Shape::new([2, 3, 4])).unwrap();
     let view = original

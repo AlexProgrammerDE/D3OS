@@ -1,0 +1,67 @@
+#[cutile::entry()]
+unsafe fn SCAN_ENTRY(input: *const u32, output: *mut u32, SCAN_PARAMETERS) {
+    let row = block_id();
+    let mut linear = row;
+    let mut base = signed(offset);
+    SCAN_ADDRESSES
+    let step = SCAN_STRIDE;
+    let lane = lanes::<128>();
+    let mut carry = SCAN_IDENTITY;
+    let mut start = 0u32;
+    while start < length {
+        let col = lane + broadcast_scalar(start, shape![128]);
+        let mask = lt_tile(col, broadcast_scalar(length, shape![128]));
+        let signed_col: Tile<i32, { [128] }> = bitcast(col);
+        let address = broadcast_scalar(base, shape![128]) + signed_col * broadcast_scalar(signed(step), shape![128]);
+        let address: Tile<u32, { [128] }> = bitcast(address);
+        let words = unsafe { read_tile(input, address, mask & lt_tile(address, broadcast_scalar(extent, shape![128])), SCAN_IDENTITY) };
+        let result: Tile<u32, { [128] }> = if SCAN_OP == 0u32 || SCAN_OP == 1u32 {
+            let values: Tile<f32, { [128] }> = bitcast(words);
+            let value = if SCAN_OP == 0u32 {
+                let prefix: Tile<f32, { [128] }> = scan_sum(values, 0i32, reverse::Forward, 0f32);
+                addf(broadcast_scalar(bits_f32(carry), shape![128]), prefix, rounding::NearestEven, ftz::Disabled)
+            } else {
+                let prefix: Tile<f32, { [128] }> = scan(values, 0i32, reverse::Forward, 1f32, |a, b| a * b);
+                mulf(broadcast_scalar(bits_f32(carry), shape![128]), prefix, rounding::NearestEven, ftz::Disabled)
+            };
+            bitcast(value)
+        } else if SCAN_OP == 4u32 {
+            scan_sum(words, 0i32, reverse::Forward, 0u32) + broadcast_scalar(carry, shape![128])
+        } else if SCAN_OP == 5u32 {
+            scan(words, 0i32, reverse::Forward, 1u32, |a, b| a * b) * broadcast_scalar(carry, shape![128])
+        } else if SCAN_OP == 6u32 || SCAN_OP == 7u32 {
+            let values: Tile<i32, { [128] }> = bitcast(words);
+            let value = if SCAN_OP == 6u32 {
+                let prefix: Tile<i32, { [128] }> = scan(values, 0i32, reverse::Forward, 2147483647i32, |a, b| min(a, b));
+                min_tile(prefix, broadcast_scalar(signed(carry), shape![128]))
+            } else {
+                let prefix: Tile<i32, { [128] }> = scan(values, 0i32, reverse::Forward, -2147483647i32 - 1i32, |a, b| max(a, b));
+                max_tile(prefix, broadcast_scalar(signed(carry), shape![128]))
+            };
+            bitcast(value)
+        } else {
+            // Ordered bit keys retain signed zeros and the first NaN payload.
+            // This associative operation avoids floating min/max NaN modes.
+            let prefix: Tile<u32, { [128] }> = scan(words, 0i32, reverse::Forward, SCAN_IDENTITY, |a, b| {
+                let ak = if a & (1u32 << 31u32) != 0u32 { a ^ ((1u32 << 31u32) | 0x7fffffffu32) } else { a | (1u32 << 31u32) };
+                let bk = if b & (1u32 << 31u32) != 0u32 { b ^ ((1u32 << 31u32) | 0x7fffffffu32) } else { b | (1u32 << 31u32) };
+                if a & 0x7fffffffu32 > 0x7f800000u32 { a }
+                else if b & 0x7fffffffu32 > 0x7f800000u32 { b }
+                else if SCAN_ORDER { a } else { b }
+            });
+            let before = broadcast_scalar(carry, shape![128]);
+            let sign = broadcast_scalar(1u32 << 31u32, shape![128]);
+            let zeros = broadcast_scalar(0u32, shape![128]);
+            let ak = select(ne_tile(before & sign, zeros), before ^ broadcast_scalar((1u32 << 31u32) | 0x7fffffffu32, shape![128]), before | sign);
+            let bk = select(ne_tile(prefix & sign, zeros), prefix ^ broadcast_scalar((1u32 << 31u32) | 0x7fffffffu32, shape![128]), prefix | sign);
+            let an = gt_tile(before & broadcast_scalar(0x7fffffffu32, shape![128]), broadcast_scalar(0x7f800000u32, shape![128]));
+            let bn = gt_tile(prefix & broadcast_scalar(0x7fffffffu32, shape![128]), broadcast_scalar(0x7f800000u32, shape![128]));
+            select(an, before, select(bn, prefix, select(SCAN_TILE_ORDER(ak, bk), before, prefix)))
+        };
+        let last: Tile<u32, { [1] }> = extract(result, [scalar_to_tile(127i32)]);
+        carry = tile_to_scalar(last.reshape(shape![]));
+        let destination = broadcast_scalar(row / suffix * length * suffix + row % suffix, shape![128]) + col * broadcast_scalar(suffix, shape![128]);
+        unsafe { write_tile(output, destination, result, mask & broadcast_scalar(row < count, shape![128])) };
+        start = start + 128u32;
+    }
+}

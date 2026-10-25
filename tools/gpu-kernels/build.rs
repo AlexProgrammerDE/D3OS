@@ -271,6 +271,32 @@ fn main() {
         })
         .collect::<String>();
     let stride = (0..7).map(|axis| format!("if axis == {axis}u32 {{ stride{axis} }} else ")).collect::<String>() + "{ stride7 }";
+    println!("cargo:rerun-if-changed=src/burn-scan.rs.in");
+    let scans = fs::read_to_string("src/burn-scan.rs.in").expect("read scan template");
+    for op in d3os_nvidia::compute::scan::Scan::ALL {
+        use d3os_nvidia::compute::scan::Scan;
+        let identity = match op {
+            Scan::Sum | Scan::IntSum => "0u32",
+            Scan::Product => "0x3f800000u32",
+            Scan::IntProduct => "1u32",
+            Scan::Min => "0x7f800000u32",
+            Scan::Max => "0x7f800000u32 | (1u32 << 31u32)",
+            Scan::IntMin => "0x7fffffffu32",
+            Scan::IntMax => "1u32 << 31u32",
+        };
+        let minimum = matches!(op, Scan::Min | Scan::IntMin);
+        source.push_str(
+            &scans
+                .replace("SCAN_ENTRY", op.symbol())
+                .replace("SCAN_PARAMETERS", &parameters.replace("_reserved", "suffix"))
+                .replace("SCAN_ADDRESSES", &addresses)
+                .replace("SCAN_STRIDE", &stride)
+                .replace("SCAN_IDENTITY", identity)
+                .replace("SCAN_OP", &format!("{}u32", op as u32))
+                .replace("SCAN_ORDER", if minimum { "ak <= bk" } else { "ak >= bk" })
+                .replace("SCAN_TILE_ORDER", if minimum { "le_tile" } else { "ge_tile" }),
+        );
+    }
     println!("cargo:rerun-if-changed=src/burn-i32-reduction.rs.in");
     let integer_reduction = fs::read_to_string("src/burn-i32-reduction.rs.in").expect("read integer reduction source");
     use d3os_nvidia::compute::reduction::Reduction;

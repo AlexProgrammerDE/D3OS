@@ -13,6 +13,7 @@ mod pooling;
 mod quantization;
 mod qwen;
 mod random;
+mod scans;
 mod scatter;
 mod selection;
 mod updates;
@@ -142,6 +143,11 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     ));
     integers::run(backend).map_err(|e| format!("Burn native integer reductions: {e}"))?;
     words::run(backend).map_err(|e| format!("Burn native words: {e}"))?;
+    scans::run(backend)?;
+    d3os_ai::validation::scan::run(&device, true)?;
+    crate::report(format_args!(
+        "BURN_SCAN_CONFORMANCE_OK os=d3os backend=native operations=8 reference=i128,f64 lengths=1,127,128,129,257,531 gradients=4 empty=true shared_views=true"
+    ));
     d3os_ai::validation::integer::run(&device)?;
     crate::report(format_args!(
         "BURN_INTEGER_CONFORMANCE_OK os=d3os backend=native operations=div,remainder tensor=true scalar=true shared_views=true"

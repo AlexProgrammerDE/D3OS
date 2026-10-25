@@ -5,6 +5,7 @@ use d3os_compute::{Error, Result};
 use d3os_nvidia::compute::elementwise::{self, Elementwise};
 use d3os_nvidia::compute::indexing;
 use d3os_nvidia::compute::reduction::{self, Reduction};
+use d3os_nvidia::compute::scan::{self, Scan};
 use d3os_nvidia::compute::words::{self, WordOp};
 
 /// Native kernels use signed 32-bit element indices, including reversed views.
@@ -357,6 +358,14 @@ impl Layout {
         }
         reduction::validate(&parameters).map_err(|_| Error::InvalidParameter)?;
         Ok(parameters.map(|value| value as usize))
+    }
+
+    pub fn scan_parameters(&self, axis: usize, op: Scan) -> Result<[usize; 24]> {
+        let mut parameters = self.reduction_parameters(axis, op.reduction())?.map(|v| v as u32);
+        parameters[2] = op as u32;
+        parameters[7] = self.shape[axis + 1..].iter().product::<usize>() as u32;
+        scan::validate(&parameters).map_err(|_| Error::InvalidParameter)?;
+        Ok(parameters.map(|v| v as usize))
     }
 }
 

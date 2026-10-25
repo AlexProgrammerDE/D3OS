@@ -6,6 +6,7 @@ pub mod integer_matrix;
 pub mod quantization;
 pub mod qwen;
 pub mod qwen_state;
+pub mod scan;
 use alloc::{format, string::String};
 use burn::{
     module::{Module, Param},
