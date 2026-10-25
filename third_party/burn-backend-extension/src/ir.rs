@@ -70,6 +70,11 @@ impl InputKind {
         })
     }
 
+    pub(crate) fn optional_tensor(ty: &Type) -> Option<Self> {
+        let inner = container_inner(ty, "Option")?;
+        TensorKind::from_type(inner).map(Self::OptionTensor)
+    }
+
     fn dispatch(ty: &Type) -> Option<Self> {
         if let Type::Reference(reference) = ty
             && let Some(kind) = TensorKind::from_type(&reference.elem)
@@ -82,10 +87,8 @@ impl InputKind {
         if let Some(tensor) = Self::owned_tensor(ty) {
             return Some(tensor);
         }
-        if let Some(inner) = container_inner(ty, "Option")
-            && let Some(kind) = TensorKind::from_type(inner)
-        {
-            return Some(Self::OptionTensor(kind));
+        if let Some(optional) = Self::optional_tensor(ty) {
+            return Some(optional);
         }
         if let Some(inner) = container_inner(ty, "Vec")
             && let Some(kind) = TensorKind::from_type(inner)

@@ -159,6 +159,60 @@ It retains the Linux GPU speed target and the independent CPU numerical oracle a
 AlexNet also passes its eight-layer Burn validation after the shared matrix dispatch change.
 That regression log is under `target/nvidia/mnist-parity/split-alexnet/`; its load-inclusive interval is not a warm inference measurement.
 
+## Fuse native Adam updates
+
+The post-split diagnostic records 198 launches per training step, including 144 generic elementwise launches.
+Those generic kernels account for about 55 percent of instrumented GPU time.
+The diagnostic is under `target/nvidia/mnist-parity/training-profile-after-split/` and remains outside the throughput comparison.
+
+Burn's optional native optimizer feature now dispatches one FP32 Adam kernel per parameter.
+It retains the public optimizer API, timestep, moment tensors, and checkpoint format.
+The parameter and moments occupy separate views of one new GPU allocation. Inputs and shared snapshots remain immutable.
+AMSGrad adds its historical maximum to that allocation. Weight decay and gradient clipping retain their existing preprocessing paths.
+The kernel uses explicit FP32 rounding, with the original bias correction and epsilon placement.
+Other devices retain Burn's tensor-operation implementation.
+
+The GPU conformance oracle uses canonical CPU arrays built from the native views' logical values.
+This keeps the CPU reference independent of native view implementation.
+Burn Flex 0.22.1 panics when Adam consumes an empty flipped CPU tensor; the separate Linux host probe reproduces this defect.
+The native tests retain their reversed, transposed, and empty inputs.
+The first diagnostic retains the host probe, guest console, and incomplete operator result under `adam-doom-operators/`.
+
+The fused operation uses Burn's extension dispatcher to preserve untracked autodiff and checkpointing contexts.
+Optional restored moments participate in that dispatch. Tracked optimizer inputs retain the differentiable tensor-operation path.
+The complete GPU operator suite passes both checkpointing strategies, tracked gradients, and MNIST checkpoint resume.
+Guarded direct updates preserve moment bits exactly against separate FP32 CPU operations.
+Other checks cover repeated updates, AMSGrad reconfiguration, weight decay, shared snapshots, reversed views, and empty tensors.
+Accepted operator evidence is under `target/nvidia/mnist-parity/adam-context-operators/`.
+
+The separate post-fusion profile records 102 launches per step, down from 198.
+Generic elementwise launches fall from 144 to 40, with eight fused Adam launches per step.
+This removes 96 launches per step, or 48.5 percent. The profile remains excluded from ordinary performance comparisons.
+Its evidence is under `target/nvidia/mnist-parity/training-profile-fused-adam/`.
+
+Ordinary D3OS training repetitions take 79, 80, and 78 ms for 64 steps, with a mean of 79.000 ms.
+This is 1.219 times faster than the preceding 96.333 ms cohort and 3.253 times faster than the initial 257 ms mean.
+All 448,062 strict CPU oracle values pass with zero tolerance failures.
+
+A fresh Linux CUDA cohort uses the rebuilt reference, matching inputs, and the same work contract.
+Its training repetitions take 118.034, 90.850, and 96.999 ms, with a mean of 101.961 ms.
+The earlier Linux mean remains 88.054 ms. All trials remain retained, including the faster 67.088 ms earlier Linux interval.
+The timing spread and matrix arithmetic difference remain relevant to parity claims.
+
+| Work | Fresh Linux VM, Burn CUDA, TF32 allowed | D3OS VM, native Burn, FP32 |
+| --- | ---: | ---: |
+| Inference, batch 1, 10,000 images | 3,699.530 ms | 1,577.000 ms |
+| Inference, batch 64, 10,000 images | 59.774 ms | 48.333 ms |
+| Inference, batch 256, 10,000 images | 30.568 ms | 30.000 ms |
+| Training, batch 64, 64 steps | 101.961 ms | 79.000 ms |
+
+Every inference repetition preserves 99.26 percent accuracy and prediction CRC32 `ce40d6c3`.
+The older Linux batch-256 mean remains 27.293 ms, below D3OS's 30.000 ms. That inference gap remains open.
+
+Fresh execution evidence is under `target/nvidia/mnist-parity/linux-fused-adam-cohort/` and `d3os-fused-adam/`.
+The comparison files are `comparison-fused-adam-fresh-linux.json` and `comparison-fused-adam-retained-linux.json` in the same parent directory.
+Both comparisons retain the independent CPU numerical oracle and explicitly mark matrix performance precision as unmatched.
+
 ## Reproduce the comparison
 
 Build the production D3OS image and prepare the normal NVIDIA firmware and portable kernel inputs first.

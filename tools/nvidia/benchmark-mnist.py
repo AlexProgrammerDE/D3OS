@@ -170,6 +170,10 @@ def main():
         "tools/nvidia/run-mnist.py", "tools/nvidia/run-qemu.py",
         "os/library/burn-native/src/tensor.rs", "os/library/nvidia/src/compute.rs",
         "tools/gpu-kernels/src/matrix.rs", "tools/gpu-kernels/src/matrix.rs.in",
+        "os/library/burn-native/src/backend/optimizer.rs", "os/library/nvidia/src/compute/optimizer.rs",
+        "tools/gpu-kernels/src/optimizer.rs", "third_party/burn-optim/src/optim/adam.rs",
+        "third_party/burn-optim/src/optim/adam/native.rs", "third_party/burn-optim/Cargo.toml", "os/library/ai/Cargo.toml",
+        "third_party/burn-optim/src/optim/adam/native/ops.rs",
     )
     manifest["sources"] = {name: digest(ROOT / name) for name in sources}
     for name in sources:

@@ -2122,6 +2122,7 @@ version = "0.1.0"
 dependencies = [
  "burn",
  "burn-flex",
+ "burn-optim",
  "concurrent",
  "crc32fast",
  "d3os-tensor-file",

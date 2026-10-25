@@ -11,6 +11,7 @@ fn main() {
         "quantized-vector.rs",
         "quad.rs",
         "elementwise.rs",
+        "optimizer.rs",
         "matrix.rs",
         "tensor.rs",
         "attention.rs",

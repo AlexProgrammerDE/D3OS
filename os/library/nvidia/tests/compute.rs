@@ -1,6 +1,49 @@
 use d3os_nvidia::compute::Kernel;
 
 #[test]
+fn adam_bounds_every_state_component_and_rejects_inconsistent_flags() {
+    use d3os_nvidia::compute::optimizer::{AMSGRAD, MAXIMUM, STATE};
+    let mut p = [0u32; 9];
+    p[0] = 257;
+    for flags in [0, STATE, AMSGRAD, STATE | AMSGRAD, STATE | AMSGRAD | MAXIMUM] {
+        p[1] = flags;
+        let work = Kernel::Adam.work(&p).unwrap();
+        let state = if flags & STATE == 0 { 0 } else { 257 };
+        assert_eq!(
+            work.extents[..6],
+            [
+                257,
+                257,
+                state,
+                state,
+                if flags & MAXIMUM == 0 { 0 } else { 257 },
+                257 * if flags & AMSGRAD == 0 { 3 } else { 4 }
+            ]
+        );
+        assert_eq!((work.blocks, work.pointers, work.output), (3, 6, 5));
+        assert!(!work.in_place);
+        let pointers = [0x10000, 0x20000, 0x30000, 0x40000, 0x50000, 0x60000];
+        assert!(work.validate_aliases(&pointers).is_ok());
+        for input in [0, 1] {
+            let mut aliased = pointers;
+            aliased[5] = aliased[input] + 4;
+            assert!(work.validate_aliases(&aliased).is_err());
+        }
+    }
+    for flags in [MAXIMUM, AMSGRAD | MAXIMUM, STATE | MAXIMUM, 8] {
+        p[1] = flags;
+        assert!(Kernel::Adam.work(&p).is_err());
+    }
+    p[1] = 0;
+    for count in [0, u32::MAX] {
+        p[0] = count;
+        assert!(Kernel::Adam.work(&p).is_err());
+    }
+    assert!(Kernel::Adam.work(&p[..8]).is_err());
+    assert!(Kernel::Adam.allocates_output());
+}
+
+#[test]
 fn scatter_preserves_destination_ranges_and_rejects_writer_aliases() {
     use d3os_nvidia::compute::indexing::Scatter;
     let mut p = [0u32; 32];

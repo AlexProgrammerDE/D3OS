@@ -47,6 +47,7 @@ rustdoc-args = [
 ]
 
 [features]
+d3os-native = ["dep:burn-dispatch", "burn-dispatch/d3os-native"]
 default = [
     "std",
     "burn-core/default",
@@ -82,6 +83,11 @@ default-features = false
 [dependencies.burn-derive]
 version = "0.22.1"
 default-features = false
+
+[dependencies.burn-dispatch]
+version = "0.22.1"
+default-features = false
+optional = true
 
 [dependencies.burn-pack]
 version = "0.22.1"

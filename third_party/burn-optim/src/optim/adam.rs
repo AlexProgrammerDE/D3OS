@@ -1,5 +1,8 @@
 use burn_core as burn;
 
+#[cfg(feature = "d3os-native")]
+mod native;
+
 use crate::RecordState;
 
 use burn::config::Config;
@@ -74,6 +77,11 @@ impl Optimizer for Adam {
 
         if let Some(weight_decay) = &self.weight_decay {
             grad = weight_decay.transform(grad, tensor.clone());
+        }
+
+        #[cfg(feature = "d3os-native")]
+        if native::supports(&tensor, &grad, state_momentum.as_ref()) {
+            return native::step(&self.momentum, lr, tensor, grad, state_momentum);
         }
 
         let (grad, state_momentum) = self.momentum.transform(grad, state_momentum);
@@ -191,9 +199,7 @@ impl AdaptiveMomentum {
             }
         };
 
-        let time = state.time as i32;
-        let bias_correction2_sqrt = (1.0 - self.beta_2.powi(time)).sqrt();
-        let combined_factor = bias_correction2_sqrt / (1.0 - self.beta_1.powi(time));
+        let (bias_correction2_sqrt, combined_factor) = self.bias_factors(state.time);
 
         let v_to_use = if self.amsgrad {
             state.max_moment_2.as_ref().unwrap_or(&state.moment_2)
@@ -208,6 +214,12 @@ impl AdaptiveMomentum {
                 .add_scalar(self.epsilon * bias_correction2_sqrt),
         );
         (grad, state)
+    }
+
+    fn bias_factors(&self, time: usize) -> (f32, f32) {
+        let time = time as i32;
+        let square_root = (1.0 - self.beta_2.powi(time)).sqrt();
+        (square_root, square_root / (1.0 - self.beta_1.powi(time)))
     }
 }
 

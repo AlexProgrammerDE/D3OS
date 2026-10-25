@@ -196,6 +196,8 @@ fn lower_extension(attr: Backends, item: &ItemTrait) -> syn::Result<Extension> {
                 }
             } else if let Some(kind) = InputKind::owned_tensor(&pt.ty) {
                 kind
+            } else if let Some(kind) = InputKind::optional_tensor(&pt.ty) {
+                kind
             } else {
                 InputKind::Other
             };

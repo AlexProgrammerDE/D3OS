@@ -510,6 +510,7 @@ version = "0.22.1"
 dependencies = [
  "burn-core",
  "burn-derive",
+ "burn-dispatch",
  "burn-pack",
  "derive-new",
  "hashbrown 0.16.1",
@@ -927,6 +928,7 @@ dependencies = [
  "burn",
  "burn-dispatch",
  "burn-flex",
+ "burn-optim",
  "concurrent",
  "crc32fast",
  "d3os-burn-native",

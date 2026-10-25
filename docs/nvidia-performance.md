@@ -2156,6 +2156,15 @@ It retains ownership of the DMA region for the firmware lifetime.
 
 ## DOOM stage profile
 
+Two protocol-19 D3OS VMs record six uncapped GPU timedemos at 1,547.174, 1,566.635, 1,566.635, 1,638.783, 1,628.072, and 1,628.072 FPS.
+Their combined mean is 1,595.895 FPS. Each timedemo executes 7,117 gametics with native GPU window presentation and compilation excluded.
+Both cohorts use matching kernel and DOOM executable hashes, four pinned virtual CPUs, and 4 GiB of guest memory.
+The timing evidence is under `target/nvidia/mnist-parity/adam-doom-operators/` and `adam-doom-operators-canonical/`.
+Those intervals finish before the subsequent optimizer validation failures, which remain retained with their guest consoles.
+The corrected complete GPU operator suite passes separately under `adam-context-operators/`.
+See [the MNIST report](mnist-performance.md#fuse-native-adam-updates) for the fixes and training measurements.
+An equivalent Linux GPU rendering and presentation reference remains required; these FPS values do not establish Linux parity.
+
 `NVIDIA_DOOM_PROFILE` separates player-view rendering, palette/scaling transfers, and final framebuffer copying.
 Each stage reports CPU cycles per rendered frame, including scheduling delays.
 `NVIDIA_DOOM_KERNEL_PROFILE` reports CPU dispatch cycles per frame for each kernel.

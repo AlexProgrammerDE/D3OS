@@ -5,6 +5,7 @@ mod execution;
 mod float;
 mod integer;
 mod modules;
+mod optimizer;
 mod quantized;
 mod qwen;
 

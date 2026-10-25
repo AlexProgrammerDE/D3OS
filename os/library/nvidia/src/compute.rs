@@ -5,6 +5,7 @@ use crate::{Error, Result};
 pub mod convolution;
 pub mod elementwise;
 pub mod indexing;
+pub mod optimizer;
 pub mod pooling;
 pub mod random;
 pub mod range;
@@ -12,7 +13,7 @@ pub mod reduction;
 pub mod updates;
 pub mod words;
 
-pub const VERSION: u32 = 18;
+pub const VERSION: u32 = 19;
 /// END_COMMANDS flag: an inner recording scope joins its parent's completion.
 /// The outermost scope always waits. Zero retains synchronous nested scopes.
 pub const DEFER_NESTED_COMPLETION: u64 = 1;
@@ -46,7 +47,7 @@ pub struct MemoryProfile {
     pub device_cached_bytes: u64,
     pub device_retired_bytes: u64,
 }
-pub const KERNEL_COUNT: usize = 59;
+pub const KERNEL_COUNT: usize = 60;
 
 /// CPU service costs by request operation, including queue work within it.
 #[derive(Clone, Copy, Debug, Default)]
@@ -162,9 +163,10 @@ pub enum Kernel {
     ViewAssign = 56,
     Random = 57,
     Range = 58,
+    Adam = 59,
 }
 
-const _: () = assert!(Kernel::Range as usize + 1 == KERNEL_COUNT);
+const _: () = assert!(Kernel::Adam as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -209,6 +211,7 @@ impl Kernel {
         matches!(
             self,
             Self::TensorElementwise
+                | Self::Adam
                 | Self::MaskWhere
                 | Self::Random
                 | Self::Range
@@ -312,6 +315,7 @@ impl Kernel {
             56 => Self::ViewAssign,
             57 => Self::Random,
             58 => Self::Range,
+            59 => Self::Adam,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -377,6 +381,7 @@ impl Kernel {
             Self::ViewAssign => "burn_view_assign",
             Self::Random => "burn_random_words",
             Self::Range => "burn_i32_range",
+            Self::Adam => "burn_adam",
         }
     }
 
@@ -434,6 +439,10 @@ impl Kernel {
         let mut mutated = 0;
         let mut threads = 128;
         let (count, pointers, output, in_place) = match (self, p) {
+            (Self::Adam, p) => {
+                extents[..6].copy_from_slice(&optimizer::validate(p)?);
+                (p[0], 6, 5, false)
+            }
             (Self::Random, p) => {
                 extents[..1].copy_from_slice(&random::validate(p)?);
                 (p[0], 1, 0, false)

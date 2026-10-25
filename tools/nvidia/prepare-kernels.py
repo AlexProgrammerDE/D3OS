@@ -61,6 +61,7 @@ def audit(family, sass):
             "delta_fused_four_taps",
             "tensor_matmul_tf32x3_k16",
             "tensor_matmul_tf32x3_split",
+            "burn_adam",
             "vector_project_q8_0",
             "vector_project_q3k",
             "vector_project_q4k",

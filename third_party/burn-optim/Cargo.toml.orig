@@ -15,6 +15,7 @@ version.workspace = true
 workspace = true
 
 [features]
+d3os-native = ["dep:burn-dispatch", "burn-dispatch/d3os-native"]
 default = ["std", "burn-core/default"]
 doc = [
     "std",
@@ -27,6 +28,7 @@ tracing = ["burn-core/tracing"]
 # collective = ["burn-collective"]
 
 [dependencies]
+burn-dispatch = { workspace = true, default-features = false, optional = true }
 
 # ** Please make sure all dependencies support no_std when std is disabled **
 burn-core = { workspace = true, features = ["autodiff", "extension"] }

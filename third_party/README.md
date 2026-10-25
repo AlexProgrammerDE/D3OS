@@ -20,6 +20,14 @@ The patch must remain until an upstream release supplies equivalent portable opt
 Host and D3OS target checks cover the dependency graph.
 Runtime validation checks analytic gradients, tensor aliasing, and Adam checkpoint resume.
 
+The optional `d3os-native` feature also dispatches FP32 Adam updates to one native cuTile kernel per parameter.
+The public Burn optimizer API, moment tensors, timestep, and checkpoint format remain unchanged.
+Bias correction uses the shared host calculation, and the GPU retains explicit FP32 rounding and epsilon placement.
+AMSGrad retains its historical maximum. Weight decay and gradient clipping keep their existing preprocessing paths.
+Other devices retain the tensor-operation implementation. D3OS enables the feature when native AI and training are both enabled.
+The fused operation preserves untracked autodiff contexts, including moments restored from checkpoints.
+Tracked optimizer inputs retain the differentiable tensor-operation implementation.
+
 ## burn-dispatch and burn-backend-extension 0.22.1
 
 Sources: [burn-dispatch 0.22.1](https://crates.io/crates/burn-dispatch/0.22.1) and [burn-backend-extension 0.22.1](https://crates.io/crates/burn-backend-extension/0.22.1).
@@ -41,6 +49,9 @@ These patches do not replace Burn's optimizer or autodiff algorithms.
 The dispatcher also forwards linear forward and backward operations to the active backend.
 The upstream dispatcher decomposes linear layers before backend-specific implementations can run.
 Forwarding enables native linear execution while retaining each backend's autodiff behavior.
+The extension frontend also recognizes optional tensor inputs through the shared routing parser.
+Present inputs participate in backend selection, primitive conversion, and autodiff-context merging.
+Native Adam uses this path for optional restored moments and AMSGrad history.
 
 ## gemm-common 0.19.0
 
