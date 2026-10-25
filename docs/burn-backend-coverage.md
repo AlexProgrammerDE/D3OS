@@ -15,10 +15,10 @@ Associated types and source SHA-256 hashes accompany the report.
 
 The current inventory contains 484 methods: 267 native overrides and 217 inherited defaults.
 All required methods have declarations or implementations. This count does not establish runtime support.
-The report also records 105 native helper bodies for manual review of dtype and shape restrictions.
+The report also records 106 native helper bodies for manual review of dtype and shape restrictions.
 
 The tool follows syntactic associated backend calls and expands the pinned `dequant_op_quant!` and `dequant_op_flow!` macros.
-It identifies 39 methods with possible paths to explicit declines or panic declarations.
+It identifies 38 methods with possible paths to explicit declines or panic declarations.
 This number is not an unsupported-operation count. Some paths represent expected invalid-input errors or conditional restrictions.
 
 The analysis does not resolve method types, evaluate conditional compilation, or expand other macros and free helper functions.
@@ -168,6 +168,7 @@ Original axis order resolves top-k ties. This policy remains distinct from the t
 Each merge pass writes every output element, including partial tiles and unmatched tails.
 Gather-based merge partitions keep output addresses independent of index payloads.
 The first pass reads signed or broadcast views directly and initializes original axis indices.
+
 Subsequent passes alternate between two allocations, each containing values followed by indices.
 The two working allocations contain four words per input element in total, excluding the input.
 A top-k result slices the final allocation through tensor metadata without a host bounds readback.
@@ -192,20 +193,47 @@ The pinned Linux backend uses a host fallback for sort and argsort, but runs top
 Its IEEE run fails: top-k returns the most negative finite FP32 value where the input contains negative infinity.
 The exact output words are `0xff7fffff` instead of `0xff800000`.
 That failed run remains evidence. D3OS does not copy the Linux sentinel result.
+
 The first Linux finite-input run reached its 300-second deadline without a success marker.
 The diagnostic ended with a guest out-of-memory kill of `burn-sort` at 583 seconds.
 That run used 4 GiB of guest RAM and retained basic CubeCL compilation logs.
+A retry with 12 GiB reached its 1,200-second deadline without completing the finite-input probe.
+The finite Linux comparison therefore remains unverified. These runs contain no matched execution-performance measurement.
+
 CPU checks and restricted comparisons do not establish complete GPU parity.
 
 The current portable inference bundle contains 209 entries and 65 native kernel profiles.
 All 199 earlier instruction and constant sections remain byte-identical. The ten new entries pass the host spill audit.
 These checks establish correctness for the tested cases. They contain no performance or compilation-time parity measurement.
 
+## Native vector products
+
+The FP32 cross product uses resident slice views, products, subtraction, and concatenation.
+Its vector axis must have length three in both inputs. Other axes support broadcasting and signed strides.
+Command recording groups all component operations and keeps queued inputs alive through completion.
+Empty outputs return without a GPU launch, after dtype, shape, and axis validation.
+This composition reuses the existing portable kernels. Protocol 28 and its 209-entry bundle remain unchanged.
+
+The shared forward reference covers all three axes, reversed transposes, broadcast inputs, retained tensors, and partial tiles.
+Six independent gradient references cover both input derivatives on nonbroadcast tensors across all axes.
+A separate infinity case checks the scalar vector path.
+Broadcast gradient reduction remains unverified and is outside these six checks.
+Both Linux CUDA and D3OS pass this public corpus, including empty outputs, on the same physical GPU.
+Both VMs use 4 GiB of guest RAM.
+
+D3OS also passes resident execution without tensor transfers, queued input lifetime, and invalid native input checks.
+Empty native cross products enqueue no GPU launch.
+The complete operator suite passes, and every guest-compiled module matches its host audit hash.
+
+The explicit Flex CPU reference passes the nonempty corpus.
+Its all-shape run panics in the pinned `burn-flex` binary operation when cross-product slices reference empty storage.
+That failed CPU run remains evidence. CPU execution does not establish native GPU conformance.
+
 ## Remaining implementation areas
 
 The unresolved work includes ordinary dtypes, complete integer arithmetic, matrix products for further dtypes, and additional floating-point operations.
 Further sorting dtypes, compaction, non-additive updates, further convolution variants, deformable convolution, and interpolation also require coverage.
-Graph capture, profiling, memory capabilities, records, and observable errors require matched Linux capability checks.
+Broadcast cross-product gradients, graph capture, profiling, memory capabilities, records, and observable errors require matched Linux capability checks.
 The current layout also restricts rank to eight and extents to signed 32-bit values.
 The method inventory records defaults, but each composed path still needs dtype, shape, ownership, and execution checks.
 
@@ -222,7 +250,7 @@ Build the Linux probes with their default CUDA feature:
 
 ```bash
 cd tools/mnist-benchmark
-cargo build --release --locked --bin capabilities --bin erf --bin integer --bin integer_matrix --bin scan --bin sort
+cargo build --release --locked --bin capabilities --bin erf --bin integer --bin integer_matrix --bin scan --bin sort --bin cross
 cd ../..
 ```
 
@@ -247,6 +275,9 @@ python3 tools/nvidia/linux-reference.py \
 python3 tools/nvidia/linux-reference.py \
   --directory target/nvidia/linux-burn-sort \
   --burn-sort tools/mnist-benchmark/target/release/sort
+python3 tools/nvidia/linux-reference.py \
+  --directory target/nvidia/linux-burn-cross \
+  --burn-cross tools/mnist-benchmark/target/release/cross
 ```
 
 If the all-shape matrix check fails, run the nonempty comparison in a separate directory:
@@ -296,7 +327,9 @@ The audit directory contains `traits-i32-matrix.json` and `i32-matrix-comparison
 The cumulative evidence lives under `target/nvidia/burn-backend-validation/scans-first/` and `target/nvidia/burn-backend-audit/linux-scan-final/`.
 The audit directory contains `traits-scan.json` and `scan-comparison.json`.
 The sorting evidence lives under `target/nvidia/burn-backend-validation/sorts-final/`.
-Its Linux counterparts are `target/nvidia/burn-backend-audit/linux-sort-ieee-diagnostic/` and `linux-sort-finite-diagnostic/`.
+Its Linux counterparts are `target/nvidia/burn-backend-audit/linux-sort-ieee-diagnostic/`, `linux-sort-finite-diagnostic/`, and `linux-sort-finite-12g/`.
 The audit directory contains `traits-sort-final.json` and `sort-comparison.json`.
+The vector-product evidence lives under `target/nvidia/burn-backend-validation/cross-final/` and `target/nvidia/burn-backend-audit/linux-cross/`.
+The audit directory contains `traits-cross.json`, `cross-comparison.json`, and the retained Flex CPU failure.
 Manifests record the shared validation source hashes, executable hashes, and execution backend.
 These generated local artifacts are not Git-tracked. The probes and audit tool are tracked for reproduction.

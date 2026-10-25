@@ -1,6 +1,7 @@
 //! Check Burn tensor ownership and views on real native GPU allocations.
 mod activation;
 mod convolution;
+mod cross;
 mod dispatch;
 mod indexing;
 mod integers;
@@ -146,6 +147,11 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     words::run(backend).map_err(|e| format!("Burn native words: {e}"))?;
     scans::run(backend)?;
     sort::run(backend)?;
+    cross::run(backend)?;
+    d3os_ai::validation::cross::run(&device, true)?;
+    crate::report(format_args!(
+        "BURN_CROSS_CONFORMANCE_OK os=d3os backend=native dtype=f32 axes=all signed_views=true broadcasting=true gradients=6 empty=true"
+    ));
     for domain in [d3os_ai::validation::sort::FloatDomain::Ieee, d3os_ai::validation::sort::FloatDomain::Finite] {
         d3os_ai::validation::sort::run(&device, true, d3os_ai::validation::sort::TopKOrdering::NanFirst, domain)?;
     }

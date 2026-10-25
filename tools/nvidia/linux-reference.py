@@ -81,6 +81,7 @@ def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_fi
         "integer": "public integer division and floor remainder conformance; no performance measurement",
         "integer_matrix": "public I32 matrix product conformance; no performance measurement",
         "scan": "public cumulative operations and gradients; no performance measurement",
+        "cross": "public FP32 vector products and gradients; no performance measurement",
         "sort": "public ordering API conformance; pinned Burn uses host sorting with CUDA storage; no GPU sorting performance comparison",
     }
     purpose = "erf error profile and GELU conformance; strict failures reported" if erf_profile else purposes[kind]
@@ -1184,6 +1185,8 @@ def main():
     parser.add_argument("--burn-integer", type=Path, help="run public I32 division and floor remainder conformance on Linux CUDA")
     parser.add_argument("--burn-integer-matmul", type=Path, help="run public I32 matrix product conformance on Linux CUDA")
     parser.add_argument("--burn-integer-matmul-nonempty", action="store_true", help="run the nonempty I32 matrix cases separately from empty shapes")
+    parser.add_argument("--burn-cross-nonempty", action="store_true", help="run nonempty vector-product checks separately from empty shapes")
+    parser.add_argument("--burn-cross", type=Path, help="run public FP32 cross products and gradients on Linux CUDA")
     parser.add_argument("--burn-scan", type=Path, help="run public cumulative operations and gradients on Linux CUDA")
     parser.add_argument("--burn-scan-nonempty", action="store_true", help="run cumulative checks separately from empty shapes")
     parser.add_argument("--burn-sort", type=Path, help="compare public ordering APIs; pinned Burn uses a host sort fallback with CUDA storage")
@@ -1241,7 +1244,7 @@ def main():
     args = parser.parse_args()
     if args.nsight_directory and not args.quantized_profile:
         parser.error("--nsight-directory requires --quantized-profile")
-    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.burn_integer, args.burn_integer_matmul, args.burn_scan, args.burn_sort, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
+    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.burn_integer, args.burn_integer_matmul, args.burn_cross, args.burn_scan, args.burn_sort, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
         parser.error("--quantized-profile requires a separate diagnostic guest")
     if args.pin_vcpus and len(os.sched_getaffinity(0)) != 4:
         parser.error("--pin-vcpus requires an inherited affinity of four host CPUs")
@@ -1268,6 +1271,7 @@ def main():
                 bool(args.burn_erf),
                 bool(args.burn_integer),
                 bool(args.burn_integer_matmul),
+                bool(args.burn_cross),
                 bool(args.burn_scan),
                 bool(args.burn_sort),
                 bool(args.llama_directory),
@@ -1294,6 +1298,10 @@ def main():
         parser.error("--burn-integer-matmul requires a built conformance executable")
     if args.burn_integer_matmul_nonempty and not args.burn_integer_matmul:
         parser.error("--burn-integer-matmul-nonempty requires --burn-integer-matmul")
+    if args.burn_cross_nonempty and not args.burn_cross:
+        parser.error("--burn-cross-nonempty requires --burn-cross")
+    if args.burn_cross and not args.burn_cross.is_file():
+        parser.error("--burn-cross requires a built conformance executable")
     if args.burn_scan and not args.burn_scan.is_file():
         parser.error("--burn-scan requires a built conformance executable")
     if args.burn_scan_nonempty and not args.burn_scan:
@@ -1348,6 +1356,8 @@ def main():
         burn_probe(args.directory / "root", args.burn_integer.resolve(), "integer")
     elif args.burn_integer_matmul:
         burn_probe(args.directory / "root", args.burn_integer_matmul.resolve(), "integer_matrix", nonempty=args.burn_integer_matmul_nonempty)
+    elif args.burn_cross:
+        burn_probe(args.directory / "root", args.burn_cross.resolve(), "cross", nonempty=args.burn_cross_nonempty)
     elif args.burn_scan:
         burn_probe(args.directory / "root", args.burn_scan.resolve(), "scan", nonempty=args.burn_scan_nonempty)
     elif args.burn_sort:
@@ -1504,6 +1514,10 @@ def main():
         cases, domain, empty = (5, "nonempty", "false") if args.burn_integer_matmul_nonempty else (8, "all", "true")
         if f"BURN_INTEGER_MATMUL_CONFORMANCE_OK os=linux backend=cuda cases={cases} domain={domain} reference=i128 wrapping=exact shared_views=true empty={empty}" not in text:
             raise RuntimeError("Linux CUDA Burn I32 matrix product conformance did not complete")
+    if args.burn_cross:
+        empty = "false" if args.burn_cross_nonempty else "true"
+        if f"BURN_CROSS_CONFORMANCE_OK os=linux backend=cuda dtype=f32 axes=all signed_views=true broadcasting=true gradients=6 empty={empty}" not in text:
+            raise RuntimeError("Linux CUDA Burn cross product conformance did not complete")
     if args.burn_scan:
         empty = "false" if args.burn_scan_nonempty else "true"
         if f"BURN_SCAN_CONFORMANCE_OK os=linux backend=cuda operations=8 reference=i128,f64 lengths=1,127,128,129,257,531 gradients=4 empty={empty} shared_views=true" not in text:

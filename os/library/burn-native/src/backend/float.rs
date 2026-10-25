@@ -67,8 +67,8 @@ impl FloatTensorOps<Self> for Native {
             |v| v[0].matmul(v[1]),
         )
     }
-    fn float_cross(lhs: FloatTensor<Self>, rhs: FloatTensor<Self>, _dim: usize) -> FloatTensor<Self> {
-        BackendTensor::unsupported("float_cross", lhs.shape(), DType::F32, &[&lhs, &rhs], "float_cross")
+    fn float_cross(lhs: FloatTensor<Self>, rhs: FloatTensor<Self>, dim: usize) -> FloatTensor<Self> {
+        binary("float_cross", &lhs, &rhs, lhs.dtype(), |a, b| a.cross(b, dim))
     }
     fn float_recip(tensor: FloatTensor<Self>) -> FloatTensor<Self> {
         one("float_recip", &tensor, tensor.dtype(), |t| t.unary(Elementwise::Reciprocal))

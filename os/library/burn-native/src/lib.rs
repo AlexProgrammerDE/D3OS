@@ -15,6 +15,7 @@ pub mod range;
 mod sort;
 mod tensor;
 mod updates;
+mod vector;
 
 pub use device::NativeDevice;
 pub use tensor::NativeTensor;
