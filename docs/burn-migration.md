@@ -311,7 +311,8 @@ All eight integer input index formats use resident validation before I32 convers
 Requested ordering, extrema, and coordinate index formats use resident output casts.
 D3OS passes 52,306 public cases and 282 guarded raw/native checks for this extension.
 The complete earlier regression suite also passes.
-Linux retains scalar-readback, Flex32-upload, and 4 GiB guest-memory failures. Its larger-memory comparison remains pending.
+Linux retains scalar-readback, Flex32-upload, and 4 GiB guest-memory failures.
+Its 12 GiB retry reached the 2,400-second deadline without completing.
 Pooling index outputs remain I32-only. Typed arithmetic updates and broader value domains also remain incomplete.
 I32 tensor and generic scalar powers now use resident wrapping integer arithmetic without a floating-point intermediate.
 The exponent bits follow the same unsigned interpretation as the pinned Linux backend.

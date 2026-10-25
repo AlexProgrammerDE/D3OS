@@ -320,7 +320,7 @@ The retained Linux run stops at the pinned CubeCL rank-zero readback panic.
 The diagnostic without scalar ND results stops at the unsupported direct Flex32 upload.
 The diagnostic without both domains runs out of its 4 GiB guest RAM allocation after 725 seconds.
 These records report no tensor mismatch before their failure. They do not establish complete Linux conformance.
-A larger 12 GiB Linux diagnostic remains pending.
+The 12 GiB Linux diagnostic reached its 2,400-second deadline without a completion marker or reported tensor mismatch.
 All Linux records use the same frozen reference, runner, executable, and launcher hashes.
 These are correctness checks, with no execution-performance or compile-time parity claim.
 
