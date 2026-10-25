@@ -8,6 +8,7 @@ fn main() {
         "burn-math.rs",
         "burn-erf.rs",
         "burn-remainder.rs",
+        "burn-inverse.rs",
         "burn-integer-matrix.rs",
         "burn-scale-common.rs",
         "burn-range.rs",

@@ -88,7 +88,7 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
         return Err(String::from("Qwen Burn malformed input touched GPU storage"));
     }
     // A failed Burn input propagates through the custom operation without work.
-    let failed = input.acos();
+    let failed = super::dispatch::invalid_gather(input, &device);
     let before = backend.service_profile().map_err(|e| format!("Qwen Burn profile: {e}"))?;
     let dependent = matrix.project(failed)?;
     let after = backend.service_profile().map_err(|e| format!("Qwen Burn profile: {e}"))?;
@@ -188,7 +188,7 @@ fn state_residency(backend: &Nvidia, device: &d3os_ai::burn::tensor::Device) -> 
     if attention.position() != 2 || delta.recurrent().dims() != [2, 4, 3] {
         return Err(String::from("Qwen state metadata differs"));
     }
-    let failed = query.acos();
+    let failed = super::dispatch::invalid_gather(query, device);
     let before = backend.service_profile().map_err(|e| format!("Qwen state failure profile: {e}"))?;
     let (failed, output) = attention.forward(
         AttentionInputs {

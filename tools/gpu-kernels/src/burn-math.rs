@@ -15,7 +15,11 @@ fn burn_round_even(bits: Tile<u32, { [128] }>) -> Tile<u32, { [128] }> {
     let odd = eq_tile((whole >> shift) & one, one);
     let up = gt_tile(fraction, half) | (eq_tile(fraction, half) & odd);
     let rounded = whole + select(up, increment, broadcast_scalar(0u32, shape![128]));
-    let small = select(gt_tile(magnitude, broadcast_scalar(0x3f000000u32, shape![128])), broadcast_scalar(0x3f800000u32, shape![128]), broadcast_scalar(0u32, shape![128]));
+    let small = select(
+        gt_tile(magnitude, broadcast_scalar(0x3f000000u32, shape![128])),
+        broadcast_scalar(0x3f800000u32, shape![128]),
+        broadcast_scalar(0u32, shape![128]),
+    );
     let rounded = select(lt_tile(magnitude, broadcast_scalar(0x3f800000u32, shape![128])), small, rounded) | sign;
     select(lt_tile(magnitude, broadcast_scalar(0x4b000000u32, shape![128])), rounded, bits)
 }
@@ -23,5 +27,21 @@ fn burn_round_even(bits: Tile<u32, { [128] }>) -> Tile<u32, { [128] }> {
 #[cutile::entry()]
 unsafe fn burn_fill(output: *mut u32, count: u32, value: u32) {
     let index = indices();
-    unsafe { write_tile(output, index, broadcast_scalar(value, shape![128]), lt_tile(index, broadcast_scalar(count, shape![128]))) };
+    unsafe {
+        write_tile(
+            output,
+            index,
+            broadcast_scalar(value, shape![128]),
+            lt_tile(index, broadcast_scalar(count, shape![128])),
+        )
+    };
+}
+
+fn burn_log1p_bits(bits: Tile<u32, { [128] }>) -> Tile<u32, { [128] }> {
+    let x: Tile<f32, { [128] }> = bitcast(bits);
+    let unit = broadcast_scalar(1f32, shape![128]);
+    let u = unit + x;
+    let corrected = log(u) * divf(x, u - unit, rounding::NearestEven, ftz::Disabled);
+    let unchanged = eq_tile(u, unit) | eq_tile(x, broadcast_scalar(bits_f32(0x7f800000u32), shape![128]));
+    select(unchanged, bits, bitcast(corrected))
 }

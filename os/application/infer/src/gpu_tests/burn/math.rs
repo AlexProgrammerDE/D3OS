@@ -43,6 +43,13 @@ fn reference(op: Elementwise, x: f32) -> u32 {
         Elementwise::Cosh => libm::coshf(x).to_bits(),
         Elementwise::Tan => libm::tanf(x).to_bits(),
         Elementwise::Erf => libm::erff(x).to_bits(),
+        Elementwise::Acos => d3os_ai::validation::inverse::reference(d3os_ai::validation::inverse::Operation::Acos, x).to_bits(),
+        Elementwise::Acosh => d3os_ai::validation::inverse::reference(d3os_ai::validation::inverse::Operation::Acosh, x).to_bits(),
+        Elementwise::Asin => d3os_ai::validation::inverse::reference(d3os_ai::validation::inverse::Operation::Asin, x).to_bits(),
+        Elementwise::Asinh => d3os_ai::validation::inverse::reference(d3os_ai::validation::inverse::Operation::Asinh, x).to_bits(),
+        Elementwise::Atan => d3os_ai::validation::inverse::reference(d3os_ai::validation::inverse::Operation::Atan, x).to_bits(),
+        Elementwise::Atanh => d3os_ai::validation::inverse::reference(d3os_ai::validation::inverse::Operation::Atanh, x).to_bits(),
+
         _ => unreachable!(),
     }
 }
@@ -259,7 +266,7 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
         return Err(String::from("empty unary math dispatched GPU work"));
     }
     crate::report(format_args!(
-        "NVIDIA_BURN_MATH_OK unary=22 power=ok fill=ok edge_values={} rounding=ties_even guards=ok resident=ok backend=nvidia",
+        "NVIDIA_BURN_MATH_OK unary=28 power=ok fill=ok edge_values={} rounding=ties_even guards=ok resident=ok backend=nvidia",
         edges.len()
     ));
     Ok(())

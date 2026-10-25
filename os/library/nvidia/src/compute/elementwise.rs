@@ -42,10 +42,17 @@ pub enum Elementwise {
     Tan = 32,
     Erf = 33,
     Remainder = 34,
+    Acos = 35,
+    Acosh = 36,
+    Asin = 37,
+    Asinh = 38,
+    Atan = 39,
+    Atanh = 40,
+    Atan2 = 41,
 }
 
 impl Elementwise {
-    pub const ALL: [Self; 35] = [
+    pub const ALL: [Self; 42] = [
         Self::Copy,
         Self::Add,
         Self::Subtract,
@@ -81,6 +88,13 @@ impl Elementwise {
         Self::Tan,
         Self::Erf,
         Self::Remainder,
+        Self::Acos,
+        Self::Acosh,
+        Self::Asin,
+        Self::Asinh,
+        Self::Atan,
+        Self::Atanh,
+        Self::Atan2,
     ];
 
     pub fn from_raw(raw: u32) -> Result<Self> {
@@ -124,6 +138,13 @@ impl Elementwise {
             Self::Tan => "burn_tan",
             Self::Erf => "burn_erf",
             Self::Remainder => "burn_remainder",
+            Self::Acos => "burn_acos",
+            Self::Acosh => "burn_acosh",
+            Self::Asin => "burn_asin",
+            Self::Asinh => "burn_asinh",
+            Self::Atan => "burn_atan",
+            Self::Atanh => "burn_atanh",
+            Self::Atan2 => "burn_atan2",
         }
     }
 
@@ -132,7 +153,11 @@ impl Elementwise {
     }
 
     pub fn binary(self) -> bool {
-        self.comparison() || matches!(self, Self::Add | Self::Subtract | Self::Multiply | Self::Divide | Self::Power | Self::Remainder)
+        self.comparison()
+            || matches!(
+                self,
+                Self::Add | Self::Subtract | Self::Multiply | Self::Divide | Self::Power | Self::Remainder | Self::Atan2
+            )
     }
 
     pub fn unary(self) -> bool {

@@ -53,7 +53,7 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
         super::dispatch::resident(backend, &before, 1)?;
         device.sync().map_err(|e| format!("nonfinite selection poisoned the device: {e:?}"))?;
     }
-    let failed = Tensor::<2>::from_floats([[1., 2., 3.]], &device).acos();
+    let failed = super::dispatch::invalid_gather(Tensor::<2>::from_floats([[1., 2., 3.]], &device), &device);
     let before = backend.service_profile().map_err(|e| format!("{e}"))?;
     let kernels = backend.profile().map_err(|e| format!("{e}"))?;
     if !matches!(greedy(&failed), Err(Error::Execution(_))) {

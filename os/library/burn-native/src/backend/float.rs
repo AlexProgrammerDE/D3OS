@@ -283,25 +283,25 @@ impl FloatTensorOps<Self> for Native {
         one("float_tanh", &tensor, tensor.dtype(), |t| t.unary(Elementwise::Tanh))
     }
     fn float_acos(tensor: FloatTensor<Self>) -> FloatTensor<Self> {
-        BackendTensor::unsupported("float_acos", tensor.shape(), DType::F32, &[&tensor], "float_acos")
+        one("float_acos", &tensor, tensor.dtype(), |t| t.unary(Elementwise::Acos))
     }
     fn float_acosh(tensor: FloatTensor<Self>) -> FloatTensor<Self> {
-        BackendTensor::unsupported("float_acosh", tensor.shape(), DType::F32, &[&tensor], "float_acosh")
+        one("float_acosh", &tensor, tensor.dtype(), |t| t.unary(Elementwise::Acosh))
     }
     fn float_asin(tensor: FloatTensor<Self>) -> FloatTensor<Self> {
-        BackendTensor::unsupported("float_asin", tensor.shape(), DType::F32, &[&tensor], "float_asin")
+        one("float_asin", &tensor, tensor.dtype(), |t| t.unary(Elementwise::Asin))
     }
     fn float_asinh(tensor: FloatTensor<Self>) -> FloatTensor<Self> {
-        BackendTensor::unsupported("float_asinh", tensor.shape(), DType::F32, &[&tensor], "float_asinh")
+        one("float_asinh", &tensor, tensor.dtype(), |t| t.unary(Elementwise::Asinh))
     }
     fn float_atan(tensor: FloatTensor<Self>) -> FloatTensor<Self> {
-        BackendTensor::unsupported("float_atan", tensor.shape(), DType::F32, &[&tensor], "float_atan")
+        one("float_atan", &tensor, tensor.dtype(), |t| t.unary(Elementwise::Atan))
     }
     fn float_atanh(tensor: FloatTensor<Self>) -> FloatTensor<Self> {
-        BackendTensor::unsupported("float_atanh", tensor.shape(), DType::F32, &[&tensor], "float_atanh")
+        one("float_atanh", &tensor, tensor.dtype(), |t| t.unary(Elementwise::Atanh))
     }
     fn float_atan2(lhs: FloatTensor<Self>, rhs: FloatTensor<Self>) -> FloatTensor<Self> {
-        BackendTensor::unsupported("float_atan2", lhs.shape(), DType::F32, &[&lhs, &rhs], "float_atan2")
+        binary("float_atan2", &lhs, &rhs, lhs.dtype(), |a, b| a.binary(b, Elementwise::Atan2))
     }
     fn float_round(tensor: FloatTensor<Self>) -> FloatTensor<Self> {
         one("float_round", &tensor, tensor.dtype(), |t| t.unary(Elementwise::Round))

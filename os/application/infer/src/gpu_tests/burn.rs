@@ -7,6 +7,7 @@ mod cross;
 mod dispatch;
 mod indexing;
 mod integers;
+mod inverse;
 mod linear;
 mod math;
 mod matrix;
@@ -149,6 +150,17 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     crate::report(format_args!(
         "BURN_ERF_CONFORMANCE_OK os=d3os backend=native erf_ulp=8 erf=forward,backward gelu=forward,backward shared_views=verified"
     ));
+    inverse::run(backend)?;
+    for (domain, name) in [
+        (d3os_ai::validation::inverse::Domain::Ieee, "ieee"),
+        (d3os_ai::validation::inverse::Domain::Finite, "finite"),
+    ] {
+        let r = d3os_ai::validation::inverse::run(&device, domain)?;
+        crate::report(format_args!(
+            "BURN_INVERSE_OK os=d3os backend=native domain={} unary_ops=6 unary_inputs={} atan2_pairs={} ulp=8 gradients={} signed_views=true broadcast=true empty=true",
+            name, r.unary_inputs, r.atan2_pairs, r.gradients
+        ));
+    }
     remainder::run(backend)?;
     for (domain, name) in [
         (d3os_ai::validation::remainder::Domain::Ieee, "ieee"),

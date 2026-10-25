@@ -53,11 +53,7 @@ unsafe fn BURN_ENTRY(a: *const u32, b: *const u32, output: *mut u32, BURN_PARAME
     } else if BURN_OP == 16u32 {
         bitcast(log(x))
     } else if BURN_OP == 17u32 {
-        let unit = broadcast_scalar(1f32, shape![128]);
-        let u = unit + x;
-        let corrected = log(u) * divf(x, u - unit, rounding::NearestEven, ftz::Disabled);
-        let unchanged = eq_tile(u, unit) | eq_tile(x, broadcast_scalar(bits_f32(0x7f800000u32), shape![128]));
-        select(unchanged, left, bitcast(corrected))
+        burn_log1p_bits(left)
     } else if BURN_OP == 18u32 {
         bitcast(unsafe { tanh_with_rounding(x, rounding::Full) })
     } else if BURN_OP == 19u32 {
@@ -93,8 +89,22 @@ unsafe fn BURN_ENTRY(a: *const u32, b: *const u32, output: *mut u32, BURN_PARAME
         bitcast(tan(x))
     } else if BURN_OP == 33u32 {
         burn_erf_bits(left)
-    } else {
+    } else if BURN_OP == 34u32 {
         burn_remainder_bits(left, right)
+    } else if BURN_OP == 35u32 {
+        burn_acos_bits(left)
+    } else if BURN_OP == 36u32 {
+        burn_acosh_bits(left)
+    } else if BURN_OP == 37u32 {
+        burn_asin_bits(left)
+    } else if BURN_OP == 38u32 {
+        burn_asinh_bits(left)
+    } else if BURN_OP == 39u32 {
+        burn_atan_bits(left)
+    } else if BURN_OP == 40u32 {
+        burn_atanh_bits(left)
+    } else {
+        bitcast(atan2(x, y))
     };
     unsafe { write_tile(output, i, result, mask) };
 }

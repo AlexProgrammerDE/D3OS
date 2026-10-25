@@ -18,7 +18,7 @@ All required methods have declarations or implementations. This count does not e
 The report also records 116 native helper bodies for manual review of dtype and shape restrictions.
 
 The tool follows syntactic associated backend calls and expands the pinned `dequant_op_quant!` and `dequant_op_flow!` macros.
-It identifies 23 methods with possible paths to explicit declines or panic declarations.
+It identifies 16 methods with possible paths to explicit declines or panic declarations.
 This number is not an unsupported-operation count. Some paths represent expected invalid-input errors or conditional restrictions.
 
 The analysis does not resolve method types, evaluate conditional compilation, or expand other macros and free helper functions.
@@ -155,6 +155,58 @@ Linux CUDA passes the shared corpus with Flex32 excluded explicitly.
 
 These checks cover ordinary casts, not full dtype arithmetic, quantized conversion variants, or accelerated matrix products for the additional formats.
 The capability declarations remain conservative. This checkpoint contains no matched execution-performance or compile-time parity measurement.
+
+## Inverse FP32 math
+
+Protocol 34 adds `acos`, `acosh`, `asin`, `asinh`, `atan`, `atanh`, and `atan2` through Burn's public API.
+The matching SDK, driver, application image, and 223-entry portable inference bundle must use this protocol together.
+The compute profile retains 68 slots because these operations use elementwise dispatch.
+All 216 earlier instruction entries and their constant sections remain byte-identical.
+
+The circular functions use [NVIDIA Tile IR `atan2`](https://docs.nvidia.com/cuda/tile-ir/13.4/sections/operations.html#cuda-tile-atan2).
+The `asin` and `acos` radicand uses `(1 - x) * (1 + x)` to retain accuracy near both endpoints.
+The hyperbolic functions use bounded FP32 range reductions adapted from Rust libm 0.2.16, with its MIT notice retained.
+Tiny `asinh` and `atanh` inputs retain their original bits.
+Large hyperbolic inputs use logarithmic forms that avoid intermediate squares.
+
+A shared corrected `log1p` helper serves the new functions and the existing public `log1p` operation.
+Its extracted implementation produces the same machine code as before.
+
+Each unary operation receives 11,084 inputs across every FP32 exponent range, including random bit patterns and boundary neighbors.
+The `atan2` corpus contains 11,280 pairs, including Cartesian combinations of signed zeros, subnormals, infinities, and NaNs.
+A separate bounded corpus contains 512 inputs per unary operation and 548 `atan2` pairs.
+Checks include reversed transposes, source preservation, broadcasting in both directions, and empty outputs.
+Twelve analytic gradient cases cover all six unary functions and both `atan2` operands, including broadcast reductions.
+
+Finite nonzero forward results have an eight-ULP limit against independent FP64 libm results rounded to FP32.
+Zeros require their exact sign, infinities require exact bits, and NaNs require matching classification.
+Gradients use independent FP64 derivatives away from singularities, with a relative tolerance of `2e-5` and absolute tolerance of `1e-6`.
+The native common math suite also checks all six new unary entries against its 2,816 IEEE edge values and resident counters.
+Native `atan2` checks cover seven guarded lengths, output allocation, resident execution, queued lifetimes, scalar rank zero, and empty inputs.
+The first native run exposed an invalid-domain result in the pinned FP32 libm reference.
+For input `0xc27fffff`, approximately `-64`, it returned a negative finite value instead of NaN.
+The corrected reference enforces the real `acosh` domain and uses FP64 libm results rounded to FP32 for all seven operations.
+The first failed run remains under `target/nvidia/burn-backend-validation/inverse-first/`.
+
+A second native run passes both inverse corpora and all gradient cases, then reaches an obsolete Qwen error fixture.
+Five error fixtures used `acos` to create an unsupported-operation error.
+They now use out-of-range gathers, so future operation support cannot make their inputs valid.
+Counters still require failed dependent operations to allocate no storage and launch no work.
+
+The complete D3OS GPU suite passes after these fixture corrections.
+Both inverse corpora and all 12 gradient cases pass against the corrected reference.
+The existing operator, quantization, Qwen extension, and error-propagation checks also pass.
+All three modules compiled inside D3OS match their host audit hashes.
+
+Linux CUDA passes the full circular corpus and all 12 gradient cases.
+Its `acosh` returns infinity for a large finite input whose reference is `45.054565`.
+Its full `asinh` and `atanh` checks return zero for the smallest positive FP32 input.
+The bounded `asinh` and `atanh` checks each differ by 13 ULP at their first mismatch.
+
+The diagnostic mode checks every operation and reports each strict result independently.
+Diagnostic completion does not establish strict conformance. Both Linux domains retain `strict_conformance=false`.
+
+These checks contain no execution-performance or compile-time parity measurement.
 
 ## Native floating-point remainder
 
@@ -593,9 +645,21 @@ Build the Linux probes with their default CUDA feature:
 
 ```bash
 cd tools/mnist-benchmark
-cargo build --release --locked --bin capabilities --bin erf --bin integer --bin integer_matrix --bin scan --bin sort --bin cross --bin compaction --bin scatter_updates --bin quantized_empty --bin nd_indexing --bin storage --bin conversions --bin remainder
+cargo build --release --locked --bin capabilities --bin erf --bin integer --bin integer_matrix --bin scan --bin sort --bin cross --bin compaction --bin scatter_updates --bin quantized_empty --bin nd_indexing --bin storage --bin conversions --bin remainder --bin inverse
 cd ../..
 ```
+
+Run the strict inverse comparison:
+
+```bash
+python3 tools/nvidia/linux-reference.py \
+  --directory target/nvidia/linux-burn-inverse \
+  --burn-inverse tools/mnist-benchmark/target/release/inverse
+```
+
+For per-operation diagnostics, use a fresh directory and add `--burn-inverse-diagnostic`.
+For the bounded corpus, also add `--burn-inverse-finite`.
+The D3OS `gpu-self-test` requires both complete corpora to pass the same strict bound.
 
 Run the ordinary finite remainder comparison:
 
@@ -794,5 +858,9 @@ The audit directory contains `traits-remainder-final.json`, `remainder-compariso
 The failed Linux diagnostics remain under `linux-remainder-ieee/` and `linux-remainder-wide/`.
 The earlier integer-significand implementation passes under `target/nvidia/burn-backend-validation/remainder-final/`.
 Its full IEEE run also remains under `target/nvidia/burn-backend-validation/remainder-first/`.
+The accepted inverse evidence lives under `target/nvidia/burn-backend-validation/inverse-errors-fixed/`.
+Its Linux counterparts are `target/nvidia/burn-backend-audit/linux-inverse-ieee-domain-fixed/` and `linux-inverse-finite-domain-fixed/`.
+The strict Linux failures remain under `linux-inverse-ieee/` and `linux-inverse-finite/`.
+The audit directory contains `traits-inverse.json`, `inverse-comparison.json`, and `inverse-section-comparison.json`.
 Manifests record the shared validation source hashes, executable hashes, and execution backend.
 These generated local artifacts are not Git-tracked. The probes and audit tool are tracked for reproduction.

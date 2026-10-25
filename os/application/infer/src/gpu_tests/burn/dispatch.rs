@@ -33,6 +33,12 @@ fn check<const D: usize>(tensor: Tensor<D>, expected: &[f32]) -> Result<(), Stri
     Ok(())
 }
 
+/// Produce a real bounds error without depending on an unsupported operation.
+pub(super) fn invalid_gather<const D: usize>(source: Tensor<D>, device: &Device) -> Tensor<D> {
+    let invalid = Tensor::<D, Int>::full(source.shape(), source.dims()[0] as i32, device);
+    source.gather(0, invalid)
+}
+
 fn tensors_and_errors(backend: &Nvidia, device: &Device) -> Result<(), String> {
     let source = Tensor::<2>::from_floats([[1.0, 2.0], [3.0, 4.0]], device);
     let before = backend.service_profile().map_err(|e| format!("Burn profile: {e}"))?;
@@ -45,8 +51,8 @@ fn tensors_and_errors(backend: &Nvidia, device: &Device) -> Result<(), String> {
     check(product, &[5.0, 11.0, 11.0, 25.0])?;
     check(viewed, &[4.0, 2.0, 3.0, 1.0])?;
 
+    let failed = invalid_gather(source.clone(), device);
     let before = backend.service_profile().map_err(|e| format!("Burn profile: {e}"))?;
-    let failed = source.clone().acos();
     let dependent = (failed.clone().reshape([4]) + 2.0).sum();
     resident(backend, &before, 0)?;
     let after = backend.service_profile().map_err(|e| format!("Burn failure profile: {e}"))?;
@@ -66,7 +72,7 @@ fn tensors_and_errors(backend: &Nvidia, device: &Device) -> Result<(), String> {
     }
     // An acknowledged error in an optional bias remains the original root.
     // The unsupported consumer must not create a second, unrelated error.
-    let failed_bias = source.clone().sum().acos();
+    let failed_bias = invalid_gather(source.clone().sum(), device);
     if device.sync().is_ok() {
         return Err(String::from("Burn optional input failure was not reported"));
     }

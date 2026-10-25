@@ -73,7 +73,7 @@ def stage_burn_program(root, binary, destination):
     return libdevice
 
 
-def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_finite=False, sort_compile_log=False, compaction_aligned=False, quantized_empty_case=None, scatter_finite=False, select_updates=False, nd_unique=False, nd_nonempty=False, nd_scalar_grad=False, nd_no_scalar=False, storage_flex_direct=False, storage_no_flex32=False, conversions_no_flex32=False, remainder_finite=False, remainder_wide=False):
+def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_finite=False, sort_compile_log=False, compaction_aligned=False, quantized_empty_case=None, scatter_finite=False, select_updates=False, nd_unique=False, nd_nonempty=False, nd_scalar_grad=False, nd_no_scalar=False, storage_flex_direct=False, storage_no_flex32=False, conversions_no_flex32=False, remainder_finite=False, remainder_wide=False, inverse_finite=False, inverse_diagnostic=False):
     purposes = {
         "quantization": "shared API conformance; no performance measurement",
         "quantized_empty": "empty quantized API diagnostic and record round trip; execution errors retained; no performance measurement",
@@ -83,6 +83,7 @@ def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_fi
         "integer_matrix": "public I32 matrix product conformance; no performance measurement",
         "scan": "public cumulative operations and gradients; no performance measurement",
         "cross": "public FP32 vector products and gradients; no performance measurement",
+        "inverse": "public inverse FP32 math and gradients, independent libm references; no performance measurement",
         "remainder": "public FP32 floor remainder and gradients; independent libm reference; no performance measurement",
         "conversions": "ordinary numeric conversions, independent binary rounding reference, signed views and empty shapes; no performance measurement",
         "storage": "ordinary dtype storage, exact view copies, scalar fills and reloads; no arithmetic or performance comparison",
@@ -94,6 +95,12 @@ def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_fi
     purpose = "erf error profile and GELU conformance; strict failures reported" if erf_profile else purposes[kind]
     program = f"/burn-{kind}"
     arguments = " --profile" if erf_profile else " --nonempty" if nonempty else ""
+    if inverse_diagnostic:
+        arguments += " --diagnostic"
+        purpose += "; strict failures reported per operation, diagnostic completion is not conformance"
+    if inverse_finite:
+        arguments += " --finite"
+        purpose += "; bounded finite domain; full IEEE diagnostic remains separate"
     if remainder_wide:
         arguments += " --finite-wide"
         purpose += "; all finite exponent ranges with nonzero divisors"
@@ -1234,6 +1241,9 @@ def main():
     parser.add_argument("--burn-integer", type=Path, help="run public I32 division and floor remainder conformance on Linux CUDA")
     parser.add_argument("--burn-integer-matmul", type=Path, help="run public I32 matrix product conformance on Linux CUDA")
     parser.add_argument("--burn-integer-matmul-nonempty", action="store_true", help="run the nonempty I32 matrix cases separately from empty shapes")
+    parser.add_argument("--burn-inverse", type=Path, help="run public inverse FP32 math and gradients")
+    parser.add_argument("--burn-inverse-diagnostic", action="store_true")
+    parser.add_argument("--burn-inverse-finite", action="store_true")
     parser.add_argument("--burn-remainder", type=Path, help="run public FP32 floor remainder and gradient conformance")
     parser.add_argument("--burn-remainder-wide", action="store_true", help="compare all finite exponent ranges with nonzero divisors")
     parser.add_argument("--burn-remainder-finite", action="store_true", help="restrict to the ordinary finite dyadic corpus")
@@ -1315,7 +1325,7 @@ def main():
     args = parser.parse_args()
     if args.nsight_directory and not args.quantized_profile:
         parser.error("--nsight-directory requires --quantized-profile")
-    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.burn_integer, args.burn_integer_matmul, args.burn_scatter_updates, args.burn_nd_indexing, args.burn_storage, args.burn_conversions, args.burn_remainder, args.burn_quantized_empty, args.burn_compaction, args.burn_cross, args.burn_scan, args.burn_sort, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
+    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.burn_integer, args.burn_integer_matmul, args.burn_scatter_updates, args.burn_nd_indexing, args.burn_storage, args.burn_conversions, args.burn_remainder, args.burn_inverse, args.burn_quantized_empty, args.burn_compaction, args.burn_cross, args.burn_scan, args.burn_sort, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
         parser.error("--quantized-profile requires a separate diagnostic guest")
     if args.pin_vcpus and len(os.sched_getaffinity(0)) != 4:
         parser.error("--pin-vcpus requires an inherited affinity of four host CPUs")
@@ -1347,6 +1357,7 @@ def main():
                 bool(args.burn_storage),
                 bool(args.burn_conversions),
                 bool(args.burn_remainder),
+                bool(args.burn_inverse),
                 bool(args.burn_quantized_empty),
                 bool(args.burn_compaction),
                 bool(args.burn_cross),
@@ -1376,6 +1387,10 @@ def main():
         parser.error("--burn-integer-matmul requires a built conformance executable")
     if args.burn_integer_matmul_nonempty and not args.burn_integer_matmul:
         parser.error("--burn-integer-matmul-nonempty requires --burn-integer-matmul")
+    if args.burn_inverse and not args.burn_inverse.is_file():
+        parser.error("--burn-inverse requires a built conformance executable")
+    if (args.burn_inverse_finite or args.burn_inverse_diagnostic) and not args.burn_inverse:
+        parser.error("--burn-inverse-finite requires --burn-inverse")
     if args.burn_remainder and not args.burn_remainder.is_file():
         parser.error("--burn-remainder requires a built conformance executable")
     if args.burn_remainder_finite and args.burn_remainder_wide:
@@ -1468,6 +1483,8 @@ def main():
         burn_probe(args.directory / "root", args.burn_integer.resolve(), "integer")
     elif args.burn_integer_matmul:
         burn_probe(args.directory / "root", args.burn_integer_matmul.resolve(), "integer_matrix", nonempty=args.burn_integer_matmul_nonempty)
+    elif args.burn_inverse:
+        burn_probe(args.directory / "root", args.burn_inverse.resolve(), "inverse", inverse_finite=args.burn_inverse_finite, inverse_diagnostic=args.burn_inverse_diagnostic)
     elif args.burn_remainder:
         burn_probe(args.directory / "root", args.burn_remainder.resolve(), "remainder", remainder_finite=args.burn_remainder_finite, remainder_wide=args.burn_remainder_wide)
     elif args.burn_conversions:
@@ -1640,6 +1657,13 @@ def main():
         cases, domain, empty = (5, "nonempty", "false") if args.burn_integer_matmul_nonempty else (8, "all", "true")
         if f"BURN_INTEGER_MATMUL_CONFORMANCE_OK os=linux backend=cuda cases={cases} domain={domain} reference=i128 wrapping=exact shared_views=true empty={empty}" not in text:
             raise RuntimeError("Linux CUDA Burn I32 matrix product conformance did not complete")
+    if args.burn_inverse:
+        domain, count, pairs = ("finite", 512, 548) if args.burn_inverse_finite else ("ieee", 11084, 11280)
+        marker = f"BURN_INVERSE_OK os=linux backend=cuda domain={domain} unary_ops=6 unary_inputs={count} atan2_pairs={pairs} ulp=8 gradients=12 signed_views=true broadcast=true empty=true"
+        if args.burn_inverse_diagnostic:
+            marker = "BURN_INVERSE_DIAGNOSTIC_OK os=linux backend=cuda strict_failures_reported=true performance=false"
+        if marker not in text:
+            raise RuntimeError("Linux inverse FP32 math conformance or diagnostic did not complete")
     if args.burn_remainder:
         domain, pairs, scalars = ("finite_wide", 40790, 10) if args.burn_remainder_wide else ("finite", 512, 8) if args.burn_remainder_finite else ("ieee", 53248, 15)
         marker = f"BURN_REMAINDER_OK os=linux backend=cuda domain={domain} pairs={pairs} scalar_cases={scalars} gradients=8 reference=libm_fmod_floor finite_bits=exact zero_sign=unspecified signed_views=true broadcast=true empty=true"
