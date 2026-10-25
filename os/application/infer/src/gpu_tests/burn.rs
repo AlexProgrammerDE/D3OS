@@ -6,6 +6,7 @@ mod convolution;
 mod cross;
 mod deform;
 mod dispatch;
+mod float_arithmetic;
 mod indexed;
 mod indexing;
 mod integer_arithmetic;
@@ -212,6 +213,20 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     }
     integers::run(backend).map_err(|e| format!("Burn native integer reductions: {e}"))?;
     words::run(backend).map_err(|e| format!("Burn native words: {e}"))?;
+    float_arithmetic::run(backend)?;
+    let float_options = d3os_ai::validation::float_arithmetic::Options::default();
+    let float_summary = d3os_ai::burn::tensor::try_read_sync(d3os_ai::validation::float_arithmetic::run(&device, &float_options))
+        .ok_or_else(|| String::from("native floating arithmetic future did not complete"))??;
+    let expected_float = d3os_ai::validation::float_arithmetic::expected_summary(&float_options);
+    if float_summary != expected_float {
+        return Err(format!("floating arithmetic totals: {float_summary:?}, expected {expected_float:?}"));
+    }
+    crate::report(format_args!(
+        "BURN_FLOAT_ARITHMETIC_OK os=d3os backend=native fusion=disabled corpus={} fixture_sha256={} totals={} reference=python_fraction_ieee_rne finite_inf_signed_zero=exact_bits arithmetic_nan=classification scalar=f64_then_f32_then_half high_level_dtype=explicit chain=materialized_each_primitive poison=retained_allocation physical_padding=raw_verified no_flex32=false skip_rank_zero=false finite=false",
+        d3os_ai::validation::float_arithmetic::CORPUS_VERSION,
+        d3os_ai::validation::float_arithmetic::FIXTURE_SHA256,
+        serde_json::json!({"dtypes":float_summary.dtypes,"operations":float_summary.operations,"cases":float_summary.cases(),"tensor_cases":float_summary.tensor_cases,"scalar_cases":float_summary.scalar_cases,"unary_cases":float_summary.unary_cases,"high_level_cases":float_summary.high_level_cases,"chain_cases":float_summary.chain_cases,"chain_steps":float_summary.chain_steps,"source_checks":float_summary.source_checks,"alias_checks":float_summary.alias_checks,"poison_checks":float_summary.poison_checks,"values":float_summary.values,"exact_values":float_summary.exact_values,"nan_values":float_summary.nan_values})
+    ));
     integer_arithmetic::run(backend)?;
     let integer_options = d3os_ai::validation::integer_arithmetic::Options {
         extensions: true,

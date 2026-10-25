@@ -32,25 +32,25 @@ impl FloatTensorOps<Self> for Native {
         binary("float_add", &lhs, &rhs, lhs.dtype(), |a, b| a.binary(b, Elementwise::Add))
     }
     fn float_add_scalar(lhs: FloatTensor<Self>, rhs: Scalar) -> FloatTensor<Self> {
-        one("float_add_scalar", &lhs, lhs.dtype(), |a| a.scalar(Elementwise::Add, rhs.elem::<f32>()))
+        one("float_add_scalar", &lhs, lhs.dtype(), |a| a.float_scalar(Elementwise::Add, rhs))
     }
     fn float_sub(lhs: FloatTensor<Self>, rhs: FloatTensor<Self>) -> FloatTensor<Self> {
         binary("float_sub", &lhs, &rhs, lhs.dtype(), |a, b| a.binary(b, Elementwise::Subtract))
     }
     fn float_sub_scalar(lhs: FloatTensor<Self>, rhs: Scalar) -> FloatTensor<Self> {
-        one("float_sub_scalar", &lhs, lhs.dtype(), |a| a.scalar(Elementwise::Subtract, rhs.elem::<f32>()))
+        one("float_sub_scalar", &lhs, lhs.dtype(), |a| a.float_scalar(Elementwise::Subtract, rhs))
     }
     fn float_mul(lhs: FloatTensor<Self>, rhs: FloatTensor<Self>) -> FloatTensor<Self> {
         binary("float_mul", &lhs, &rhs, lhs.dtype(), |a, b| a.binary(b, Elementwise::Multiply))
     }
     fn float_mul_scalar(lhs: FloatTensor<Self>, rhs: Scalar) -> FloatTensor<Self> {
-        one("float_mul_scalar", &lhs, lhs.dtype(), |a| a.scalar(Elementwise::Multiply, rhs.elem::<f32>()))
+        one("float_mul_scalar", &lhs, lhs.dtype(), |a| a.float_scalar(Elementwise::Multiply, rhs))
     }
     fn float_div(lhs: FloatTensor<Self>, rhs: FloatTensor<Self>) -> FloatTensor<Self> {
         binary("float_div", &lhs, &rhs, lhs.dtype(), |a, b| a.binary(b, Elementwise::Divide))
     }
     fn float_div_scalar(lhs: FloatTensor<Self>, rhs: Scalar) -> FloatTensor<Self> {
-        one("float_div_scalar", &lhs, lhs.dtype(), |a| a.scalar(Elementwise::Divide, rhs.elem::<f32>()))
+        one("float_div_scalar", &lhs, lhs.dtype(), |a| a.float_scalar(Elementwise::Divide, rhs))
     }
     fn float_remainder(lhs: FloatTensor<Self>, rhs: FloatTensor<Self>) -> FloatTensor<Self> {
         binary("float_remainder", &lhs, &rhs, lhs.dtype(), |a, b| a.binary(b, Elementwise::Remainder))
@@ -71,6 +71,9 @@ impl FloatTensorOps<Self> for Native {
     }
     fn float_cross(lhs: FloatTensor<Self>, rhs: FloatTensor<Self>, dim: usize) -> FloatTensor<Self> {
         binary("float_cross", &lhs, &rhs, lhs.dtype(), |a, b| a.cross(b, dim))
+    }
+    fn float_sign(tensor: FloatTensor<Self>) -> FloatTensor<Self> {
+        one("float_sign", &tensor, tensor.dtype(), |t| t.float_unary(Elementwise::Sign))
     }
     fn float_recip(tensor: FloatTensor<Self>) -> FloatTensor<Self> {
         one("float_recip", &tensor, tensor.dtype(), |t| t.unary(Elementwise::Reciprocal))

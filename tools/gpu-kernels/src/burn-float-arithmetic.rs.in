@@ -1,0 +1,142 @@
+// Each primitive retains its arithmetic type and rounds to nearest even.
+// Typed half division uses tileiras's documented F32 emulation internally.
+fn float_arithmetic_width(format: u32) -> u32 {
+    if format == 0u32 { 3u32 } else if format <= 2u32 { 2u32 } else { 1u32 }
+}
+
+fn float_arithmetic_one(format: u32) -> u64 {
+    if format == 0u32 { 1072693248u64 << 32u64 }
+    else if format <= 2u32 { 1065353216u64 }
+    else if format == 3u32 { 15360u64 }
+    else { 16256u64 }
+}
+
+fn float_arithmetic_f64(a: Tile<u64, {[128]}>, b: Tile<u64, {[128]}>, op: u32) -> Tile<u64, {[128]}> {
+    let x: Tile<f64, {[128]}> = bitcast(a);
+    let y: Tile<f64, {[128]}> = bitcast(b);
+    let one: Tile<f64, {[128]}> = bitcast(broadcast_scalar(1072693248u64 << 32u64, shape![128]));
+    if op == 1u32 { bitcast(addf(x, y, rounding::NearestEven, ftz::Disabled)) }
+    else if op == 2u32 { bitcast(subf(x, y, rounding::NearestEven, ftz::Disabled)) }
+    else if op == 3u32 { bitcast(mulf(x, y, rounding::NearestEven, ftz::Disabled)) }
+    else if op == 4u32 { bitcast(divf(x, y, rounding::NearestEven, ftz::Disabled)) }
+    else { bitcast(divf(one, x, rounding::NearestEven, ftz::Disabled)) }
+}
+
+fn float_arithmetic_f32(a: Tile<u32, {[128]}>, b: Tile<u32, {[128]}>, op: u32) -> Tile<u32, {[128]}> {
+    let x: Tile<f32, {[128]}> = bitcast(a);
+    let y: Tile<f32, {[128]}> = bitcast(b);
+    let one: Tile<f32, {[128]}> = bitcast(broadcast_scalar(1065353216u32, shape![128]));
+    if op == 1u32 { bitcast(addf(x, y, rounding::NearestEven, ftz::Disabled)) }
+    else if op == 2u32 { bitcast(subf(x, y, rounding::NearestEven, ftz::Disabled)) }
+    else if op == 3u32 { bitcast(mulf(x, y, rounding::NearestEven, ftz::Disabled)) }
+    else if op == 4u32 { bitcast(divf(x, y, rounding::NearestEven, ftz::Disabled)) }
+    else { bitcast(divf(one, x, rounding::NearestEven, ftz::Disabled)) }
+}
+
+fn float_arithmetic_f16(a: Tile<u16, {[128]}>, b: Tile<u16, {[128]}>, op: u32) -> Tile<u16, {[128]}> {
+    let x: Tile<f16, {[128]}> = bitcast(a);
+    let y: Tile<f16, {[128]}> = bitcast(b);
+    let one: Tile<f16, {[128]}> = bitcast(broadcast_scalar(15360u16, shape![128]));
+    if op == 1u32 { bitcast(addf(x, y, rounding::NearestEven, ftz::Disabled)) }
+    else if op == 2u32 { bitcast(subf(x, y, rounding::NearestEven, ftz::Disabled)) }
+    else if op == 3u32 { bitcast(mulf(x, y, rounding::NearestEven, ftz::Disabled)) }
+    else if op == 4u32 { bitcast(divf(x, y, rounding::NearestEven, ftz::Disabled)) }
+    else { bitcast(divf(one, x, rounding::NearestEven, ftz::Disabled)) }
+}
+
+fn float_arithmetic_bf16(a: Tile<u16, {[128]}>, b: Tile<u16, {[128]}>, op: u32) -> Tile<u16, {[128]}> {
+    let x: Tile<bf16, {[128]}> = bitcast(a);
+    let y: Tile<bf16, {[128]}> = bitcast(b);
+    let one: Tile<bf16, {[128]}> = bitcast(broadcast_scalar(16256u16, shape![128]));
+    if op == 1u32 { bitcast(addf(x, y, rounding::NearestEven, ftz::Disabled)) }
+    else if op == 2u32 { bitcast(subf(x, y, rounding::NearestEven, ftz::Disabled)) }
+    else if op == 3u32 { bitcast(mulf(x, y, rounding::NearestEven, ftz::Disabled)) }
+    else if op == 4u32 { bitcast(divf(x, y, rounding::NearestEven, ftz::Disabled)) }
+    else { bitcast(divf(one, x, rounding::NearestEven, ftz::Disabled)) }
+}
+
+fn float_arithmetic_value(left: Tile<u64, {[128]}>, right: Tile<u64, {[128]}>, format: u32, op: u32) -> Tile<u64, {[128]}> {
+    let sign = broadcast_scalar(1u64, shape![128]) << broadcast_scalar(if format == 0u32 { 63u64 } else if format <= 2u32 { 31u64 } else { 15u64 }, shape![128]);
+    // Transform stored bits before any floating operation, preserving NaN payloads.
+    if op == 11u32 { left ^ sign }
+    else if op == 12u32 { left & (sign - broadcast_scalar(1u64, shape![128])) }
+    else if op == 25u32 {
+        // Integer IEEE classification preserves even the smallest half subnormal.
+        // Either zero sign and every NaN yield +0; infinities retain their sign.
+        let magnitude = left & (sign - broadcast_scalar(1u64, shape![128]));
+        let infinity = broadcast_scalar(if format == 0u32 { 2146435072u64 << 32u64 }
+            else if format <= 2u32 { 2139095040u64 }
+            else if format == 3u32 { 31744u64 } else { 32640u64 }, shape![128]);
+        let ordered_nonzero = ne_tile(magnitude, broadcast_scalar(0u64, shape![128])) & le_tile(magnitude, infinity);
+        select(ordered_nonzero, (left & sign) | broadcast_scalar(float_arithmetic_one(format), shape![128]), broadcast_scalar(0u64, shape![128]))
+    }
+    else if format == 0u32 { float_arithmetic_f64(left, right, op) }
+    else if format <= 2u32 { exti(float_arithmetic_f32(packed_low(left), packed_low(right), op)) }
+    else {
+        let a: Tile<u16, {[128]}> = trunci(left & broadcast_scalar(65535u64, shape![128]), overflow::NoUnsignedWrap);
+        let b: Tile<u16, {[128]}> = trunci(right & broadcast_scalar(65535u64, shape![128]), overflow::NoUnsignedWrap);
+        let bits = if format == 3u32 { float_arithmetic_f16(a, b, op) } else { float_arithmetic_bf16(a, b, op) };
+        exti(bits)
+    }
+}
+
+unsafe fn float_arithmetic_read(input: *const u32, address: Tile<i32, {[128]}>, width: u32, extent: u32, valid: Tile<bool, {[128]}>) -> Tile<u64, {[128]}> {
+    let nonnegative = ge_tile(address, broadcast_scalar(0i32, shape![128]));
+    let address: Tile<u32, {[128]}> = bitcast(address);
+    let valid = valid & nonnegative & lt_tile(address, broadcast_scalar(extent, shape![128]));
+    let address = select(valid, address, broadcast_scalar(0u32, shape![128]));
+    let per_word = if width == 3u32 { 1u32 } else { 4u32 >> width };
+    let words = if width == 3u32 { extent * 2u32 } else { (extent + per_word - 1u32) / per_word };
+    let last_word = if width == 3u32 { address * broadcast_scalar(2u32, shape![128]) + broadcast_scalar(1u32, shape![128]) }
+    else { address / broadcast_scalar(per_word, shape![128]) };
+    // The high F64 word must also fit the unsigned physical pointer range.
+    let valid = valid & lt_tile(last_word, broadcast_scalar(words, shape![128]));
+    unsafe { packed_read_width(input, address, width, valid) }
+}
+
+#[cutile::entry()]
+unsafe fn burn_float_arithmetic(a: *const u32, b: *const u32, output: *mut u32, FLOAT_PARAMETERS) {
+    let owner = indices();
+    let format = (operation >> 8u32) & 255u32;
+    let op = operation & 255u32;
+    let scalar_rhs = operation & 16777216u32 != 0u32;
+    let unary = op == 11u32 || op == 12u32 || op == 13u32 || op == 25u32;
+    let width = float_arithmetic_width(format);
+    let per_word = if width == 3u32 { 1u32 } else { 4u32 >> width };
+    let writers = (count + per_word - 1u32) / per_word;
+    let one = broadcast_scalar(float_arithmetic_one(format), shape![128]);
+    let mut result = broadcast_scalar(0u32, shape![128]);
+    for slot in 0u32..per_word {
+        let logical = owner * broadcast_scalar(per_word, shape![128]) + broadcast_scalar(slot, shape![128]);
+        let valid = lt_tile(logical, broadcast_scalar(count, shape![128]));
+        // Inactive lanes must not feed oversized signed coordinates to layout.
+        let mut linear = select(valid, logical, broadcast_scalar(0u32, shape![128]));
+        let mut address_a = broadcast_scalar(signed(offset_a), shape![128]);
+        let mut address_b = broadcast_scalar(signed(if scalar_rhs || unary { 0u32 } else { offset_b }), shape![128]);
+        FLOAT_ADDRESSES
+        let left = unsafe { float_arithmetic_read(a, address_a, width, extent_a, valid) };
+        let right = if scalar_rhs {
+            let low: Tile<u64, {[128]}> = exti(broadcast_scalar(scalar, shape![128]));
+            let high: Tile<u64, {[128]}> = exti(broadcast_scalar(offset_b, shape![128]));
+            low | (high << broadcast_scalar(32u64, shape![128]))
+        } else if unary { one }
+        else { unsafe { float_arithmetic_read(b, address_b, width, extent_b, valid) } };
+        // A store mask does not suppress evaluation. One is a safe inactive
+        // divisor for both ordinary division and the reciprocal's lhs input.
+        let left = select(valid, left, one);
+        let right = select(valid, right, one);
+        let value = float_arithmetic_value(left, right, format, op);
+        let value = select(valid, value, broadcast_scalar(0u64, shape![128]));
+        if width == 3u32 {
+            let word = owner * broadcast_scalar(2u32, shape![128]);
+            unsafe { write_tile(output, word, packed_low(value), valid) };
+            unsafe { write_tile(output, word + broadcast_scalar(1u32, shape![128]), packed_low(value >> broadcast_scalar(32u64, shape![128])), valid) };
+        } else {
+            result = result | (packed_low(value) << broadcast_scalar(slot * (8u32 << width), shape![128]));
+        }
+    }
+    if width != 3u32 {
+        // One owner stores the whole packed word, including a zero odd tail.
+        unsafe { write_tile(output, owner, result, lt_tile(owner, broadcast_scalar(writers, shape![128]))) };
+    }
+}

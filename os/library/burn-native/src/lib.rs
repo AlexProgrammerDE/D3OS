@@ -8,6 +8,7 @@ mod compaction;
 pub mod convolution;
 pub mod deform;
 mod device;
+mod float_arithmetic;
 mod indexing;
 mod indices;
 mod integer_arithmetic;

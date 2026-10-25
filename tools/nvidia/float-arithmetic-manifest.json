@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "oracle": "Python exact integers/Fraction; independent IEEE RNE encoder",
+  "generator_sha256": "2b2009b431d8a9e5ec9465295aa99f77a4be881c7a8ca4c18f04ef93950f8ac2",
+  "fixture_sha256": "175aed2f4627637209a72404430340f825f86c63dca8d0302b8b20de197faae3",
+  "fixture_bytes": 100604,
+  "pool_values_per_format": 32,
+  "formats": [
+    "F64",
+    "F32",
+    "F16",
+    "BF16"
+  ],
+  "Flex32": "reuses F32 values, retains separate dtype cases",
+  "layout": "per format: pool[32], binary[4][32][32], unary[4][32], scalar_bits[S], scalar[ S ][4][32]; native-width little endian",
+  "half_ideal_vs_f32_intermediate_checks": 11776,
+  "maximum_logical_cases": 900,
+  "base_cases": 760,
+  "maximum_output_elements": 257,
+  "nan_policy": "classification for arithmetic; stored raw source bytes remain exact"
+}

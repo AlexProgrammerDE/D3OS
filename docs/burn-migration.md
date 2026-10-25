@@ -172,7 +172,7 @@ The GPU operations include FP32 arithmetic and math, reductions, exact tensor fi
 Another 32 entries implement I32 arithmetic, signed comparisons, bitwise operations, boolean logic, masks, and conversions.
 These operations support strided views and broadcasting. Input tensors remain shared and immutable.
 Full writers avoid a separate output clear. Empty logical outputs require no element work.
-The matching SDK and driver use native compute protocol version 42 and the 246-entry portable inference bundle.
+The matching SDK and driver use native compute protocol version 43 and the 247-entry portable inference bundle.
 
 The D3OS GPU self-test passes reversed and transposed views, overlapping windows, broadcast batches, subviews, empty dimensions, and neighboring guards.
 Matrix references use independent FP64 accumulation. Math references use independent libm functions and include 2,816 FP32 edge values.
@@ -318,6 +318,12 @@ Ordinary elementwise arithmetic now supports all eight integer formats through 1
 D3OS passes 7,349 public cases, including 998 Native extensions, and the complete guarded arithmetic and earlier regression suites.
 The portable Linux arithmetic run stops at the pinned CubeCL rank-zero readback panic.
 Typed reductions, scans, ordering, and matrix value domains remain restricted.
+Basic float arithmetic now supports eight operations across F64, F32, Flex32, F16, and BF16.
+The four scalar arithmetic wrappers preserve F64 precision and the pinned Linux rounding schedule for half scalars.
+D3OS passes all 900 public cases and the guarded float suite, plus every earlier regression gate.
+Linux passes the 680-case diagnostic with rank-zero results and direct Flex32 uploads excluded explicitly.
+The complete Linux attempt retains both upstream failures. These results do not establish full backend or performance parity.
+
 I32 tensor and generic scalar powers now use resident wrapping integer arithmetic without a floating-point intermediate.
 The exponent bits follow the same unsigned interpretation as the pinned Linux backend.
 FP32 deformable convolution now provides input, offset, weight, modulation-mask, and bias gradients on the native GPU.

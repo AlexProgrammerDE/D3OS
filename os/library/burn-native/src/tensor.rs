@@ -151,6 +151,9 @@ impl NativeTensor {
     }
 
     pub fn binary(&self, rhs: &Self, operation: Elementwise) -> Result<Self> {
+        if self.dtype != DType::F32 && d3os_nvidia::compute::float_arithmetic::Operation::from_elementwise(operation).is_ok() {
+            return self.float_binary(rhs, operation);
+        }
         if self.dtype != DType::F32 || rhs.dtype != DType::F32 || !operation.binary() {
             return Err(Error::InvalidParameter);
         }
@@ -177,6 +180,9 @@ impl NativeTensor {
     }
 
     pub fn unary(&self, operation: Elementwise) -> Result<Self> {
+        if self.dtype != DType::F32 && d3os_nvidia::compute::float_arithmetic::Operation::from_elementwise(operation).is_ok() {
+            return self.float_unary(operation);
+        }
         if self.dtype != DType::F32 || !operation.unary() {
             return Err(Error::InvalidParameter);
         }

@@ -304,6 +304,13 @@ fn main() {
                 .replace("BURN_OP", &format!("{}u32", op as u32)),
         );
     }
+    println!("cargo:rerun-if-changed=src/burn-float-arithmetic.rs.in");
+    source.push_str(
+        &fs::read_to_string("src/burn-float-arithmetic.rs.in")
+            .expect("read typed floating arithmetic")
+            .replace("FLOAT_PARAMETERS", &parameters)
+            .replace("FLOAT_ADDRESSES", &addresses),
+    );
     println!("cargo:rerun-if-changed=src/burn-integer-arithmetic.rs.in");
     source.push_str(
         &fs::read_to_string("src/burn-integer-arithmetic.rs.in")

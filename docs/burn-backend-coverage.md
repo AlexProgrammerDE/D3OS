@@ -13,9 +13,9 @@ It also includes float, integer, boolean, quantized, module, activation, transac
 Each method records its signature, source location, conditional compilation attributes, and implementation or inherited default.
 Associated types and source SHA-256 hashes accompany the report.
 
-The current inventory contains 484 methods: 280 native overrides and 204 inherited defaults.
+The current inventory contains 484 methods: 281 native overrides and 203 inherited defaults.
 All required methods have declarations or implementations. This count does not establish runtime support.
-The report also records 141 native helper bodies for manual review of dtype and shape restrictions.
+The report also records 145 native helper bodies for manual review of dtype and shape restrictions.
 
 The tool follows syntactic associated backend calls and expands the pinned `dequant_op_quant!` and `dequant_op_flow!` macros.
 It identifies 8 methods with possible paths to explicit declines or panic declarations.
@@ -323,6 +323,54 @@ These records report no tensor mismatch before their failure. They do not establ
 The 12 GiB Linux diagnostic reached its 2,400-second deadline without a completion marker or reported tensor mismatch.
 All Linux records use the same frozen reference, runner, executable, and launcher hashes.
 These are correctness checks, with no execution-performance or compile-time parity claim.
+
+## Typed basic floating arithmetic
+
+Protocol 43 adds eight basic floating operations across F64, F32, Flex32, F16, and BF16.
+The matching bundle contains 247 inference entries and 82 compute profiles.
+All 246 earlier entries retain 532 identical instruction and constant sections.
+
+The operations are addition, subtraction, multiplication, division, negation, absolute value, reciprocal, and sign.
+Each native tensor result retains its input dtype.
+The Native API rejects mixed tensor dtypes with a recoverable error.
+Matching F32 operations retain their existing GPU entry points.
+F64 arithmetic uses actual F64 operands and results, including both storage words.
+Half and BF16 operations use typed arithmetic with destination rounding.
+Division and reciprocal use nearest-even division without FTZ.
+
+Backend scalar conversion follows the pinned Linux schedule through F64, F32, and the destination half format.
+The four scalar arithmetic routes now retain F64 precision, range, and subnormals that the previous F32 conversion discarded.
+The public corpus includes F64 scalar precision checks and half scalar rounding checks.
+Stored intermediate results establish each primitive's rounding boundary separately from a fused operation.
+
+The independent fixture generator uses exact integers, rational arithmetic, and an IEEE nearest-even encoder.
+Finite results, infinities, and signed zeros require exact bits. Arithmetic NaNs require classification.
+Native negation and absolute-value guards also require exact NaN payload transformations.
+Sign returns positive zero for either zero sign or a NaN.
+Fixture verification includes 6,948 comparisons against local MPFR.
+
+D3OS passes 900 public cases, covering 101,825 results, 1,170 source checks, and 1,140 alias checks.
+Guarded checks pass 214 raw dispatches, 219 fresh outputs, 520 Native results, 557 expected rejections, and 172 public results.
+They cover signed views, broadcasts, ranks zero and eight, packed guards, zero tails, resident execution, error recovery, and queued input drops.
+All earlier regression gates pass, including typed integer arithmetic and the 52,306-case indexing corpus.
+All three guest compiler hashes match their host audits.
+
+The first GPU run exposed an incorrect negative F16 sign result.
+Its Tile IR encoded the negative half constant as zero. The generated instructions lacked the negative-result branch.
+The corrected kernel classifies stored IEEE fields with integer operations instead of floating comparisons.
+The same guarded input now returns the expected minus one.
+An independent review also corrected an error fixture that reconstructed an I32 failed primitive as a Float tensor.
+The corrected fixture reads that backend failure directly and preserves its recovery checks.
+
+Linux CUDA passes the 680-case diagnostic across F64, F32, F16, and BF16, covering 82,928 result values.
+This diagnostic excludes rank-zero results and direct Flex32 uploads. It retains the IEEE cases and materializes each chain intermediate.
+The complete Linux run retains CubeCL's rank-zero readback panic.
+The diagnostic without rank-zero results retains its direct Flex32 upload rejection.
+Every Linux record preserves the same shared reference, fixture, executable, and launcher hashes.
+
+Eight SDK tests, eight host reference tests, 24 Native unit tests, compiler audits, Clippy checks, and the production image build pass.
+These are correctness checks, with no performance-parity claim.
+Other floating math, typed reductions, scans, ordering, matrices, arithmetic updates, and broader quantized APIs remain incomplete.
 
 ## Typed integer elementwise arithmetic
 
@@ -1425,3 +1473,40 @@ python3 tools/nvidia/linux-reference.py \
 
 For a diagnostic subset, use `--burn-integer-arithmetic-dtype` or `--burn-integer-arithmetic-op`.
 The runner's `--expected-summary` describes the exact selected corpus before device construction.
+
+The typed float evidence lives under `target/nvidia/burn-backend-validation/float-arithmetic-sign-fixed/`.
+The initial sign failure remains under `float-arithmetic-first/`, with its original source and portable manifest.
+The Linux records use the `target/nvidia/burn-backend-audit/linux-float-arithmetic-` prefix.
+The audit directory contains `traits-float-arithmetic-final.json`, `float-arithmetic-comparison.json`, and `float-arithmetic-section-comparison.json`.
+The archived sign diagnosis includes `float-arithmetic-sign-lowering-diagnostic.json` in the local cache.
+These records establish correctness within the stated domains. They contain no matched performance benchmark.
+
+Build the typed float runner from its pinned toolchain directory:
+
+```bash
+cd tools/mnist-benchmark
+cargo build --release --locked --bin float_arithmetic
+cd ../..
+```
+
+Verify the deterministic fixtures and their independent local MPFR comparison:
+
+```bash
+python3 tools/nvidia/float-arithmetic-generate.py --check --mpfr
+```
+
+The `--mpfr` option requires the local MPFR library. The fixture generator has no Python package dependency.
+
+Run the supported Linux diagnostic in a fresh directory:
+
+```bash
+python3 tools/nvidia/linux-reference.py \
+  --directory target/nvidia/linux-burn-float-arithmetic \
+  --burn-float-arithmetic tools/mnist-benchmark/target/release/float_arithmetic \
+  --burn-float-arithmetic-skip-rank-zero --burn-float-arithmetic-no-flex32 \
+  --memory-mib 12288 --timeout 900
+```
+
+For the complete Linux attempt, omit both diagnostic flags and use a fresh directory.
+The additional `--burn-float-arithmetic-finite` option requires finite operands and finite expected results.
+The dtype and operation filters select smaller diagnostic groups. Each selection has its own exact expected summary.
