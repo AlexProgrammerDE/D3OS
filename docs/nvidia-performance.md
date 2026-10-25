@@ -462,6 +462,92 @@ Evidence is under `target/nvidia/large-profile/`.
 The `27b-serial.log` and `block-27b-serial.log` files retain both complete sessions.
 The `block-comparison.json` file separates ordinary samples from device measurements.
 
+## Paired-byte Q8 projections
+
+The Qwen 9B profile identifies single-token Q8_0 projections as the main decode cost.
+The previous vector kernel broadcasts FP32 inputs across a four-row tile and reduces 128 values per row.
+Its replacement assigns 32 logical lanes to each row and loads two adjacent quantized weights through one aligned 16-bit read.
+Eight FP32 accumulators process eight Q8 blocks per iteration, followed by a 32-value row reduction.
+Activations remain FP32. Weight scaling and the numerical tolerances remain unchanged.
+Prompt processing retains its existing Tensor Core path.
+
+The host audit finds no local register spills in the new vector kernel.
+It uses 64 registers instead of 43 and reduces shared storage from 4,096 to 512 bytes.
+Static shared-memory load/store instructions fall from 5/17 to 3/3.
+These are instruction counts in the disassembly, not dynamic operation counts.
+Raw executable-section comparison finds only `vector_project_q8_0` changed among the 174 inference entries.
+
+The repeated comparison uses D3OS, Burn, the native NVIDIA backend, and the same RTX 4090 Laptop GPU.
+Both bundles compile from Tile IR inside D3OS before operator validation and timing.
+Each VM uses four KVM CPUs, affinity `8,10,12,14`, and 15360 MiB of RAM.
+Work remains 37 prompt tokens, 128 teacher-forced decode tokens, and a 2048-token FP32 cache.
+Each fresh boot runs the GPU operator suite, three ordinary model sessions, and a separate device-timestamp session.
+The table includes only the two ordinary warm sessions from each boot.
+
+| Qwen3.5-9B Q8_0, D3OS GPU | Previous vector kernel | Paired-byte vector kernel |
+| --- | ---: | ---: |
+| Fresh validation boots | 2 | 3 |
+| Ordinary warm samples | 4 | 6 |
+| Warm generation range | 31.809–32.072 tokens/s | 48.448–48.911 tokens/s |
+| Mean warm generation | 31.984 tokens/s | 48.663 tokens/s |
+| Warm prompt processing range | 413–421 ms | 410–423 ms |
+| Quantized projection device time | 27.664–27.888 ms/token | 18.112–18.164 ms/token |
+
+Mean generation improves by 52.15 percent across these samples.
+A fresh, uninstrumented Linux llama.cpp CUDA VM measures 58.204 and 58.101 tokens/s, averaging 58.153.
+Its warm prompt processing takes 43.293 and 43.248 ms.
+These Linux results use the same model, prompt, cache settings, guest resources, and host affinity.
+The projection arithmetic difference described below still needs a matched precision comparison.
+Prompt processing remains unchanged on D3OS, with a large gap against Linux.
+An independent host IR export overlaps some boots on CPUs `0,2,4,6`; these results do not establish an isolated compilation improvement.
+Each ordinary sample excludes compilation, operator checks, reference validation, and device-timestamp instrumentation.
+
+All five boots pass the quantized operator tests, partial blocks, output tails, and buffer guards.
+All 32,033,280 independent FP32 logit comparisons pass with the original tolerances in each validation.
+The maximum absolute error changes from `0.000024318695` to `0.000025749207`.
+The selection checksum stays `11168047765639420708`, with the same one greedy difference from Linux CUDA.
+Host linker tests, Clippy, and the Tensor Core instruction audits also pass.
+Evidence is under `target/nvidia/q8-optimization/`, with individual serial logs and `comparison.json`.
+The fresh ordinary Linux reference is under its `linux-current/` subdirectory.
+
+The final source rebuild produces the same three audited GPU binaries as the measured candidate, byte for byte.
+A separate D3OS boot then recompiles those final IR inputs and reproduces all three binary hashes.
+It passes the complete GPU operator suite and all 32,033,280 FP32 logit comparisons.
+Its warm generation samples are 48.799 and 48.614 tokens/s, with 422 and 412 ms prompt processing.
+This final boot runs without the concurrent host IR export.
+Its logs are under `target/nvidia/q8-optimization/final-validation/`.
+The default kernel bundle now uses these validated portable inputs.
+
+### Audit the Linux projection precision
+
+The Linux large-model reference now accepts `--trace-cuda-kernels` for a separate diagnostic run.
+It records unique CUDA runtime kernel names and marks its result as `instrumented=true`.
+Use its ordinary, uninstrumented runs for performance comparisons.
+The trace library remains inside the Linux reference guest and never enters D3OS.
+
+The pinned llama.cpp b11827 9B run launches `quantize_q8_1`, `quantize_mmq_q8_1`, and `mul_mat_vec_q` kernels for Q8_0 weights.
+Its [quantized vector implementation](https://github.com/ggml-org/llama.cpp/blob/b11827/ggml/src/ggml-cuda/mmvq.cu) quantizes FP32 inputs to Q8_1 before projection.
+Its [Q8 dot product](https://github.com/ggml-org/llama.cpp/blob/b11827/ggml/src/ggml-cuda/vecdotq.cuh) uses integer dot instructions and block scales.
+FP32 cache and output settings therefore do not establish identical activation arithmetic between Linux and D3OS.
+The stock Linux throughput remains a performance target, with that precision difference stated explicitly.
+D3OS retains its independent FP32 references and their original tolerances.
+
+For example, collect the diagnostic separately from the ordinary Linux baseline:
+
+```bash
+taskset -c 8,10,12,14 python3 tools/nvidia/linux-reference.py \
+  --large-qwen 9b \
+  --llama-directory target/nvidia/linux-llama/llama-b11827 \
+  --model /path/to/Qwen3.5-9B-Q8_0.gguf \
+  --memory-mib 15360 --timeout 240 \
+  --directory target/nvidia/linux-qwen-9b-trace \
+  --trace-cuda-kernels
+```
+
+The validated trace records 39 unique kernel names.
+Its manifest records the tracing source and library hashes.
+Evidence is under `target/nvidia/q8-optimization/linux-trace-fixed/`.
+
 ## Native Burn integer coverage
 
 The I32 backend adds exact wrapping reductions and GPU-generated index ranges.

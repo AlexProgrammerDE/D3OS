@@ -56,7 +56,15 @@ def audit(family, sass):
     if family == "inference":
         if re.search(r"\bFMNMX\b", bodies.get("inference_relu", "")):
             raise RuntimeError("ReLU must preserve NaN payloads")
-        for name in ("delta_fused_four_taps", "tensor_matmul_tf32x3_k16"):
+        for name in (
+            "delta_fused_four_taps",
+            "tensor_matmul_tf32x3_k16",
+            "vector_project_q8_0",
+            "vector_project_q3k",
+            "vector_project_q4k",
+            "vector_project_q5k",
+            "vector_project_q6k",
+        ):
             body = bodies.get(name, "")
             if not body or re.search(r"\b(?:LDL|STL)\b", body):
                 raise RuntimeError(f"{name}: specialization must remain spill-free")

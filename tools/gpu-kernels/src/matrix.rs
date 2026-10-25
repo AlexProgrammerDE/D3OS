@@ -19,11 +19,11 @@ unsafe fn tensor_project_bf16_weights(a: *const f32, b: *const f32, out: *mut f3
 // every single-token vector launch.
 #[cutile::entry()]
 unsafe fn vector_project_tf32x3(a: *const f32, b: *const f32, out: *mut f32, _m: u32, k: u32, n: u32) {
-    unsafe { vector_project_4::<false, false, 0>(a, b, b, out, k, n) }
+    unsafe { vector_project_4::<false, false>(a, b, b, out, k, n) }
 }
 #[cutile::entry()]
 unsafe fn vector_project_bf16_weights(a: *const f32, b: *const f32, out: *mut f32, _m: u32, k: u32, n: u32) {
-    unsafe { vector_project_4::<true, false, 0>(a, b, b, out, k, n) }
+    unsafe { vector_project_4::<true, false>(a, b, b, out, k, n) }
 }
 #[cutile::entry()]
 unsafe fn vector_project_paired_bf16_weights(a: *const f32, b: *const f32, out: *mut f32, _m: u32, k: u32, n: u32) {
@@ -51,12 +51,12 @@ unsafe fn sum_projection_partials(input: *const f32, output: *mut f32, rows: u32
 }
 #[cutile::entry()]
 unsafe fn gated_project_bf16_weights(a: *const f32, gate: *const f32, up: *const f32, output: *mut f32, inner: u32, cols: u32) {
-    unsafe { vector_project_4::<true, true, 0>(a, gate, up, output, inner, cols) }
+    unsafe { vector_project_4::<true, true>(a, gate, up, output, inner, cols) }
 }
 
 #[cutile::entry()]
 unsafe fn vector_project_wide_tf32x3(a: *const f32, b: *const f32, out: *mut f32, _m: u32, k: u32, n: u32) {
-    unsafe { vector_project_32::<false, false, 0>(a, b, b, out, k, n) }
+    unsafe { vector_project_32::<false, false>(a, b, b, out, k, n) }
 }
 #[cutile::entry()]
 unsafe fn vector_project_wide_bf16_weights(a: *const f32, b: *const f32, out: *mut f32, _m: u32, k: u32, n: u32) {
@@ -65,7 +65,7 @@ unsafe fn vector_project_wide_bf16_weights(a: *const f32, b: *const f32, out: *m
 
 #[cutile::entry()]
 unsafe fn vector_project_unpaired_wide_bf16_weights(a: *const f32, b: *const f32, out: *mut f32, _m: u32, k: u32, n: u32) {
-    unsafe { vector_project_32::<true, false, 0>(a, b, b, out, k, n) }
+    unsafe { vector_project_32::<true, false>(a, b, b, out, k, n) }
 }
 #[cutile::entry()]
 unsafe fn gated_project_paired_bf16_weights(a: *const f32, gate: *const f32, up: *const f32, output: *mut f32, inner: u32, cols: u32) {

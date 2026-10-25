@@ -1,3 +1,62 @@
+// Each lane reads two aligned Q8 bytes and keeps both products in FP32.
+// Thirty-two logical lanes reduce each of four output rows.
+unsafe fn vector_q8_pairs<const GROUP: i32>(
+    a: *const f32, b: *const f32, col: Tile<u32, { [128] }>, lane: Tile<u32, { [128] }>, block: u32, blocks: u32, cols: u32,
+    even: Tile<f32, { [128] }>, odd: Tile<f32, { [128] }>,
+) -> (Tile<f32, { [128] }>, Tile<f32, { [128] }>) {
+    let qblock = lane / broadcast_scalar(16u32, shape![128]) + broadcast_scalar(block + unsigned(GROUP) * 2u32, shape![128]);
+    let pair = lane % broadcast_scalar(16u32, shape![128]);
+    let mask = lt_tile(col, broadcast_scalar(cols, shape![128])) & lt_tile(qblock, broadcast_scalar(blocks, shape![128]));
+    let base = (col * broadcast_scalar(blocks, shape![128]) + qblock) * broadcast_scalar(17u32, shape![128]);
+    let scale = unsafe { quant_half_128(b, base * broadcast_scalar(2u32, shape![128]), mask) };
+    let packed = unsafe { read_tile(bf16_pointer(b), base + broadcast_scalar(1u32, shape![128]) + pair, mask, 0u16) };
+    let packed: Tile<u32, { [128] }> = exti(packed);
+    let low = packed & broadcast_scalar(255u32, shape![128]);
+    let high = packed >> broadcast_scalar(8u32, shape![128]);
+    let low = scale * quant_signed_byte_128(low);
+    let high = scale * quant_signed_byte_128(high);
+    let index = qblock * broadcast_scalar(32u32, shape![128]) + pair * broadcast_scalar(2u32, shape![128]);
+    let x0 = unsafe { read_tile(a, index, mask, 0f32) };
+    let x1 = unsafe { read_tile(a, index + broadcast_scalar(1u32, shape![128]), mask, 0f32) };
+    (fma(x0, low, even, rounding::NearestEven, ftz::Disabled), fma(x1, high, odd, rounding::NearestEven, ftz::Disabled))
+}
+
+unsafe fn vector_project_q8(a: *const f32, b: *const f32, output: *mut f32, inner: u32, cols: u32) {
+    let first = block_id() * 4u32;
+    let lane = lanes::<128>() % broadcast_scalar(32u32, shape![128]);
+    let col = lanes::<128>() / broadcast_scalar(32u32, shape![128]) + broadcast_scalar(first, shape![128]);
+    let blocks = inner / 32u32;
+    let mut e0 = broadcast_scalar(0f32, shape![128]);
+    let mut o0 = e0;
+    let mut e1 = e0;
+    let mut o1 = e0;
+    let mut e2 = e0;
+    let mut o2 = e0;
+    let mut e3 = e0;
+    let mut o3 = e0;
+    let mut block = 0u32;
+    while block < blocks {
+        let (even, odd) = unsafe { vector_q8_pairs::<0>(a, b, col, lane, block, blocks, cols, e0, o0) };
+        e0 = even;
+        o0 = odd;
+        let (even, odd) = unsafe { vector_q8_pairs::<1>(a, b, col, lane, block, blocks, cols, e1, o1) };
+        e1 = even;
+        o1 = odd;
+        let (even, odd) = unsafe { vector_q8_pairs::<2>(a, b, col, lane, block, blocks, cols, e2, o2) };
+        e2 = even;
+        o2 = odd;
+        let (even, odd) = unsafe { vector_q8_pairs::<3>(a, b, col, lane, block, blocks, cols, e3, o3) };
+        e3 = even;
+        o3 = odd;
+        block = block + 8u32;
+    }
+    let sum = ((e0 + o0) + (e1 + o1)) + ((e2 + o2) + (e3 + o3));
+    let sum: Tile<f32, { [4, 32] }> = sum.reshape(shape![4, 32]);
+    let value: Tile<f32, { [4] }> = reduce_sum(sum, 1i32);
+    let col = lanes::<4>() + broadcast_scalar(first, shape![4]);
+    unsafe { write_tile(output, col, value, lt_tile(col, broadcast_scalar(cols, shape![4]))) };
+}
+
 // Decode each 256-weight block with 32 logical lanes per output row. A CTA
 // projects four rows, reusing packed bytes across eight 32-value groups.
 // Keep FP32 activations and the generic decoder's scale multiplication order.

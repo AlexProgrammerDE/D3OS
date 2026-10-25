@@ -270,6 +270,48 @@ def large_qwen_benchmark(root, directory, source, model, target):
     )
 
 
+def trace_cuda_kernels(root):
+    source = ROOT / "tools/nvidia/linux-cuda-trace.c"
+    library = root / "bin/linux-cuda-trace.so"
+    subprocess.run(
+        [
+            "gcc",
+            "-std=c11",
+            "-O2",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-shared",
+            "-fPIC",
+            str(source),
+            "-ldl",
+            "-pthread",
+            "-o",
+            str(library),
+        ],
+        check=True,
+    )
+    benchmark = root / "benchmark"
+    script = benchmark.read_text()
+    first, rest = script.split("\n", 1)
+    benchmark.write_text(
+        first + "\nexport LD_PRELOAD=/bin/linux-cuda-trace.so\n" + rest
+    )
+    (root.parent / "cuda-trace-manifest.json").write_text(
+        json.dumps(
+            {
+                "os": "linux",
+                "backend": "cuda",
+                "instrumented": True,
+                "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+                "library_sha256": hashlib.sha256(library.read_bytes()).hexdigest(),
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+
+
 def validate_large_qwen(text, layers):
     if (
         "LINUX_LARGE_QWEN_OK" not in text
@@ -881,6 +923,11 @@ def main():
     parser.add_argument("--compiler-repeats", type=int, default=3)
     parser.add_argument("--llama-directory", type=Path)
     parser.add_argument("--large-qwen", choices=("9b", "27b"))
+    parser.add_argument(
+        "--trace-cuda-kernels",
+        action="store_true",
+        help="record Linux large-Qwen kernel names in a separate instrumented run",
+    )
     parser.add_argument("--matched-qwen-input", type=Path)
     parser.add_argument(
         "--matched-qwen-report-selection",
@@ -901,6 +948,8 @@ def main():
     parser.add_argument("--doom-benchmark", action="store_true")
     parser.add_argument("--alexnet-benchmark", action="store_true")
     args = parser.parse_args()
+    if args.trace_cuda_kernels and not (args.large_qwen and args.llama_directory):
+        parser.error("--trace-cuda-kernels requires --large-qwen and --llama-directory")
     affinity = ",".join(str(cpu) for cpu in sorted(os.sched_getaffinity(0)))
     print(f"NVIDIA_HOST_CPU_AFFINITY cpus={affinity}", flush=True)
     if (
@@ -974,6 +1023,8 @@ def main():
         alexnet_benchmark(args.directory / "root")
     elif (args.directory / "root/benchmark").exists():
         (args.directory / "root/benchmark").unlink()
+    if args.trace_cuda_kernels:
+        trace_cuda_kernels(args.directory / "root")
     if args.prepare_only:
         return
     # Reuse the same VFIO validation as D3OS. This guest never rebinds the host.
@@ -1047,6 +1098,12 @@ def main():
     if args.llama_directory:
         if args.large_qwen:
             result = validate_large_qwen(text, 32 if args.large_qwen == "9b" else 64)
+            result["instrumented"] = args.trace_cuda_kernels
+            if args.trace_cuda_kernels:
+                names = re.findall(r"LINUX_CUDA_KERNEL api=\S+ name=([^\r\n]+)", text)
+                if not names or "LINUX_CUDA_TRACE_FAIL" in text:
+                    raise RuntimeError("Linux CUDA kernel tracing did not complete")
+                result["cuda_kernel_names"] = names
             (args.directory / "large-qwen-results.json").write_text(
                 json.dumps(result, indent=2) + "\n"
             )

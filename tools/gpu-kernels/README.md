@@ -1,9 +1,11 @@
 # Native D3OS cuTile kernels
 
-This host compiler builds every native inference and rendering kernel for D3OS.
-NVIDIA cuTile Rust produces Tile IR 13.4, and `tileiras` assembles Ada `sm_89` binaries.
-D3OS loads the binaries with its Rust driver and compute API.
-The guest requires no CUDA host runtime or Linux compatibility layer.
+This host compiler exports portable Tile IR for native inference and rendering kernels.
+NVIDIA cuTile Rust produces Tile IR 13.4.
+D3OS runs `tileiras` and `ptxas` inside its Linux execution personality during module loading.
+The compiler targets the detected GPU, currently Ada `sm_89` on the validation machine.
+The native Rust driver then loads and executes the compiled modules.
+D3OS requires no Linux CUDA execution libraries.
 
 ## Build and check
 
@@ -28,8 +30,10 @@ The output directory contains three binary families:
 | `tensor-matmul` | FP16 and BF16 Tensor Core boot checks |
 | `inference` | All 59 public kernel families, operation specializations, and timing and scratch diagnostics |
 
-Each family also includes textual IR, binary Tile IR, disassembly, and resource metadata.
-The manifest records hashes and compiler validation.
+Each family includes textual IR, binary Tile IR, and entry metadata.
+The manifest records input hashes and the guest compilation requirement.
+With `--audit`, host assembly and disassembly stay under `host-audit/`.
+Those machine-code files never enter the guest boot image.
 Compilation does not establish GPU execution or numerical correctness.
 Follow [the VFIO guide](../../docs/nvidia-vfio.howto.md) for hardware checks.
 
@@ -48,7 +52,7 @@ Keep pointers as 64-bit device addresses and scalar dimensions as `u32`.
 Allocate buffers through the D3OS API.
 The build rejects GPU relocations and runtime constant-bank dependencies that the native loader cannot satisfy.
 
-The compiler checks each binary's required thread count.
+The compiler metadata records each entry's required thread count.
 The driver checks that contract again before launch.
 It binds compiler constant banks and allocates shared memory and scratch from binary metadata.
 Use dependency tokens when a read depends on an earlier global-memory write.
