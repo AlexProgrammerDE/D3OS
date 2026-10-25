@@ -86,12 +86,10 @@ impl QTensorOps<Self> for Native {
             inputs.push(global);
         }
         BackendQuantizedTensor::build("quantize", tensor.shape(), *scheme, &inputs, || {
-            if qparams.global.is_some() {
-                return Err(Error::InvalidParameter);
-            }
             NativeQuantizedTensor::quantize(
                 tensor.value().ok_or(Error::InvalidParameter)?,
                 qparams.scales.value().ok_or(Error::InvalidParameter)?,
+                qparams.global.as_ref().map(|t| t.value().ok_or(Error::InvalidParameter)).transpose()?,
                 *scheme,
             )
         })
@@ -170,9 +168,19 @@ mod tests {
         for data in [
             TensorData::from_bytes_vec(alloc::vec![0; 4], [4], DType::QFloat(QuantScheme::default())),
             TensorData::from_bytes_vec(
+                alloc::vec![0; 13],
+                [16],
+                DType::QFloat(
+                    QuantScheme::default()
+                        .with_value(burn_backend::quantization::QuantValue::Q4S)
+                        .per_block([16], burn_backend::quantization::ScaleDtype::F16)
+                        .per_tensor(burn_backend::quantization::ScaleDtype::F32),
+                ),
+            ),
+            TensorData::from_bytes_vec(
                 alloc::vec![0; 8],
                 [4],
-                DType::QFloat(QuantScheme::default().per_tensor(burn_backend::quantization::ScaleDtype::F16)),
+                DType::QFloat(QuantScheme::default().with_mode(burn_backend::quantization::QuantMode::Lookup)),
             ),
         ] {
             let tensor = Native::q_from_data(data, &NativeDevice);

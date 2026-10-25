@@ -1,4 +1,5 @@
 //! Packed integer and floating-point quantization with GPU-resident scales.
+mod scales;
 use crate::{NativeTensor, layout::Layout};
 use alloc::{sync::Arc, vec::Vec};
 use burn_backend::{
@@ -19,6 +20,7 @@ pub struct NativeQuantizedTensor {
     values: Arc<GpuBuffer<u32>>,
     layout: Layout,
     scales: NativeTensor,
+    global: Option<NativeTensor>,
     scheme: QuantScheme,
 }
 
@@ -26,8 +28,7 @@ pub struct NativeQuantizedTensor {
 /// block-layout helpers. Scale grids follow rectangular blocks, not flat runs.
 pub(crate) fn supported_scheme(scheme: &QuantScheme) -> bool {
     scheme.mode == QuantMode::Symmetric
-        && scheme.scale_dtype() == ScaleDtype::F32
-        && !(scheme.block_scale().is_some() && scheme.tensor_scale().is_some())
+        && (scheme.block_scale().is_none() || scheme.tensor_scale().is_none() || scheme.tensor_scale() == Some(ScaleDtype::F32))
         && match scheme.store {
             QuantStore::PackedU32(0..8) => true,
             QuantStore::Native => scheme.value.size_bits() == 8,
@@ -89,7 +90,9 @@ fn metadata(layout: &Layout, scheme: &QuantScheme) -> Result<[u32; 32]> {
     Ok(out)
 }
 
-fn run(input: &GpuBuffer<u32>, layout: &Layout, scales: &NativeTensor, scheme: &QuantScheme, operation: Operation) -> Result<GpuBuffer<u32>> {
+fn run(
+    input: &GpuBuffer<u32>, layout: &Layout, scales: &NativeTensor, global: Option<&NativeTensor>, scheme: &QuantScheme, operation: Operation,
+) -> Result<GpuBuffer<u32>> {
     let bits = scheme.value.size_bits();
     let elements = if operation == Operation::Dequantize {
         layout.len()
@@ -115,12 +118,22 @@ fn run(input: &GpuBuffer<u32>, layout: &Layout, scales: &NativeTensor, scheme: &
             _ => Codec::IntegerFull,
         } as usize,
         layout.offset(),
-        0,
+        scales::format(scheme.scale_dtype()) as usize
+            | if global.is_some() {
+                d3os_nvidia::compute::quantization::GLOBAL_SCALE as usize
+            } else {
+                0
+            },
     ];
     Nvidia.produce_words(
         elements,
         Kernel::TensorQuantized,
-        &[(input, 0), (&scales.buffer, scales.layout.offset()), (&metadata, 0)],
+        &[
+            (input, 0),
+            (&scales.buffer, scales.layout.offset()),
+            (&metadata, 0),
+            (&global.unwrap_or(&scales).buffer, global.map_or(0, |t| t.layout.offset())),
+        ],
         &parameters,
     )
 }
@@ -133,15 +146,18 @@ impl NativeQuantizedTensor {
         self.scheme
     }
 
-    pub fn quantize(tensor: &NativeTensor, scales: &NativeTensor, scheme: QuantScheme) -> Result<Self> {
+    pub fn quantize(tensor: &NativeTensor, scales: &NativeTensor, global: Option<&NativeTensor>, scheme: QuantScheme) -> Result<Self> {
         let shape = tensor.shape();
         validate_scheme(&shape, &scheme)?;
         if tensor.dtype() != DType::F32 || scales.dtype() != DType::F32 || scales.layout.len() != params_shape(&shape, &scheme).num_elements() {
             return Err(Error::InvalidParameter);
         }
+        let two_levels = scheme.block_scale().is_some() && scheme.tensor_scale().is_some();
+        if global.is_some() != two_levels || global.is_some_and(|t| t.dtype() != DType::F32 || t.layout.len() != 1) {
+            return Err(Error::InvalidParameter);
+        }
         Nvidia.record_commands(|| {
-            let scales = if scales.layout.is_contiguous() { scales.clone() } else { scales.copy()? };
-            let scales = scales.reshape(params_shape(&shape, &scheme))?;
+            let scales = scales::encode(scales, scheme.scale_dtype(), params_shape(&shape, &scheme))?;
             let axes = storage_axes(&shape, &scheme);
             let mut stored_scheme = scheme;
             stored_scheme.permute_block_dims(shape.num_dims(), &axes);
@@ -151,12 +167,13 @@ impl NativeQuantizedTensor {
             } else {
                 scales.clone()
             };
-            let values = run(&input.buffer, &input.layout, &stored_scales, &stored_scheme, Operation::Quantize)?;
+            let values = run(&input.buffer, &input.layout, &stored_scales, global, &stored_scheme, Operation::Quantize)?;
             let layout = Layout::contiguous(input.shape())?.permute(&axes)?;
             Ok(Self {
                 values: Arc::new(values),
                 layout,
                 scales: scales.clone(),
+                global: global.cloned(),
                 scheme,
             })
         })
@@ -164,7 +181,14 @@ impl NativeQuantizedTensor {
 
     pub fn dequantize(&self) -> Result<NativeTensor> {
         Nvidia.record_commands(|| {
-            let buffer = run(&self.values, &self.layout, &self.scales, &self.scheme, Operation::Dequantize)?;
+            let buffer = run(
+                &self.values,
+                &self.layout,
+                &self.scales,
+                self.global.as_ref(),
+                &self.scheme,
+                Operation::Dequantize,
+            )?;
             Ok(NativeTensor {
                 buffer: Arc::new(buffer),
                 layout: Layout::contiguous(self.shape())?,
@@ -190,8 +214,13 @@ impl NativeQuantizedTensor {
             .ok_or(Error::SizeOverflow)?
             .div_ceil(32)
             * 4;
-        let scale_bytes = scales_shape.num_elements().checked_mul(4).ok_or(Error::SizeOverflow)?;
-        let prefix = data.as_bytes().len().checked_sub(scale_bytes).ok_or(Error::InvalidParameter)?;
+        let scale_bytes = scales_shape
+            .num_elements()
+            .checked_mul(scales::format(scheme.scale_dtype()).bits() as usize / 8)
+            .ok_or(Error::SizeOverflow)?;
+        let global_bytes = usize::from(scheme.block_scale().is_some() && scheme.tensor_scale().is_some()) * 4;
+        let scale_end = data.as_bytes().len().checked_sub(global_bytes).ok_or(Error::InvalidParameter)?;
+        let prefix = scale_end.checked_sub(scale_bytes).ok_or(Error::InvalidParameter)?;
         let compact = match scheme.store {
             QuantStore::Native | QuantStore::PackedNative(_) => shape
                 .num_elements()
@@ -208,13 +237,19 @@ impl NativeQuantizedTensor {
         } else {
             Nvidia.upload_bytes(&data.as_bytes()[..prefix])?
         };
-        let scale_data = TensorData::try_from_bytes_vec(data.as_bytes()[prefix..].to_vec(), scales_shape, DType::F32).map_err(|_| Error::InvalidParameter)?;
-        let scales = NativeTensor::from_data(scale_data)?;
+        let scales = scales::from_bytes(&data.as_bytes()[prefix..scale_end], scheme.scale_dtype(), scales_shape)?;
+        let global = if global_bytes != 0 {
+            let data = TensorData::try_from_bytes_vec(data.as_bytes()[scale_end..].to_vec(), [1], DType::F32).map_err(|_| Error::InvalidParameter)?;
+            Some(NativeTensor::from_data(data)?)
+        } else {
+            None
+        };
         let scales = if scheme.block_size().is_some() { scales.permute(&axes)? } else { scales };
         Ok(Self {
             values: Arc::new(values),
             layout: Layout::contiguous(stored_shape)?.permute(&axes)?,
             scales,
+            global,
             scheme,
         })
     }
@@ -229,7 +264,7 @@ impl NativeQuantizedTensor {
         } else {
             self.scales.clone()
         };
-        let values = run(&self.values, &layout, &scales, &stored_scheme, Operation::Copy)?;
+        let values = run(&self.values, &layout, &scales, self.global.as_ref(), &stored_scheme, Operation::Copy)?;
         let mut words = alloc::vec![0u32; layout.len().div_ceil(32 / self.scheme.value.size_bits())];
         if !words.is_empty() {
             Nvidia.read_words_into(&values, 0, &mut words)?;
@@ -238,7 +273,10 @@ impl NativeQuantizedTensor {
         if matches!(self.scheme.store, QuantStore::Native | QuantStore::PackedNative(_)) {
             bytes.truncate(layout.len() * self.scheme.value.size_bits() / 8);
         }
-        bytes.extend_from_slice(scales.read()?.as_bytes());
+        bytes.extend_from_slice(&scales::read(&scales, self.scheme.scale_dtype())?);
+        if let Some(global) = &self.global {
+            bytes.extend_from_slice(global.read()?.as_bytes());
+        }
         TensorData::try_from_bytes_vec(bytes, self.shape(), DType::QFloat(self.scheme)).map_err(|_| Error::InvalidParameter)
     }
 
@@ -258,7 +296,7 @@ impl NativeQuantizedTensor {
         let (values, layout) = if self.layout.is_contiguous() {
             (self.values.clone(), self.layout.reshape(shape.clone())?)
         } else {
-            let values = run(&self.values, &self.layout, &self.scales, &self.scheme, Operation::Copy)?;
+            let values = run(&self.values, &self.layout, &self.scales, self.global.as_ref(), &self.scheme, Operation::Copy)?;
             (Arc::new(values), Layout::contiguous(shape.clone())?)
         };
         let scales = if self.scales.layout.is_contiguous() {
@@ -271,6 +309,7 @@ impl NativeQuantizedTensor {
             values,
             layout,
             scales,
+            global: self.global.clone(),
             scheme: self.scheme,
         })
     }
@@ -297,6 +336,7 @@ impl NativeQuantizedTensor {
             values: self.values.clone(),
             layout,
             scales,
+            global: self.global.clone(),
             scheme,
         })
     }
@@ -312,6 +352,7 @@ impl NativeQuantizedTensor {
             values: self.values.clone(),
             layout,
             scales,
+            global: self.global.clone(),
             scheme: self.scheme,
         })
     }
@@ -356,7 +397,7 @@ mod tests {
             QuantScheme::default().with_store(QuantStore::PackedU32(3)),
             QuantScheme::default().per_block([3], ScaleDtype::F32),
             QuantScheme::default().per_block([2, 2, 2], ScaleDtype::F32),
-            QuantScheme::default().per_tensor(ScaleDtype::F16),
+            QuantScheme::default().per_block([4], ScaleDtype::F16).per_tensor(ScaleDtype::F16),
             QuantScheme::default().with_value(QuantValue::E2M1).with_store(QuantStore::Native),
         ] {
             assert!(validate_scheme(&shape, &scheme).is_err());

@@ -22,6 +22,8 @@ fn public(backend: &Nvidia, device: &Device) -> Result<(), String> {
     d3os_ai::validation::quantization::integer(device)?;
     d3os_ai::validation::quantization::minifloat(device)?;
     d3os_ai::validation::quantization::minifloat_native_additional(device)?;
+    d3os_ai::validation::quantization::scales(device)?;
+    d3os_ai::validation::quantization::scales_native_additional(device)?;
     let scheme = QuantScheme::default().with_value(QuantValue::Q4S);
     let source = Tensor::<2>::from_data(TensorData::new((0..32).map(|i| i as f32 % 7.0 - 3.0).collect(), [2, 16]), device);
     let scales = Tensor::<1>::from_floats([1.], device);
@@ -107,7 +109,7 @@ fn guards(backend: &Nvidia) -> Result<(), Error> {
         let output = backend.upload_words(&vec![GUARD; words + 2])?;
         backend.dispatch_words(
             Kernel::TensorQuantized,
-            &[(&input, 0), (&scales, 0), (&metadata, 0), (&output, 1)],
+            &[(&input, 0), (&scales, 0), (&metadata, 0), (&scales, 0), (&output, 1)],
             &[17, 17, 1, bits, 0, 1, 0, 0],
         )?;
         let mut actual = vec![0; words + 2];
@@ -120,7 +122,7 @@ fn guards(backend: &Nvidia) -> Result<(), Error> {
         let decoded = backend.upload_words(&[GUARD; 19])?;
         backend.dispatch_words(
             Kernel::TensorQuantized,
-            &[(&output, 1), (&scales, 0), (&metadata, 0), (&decoded, 1)],
+            &[(&output, 1), (&scales, 0), (&metadata, 0), (&scales, 0), (&decoded, 1)],
             &[17, 17, 1, bits, 1, 1, 0, 0],
         )?;
         let mut actual = [0; 19];
@@ -134,7 +136,7 @@ fn guards(backend: &Nvidia) -> Result<(), Error> {
         let metadata = backend.upload_words(&meta)?;
         backend.dispatch_words(
             Kernel::TensorQuantized,
-            &[(&output, 1), (&scales, 0), (&metadata, 0), (&decoded, 1)],
+            &[(&output, 1), (&scales, 0), (&metadata, 0), (&scales, 0), (&decoded, 1)],
             &[17, 17, 1, bits, 1, 1, 0, 0],
         )?;
         backend.read_words_into(&decoded, 0, &mut actual)?;
@@ -145,13 +147,54 @@ fn guards(backend: &Nvidia) -> Result<(), Error> {
     Ok(())
 }
 
+fn scale_guards(backend: &Nvidia) -> Result<(), Error> {
+    const GUARD: u32 = 0xd305abcd;
+    let values = [0f32, 0.5, 1., 2., 4., 8., 16.];
+    let input = backend.upload_words(&values.map(f32::to_bits))?;
+    for (format, width, codes) in [
+        (0usize, 4usize, values.map(f32::to_bits)),
+        (1, 2, [0, 0x3800, 0x3c00, 0x4000, 0x4400, 0x4800, 0x4c00]),
+        (2, 2, [0, 0x3f00, 0x3f80, 0x4000, 0x4080, 0x4100, 0x4180]),
+        (3, 1, [0, 126, 127, 128, 129, 130, 131]),
+        (4, 1, [0, 0x30, 0x38, 0x40, 0x48, 0x50, 0x58]),
+    ] {
+        let encoded = backend.upload_words(&[GUARD; 9])?;
+        backend.dispatch_words(Kernel::TensorScale, &[(&input, 0), (&encoded, 1)], &[7, format, 0])?;
+        let mut actual = [0; 9];
+        backend.read_words_into(&encoded, 0, &mut actual)?;
+        if actual[0] != GUARD || actual[8] != GUARD || actual[1..8] != codes {
+            return Err(Error::DeviceFault);
+        }
+        let mut bytes: Vec<_> = codes.into_iter().flat_map(|code| code.to_le_bytes().into_iter().take(width)).collect();
+        bytes.resize(bytes.len().next_multiple_of(4), 0);
+        let words = bytes.len() / 4;
+        let packed = backend.upload_words(&vec![GUARD; words + 2])?;
+        backend.dispatch_words(Kernel::TensorScale, &[(&encoded, 1), (&packed, 1)], &[7, format, 1])?;
+        let mut actual = vec![0; words + 2];
+        backend.read_words_into(&packed, 0, &mut actual)?;
+        let stored: Vec<_> = actual[1..words + 1].iter().flat_map(|v| v.to_le_bytes()).collect();
+        if actual[0] != GUARD || actual[words + 1] != GUARD || stored != bytes {
+            return Err(Error::DeviceFault);
+        }
+        let decoded = backend.upload_words(&[GUARD; 9])?;
+        backend.dispatch_words(Kernel::TensorScale, &[(&packed, 1), (&decoded, 1)], &[7, format, 2])?;
+        let mut actual = [0; 9];
+        backend.read_words_into(&decoded, 0, &mut actual)?;
+        if actual[0] != GUARD || actual[8] != GUARD || actual[1..8] != codes {
+            return Err(Error::DeviceFault);
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     let device = d3os_ai::native_device().map_err(|e| format!("quantization device: {e}"))?;
     public(backend, &device)?;
     guards(backend).map_err(|e| format!("quantization guards: {e}"))?;
+    scale_guards(backend).map_err(|e| format!("scale guards: {e}"))?;
     device.sync().map_err(|e| format!("quantization synchronization: {e:?}"))?;
     crate::report(format_args!(
-        "NVIDIA_BURN_QUANTIZATION_OK api=public integer_bits=8,4,2 formats=9 minifloat=e4m3,e5m2,e2m1 boundaries=exhaustive rounding=ties_even scales=per_tensor,rectangular_block serialization=verified views=verified guards=verified backend=nvidia"
+        "NVIDIA_BURN_QUANTIZATION_OK api=public integer_bits=8,4,2 formats=9 minifloat=e4m3,e5m2,e2m1 boundaries=exhaustive scale_dtypes=5 levels=1,2 rounding=ties_even scales=per_tensor,rectangular_block serialization=verified views=verified guards=verified backend=nvidia"
     ));
     Ok(())
 }

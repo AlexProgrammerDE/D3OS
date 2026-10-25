@@ -170,7 +170,7 @@ The GPU operations include FP32 arithmetic and math, reductions, exact tensor fi
 Another 29 entries implement I32 arithmetic, signed comparisons, bitwise operations, boolean logic, masks, and conversions.
 These operations support strided views and broadcasting. Input tensors remain shared and immutable.
 Full writers avoid a separate output clear. Empty logical outputs require no element work.
-The matching SDK and driver use native compute protocol version 22.
+The matching SDK and driver use native compute protocol version 23.
 
 The D3OS GPU self-test passes reversed and transposed views, overlapping windows, broadcast batches, subviews, empty dimensions, and neighboring guards.
 Matrix references use independent FP64 accumulation. Math references use independent libm functions and include 2,816 FP32 edge values.
@@ -290,8 +290,8 @@ The gaps include integer division, integer matrix products, scans, some FP32 mat
 Complete Burn quantization, non-additive indexed updates, three-dimensional convolutions, transposed convolutions, and interpolation also remain incomplete.
 The native backend also uses Burn's `GraphUnsupported` primitive, so captured graph replay remains a gap.
 Its advertised dtype capabilities cover F32, I32 storage, U32 boolean storage, and the quantization storage described below.
-The public `QTensorOps` methods now execute for six integer formats, two FP8 formats, and FP4 with F32 scales.
-Additional scale dtypes, two-level scales, and optimized public quantized matrix products remain open.
+The public `QTensorOps` methods now execute for six integer formats, two FP8 formats, and FP4 with five scale dtypes.
+Two-level schemes use an F32 tensor scale. Optimized public quantized matrix products remain open.
 Packed GGUF projection support does not close those remaining public API or dtype gaps.
 Qwen now has public Burn extensions for packed projections, embeddings, gates, and normalization.
 Attention caches and recurrent state now use public Burn tensors.
@@ -426,13 +426,13 @@ The complete pre-existing GPU operator suite also passes.
 All 181 previous inference entries and their compiler constant banks remain byte-identical.
 The portable bundle adds three spill-free entries and retains every Tensor Core instruction audit.
 Its 184-entry inference module is compiled inside D3OS, with all generated module hashes matching the host audits.
-This integer milestone used protocol 21; the current SDK and driver require protocol 22.
+This integer milestone used protocol 21; the current SDK and driver require protocol 23.
 
 Evidence is under `target/nvidia/burn-quantization-validation/first/`.
 The original integer bundle remains under `target/nvidia/burn-quantization-kernels/`. The current default includes the floating-point formats below.
 These results establish native integer quantization functionality, not complete backend or Linux performance parity.
 The common integer cases also pass the matched Linux conformance check below.
-The floating-point formats are covered below. Additional scale dtypes, two-level scales, and efficient quantized matrix execution remain required.
+The floating-point formats and additional scale levels are covered below. Efficient quantized matrix execution remains required.
 Qwen still uses its existing packed-GGUF extensions and FP32 activations until that execution work is integrated and validated.
 
 ### Matched integer conformance
@@ -480,7 +480,7 @@ This common-case conformance result does not establish full quantization or back
 ## Public FP8 and FP4 quantization
 
 The native backend also supports `E4M3` and `E5M2` FP8 values and `E2M1` FP4 values.
-These use the same public Burn methods and retain F32 scales and output.
+These use the same public Burn methods. The original floating-point checks used F32 scales and output; additional scale formats are covered below.
 FP8 supports packed U32 and native byte storage.
 FP4 supports packed U32 and `PackedNative`, which stores two values per byte.
 Both packed stores preserve their packing axis through views and serialization.
@@ -509,9 +509,9 @@ D3OS separately runs the same exhaustive cases with native packed FP4 and retain
 The earlier Linux probe also rejects an FP4 block whose innermost extent is four because packed-U32 storage requires groups of eight.
 These limitations do not justify removing the native backend's additional checks or copying the incorrect result.
 
-The matching SDK and driver now require protocol 22.
+This floating-point milestone used protocol 22; the current SDK and driver require protocol 23.
 The packed-field codec is validated together with its bit width before dispatch.
-The inference bundle still contains 184 entries.
+That inference bundle contains 184 entries. The scale extension below adds three entries.
 Only the quantize and dequantize machine-code sections changed; the other 182 entry sections and all constant banks remain identical.
 The host audit retains the Tensor Core and spill checks.
 Compilation remains inside D3OS, outside execution measurements.
@@ -525,7 +525,59 @@ The comparison summary is `target/nvidia/burn-quantization-conformance/minifloat
 Failed Linux probes remain alongside that evidence, including the block diagnostic and unsupported native-FP4 trial.
 The verified bundle is under `target/nvidia/burn-minifloat-final-kernels/` and now populates `target/nvidia/kernels/`.
 These are correctness results. They do not establish quantized compute acceleration or full backend or performance parity.
-Additional scale dtypes, two-level scales, and the remaining dtype and operation gaps keep the primary goal open.
+The remaining dtype, operation, execution, and optimized quantized-compute gaps keep the primary goal open.
+
+## Scale storage and two-level quantization
+
+Quantization scales now support `F32`, `F16`, `BF16`, `UE8M0`, and `UE4M3`.
+Narrow scales round upward to the next representable value, with finite saturation.
+`UE8M0` has no zero, so a zero scale rounds to its minimum value, `2^-127`.
+The encode kernel applies this policy before any quantized values use the scales.
+Quantizing with a zero scale follows the Linux clamp policy, including integer formats: a NaN quotient takes the positive endpoint.
+
+A quantized tensor retains one raw scale code per device word.
+This representation preserves imported NaN payloads and makes scale views use the existing GPU tensor layout operations.
+Record storage remains compact: four bytes for F32, two for F16 or BF16, and one for either unsigned format.
+GPU pack and unpack kernels convert between device codes and record bytes without numeric conversion.
+Partial words are padded only in device allocations; the serialized record contains exactly its defined bytes.
+
+Two-level schemes retain a separate, shared F32 tensor scale.
+Kernels reconstruct the effective scale as the decoded block scale times that tensor scale.
+The product is formed in F32 before value conversion.
+Views, simple reshapes, record export, and reload preserve both levels.
+The tensor scale must use F32. This matches the pinned CUDA binding contract.
+Burn's dynamic normalization permits F16 and UE4M3 block scales; wider block formats cannot use its maximum-based normalization recipe.
+Missing or extra scale levels and malformed record lengths return execution errors before GPU access.
+
+The scale paths add three cuTile entries: encode, pack, and unpack.
+The portable inference bundle now has 187 entries.
+Native compute protocol 23 validates scale format and global-scale flags and checks the separate tensor-scale binding.
+Quantization and dequantization keep values and scales on the GPU.
+Only explicit record export reads the packed storage back to the CPU.
+
+The shared checks use independent ordered scale tables to find the first representable value at or above each input.
+They cover all five dtypes, rounding boundaries, saturation, subnormal F16 scales, zero scales, explicit two-level parameters, and dynamic two-level calibration.
+Record checks preserve raw scale bits, including NaN payloads, infinities, subnormals, and compact tails.
+Two-level zero-input calibration and exported record reload also run through the public Burn API.
+
+The pinned Linux CUDA mapper uses the input scale tensor's rank to index block coordinates.
+The public API supplies flat scales, which produces incorrect results for some multidimensional inputs.
+The retained `[7, 16]` Q4S example returns `0.0` instead of `1e-5` at index 16, even with F32 scales.
+This also explains the earlier rectangular FP4 mismatch; it is not evidence that the FP4 codec itself rounds incorrectly.
+Common scale checks therefore quantize one-dimensional inputs before reshaping and transposing the results.
+D3OS separately checks multidimensional Q4S and FP4 inputs, all five scale dtypes, both scale levels, and reversed views.
+Raw native launches also check prefix and suffix guards and tail padding for all three scale kernels.
+
+Both Linux CUDA and D3OS pass the shared checks with identical validator source hashes.
+D3OS also passes the additional multidimensional, reversed-view, and guarded-launch checks and the complete GPU operator suite.
+The three modules compiled inside D3OS match their host audit hashes.
+The 181 entries outside quantization and their constant banks remain byte-identical to the previous bundle.
+Native evidence is under `target/nvidia/burn-quantization-validation/scales-final/`.
+Linux evidence is under `target/nvidia/burn-quantization-conformance/linux-scales-final/`.
+The comparison summary is `target/nvidia/burn-quantization-conformance/scales-comparison.json`.
+The failed multidimensional Linux probe remains in `linux-scales-first/` beside the accepted Linux run.
+The checked `target/nvidia/burn-scale-kernels/` bundle now populates the default kernel directory.
+These are correctness checks. Full backend conformance, optimized quantized execution, and matched workload performance remain required.
 
 ## Portable runtime validation
 

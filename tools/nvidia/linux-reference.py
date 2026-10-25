@@ -1415,7 +1415,7 @@ def main():
         raise RuntimeError("Linux compiler benchmark did not pass")
     if args.mnist_benchmark and "LINUX_MNIST_BENCH_OK backend=cuda" not in text:
         raise RuntimeError("Linux CUDA MNIST benchmark did not pass")
-    if args.burn_quantization and "BURN_QUANTIZATION_REFERENCE_OK os=linux backend=cuda formats=9 minifloat=e4m3,e5m2,e2m1 boundaries=exhaustive" not in text:
+    if args.burn_quantization and "BURN_QUANTIZATION_REFERENCE_OK os=linux backend=cuda formats=9 minifloat=e4m3,e5m2,e2m1 boundaries=exhaustive scale_dtypes=5 levels=1,2" not in text:
         raise RuntimeError("Linux CUDA Burn quantization conformance did not pass")
     if args.alexnet_benchmark:
         validate_alexnet(text)

@@ -285,6 +285,216 @@ fn minifloat_format(device: &Device, format: QuantValue, stores: &[QuantStore], 
     Ok(())
 }
 
+fn scale_value(dtype: ScaleDtype, code: u32) -> f32 {
+    match dtype {
+        ScaleDtype::F32 => f32::from_bits(code),
+        ScaleDtype::F16 => {
+            let exponent = code >> 10;
+            let mantissa = code & 1023;
+            if exponent == 0 {
+                mantissa as f32 / 16_777_216.0
+            } else {
+                (1.0 + mantissa as f32 / 1024.0) * f32::from_bits((exponent + 112) << 23)
+            }
+        }
+        ScaleDtype::BF16 => f32::from_bits(code << 16),
+        ScaleDtype::UE8M0 => {
+            if code == 0 {
+                f32::from_bits(0x0040_0000)
+            } else {
+                f32::from_bits(code << 23)
+            }
+        }
+        ScaleDtype::UE4M3 => minifloat_value(QuantValue::E4M3, code),
+    }
+}
+
+// Search the representable scale table instead of reproducing the GPU's
+// upward bit bias. All inputs here are non-negative and finite.
+fn scale_code_up(dtype: ScaleDtype, input: f32) -> u32 {
+    let mut high = match dtype {
+        ScaleDtype::F32 => return input.to_bits(),
+        ScaleDtype::F16 => 0x7bff,
+        ScaleDtype::BF16 => 0x7f7f,
+        ScaleDtype::UE8M0 => 254,
+        ScaleDtype::UE4M3 => 126,
+    };
+    let mut low = 0;
+    while low < high {
+        let middle = low + (high - low) / 2;
+        if scale_value(dtype, middle) < input {
+            low = middle + 1
+        } else {
+            high = middle
+        }
+    }
+    low
+}
+
+fn scale_bytes(dtype: ScaleDtype, codes: &[u32]) -> Vec<u8> {
+    let size = match dtype {
+        ScaleDtype::F32 => 4,
+        ScaleDtype::F16 | ScaleDtype::BF16 => 2,
+        _ => 1,
+    };
+    codes.iter().flat_map(|code| code.to_le_bytes().into_iter().take(size)).collect()
+}
+
+fn scale_case(device: &Device, dtype: ScaleDtype, format: QuantValue, global: Option<f32>, matrix: bool) -> Result<(), String> {
+    let inputs = [0.0, 0.00001, 0.5, 1.00001, 1.001, 1.1, 65520.0];
+    let codes: Vec<_> = inputs.iter().map(|&s| scale_code_up(dtype, s)).collect();
+    let scales: Vec<_> = codes.iter().map(|&code| scale_value(dtype, code)).collect();
+    let global_value = global.unwrap_or(1.0);
+    let values: Vec<_> = scales
+        .iter()
+        .flat_map(|&s| (0..16).map(move |i| if i % 2 == 0 { s * global_value } else { -s * global_value }))
+        .collect();
+    let mut scheme = QuantScheme::default().with_value(format).per_block([1, 16], dtype);
+    if global.is_some() {
+        scheme = scheme.per_tensor(ScaleDtype::F32);
+    }
+    let params = QuantizationParameters {
+        scales: Tensor::<1>::from_floats(inputs, device),
+        global: global.map(|v| Tensor::<1>::from_floats([v], device)),
+    };
+    let q = if matrix {
+        Tensor::<2>::from_data(TensorData::new(values.clone(), [7, 16]), device).quantize(&scheme, params)
+    } else {
+        Tensor::<1>::from_data(TensorData::new(values.clone(), [112]), device)
+            .quantize(&scheme, params)
+            .reshape([7, 16])
+    };
+    // A zero scale creates a NaN quotient and clamps to the positive
+    // endpoint, so reconstruction produces positive zero for either input sign.
+    let expected: Vec<_> = values.iter().map(|&v| if v == 0.0 { 0.0 } else { v }).collect();
+    check(q.clone(), &expected).map_err(|e| format!("scale {dtype:?} {format:?} global={global:?}: {e}"))?;
+    let fields: Vec<_> = scales
+        .iter()
+        .flat_map(|&s| {
+            (0..16).map(move |i| {
+                if s == 0.0 {
+                    if format.is_symmetric() {
+                        format.range().1 as i32
+                    } else {
+                        minifloat_code(format, f32::NAN)
+                    }
+                } else if format.is_symmetric() {
+                    if i % 2 == 0 { 1 } else { -1 }
+                } else {
+                    minifloat_code(format, if i % 2 == 0 { 1.0 } else { -1.0 })
+                }
+            })
+        })
+        .collect();
+    let mut bytes = packed_reference(&fields, format.size_bits());
+    bytes.extend(scale_bytes(dtype, &codes));
+    if let Some(global) = global {
+        bytes.extend(global.to_le_bytes());
+    }
+    let data = saved_bytes(q.clone(), &bytes).map_err(|e| format!("scale {dtype:?} {format:?} global={global:?}: {e}"))?;
+    check(Tensor::<2>::from_data(data, device), &expected)?;
+    if matrix {
+        let reversed: Vec<_> = expected.iter().copied().rev().collect();
+        let flipped = q.clone().flip([0, 1]);
+        check(flipped.clone(), &reversed)?;
+        let data = flipped.try_into_data().map_err(|e| format!("flipped scale save: {e:?}"))?;
+        check(Tensor::<2>::from_data(data, device), &reversed)?;
+    }
+    let transposed: Vec<_> = (0..16)
+        .flat_map(|col| (0..7).map(move |row| (row, col)))
+        .map(|(r, c)| expected[r * 16 + c])
+        .collect();
+    let data = q.transpose().try_into_data().map_err(|e| format!("scale view save: {e:?}"))?;
+    check(Tensor::<2>::from_data(data, device), &transposed)?;
+    Ok(())
+}
+
+fn scale_record(device: &Device, dtype: ScaleDtype, global: Option<f32>) -> Result<(), String> {
+    let codes = match dtype {
+        ScaleDtype::F32 => [0, 1, 0x3f80_0000, 0x7f7f_ffff, 0x7f80_0000, 0x7fc0_0001, 0xffb1_2345],
+        ScaleDtype::F16 => [0, 1, 0x3c00, 0x7bff, 0x7c00, 0x7d01, 0xfe55],
+        ScaleDtype::BF16 => [0, 1, 0x3f80, 0x7f7f, 0x7f80, 0x7fc1, 0xffa5],
+        ScaleDtype::UE8M0 => [0, 1, 127, 253, 254, 255, 128],
+        ScaleDtype::UE4M3 => [0, 1, 0x38, 126, 127, 255, 0x80],
+    };
+    let mut scheme = QuantScheme::default().with_value(QuantValue::Q8S).per_block([16], dtype);
+    if global.is_some() {
+        scheme = scheme.per_tensor(ScaleDtype::F32);
+    }
+    let mut bytes = packed_reference(&[0; 112], 8);
+    bytes.extend(scale_bytes(dtype, &codes));
+    if let Some(global) = global {
+        bytes.extend(global.to_le_bytes());
+    }
+    let q = Tensor::<1>::from_data(TensorData::from_bytes_vec(bytes.clone(), [112], DType::QFloat(scheme)), device);
+    saved_bytes(q.clone(), &bytes).map_err(|e| format!("raw scale record {dtype:?}: {e}"))?;
+    saved_bytes(q.reshape([7, 16]).transpose(), &bytes).map_err(|e| format!("raw scale view record {dtype:?}: {e}"))?;
+    Ok(())
+}
+
+fn scale_dynamic(device: &Device, dtype: ScaleDtype, format: QuantValue) -> Result<(), String> {
+    let inner = if dtype == ScaleDtype::F16 {
+        [1.0, 2., 3., 4., 64., 128., 65504.]
+    } else {
+        [0.5, 1., 1.5, 2., 16., 32., 448.]
+    };
+    let maximum = format.range().1;
+    let values: Vec<_> = inner
+        .iter()
+        .flat_map(|&s| (0..16).map(move |i| (if i % 2 == 0 { maximum } else { -maximum }) * (s * 0.25)))
+        .collect();
+    let scheme = QuantScheme::default().with_value(format).per_block([16], dtype).per_tensor(ScaleDtype::F32);
+    let q = Tensor::<1>::from_data(TensorData::new(values.clone(), [112]), device).quantize_dynamic(&scheme);
+    check(q.clone(), &values).map_err(|e| format!("dynamic scales {dtype:?} {format:?}: {e}"))?;
+    let fields: Vec<_> = (0..112)
+        .map(|i| {
+            let value = if i % 2 == 0 { maximum } else { -maximum };
+            if format.is_symmetric() { value as i32 } else { minifloat_code(format, value) }
+        })
+        .collect();
+    let mut bytes = packed_reference(&fields, format.size_bits());
+    bytes.extend(scale_bytes(dtype, &inner.map(|s| scale_code_up(dtype, s))));
+    bytes.extend(0.25f32.to_le_bytes());
+    let data = saved_bytes(q, &bytes).map_err(|e| format!("dynamic scale bytes {dtype:?} {format:?}: {e}"))?;
+    check(Tensor::<1>::from_data(data, device), &values)?;
+    check(Tensor::<1>::zeros([112], device).quantize_dynamic(&scheme), &[0.; 112])?;
+    Ok(())
+}
+
+/// Public scale storage and reconstruction, with independent code tables.
+pub fn scales(device: &Device) -> Result<(), String> {
+    for format in [QuantValue::Q8S, QuantValue::E4M3] {
+        for dtype in [ScaleDtype::F32, ScaleDtype::F16, ScaleDtype::BF16, ScaleDtype::UE8M0, ScaleDtype::UE4M3] {
+            scale_case(device, dtype, format, None, false)?;
+        }
+        for dtype in [ScaleDtype::F16, ScaleDtype::UE4M3] {
+            scale_case(device, dtype, format, Some(0.25), false)?;
+            scale_dynamic(device, dtype, format)?;
+        }
+    }
+    for dtype in [ScaleDtype::F32, ScaleDtype::F16, ScaleDtype::BF16, ScaleDtype::UE8M0, ScaleDtype::UE4M3] {
+        scale_record(device, dtype, None)?;
+    }
+    for dtype in [ScaleDtype::F16, ScaleDtype::UE4M3] {
+        scale_record(device, dtype, Some(0.25))?;
+    }
+
+    Ok(())
+}
+
+/// Cases beyond the pinned CUDA backend's multidimensional scale mapping.
+pub fn scales_native_additional(device: &Device) -> Result<(), String> {
+    for format in [QuantValue::Q4S, QuantValue::E2M1] {
+        for dtype in [ScaleDtype::F32, ScaleDtype::F16, ScaleDtype::BF16, ScaleDtype::UE8M0, ScaleDtype::UE4M3] {
+            scale_case(device, dtype, format, None, true)?;
+        }
+        for dtype in [ScaleDtype::F16, ScaleDtype::UE4M3] {
+            scale_case(device, dtype, format, Some(0.25), true)?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -303,5 +513,23 @@ mod tests {
             assert_eq!(minifloat_code(QuantValue::E2M1, input), code);
             assert_eq!(minifloat_code(QuantValue::E2M1, -input), code | 8);
         }
+    }
+
+    #[test]
+    fn scale_reference_ceilings_match_known_boundaries() {
+        for (dtype, code) in [
+            (ScaleDtype::F16, 0x3c01),
+            (ScaleDtype::BF16, 0x3f81),
+            (ScaleDtype::UE4M3, 0x39),
+            (ScaleDtype::UE8M0, 128),
+        ] {
+            assert_eq!(scale_code_up(dtype, 1.00001), code);
+            assert_eq!(scale_code_up(dtype, scale_value(dtype, code)), code);
+        }
+        assert_eq!(scale_code_up(ScaleDtype::F16, 1e-10), 1);
+        assert_eq!(scale_code_up(ScaleDtype::BF16, f32::from_bits(1)), 1);
+        assert_eq!(scale_code_up(ScaleDtype::UE8M0, 0.0), 0);
+        assert_eq!(scale_code_up(ScaleDtype::F16, f32::MAX), 0x7bff);
+        assert_eq!(scale_code_up(ScaleDtype::UE4M3, f32::MAX), 126);
     }
 }

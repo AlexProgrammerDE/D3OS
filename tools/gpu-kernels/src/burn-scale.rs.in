@@ -1,0 +1,31 @@
+#[cutile::entry()]
+unsafe fn SCALE_ENTRY(input: *const u32, output: *mut u32, count: u32, dtype: u32, _operation: u32) {
+    let i = indices();
+    let bits = if dtype == 0u32 { 32u32 } else if dtype < 3u32 { 16u32 } else { 8u32 };
+    let factor = 32u32 / bits;
+    let field_mask = if bits == 32u32 { unsigned(-1i32) } else { (1u32 << bits) - 1u32 };
+    if SCALE_MODE == 1u32 {
+        let words = (count + factor - 1u32) / factor;
+        let mask = lt_tile(i, broadcast_scalar(words, shape![128]));
+        let mut packed = broadcast_scalar(0u32, shape![128]);
+        let mut position = 0u32;
+        while position < factor {
+            let index = i * broadcast_scalar(factor, shape![128]) + broadcast_scalar(position, shape![128]);
+            let value = unsafe { read_tile(input, index, mask & lt_tile(index, broadcast_scalar(count, shape![128])), 0u32) };
+            packed = packed | ((value & broadcast_scalar(field_mask, shape![128])) << broadcast_scalar(position * bits, shape![128]));
+            position = position + 1u32;
+        }
+        unsafe { write_tile(output, i, packed, mask) };
+    } else {
+        let mask = lt_tile(i, broadcast_scalar(count, shape![128]));
+        let value = if SCALE_MODE == 0u32 {
+            let word = unsafe { read_tile(input, i, mask, 0u32) };
+            let value: Tile<f32, { [128] }> = bitcast(word);
+            burn_scale_code(value, dtype)
+        } else {
+            let word = unsafe { read_tile(input, i / broadcast_scalar(factor, shape![128]), mask, 0u32) };
+            (word >> ((i % broadcast_scalar(factor, shape![128])) * broadcast_scalar(bits, shape![128]))) & broadcast_scalar(field_mask, shape![128])
+        };
+        unsafe { write_tile(output, i, value, mask) };
+    }
+}

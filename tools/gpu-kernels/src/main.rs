@@ -98,6 +98,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         inference.extend([
             "burn_dequantize",
             "burn_quantized_copy",
+            "burn_scale_pack",
+            "burn_scale_unpack",
             "vector_project_tf32x3",
             "vector_project_bf16_weights",
             "vector_project_paired_bf16_weights",

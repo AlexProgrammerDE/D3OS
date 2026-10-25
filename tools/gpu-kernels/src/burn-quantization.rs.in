@@ -81,8 +81,8 @@ fn burn_minifloat_encode(value: Tile<f32, { [128] }>, codec: u32) -> Tile<u32, {
 
 #[cutile::entry()]
 unsafe fn QUANTIZATION_ENTRY(
-    input: *const u32, scales: *const f32, metadata: *const u32, output: *mut u32,
-    count: u32, source: u32, scale_count: u32, bits: u32, _operation: u32, codec: u32, offset: u32, _reserved: u32,
+    input: *const u32, scales: *const u32, metadata: *const u32, global: *const u32, output: *mut u32,
+    count: u32, source: u32, scale_count: u32, bits: u32, _operation: u32, codec: u32, offset: u32, scale_flags: u32,
 ) {
     let i = indices();
     let factor = 32u32 / bits;
@@ -103,8 +103,8 @@ unsafe fn QUANTIZATION_ENTRY(
         } else {
             burn_minifloat_decode(field, codec)
         };
-        let scale = unsafe { read_tile(scales, scale_address, mask & lt_tile(scale_address, broadcast_scalar(scale_count, shape![128])), 0f32) };
-        let result: Tile<u32, { [128] }> = bitcast(value * scale);
+        let scale = unsafe { burn_quantization_scale(scales, global, scale_address, mask, scale_count, scale_flags) };
+        let result: Tile<u32, { [128] }> = bitcast(mulf(value, scale, rounding::NearestEven, ftz::Disabled));
         unsafe { write_tile(output, i, result, mask) };
     } else {
         let words = (count + factor - 1u32) / factor;
@@ -118,15 +118,16 @@ unsafe fn QUANTIZATION_ENTRY(
             let value: Tile<u32, { [128] }> = if QUANTIZATION_MODE == 0u32 {
                 let word = unsafe { read_tile(input, address, valid & lt_tile(address, broadcast_scalar(source, shape![128])), 0u32) };
                 let value: Tile<f32, { [128] }> = bitcast(word);
-                let scale = unsafe { read_tile(scales, scale_address, valid & lt_tile(scale_address, broadcast_scalar(scale_count, shape![128])), 0f32) };
+                let scale = unsafe { burn_quantization_scale(scales, global, scale_address, valid, scale_count, scale_flags) };
                 let scaled = divf(value, scale, rounding::NearestEven, ftz::Disabled);
                 if codec < 2u32 {
                     let scaled: Tile<f32, { [128] }> = bitcast(burn_round_even(bitcast(scaled)));
                     let high = broadcast_scalar(float_u32(sign_bit - 1u32), shape![128]);
                     let low = broadcast_scalar(0f32 - float_u32(sign_bit - codec), shape![128]);
                     let clamped = select(lt_tile(scaled, low), low, select(gt_tile(scaled, high), high, scaled));
-                    // NaNs and padding become zero before the conversion's finite domain.
-                    let safe = select(valid & eq_tile(clamped, clamped), clamped, broadcast_scalar(0f32, shape![128]));
+                    // Burn's CUDA clamp maps NaNs to the positive endpoint.
+                    let clamped = select(eq_tile(clamped, clamped), clamped, high);
+                    let safe = select(valid, clamped, broadcast_scalar(0f32, shape![128]));
                     let integer: Tile<i32, { [128] }> = ftoi(safe, rounding::NearestIntToZero);
                     bitcast(integer)
                 } else {

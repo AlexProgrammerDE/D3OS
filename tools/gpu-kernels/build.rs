@@ -4,6 +4,7 @@ fn main() {
     for file in [
         "common.rs",
         "burn-math.rs",
+        "burn-scale-common.rs",
         "burn-range.rs",
         "burn-random-common.rs",
         "burn-pooling-common.rs",
@@ -58,6 +59,16 @@ fn main() {
             &entry
                 .replace("QUANTIZATION_ENTRY", operation.symbol())
                 .replace("QUANTIZATION_MODE", &format!("{}u32", operation as u32)),
+        );
+    }
+    println!("cargo:rerun-if-changed=src/burn-scale.rs.in");
+    let scales = fs::read_to_string("src/burn-scale.rs.in").expect("read scale source");
+    for operation in [0, 1, 2] {
+        let operation = d3os_nvidia::compute::quantization::ScaleOperation::from_raw(operation).expect("scale operation");
+        source.push_str(
+            &scales
+                .replace("SCALE_ENTRY", operation.symbol())
+                .replace("SCALE_MODE", &format!("{}u32", operation as u32)),
         );
     }
     println!("cargo:rerun-if-changed=src/burn-random.rs.in");
