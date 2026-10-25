@@ -73,16 +73,19 @@ def stage_burn_program(root, binary, destination):
     return libdevice
 
 
-def burn_probe(root, binary, kind, *, erf_profile=False):
+def burn_probe(root, binary, kind, *, erf_profile=False, integer_matrix_nonempty=False):
     purposes = {
         "quantization": "shared API conformance; no performance measurement",
         "capabilities": "declared dtype flags; no execution conformance",
         "erf": "public erf and GELU conformance; no performance measurement",
         "integer": "public integer division and floor remainder conformance; no performance measurement",
+        "integer_matrix": "public I32 matrix product conformance; no performance measurement",
     }
     purpose = "erf error profile and GELU conformance; strict failures reported" if erf_profile else purposes[kind]
     program = f"/burn-{kind}"
-    arguments = " --profile" if erf_profile else ""
+    arguments = " --profile" if erf_profile else " --nonempty" if integer_matrix_nonempty else ""
+    if integer_matrix_nonempty:
+        purpose = "public full-range I32 matrix product conformance for nonempty shapes; no empty-shape or performance claim"
     libdevice = stage_burn_program(root, binary, program)
     benchmark = root / "benchmark"
     benchmark.write_text(f"""#!/bin/bash
@@ -1168,6 +1171,8 @@ def main():
     parser.add_argument("--burn-erf", type=Path, help="run public erf and GELU conformance on Linux CUDA")
     parser.add_argument("--burn-erf-profile", action="store_true", help="report erf numerical errors separately from GELU conformance")
     parser.add_argument("--burn-integer", type=Path, help="run public I32 division and floor remainder conformance on Linux CUDA")
+    parser.add_argument("--burn-integer-matmul", type=Path, help="run public I32 matrix product conformance on Linux CUDA")
+    parser.add_argument("--burn-integer-matmul-nonempty", action="store_true", help="run the nonempty I32 matrix cases separately from empty shapes")
     parser.add_argument("--mnist-data", type=Path, default=ROOT / "target/mnist")
     parser.add_argument(
         "--mnist-executable", type=Path,
@@ -1219,7 +1224,7 @@ def main():
     args = parser.parse_args()
     if args.nsight_directory and not args.quantized_profile:
         parser.error("--nsight-directory requires --quantized-profile")
-    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.burn_integer, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
+    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.burn_integer, args.burn_integer_matmul, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
         parser.error("--quantized-profile requires a separate diagnostic guest")
     if args.pin_vcpus and len(os.sched_getaffinity(0)) != 4:
         parser.error("--pin-vcpus requires an inherited affinity of four host CPUs")
@@ -1245,6 +1250,7 @@ def main():
                 bool(args.burn_capabilities),
                 bool(args.burn_erf),
                 bool(args.burn_integer),
+                bool(args.burn_integer_matmul),
                 bool(args.llama_directory),
                 args.doom_benchmark,
                 args.alexnet_benchmark,
@@ -1265,6 +1271,10 @@ def main():
         parser.error("--burn-capabilities requires a built capabilities executable")
     if args.burn_integer and not args.burn_integer.is_file():
         parser.error("--burn-integer requires a built conformance executable")
+    if args.burn_integer_matmul and not args.burn_integer_matmul.is_file():
+        parser.error("--burn-integer-matmul requires a built conformance executable")
+    if args.burn_integer_matmul_nonempty and not args.burn_integer_matmul:
+        parser.error("--burn-integer-matmul-nonempty requires --burn-integer-matmul")
     if args.burn_quantization and not args.burn_quantization.is_file():
         parser.error("--burn-quantization requires a built conformance executable")
     if args.matched_qwen_input and not args.llama_directory:
@@ -1305,6 +1315,8 @@ def main():
         burn_probe(args.directory / "root", args.burn_erf.resolve(), "erf", erf_profile=args.burn_erf_profile)
     elif args.burn_integer:
         burn_probe(args.directory / "root", args.burn_integer.resolve(), "integer")
+    elif args.burn_integer_matmul:
+        burn_probe(args.directory / "root", args.burn_integer_matmul.resolve(), "integer_matrix", integer_matrix_nonempty=args.burn_integer_matmul_nonempty)
     elif args.mnist_benchmark:
         mnist_benchmark(
             args.directory / "root", args.mnist_executable.resolve(),
@@ -1453,6 +1465,10 @@ def main():
         raise RuntimeError("Linux CUDA Burn capability query did not complete")
     if args.burn_integer and "BURN_INTEGER_CONFORMANCE_OK os=linux backend=cuda operations=div,remainder tensor=true scalar=true shared_views=true" not in text:
         raise RuntimeError("Linux CUDA Burn integer conformance did not complete")
+    if args.burn_integer_matmul:
+        cases, domain, empty = (5, "nonempty", "false") if args.burn_integer_matmul_nonempty else (8, "all", "true")
+        if f"BURN_INTEGER_MATMUL_CONFORMANCE_OK os=linux backend=cuda cases={cases} domain={domain} reference=i128 wrapping=exact shared_views=true empty={empty}" not in text:
+            raise RuntimeError("Linux CUDA Burn I32 matrix product conformance did not complete")
     if args.burn_quantization and "BURN_QUANTIZATION_REFERENCE_OK os=linux backend=cuda formats=9 minifloat=e4m3,e5m2,e2m1 boundaries=exhaustive scale_dtypes=5 levels=1,2" not in text:
         raise RuntimeError("Linux CUDA Burn quantization conformance did not pass")
     if args.alexnet_benchmark:

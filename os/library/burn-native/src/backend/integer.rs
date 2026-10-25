@@ -207,7 +207,13 @@ impl IntTensorOps<Self> for Native {
         })
     }
     fn int_matmul(lhs: IntTensor<Self>, rhs: IntTensor<Self>) -> IntTensor<Self> {
-        BackendTensor::unsupported("int_matmul", lhs.shape(), DType::I32, &[&lhs, &rhs], "int_matmul")
+        BackendTensor::apply(
+            "int_matmul",
+            matmul_shape(&lhs.shape(), &rhs.shape()).unwrap_or_else(|_| lhs.shape()),
+            DType::I32,
+            &[&lhs, &rhs],
+            |v| v[0].matmul(v[1]),
+        )
     }
     fn int_sum(tensor: IntTensor<Self>) -> IntTensor<Self> {
         reduce("int_sum", &tensor, None, Reduction::Sum, DType::I32)

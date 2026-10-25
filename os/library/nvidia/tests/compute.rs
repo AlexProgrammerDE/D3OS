@@ -644,6 +644,26 @@ fn binned_raster_checks_header_and_address_extents() {
 }
 
 #[test]
+fn integer_matrix_bounds_every_buffer_and_rejects_aliased_outputs() {
+    let kernel = Kernel::IntMatmul;
+    let work = kernel.work(&[17, 33, 129]).unwrap();
+    assert_eq!(work.extents[..3], [17 * 33, 33 * 129, 17 * 129]);
+    assert_eq!((work.threads, work.blocks, work.pointers, work.output), (128, 34, 3, 2));
+    assert!(kernel.allocates_output());
+    assert!(!work.in_place);
+    assert!(work.validate_aliases(&[0x10000, 0x20000, 0x30000]).is_ok());
+    assert!(work.validate_aliases(&[0x10000, 0x10000, 0x30000]).is_ok());
+    for addresses in [[0x10000, 0x20000, 0x10004], [0x10000, 0x20000, 0x20004]] {
+        assert!(work.validate_aliases(&addresses).is_err());
+    }
+    for dimensions in [[0, 1, 1], [1, 0, 1], [1, 1, 0], [u32::MAX, 2, 1], [1, 2, u32::MAX], [65536, 1, 65535]] {
+        assert!(kernel.work(&dimensions).is_err());
+    }
+    assert!(kernel.work(&[2, 3]).is_err());
+    assert!(kernel.work(&[2, 3, 4, 1]).is_err());
+}
+
+#[test]
 fn matrix_work_covers_partial_tiles_and_checks_products() {
     for kernel in [Kernel::Matmul, Kernel::Project] {
         let work = kernel.work(&[17, 33, 9]).unwrap();

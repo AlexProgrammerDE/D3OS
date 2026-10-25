@@ -169,10 +169,10 @@ The native tensor primitive owns shared GPU storage and checked views.
 It supports FP32, I32, and boolean storage, including exact floating-point bit preservation.
 View construction performs no GPU allocation or transfer.
 The GPU operations include FP32 arithmetic and math, reductions, exact tensor fill, and FP32 Tensor Core matrix products.
-Another 29 entries implement I32 arithmetic, signed comparisons, bitwise operations, boolean logic, masks, and conversions.
+Another 31 entries implement I32 arithmetic, signed comparisons, bitwise operations, boolean logic, masks, and conversions.
 These operations support strided views and broadcasting. Input tensors remain shared and immutable.
 Full writers avoid a separate output clear. Empty logical outputs require no element work.
-The matching SDK and driver use native compute protocol version 25.
+The matching SDK and driver use native compute protocol version 26.
 
 The D3OS GPU self-test passes reversed and transposed views, overlapping windows, broadcast batches, subviews, empty dimensions, and neighboring guards.
 Matrix references use independent FP64 accumulation. Math references use independent libm functions and include 2,816 FP32 edge values.

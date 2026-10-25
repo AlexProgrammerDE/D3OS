@@ -70,6 +70,7 @@ def audit(family, sass):
             "burn_erf",
             "burn_i32_divide",
             "burn_i32_remainder",
+            "burn_i32_matmul",
             "burn_quantize",
             "burn_dequantize",
             "burn_quantized_copy",

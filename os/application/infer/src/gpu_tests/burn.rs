@@ -146,6 +146,10 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     crate::report(format_args!(
         "BURN_INTEGER_CONFORMANCE_OK os=d3os backend=native operations=div,remainder tensor=true scalar=true shared_views=true"
     ));
+    d3os_ai::validation::integer_matrix::run(&device, true)?;
+    crate::report(format_args!(
+        "BURN_INTEGER_MATMUL_CONFORMANCE_OK os=d3os backend=native cases=8 domain=all reference=i128 wrapping=exact shared_views=true empty=true"
+    ));
     indexing::run(backend).map_err(|e| format!("Burn native indexing: {e}"))?;
     scatter::run(backend).map_err(|e| format!("Burn native scatter: {e}"))?;
     convolution::run(backend).map_err(|e| format!("Burn native convolution: {e}"))?;

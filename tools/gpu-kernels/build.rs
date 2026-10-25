@@ -5,6 +5,7 @@ fn main() {
         "common.rs",
         "burn-math.rs",
         "burn-erf.rs",
+        "burn-integer-matrix.rs",
         "burn-scale-common.rs",
         "burn-range.rs",
         "burn-random-common.rs",

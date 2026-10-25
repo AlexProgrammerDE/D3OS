@@ -18,7 +18,7 @@ All required methods have declarations or implementations. This count does not e
 The report also records 99 native helper bodies for manual review of dtype and shape restrictions.
 
 The tool follows syntactic associated backend calls and expands the pinned `dequant_op_quant!` and `dequant_op_flow!` macros.
-It identifies 70 methods with possible paths to explicit declines or panic declarations.
+It identifies 69 methods with possible paths to explicit declines or panic declarations.
 This number is not an unsupported-operation count. Some paths represent expected invalid-input errors or conditional restrictions.
 
 The analysis does not resolve method types, evaluate conditional compilation, or expand other macros and free helper functions.
@@ -94,8 +94,35 @@ They cover full-range I32 values, scalar operands, broadcasting, reversed transp
 The low-level native suite also checks exceptional inputs, resident execution, partial tiles, and neighboring guards.
 Both Linux CUDA and D3OS pass the shared public checks on the physical GPU.
 D3OS also passes the complete operator suite after in-VM compilation, with all module hashes matching their host audits.
-The current bundle contains 190 entries. All 188 previous instruction and constant sections remain byte-identical.
-The I32 arithmetic capability declaration remains incomplete because matrix products and scans still require implementation.
+That bundle contains 190 entries. All 188 previous instruction and constant sections remain byte-identical.
+The I32 arithmetic capability declaration remains incomplete because scans and further operations still require implementation.
+
+## Native integer matrix products
+
+Protocol 26 adds public I32 matrix multiplication with exact wrapping products and accumulation.
+The operation uses the existing matrix path for batch broadcasting, signed views, offset views, and shared storage.
+Noncontiguous matrix operands require resident GPU copies before multiplication.
+Empty output shapes perform no element work. A zero inner dimension produces initialized zeros.
+
+The I32 kernel uses integer SIMD operations. Existing FP32 model kernels retain their Tensor Core implementations.
+The kernel writes every output element and rejects source/output overlap.
+Driver validation bounds all three buffers and rejects malformed dimensions before dispatch.
+The portable bundle contains 191 entries. All 190 previous instruction and constant sections remain byte-identical.
+
+The shared reference accumulates exact products in I128 and then converts each result to I32.
+It covers full-range values, overflow, partial tiles, transposes, reversed axes, offset views, broadcast batches, and shared inputs.
+Seven ordinary shape groups and one batch group form the complete eight-group check.
+Five groups have nonempty matrix dimensions.
+
+Linux CUDA passes all five nonempty groups on the physical GPU.
+Its separate all-shape run fails at `[16,0] @ [0,5]`: the first output is 465362048 instead of zero.
+The input readbacks pass before multiplication. The failure therefore concerns the product, not fixture upload.
+The failed all-shape run remains separate evidence. The nonempty result does not establish empty-shape support.
+
+D3OS passes all eight groups, including zero K and empty outputs, on the same physical GPU.
+Its additional native checks pass neighboring guards, invalid bounds, signed broadcast batches, and resident execution without tensor transfers.
+All modules compiled inside D3OS match their host audit hashes. The complete existing operator suite also passes.
+This validation adds no performance measurement or claim of full backend parity.
 
 ## Remaining implementation areas
 
@@ -118,7 +145,7 @@ Build the Linux probes with their default CUDA feature:
 
 ```bash
 cd tools/mnist-benchmark
-cargo build --release --locked --bin capabilities --bin erf --bin integer
+cargo build --release --locked --bin capabilities --bin erf --bin integer --bin integer_matrix
 cd ../..
 ```
 
@@ -134,6 +161,18 @@ python3 tools/nvidia/linux-reference.py \
 python3 tools/nvidia/linux-reference.py \
   --directory target/nvidia/linux-burn-integer \
   --burn-integer tools/mnist-benchmark/target/release/integer
+python3 tools/nvidia/linux-reference.py \
+  --directory target/nvidia/linux-burn-integer-matmul \
+  --burn-integer-matmul tools/mnist-benchmark/target/release/integer_matrix
+```
+
+If the all-shape matrix check fails, run the nonempty comparison in a separate directory:
+
+```bash
+python3 tools/nvidia/linux-reference.py \
+  --directory target/nvidia/linux-burn-integer-matmul-nonempty \
+  --burn-integer-matmul tools/mnist-benchmark/target/release/integer_matrix \
+  --burn-integer-matmul-nonempty
 ```
 
 If the strict erf check fails, use a separate directory for its numerical diagnostic:
@@ -157,5 +196,8 @@ The Linux evidence lives under `target/nvidia/burn-backend-audit/linux-capabilit
 The audit directory contains `traits-final.json`, `capability-comparison.json`, and `erf-comparison.json`.
 The integer evidence lives under `target/nvidia/burn-backend-validation/integer-final/` and `target/nvidia/burn-backend-audit/linux-integer/`.
 The audit directory also contains the updated `traits-integer.json` and `integer-comparison.json`.
+The matrix evidence lives under `target/nvidia/burn-backend-validation/i32-matrix-final/`.
+Its Linux counterparts are `target/nvidia/burn-backend-audit/linux-i32-matrix-all/` and `linux-i32-matrix-nonempty/`.
+The audit directory contains `traits-i32-matrix.json` and `i32-matrix-comparison.json`.
 Manifests record the shared validation source hashes, executable hashes, and execution backend.
 These generated local artifacts are not Git-tracked. The probes and audit tool are tracked for reproduction.

@@ -2,6 +2,7 @@
 pub mod capabilities;
 pub mod erf;
 pub mod integer;
+pub mod integer_matrix;
 pub mod quantization;
 pub mod qwen;
 pub mod qwen_state;

@@ -376,9 +376,9 @@ impl NativeTensor {
         Ok(output)
     }
 
-    /// FP32 matrix multiplication with Tensor Core accumulation and broadcast batches.
+    /// Broadcast matrix products: FP32 Tensor Cores or exact wrapping I32 arithmetic.
     pub fn matmul(&self, rhs: &Self) -> Result<Self> {
-        if self.dtype != DType::F32 || rhs.dtype != DType::F32 {
+        if !matches!(self.dtype, DType::F32 | DType::I32) || rhs.dtype != self.dtype {
             return Err(Error::InvalidParameter);
         }
         let shape = crate::layout::matmul_shape(self.layout.shape(), rhs.layout.shape())?;
@@ -387,7 +387,7 @@ impl NativeTensor {
             return Ok(Self {
                 buffer: self.buffer.clone(),
                 layout,
-                dtype: DType::F32,
+                dtype: self.dtype,
             });
         }
         let rank = shape.num_dims();
@@ -395,7 +395,7 @@ impl NativeTensor {
         let cols = shape[rank - 1];
         let inner = self.layout.shape()[self.layout.shape().num_dims() - 1];
         if inner == 0 {
-            return Self::empty(shape, DType::F32);
+            return Self::empty(shape, self.dtype);
         }
         let matrix_contiguous = |tensor: &Self| {
             let rank = tensor.layout.shape().num_dims();
@@ -418,16 +418,17 @@ impl NativeTensor {
         // 128 output blocks, limited to one split per 256 K elements. Each
         // split and the final merge use compensated FP32 sums.
         let tiles = rows.div_ceil(16) * cols.div_ceil(32);
-        let splits = if inner >= 4096 && tiles < 128 {
+        let splits = if self.dtype == DType::F32 && inner >= 4096 && tiles < 128 {
             128usize.div_ceil(tiles).next_power_of_two().min(inner / 256)
         } else {
             1
         };
         let parameters = [rows, inner, cols, splits];
+        let kernel = if self.dtype == DType::F32 { Kernel::Matmul } else { Kernel::IntMatmul };
         let product = |left_offset, right_offset| {
             Nvidia.produce_words(
                 rows * cols * splits,
-                Kernel::Matmul,
+                kernel,
                 &[(&left.buffer, left_offset), (&right.buffer, right_offset)],
                 &parameters[..if splits == 1 { 3 } else { 4 }],
             )
@@ -446,7 +447,7 @@ impl NativeTensor {
                 let right_offset = right_layout.element_offset(batch * inner * cols)?;
                 if splits == 1 {
                     Nvidia.dispatch_words(
-                        Kernel::Matmul,
+                        kernel,
                         &[(&left.buffer, left_offset), (&right.buffer, right_offset), (&buffer, batch * rows * cols)],
                         &parameters[..3],
                     )?;
@@ -464,7 +465,7 @@ impl NativeTensor {
         Ok(Self {
             buffer: Arc::new(buffer),
             layout,
-            dtype: DType::F32,
+            dtype: self.dtype,
         })
     }
 

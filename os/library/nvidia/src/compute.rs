@@ -14,7 +14,7 @@ pub mod reduction;
 pub mod updates;
 pub mod words;
 
-pub const VERSION: u32 = 25;
+pub const VERSION: u32 = 26;
 /// END_COMMANDS flag: an inner recording scope joins its parent's completion.
 /// The outermost scope always waits. Zero retains synchronous nested scopes.
 pub const DEFER_NESTED_COMPLETION: u64 = 1;
@@ -48,7 +48,7 @@ pub struct MemoryProfile {
     pub device_cached_bytes: u64,
     pub device_retired_bytes: u64,
 }
-pub const KERNEL_COUNT: usize = 62;
+pub const KERNEL_COUNT: usize = 63;
 
 /// CPU service costs by request operation, including queue work within it.
 #[derive(Clone, Copy, Debug, Default)]
@@ -167,9 +167,11 @@ pub enum Kernel {
     Adam = 59,
     TensorQuantized = 60,
     TensorScale = 61,
+    /// Row-major I32 matrix product with wrapping accumulation.
+    IntMatmul = 62,
 }
 
-const _: () = assert!(Kernel::TensorScale as usize + 1 == KERNEL_COUNT);
+const _: () = assert!(Kernel::IntMatmul as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -230,6 +232,7 @@ impl Kernel {
                 | Self::TensorWords
                 | Self::Gather
                 | Self::Matmul
+                | Self::IntMatmul
                 | Self::Im2col
                 | Self::MaxPool
                 | Self::Project
@@ -323,6 +326,7 @@ impl Kernel {
             59 => Self::Adam,
             60 => Self::TensorQuantized,
             61 => Self::TensorScale,
+            62 => Self::IntMatmul,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -391,6 +395,7 @@ impl Kernel {
             Self::Adam => "burn_adam",
             Self::TensorQuantized => "burn_quantize",
             Self::TensorScale => "burn_scale_encode",
+            Self::IntMatmul => "burn_i32_matmul",
         }
     }
 
@@ -767,6 +772,10 @@ impl Kernel {
                 product(&[n])?;
                 extents[0] = n as u64;
                 (n, 1, 0, false)
+            }
+            (Self::IntMatmul, &[m, k, n]) => {
+                extents[..3].copy_from_slice(&[u64::from(product(&[m, k])?), u64::from(product(&[k, n])?), u64::from(product(&[m, n])?)]);
+                (product(&[m, n.div_ceil(128), 128])?, 3, 2, false)
             }
             (Self::Matmul | Self::Project, &[m, k, n]) => {
                 extents[..3].copy_from_slice(&[product(&[m, k])? as u64, product(&[k, n])? as u64, product(&[m, n])? as u64]);
