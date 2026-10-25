@@ -403,6 +403,9 @@ def main():
                 if args.gdb_port is None:
                     qmp.execute("cont")
             if not args.boot_check:
+                if qmp is not None:
+                    qmp.close()
+                    qmp = None
                 print(
                     f"NVIDIA_VM_RUNNING pid={process.pid} serial={serial} qmp={monitor}",
                     flush=True,
