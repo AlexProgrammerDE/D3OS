@@ -11,7 +11,10 @@ impl IntTensorOps<Self> for Native {
     }
     fn int_from_data(data: TensorData, _device: &Device<Self>) -> IntTensor<Self> {
         BackendTensor::build("int_from_data", data.shape().clone(), data.dtype(), || {
-            if data.dtype() != DType::I32 {
+            if !matches!(
+                data.dtype(),
+                DType::I64 | DType::I32 | DType::I16 | DType::I8 | DType::U64 | DType::U32 | DType::U16 | DType::U8
+            ) {
                 return Err(Error::InvalidParameter);
             }
             NativeTensor::from_data(data)
@@ -331,7 +334,7 @@ impl IntTensorOps<Self> for Native {
     }
     fn int_full(shape: Shape, fill_value: Scalar, _device: &NativeDevice, dtype: IntDType) -> BackendTensor {
         BackendTensor::build("int_full", shape.clone(), dtype.into(), || {
-            NativeTensor::full(shape, dtype.into(), fill_value.elem::<i32>() as u32)
+            NativeTensor::full_scalar(shape, dtype.into(), fill_value)
         })
     }
     fn int_scatter_nd(data: BackendTensor, indices: BackendTensor, values: BackendTensor, update: IndexingUpdateOp) -> BackendTensor {

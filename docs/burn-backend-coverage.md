@@ -15,7 +15,7 @@ Associated types and source SHA-256 hashes accompany the report.
 
 The current inventory contains 484 methods: 264 native overrides and 220 inherited defaults.
 All required methods have declarations or implementations. This count does not establish runtime support.
-The report also records 111 native helper bodies for manual review of dtype and shape restrictions.
+The report also records 115 native helper bodies for manual review of dtype and shape restrictions.
 
 The tool follows syntactic associated backend calls and expands the pinned `dequant_op_quant!` and `dequant_op_flow!` macros.
 It identifies 25 methods with possible paths to explicit declines or panic declarations.
@@ -31,9 +31,14 @@ The shared capability probe queries Burn's public dtype usage API on each GPU ba
 It emits 226 cases: 16 ordinary dtypes and 210 representative quantization schemes.
 These flags describe backend declarations. They do not prove execution for every operation or shape.
 
-Linux CUDA declares ordinary storage support missing from D3OS for these 12 formats:
+Linux CUDA declares storage support missing from D3OS for these 12 formats:
 
 `F64`, `Flex32`, `F16`, `BF16`, `I64`, `I16`, `I8`, `U64`, `U32`, `U16`, `U8`, and `Bool(U8)`.
+
+Burn's `Storage` flag requires conversion to and from other supported dtypes as well as physical storage.
+The new packed storage implementation does not advertise these flags before numeric conversions are complete.
+The physical storage tests below therefore do not close this capability gap.
+Both backends decline the separate `Bool(Native)` declaration.
 
 Linux also declares arithmetic support for these formats and `I32`.
 D3OS already implements many I32 operations, but its incomplete arithmetic support remains an explicit capability gap.
@@ -44,6 +49,54 @@ All sampled quantized storage declarations available on Linux are available on D
 However, 110 sampled scheme variants lack Linux's arithmetic declaration, and 20 lack its accelerated declaration.
 These counts describe scheme variants, not distinct operations.
 Resident dequantization and requantization can implement some operations without an accelerated quantized kernel.
+
+## Packed ordinary dtype storage
+
+Protocol 31 adds packed storage copy and fill kernels.
+The matching SDK, driver, application image, and portable bundle must use this protocol together.
+The bundle contains 214 inference entries and 67 compute profile slots.
+All 212 previous instruction entries and their constant sections remain byte-identical.
+
+| Physical bytes per value | Ordinary formats |
+| --- | --- |
+| 1 | I8, U8, Bool(U8) |
+| 2 | F16, BF16, I16, U16 |
+| 4 | F32, Flex32, I32, U32, Bool(U32) |
+| 8 | F64, I64, U64 |
+
+Layouts retain element-based offsets and signed strides.
+The driver converts validated element extents to packed word extents before checking GPU address ranges.
+Each copy or fill lane writes a complete output word and initializes unused tail bytes to zero.
+The kernels preserve stored bits without a floating-point conversion.
+The existing four-byte copy and fill paths remain in use.
+
+The shared corpus checks six lengths around packed-word and tile boundaries for each format.
+Checks include reversed transposes, stepped slices, offset broadcasts, overlapping windows, empty shapes, input preservation, and record reloads.
+Fills cover signed zeros, exact half values, signed integers, and U64 values beyond the signed range.
+F16 and BF16 checks preserve all 65,536 bit codes of each format through a transposed GPU copy.
+
+Burn's high-level boolean creation normalizes storage to the device default, including uploads with an explicit dtype option.
+The shared probe therefore uses public backend operations to check both boolean widths directly.
+Floating-point and integer checks use public Burn tensors.
+
+Linux CUDA passes the complete 14-format corpus with Flex32 excluded explicitly.
+Its pinned backend rejects directly tagged Flex32 uploads despite declaring storage support.
+A separate attempt to initialize Flex32 through an FP32 assignment fails with `DTypeMismatch` in Burn fusion.
+Both diagnostics remain separate from the passing Linux result.
+The original boolean fixture failures remain recorded because they incorrectly expected high-level creation to retain the requested width.
+The explicit Flex CPU diagnostic also fails for a U64 fill beyond I64 range in its `to_i64().unwrap()` conversion.
+CPU behavior does not replace the GPU comparison.
+
+D3OS passes the complete 15-format corpus, including direct Flex32 uploads.
+Its full operator and quantization regression suites also pass after compilation inside the VM.
+All three generated modules match their host audit hashes.
+Native validation also checks neighboring guards, nonzero source padding, zero output padding, and queued source lifetimes.
+Its service counters check resident execution and output allocation without a separate clear.
+Negative checks reject F16, BF16, F64, I64, and U64 arithmetic and gathers without a GPU launch.
+
+These additions provide storage, fills, views, materialization, and tensor record reloads.
+Arithmetic, numeric casts, matrix products, and accelerated execution for the additional formats remain incomplete.
+This checkpoint contains no execution-performance or compile-time parity measurement.
 
 ## Native erf and GELU validation
 
@@ -416,7 +469,7 @@ Other quantization formats and layouts still require separate coverage.
 
 ## Remaining implementation areas
 
-The unresolved work includes ordinary dtypes, complete integer arithmetic, matrix products for further dtypes, and additional floating-point operations.
+The unresolved work includes ordinary dtype arithmetic and conversions, complete integer arithmetic, further matrix dtypes, and additional floating-point operations.
 Further sorting and compaction dtypes, further convolution variants, deformable convolution, and interpolation also require coverage.
 Compaction formats beyond the checked Q8 cases remain unverified.
 Broadcast cross-product gradients, graph capture, profiling, memory capabilities, records, and observable errors require matched Linux capability checks.
@@ -438,9 +491,22 @@ Build the Linux probes with their default CUDA feature:
 
 ```bash
 cd tools/mnist-benchmark
-cargo build --release --locked --bin capabilities --bin erf --bin integer --bin integer_matrix --bin scan --bin sort --bin cross --bin compaction --bin scatter_updates --bin quantized_empty --bin nd_indexing
+cargo build --release --locked --bin capabilities --bin erf --bin integer --bin integer_matrix --bin scan --bin sort --bin cross --bin compaction --bin scatter_updates --bin quantized_empty --bin nd_indexing --bin storage
 cd ../..
 ```
+
+Run the storage comparison with the pinned Linux Flex32 failure excluded:
+
+```bash
+python3 tools/nvidia/linux-reference.py \
+  --directory target/nvidia/linux-burn-storage \
+  --burn-storage tools/mnist-benchmark/target/release/storage \
+  --burn-storage-no-flex32
+```
+
+For the isolated Flex32 diagnostic, use a fresh directory and replace `--burn-storage-no-flex32` with `--burn-storage-flex32-direct`.
+Without either flag, the probe includes all 15 formats and retains the Linux Flex32 error.
+The D3OS `gpu-self-test` always includes all 15 formats.
 
 Run the probes sequentially because both VMs use the same GPU:
 
@@ -587,5 +653,9 @@ The accepted ND evidence lives under `target/nvidia/burn-backend-validation/nd-i
 The first native failure remains under `target/nvidia/burn-backend-validation/nd-indexing-first/`.
 The Linux scalar, duplicate, and scalar-gradient failures remain under `linux-nd-indexing-all/`, `linux-nd-indexing-no-scalar/`, and `linux-nd-indexing-scalar-grad/`.
 The audit directory contains `traits-nd-indexing.json`, `nd-indexing-comparison.json`, and separate CPU diagnostics.
+The accepted storage evidence lives under `target/nvidia/burn-backend-validation/storage-conservative-flags/` and `target/nvidia/burn-backend-audit/linux-storage-explicit-bool/`.
+The audit directory contains `traits-storage-final.json`, `storage-comparison.json`, and `storage-section-comparison.json`.
+The isolated Linux Flex32 failure remains under `linux-storage-flex32-direct/`, with the assignment diagnostic under `linux-storage-alias/`.
+The first native boolean fixture failure remains under `target/nvidia/burn-backend-validation/storage-first/`.
 Manifests record the shared validation source hashes, executable hashes, and execution backend.
 These generated local artifacts are not Git-tracked. The probes and audit tool are tracked for reproduction.

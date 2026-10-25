@@ -6,6 +6,30 @@ fn offsets(layout: &Layout) -> Vec<usize> {
 }
 
 #[test]
+fn storage_views_retain_element_strides_while_launch_extents_use_packed_words() {
+    use d3os_nvidia::compute::{
+        Kernel,
+        storage::{Mode, Width},
+    };
+    let view = Layout::contiguous(Shape::new([3, 137]))
+        .unwrap()
+        .permute(&[1, 0])
+        .unwrap()
+        .flip(&[0, 1])
+        .unwrap();
+    for (width, words) in [(Width::One, 103), (Width::Two, 206), (Width::Four, 411), (Width::Eight, 822)] {
+        let p = view.storage_parameters(width, Mode::Copy, 0).unwrap();
+        assert_eq!(&p[8..10], &[137, 3]);
+        assert_eq!(&p[16..18], &[(-1i32) as u32 as usize, (-137i32) as u32 as usize]);
+        assert_eq!(Kernel::TensorStorage.work(&p.map(|v| v as u32)).unwrap().extents[..2], [words, words]);
+    }
+    let scalar = Layout::contiguous(Shape::new([])).unwrap();
+    let p = scalar.storage_parameters(Width::Eight, Mode::Fill, 0xfedc_ba98_7654_3210).unwrap();
+    assert_eq!(&p[..8], &[1, 1, 0x103, 0x7654_3210, 0, 0xfedc_ba98, 1, 0]);
+    assert_eq!(p[16], 1);
+}
+
+#[test]
 fn scalar_layout_retains_one_element_and_lowers_to_one_physical_lane() {
     use d3os_nvidia::compute::{elementwise::Elementwise, words::WordOp};
     let scalar = Layout::from_parts(Shape::new([]), vec![], 3, 7).unwrap();

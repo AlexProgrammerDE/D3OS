@@ -1,0 +1,57 @@
+fn storage_address(mut linear: Tile<u32, { [128] }>, offset: u32, STORAGE_GEOMETRY_PARAMETERS) -> Tile<u32, { [128] }> {
+    let mut address = broadcast_scalar(signed(offset), shape![128]);
+    STORAGE_ADDRESSES
+    bitcast(address)
+}
+
+#[cutile::entry()]
+unsafe fn burn_storage_copy(input: *const u32, output: *mut u32, STORAGE_COPY_PARAMETERS) {
+    let width = kind & 0xffu32;
+    let per_word = if width == 3u32 { 1u32 } else { 4u32 >> width };
+    let words = if width == 3u32 { count * 2u32 } else { (count + per_word - 1u32) / per_word };
+    let source_words = if width == 3u32 { extent * 2u32 } else { (extent + per_word - 1u32) / per_word };
+    let word = indices();
+    let mask = lt_tile(word, broadcast_scalar(words, shape![128]));
+    let mut value = broadcast_scalar(0u32, shape![128]);
+    if width == 3u32 {
+        let logical = word / broadcast_scalar(2u32, shape![128]);
+        let address = storage_address(logical, offset, STORAGE_GEOMETRY_ARGUMENTS);
+        let address = address * broadcast_scalar(2u32, shape![128]) + word % broadcast_scalar(2u32, shape![128]);
+        value = unsafe { read_tile(input, address, mask & lt_tile(address, broadcast_scalar(source_words, shape![128])), 0u32) };
+    } else {
+        let bits = 8u32 << width;
+        let bits_mask = unsigned(-1i32) >> (32u32 - bits);
+        for slot in 0u32..per_word {
+            let logical = word * broadcast_scalar(per_word, shape![128]) + broadcast_scalar(slot, shape![128]);
+            let valid = mask & lt_tile(logical, broadcast_scalar(count, shape![128]));
+            let address = storage_address(logical, offset, STORAGE_GEOMETRY_ARGUMENTS);
+            let shift = (address % broadcast_scalar(per_word, shape![128])) * broadcast_scalar(bits, shape![128]);
+            let address = address / broadcast_scalar(per_word, shape![128]);
+            let part = unsafe { read_tile(input, address, valid & lt_tile(address, broadcast_scalar(source_words, shape![128])), 0u32) };
+            let part = (part >> shift) & broadcast_scalar(bits_mask, shape![128]);
+            value = value | (part << broadcast_scalar(slot * bits, shape![128]));
+        }
+    }
+    unsafe { write_tile(output, word, value, mask) };
+}
+
+#[cutile::entry()]
+unsafe fn burn_storage_fill(output: *mut u32, STORAGE_FILL_PARAMETERS) {
+    let width = kind & 0xffu32;
+    let per_word = if width == 3u32 { 1u32 } else { 4u32 >> width };
+    let words = if width == 3u32 { count * 2u32 } else { (count + per_word - 1u32) / per_word };
+    let word = indices();
+    let mask = lt_tile(word, broadcast_scalar(words, shape![128]));
+    let mut value = broadcast_scalar(0u32, shape![128]);
+    if width == 3u32 {
+        value = select(eq_tile(word % broadcast_scalar(2u32, shape![128]), broadcast_scalar(0u32, shape![128])), broadcast_scalar(scalar_low, shape![128]), broadcast_scalar(scalar_high, shape![128]));
+    } else {
+        let bits = 8u32 << width;
+        for slot in 0u32..per_word {
+            let logical = word * broadcast_scalar(per_word, shape![128]) + broadcast_scalar(slot, shape![128]);
+            let part = select(lt_tile(logical, broadcast_scalar(count, shape![128])), broadcast_scalar(scalar_low, shape![128]), broadcast_scalar(0u32, shape![128]));
+            value = value | (part << broadcast_scalar(slot * bits, shape![128]));
+        }
+    }
+    unsafe { write_tile(output, word, value, mask) };
+}

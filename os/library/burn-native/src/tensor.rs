@@ -19,7 +19,7 @@ pub struct NativeTensor {
 }
 
 fn supported(dtype: DType) -> bool {
-    matches!(dtype, DType::F32 | DType::I32 | DType::Bool(BoolStore::U32))
+    crate::storage::width(dtype).is_ok()
 }
 
 fn word_dtype(value: ValueType) -> DType {
@@ -31,22 +31,11 @@ fn word_dtype(value: ValueType) -> DType {
 }
 
 impl NativeTensor {
-    /// Fill dense GPU storage with exact raw words without a host upload or a
-    /// separate clear. Boolean words must have their canonical zero/one values.
+    /// Fill dense storage from the low raw bits without a host upload.
+    /// Use `full_scalar` for numeric values in their destination dtype.
+    /// Boolean fills must have their canonical zero/one values.
     pub fn full(shape: Shape, dtype: DType, word: u32) -> Result<Self> {
-        if !supported(dtype) || (matches!(dtype, DType::Bool(_)) && word > 1) {
-            return Err(Error::InvalidParameter);
-        }
-        let layout = Layout::contiguous(shape.clone())?;
-        if layout.is_empty() {
-            return Self::empty(shape, dtype);
-        }
-        let buffer = Nvidia.produce_words(layout.len(), Kernel::Fill, &[], &[layout.len(), word as usize])?;
-        Ok(Self {
-            buffer: Arc::new(buffer),
-            layout,
-            dtype,
-        })
+        Self::fill_bits(shape, dtype, u64::from(word))
     }
 
     pub fn empty(shape: Shape, dtype: DType) -> Result<Self> {
@@ -56,7 +45,7 @@ impl NativeTensor {
         let layout = Layout::contiguous(shape)?;
         // The driver requires a nonempty physical allocation. An empty logical
         // tensor owns one unused word and never dispatches element work.
-        let buffer = Nvidia.allocate_words(layout.len().max(1))?;
+        let buffer = Nvidia.allocate_words((crate::storage::width(dtype)?.words(layout.len() as u32) as usize).max(1))?;
         Ok(Self {
             buffer: Arc::new(buffer),
             layout,
@@ -67,8 +56,8 @@ impl NativeTensor {
     /// Upload host data without changing floating-point bit representations.
     pub fn from_data(data: TensorData) -> Result<Self> {
         let data = match data.dtype() {
-            DType::Bool(_) => data.try_cast(DType::Bool(BoolStore::U32)).map_err(|_| Error::InvalidParameter)?,
-            DType::F32 | DType::I32 => data,
+            DType::Bool(BoolStore::Native) => data.try_cast(DType::Bool(BoolStore::U32)).map_err(|_| Error::InvalidParameter)?,
+            dtype if supported(dtype) => data,
             _ => return Err(Error::InvalidParameter),
         };
         let layout = Layout::contiguous(data.shape().clone())?;
@@ -129,6 +118,9 @@ impl NativeTensor {
     }
 
     fn elementwise(&self, rhs: &Self, op: Elementwise, scalar_bits: u32, scalar_rhs: bool, dtype: DType) -> Result<Self> {
+        if !crate::storage::word_sized(self.dtype) || !crate::storage::word_sized(rhs.dtype) || !crate::storage::word_sized(dtype) {
+            return Err(Error::InvalidParameter);
+        }
         let shape = crate::layout::broadcast(self.layout.shape(), rhs.layout.shape())?;
         let layout = Layout::contiguous(shape.clone())?;
         if layout.is_empty() {
@@ -151,7 +143,11 @@ impl NativeTensor {
 
     /// Materialize a view on the GPU, preserving the stored bits of every dtype.
     pub fn copy(&self) -> Result<Self> {
-        self.elementwise(self, Elementwise::Copy, 0, false, self.dtype)
+        if crate::storage::word_sized(self.dtype) {
+            self.elementwise(self, Elementwise::Copy, 0, false, self.dtype)
+        } else {
+            self.copy_storage()
+        }
     }
 
     pub fn binary(&self, rhs: &Self, operation: Elementwise) -> Result<Self> {
@@ -247,7 +243,10 @@ impl NativeTensor {
         if !supported(dtype) {
             return Err(Error::InvalidParameter);
         }
-        if self.dtype == dtype || (self.dtype == DType::Bool(BoolStore::U32) && dtype == DType::I32) {
+        if self.dtype == dtype
+            || (matches!(self.dtype, DType::F32 | DType::Flex32) && matches!(dtype, DType::F32 | DType::Flex32))
+            || (self.dtype == DType::Bool(BoolStore::U32) && dtype == DType::I32)
+        {
             return Ok(Self {
                 buffer: self.buffer.clone(),
                 layout: self.layout.clone(),
@@ -256,10 +255,10 @@ impl NativeTensor {
         }
         let op = match (self.dtype, dtype) {
             (DType::F32, DType::I32) => WordOp::FloatToInt,
-            (DType::F32, DType::Bool(_)) => WordOp::FloatToBool,
+            (DType::F32, DType::Bool(BoolStore::U32)) => WordOp::FloatToBool,
             (DType::I32, DType::F32) => WordOp::IntToFloat,
-            (DType::I32, DType::Bool(_)) => WordOp::IntToBool,
-            (DType::Bool(_), DType::F32) => WordOp::BoolToFloat,
+            (DType::I32, DType::Bool(BoolStore::U32)) => WordOp::IntToBool,
+            (DType::Bool(BoolStore::U32), DType::F32) => WordOp::BoolToFloat,
             _ => return Err(Error::InvalidParameter),
         };
         self.word_unary(op)
@@ -268,7 +267,7 @@ impl NativeTensor {
     /// Read arbitrary elements on the GPU. Only the four-byte bounds result
     /// crosses to the host; invalid device indices leave inputs unchanged.
     pub fn gather(&self, axis: usize, indices: &Self) -> Result<Self> {
-        if indices.dtype != DType::I32 {
+        if !crate::storage::word_sized(self.dtype) || indices.dtype != DType::I32 {
             return Err(Error::InvalidParameter);
         }
         let layout = Layout::contiguous(self.layout.gather_shape(&indices.layout, axis)?)?;
@@ -546,18 +545,26 @@ impl NativeTensor {
     /// Explicit host readback gathers the requested view in logical order.
     /// GPU arithmetic must use the resident storage and its layout instead.
     pub fn read(&self) -> Result<TensorData> {
+        let width = crate::storage::width(self.dtype)?;
+        let word_count = width.words(self.layout.storage_elements() as u32) as usize;
         let mut words = Vec::new();
-        words.try_reserve_exact(self.layout.storage_elements()).map_err(|_| Error::AllocationFailed)?;
-        words.resize(self.layout.storage_elements(), 0u32);
+        words.try_reserve_exact(word_count).map_err(|_| Error::AllocationFailed)?;
+        words.resize(word_count, 0u32);
         Nvidia.read_words_into(&self.buffer, 0, &mut words)?;
         let mut bytes = Vec::new();
         bytes
-            .try_reserve_exact(self.layout.len().checked_mul(4).ok_or(Error::SizeOverflow)?)
+            .try_reserve_exact(self.layout.len().checked_mul(width.bytes() as usize).ok_or(Error::SizeOverflow)?)
             .map_err(|_| Error::AllocationFailed)?;
         for element in 0..self.layout.len() {
             let offset = self.layout.element_offset(element)?;
-            let word = words.get(offset).ok_or(Error::DeviceFault)?;
-            bytes.extend_from_slice(&word.to_le_bytes());
+            if width == d3os_nvidia::compute::storage::Width::Four {
+                bytes.extend_from_slice(&words.get(offset).ok_or(Error::DeviceFault)?.to_le_bytes());
+            } else {
+                let address = offset.checked_mul(width.bytes() as usize).ok_or(Error::SizeOverflow)?;
+                for byte in address..address + width.bytes() as usize {
+                    bytes.push((words.get(byte / 4).ok_or(Error::DeviceFault)? >> ((byte % 4) * 8)) as u8);
+                }
+            }
         }
         Ok(TensorData::from_bytes_vec(bytes, self.layout.shape().clone(), self.dtype))
     }

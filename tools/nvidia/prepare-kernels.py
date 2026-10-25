@@ -71,6 +71,8 @@ def audit(family, sass):
             "burn_argwhere",
             "burn_scatter_ordered_f32",
             "burn_scatter_ordered_i32",
+            "burn_storage_copy",
+            "burn_storage_fill",
             "burn_i32_divide",
             "burn_i32_remainder",
             "burn_i32_matmul",

@@ -14,10 +14,11 @@ pub mod range;
 pub mod reduction;
 pub mod scan;
 pub mod sort;
+pub mod storage;
 pub mod updates;
 pub mod words;
 
-pub const VERSION: u32 = 30;
+pub const VERSION: u32 = 31;
 /// END_COMMANDS flag: an inner recording scope joins its parent's completion.
 /// The outermost scope always waits. Zero retains synchronous nested scopes.
 pub const DEFER_NESTED_COMPLETION: u64 = 1;
@@ -51,7 +52,7 @@ pub struct MemoryProfile {
     pub device_cached_bytes: u64,
     pub device_retired_bytes: u64,
 }
-pub const KERNEL_COUNT: usize = 66;
+pub const KERNEL_COUNT: usize = 67;
 
 /// CPU service costs by request operation, including queue work within it.
 #[derive(Clone, Copy, Debug, Default)]
@@ -175,9 +176,10 @@ pub enum Kernel {
     TensorScan = 63,
     TensorSort = 64,
     ArgWhere = 65,
+    TensorStorage = 66,
 }
 
-const _: () = assert!(Kernel::ArgWhere as usize + 1 == KERNEL_COUNT);
+const _: () = assert!(Kernel::TensorStorage as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -242,6 +244,7 @@ impl Kernel {
                 | Self::TensorScan
                 | Self::TensorSort
                 | Self::ArgWhere
+                | Self::TensorStorage
                 | Self::Im2col
                 | Self::MaxPool
                 | Self::Project
@@ -339,6 +342,7 @@ impl Kernel {
             63 => Self::TensorScan,
             64 => Self::TensorSort,
             65 => Self::ArgWhere,
+            66 => Self::TensorStorage,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -411,12 +415,14 @@ impl Kernel {
             Self::TensorScan => "burn_cumsum",
             Self::TensorSort => "burn_sort_f32_ascending",
             Self::ArgWhere => "burn_argwhere",
+            Self::TensorStorage => "burn_storage_copy",
         }
     }
 
     /// Select the cuTile specialization without changing the public request ABI.
     pub fn entry(self, parameters: &[u32]) -> &'static str {
         match (self, parameters) {
+            (Self::TensorStorage, p) if p.len() == storage::PARAMETERS => storage::Mode::from_raw(p[2] >> 8).map_or(self.symbol(), |mode| mode.symbol()),
             (Self::TensorSort, p) if p.len() == sort::PARAMETERS => sort::Mode::from_raw(p[2]).map_or(self.symbol(), |mode| mode.symbol()),
             (Self::TensorScan, p) if p.len() == scan::PARAMETERS => scan::Scan::from_raw(p[2]).map_or(self.symbol(), |op| op.symbol()),
             (Self::TensorScale, [_, _, op]) => quantization::ScaleOperation::from_raw(*op).map_or(self.symbol(), |op| op.symbol()),
@@ -584,6 +590,16 @@ impl Kernel {
             (Self::TensorReduction, p) => {
                 extents[..2].copy_from_slice(&reduction::validate(p)?);
                 (product(&[p[0], 128])?, 2, 1, false)
+            }
+            (Self::TensorStorage, p) => {
+                let (mode, _, source, output) = storage::validate(p)?;
+                if mode == storage::Mode::Copy {
+                    extents[..2].copy_from_slice(&[source, output]);
+                    (u32::try_from(output).map_err(|_| Error::InvalidField)?, 2, 1, false)
+                } else {
+                    extents[0] = output;
+                    (u32::try_from(output).map_err(|_| Error::InvalidField)?, 1, 0, false)
+                }
             }
             (Self::TensorElementwise, p) => {
                 extents[..3].copy_from_slice(&elementwise::validate(p)?);

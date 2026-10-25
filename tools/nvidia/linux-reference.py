@@ -73,7 +73,7 @@ def stage_burn_program(root, binary, destination):
     return libdevice
 
 
-def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_finite=False, sort_compile_log=False, compaction_aligned=False, quantized_empty_case=None, scatter_finite=False, select_updates=False, nd_unique=False, nd_nonempty=False, nd_scalar_grad=False, nd_no_scalar=False):
+def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_finite=False, sort_compile_log=False, compaction_aligned=False, quantized_empty_case=None, scatter_finite=False, select_updates=False, nd_unique=False, nd_nonempty=False, nd_scalar_grad=False, nd_no_scalar=False, storage_flex_direct=False, storage_no_flex32=False):
     purposes = {
         "quantization": "shared API conformance; no performance measurement",
         "quantized_empty": "empty quantized API diagnostic and record round trip; execution errors retained; no performance measurement",
@@ -83,6 +83,7 @@ def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_fi
         "integer_matrix": "public I32 matrix product conformance; no performance measurement",
         "scan": "public cumulative operations and gradients; no performance measurement",
         "cross": "public FP32 vector products and gradients; no performance measurement",
+        "storage": "ordinary dtype storage, exact view copies, scalar fills and reloads; no arithmetic or performance comparison",
         "nd_indexing": "ND gather/scatter conformance, scalar forward execution and exact I32 indices; no performance measurement",
         "scatter_updates": "ordered scatter assignment/product/min/max and gradients; unique indices; no performance measurement",
         "compaction": "public dynamic-shape selection conformance; pinned Burn reads argwhere masks on the host; no GPU compaction performance comparison",
@@ -91,6 +92,12 @@ def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_fi
     purpose = "erf error profile and GELU conformance; strict failures reported" if erf_profile else purposes[kind]
     program = f"/burn-{kind}"
     arguments = " --profile" if erf_profile else " --nonempty" if nonempty else ""
+    if storage_no_flex32:
+        arguments += " --no-flex32"
+        purpose += "; Flex32 excluded due to retained direct-upload failure"
+    if storage_flex_direct:
+        arguments += " --flex32-direct"
+        purpose = "directly tagged Flex32 upload diagnostic; pinned backend failure retained separately"
     if nd_unique:
         arguments += " --unique"
         purpose += "; unique-index domain; duplicate diagnostic retained separately"
@@ -1214,6 +1221,9 @@ def main():
     parser.add_argument("--burn-integer", type=Path, help="run public I32 division and floor remainder conformance on Linux CUDA")
     parser.add_argument("--burn-integer-matmul", type=Path, help="run public I32 matrix product conformance on Linux CUDA")
     parser.add_argument("--burn-integer-matmul-nonempty", action="store_true", help="run the nonempty I32 matrix cases separately from empty shapes")
+    parser.add_argument("--burn-storage-flex32-direct", action="store_true")
+    parser.add_argument("--burn-storage-no-flex32", action="store_true")
+    parser.add_argument("--burn-storage", type=Path, help="compare ordinary dtype storage, views, fills and reloads on Linux CUDA")
     parser.add_argument("--burn-nd-indexing", type=Path, help="compare public multidimensional gather/scatter and gradients on CUDA")
     parser.add_argument("--burn-nd-indexing-unique", action="store_true")
     parser.add_argument("--burn-nd-indexing-nonempty", action="store_true")
@@ -1287,7 +1297,7 @@ def main():
     args = parser.parse_args()
     if args.nsight_directory and not args.quantized_profile:
         parser.error("--nsight-directory requires --quantized-profile")
-    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.burn_integer, args.burn_integer_matmul, args.burn_scatter_updates, args.burn_nd_indexing, args.burn_quantized_empty, args.burn_compaction, args.burn_cross, args.burn_scan, args.burn_sort, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
+    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.burn_integer, args.burn_integer_matmul, args.burn_scatter_updates, args.burn_nd_indexing, args.burn_storage, args.burn_quantized_empty, args.burn_compaction, args.burn_cross, args.burn_scan, args.burn_sort, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
         parser.error("--quantized-profile requires a separate diagnostic guest")
     if args.pin_vcpus and len(os.sched_getaffinity(0)) != 4:
         parser.error("--pin-vcpus requires an inherited affinity of four host CPUs")
@@ -1316,6 +1326,7 @@ def main():
                 bool(args.burn_integer_matmul),
                 bool(args.burn_scatter_updates),
                 bool(args.burn_nd_indexing),
+                bool(args.burn_storage),
                 bool(args.burn_quantized_empty),
                 bool(args.burn_compaction),
                 bool(args.burn_cross),
@@ -1345,6 +1356,12 @@ def main():
         parser.error("--burn-integer-matmul requires a built conformance executable")
     if args.burn_integer_matmul_nonempty and not args.burn_integer_matmul:
         parser.error("--burn-integer-matmul-nonempty requires --burn-integer-matmul")
+    if (args.burn_storage_flex32_direct or args.burn_storage_no_flex32) and not args.burn_storage:
+        parser.error("storage domain flags require --burn-storage")
+    if args.burn_storage_flex32_direct and args.burn_storage_no_flex32:
+        parser.error("direct Flex32 diagnostic cannot exclude Flex32")
+    if args.burn_storage and not args.burn_storage.is_file():
+        parser.error("--burn-storage requires a built conformance executable")
     if args.burn_nd_indexing and not args.burn_nd_indexing.is_file():
         parser.error("--burn-nd-indexing requires a built conformance executable")
     if (args.burn_nd_indexing_unique or args.burn_nd_indexing_nonempty or args.burn_nd_indexing_scalar_grad or args.burn_nd_indexing_no_scalar) and not args.burn_nd_indexing:
@@ -1421,6 +1438,8 @@ def main():
         burn_probe(args.directory / "root", args.burn_integer.resolve(), "integer")
     elif args.burn_integer_matmul:
         burn_probe(args.directory / "root", args.burn_integer_matmul.resolve(), "integer_matrix", nonempty=args.burn_integer_matmul_nonempty)
+    elif args.burn_storage:
+        burn_probe(args.directory / "root", args.burn_storage.resolve(), "storage", storage_flex_direct=args.burn_storage_flex32_direct, storage_no_flex32=args.burn_storage_no_flex32)
     elif args.burn_nd_indexing:
         burn_probe(args.directory / "root", args.burn_nd_indexing.resolve(), "nd_indexing", nd_unique=args.burn_nd_indexing_unique, nd_nonempty=args.burn_nd_indexing_nonempty, nd_scalar_grad=args.burn_nd_indexing_scalar_grad, nd_no_scalar=args.burn_nd_indexing_no_scalar)
     elif args.burn_scatter_updates:
@@ -1587,6 +1606,11 @@ def main():
         cases, domain, empty = (5, "nonempty", "false") if args.burn_integer_matmul_nonempty else (8, "all", "true")
         if f"BURN_INTEGER_MATMUL_CONFORMANCE_OK os=linux backend=cuda cases={cases} domain={domain} reference=i128 wrapping=exact shared_views=true empty={empty}" not in text:
             raise RuntimeError("Linux CUDA Burn I32 matrix product conformance did not complete")
+    if args.burn_storage:
+        dtypes, flex32 = (14, "excluded_upstream_failure") if args.burn_storage_no_flex32 else (15, "direct")
+        marker = "BURN_STORAGE_FLEX32_DIRECT_OK os=linux backend=cuda" if args.burn_storage_flex32_direct else f"BURN_STORAGE_CONFORMANCE_OK os=linux backend=cuda dtypes={dtypes} flex32={flex32} bytes=1,2,4,8 views=signed,broadcast,overlap fill=true bool_storage=explicit_backend reload=true half_bits=exhaustive empty=true scope=storage"
+        if marker not in text:
+            raise RuntimeError("Linux ordinary dtype storage conformance did not complete")
     if args.burn_nd_indexing:
         if args.burn_nd_indexing_scalar_grad:
             marker = "BURN_ND_SCALAR_GRAD_OK os=linux backend=cuda scatter_gradient_cases=5 gather_gradient_cases=1"

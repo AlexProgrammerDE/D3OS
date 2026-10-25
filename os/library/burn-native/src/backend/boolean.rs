@@ -16,7 +16,12 @@ impl BoolTensorOps<Self> for Native {
         tensor.read()
     }
     fn bool_from_data(data: TensorData, _device: &Device<Self>) -> BoolTensor<Self> {
-        BackendTensor::build("bool_from_data", data.shape().clone(), DType::Bool(burn_backend::BoolStore::U32), || {
+        let dtype = if data.dtype() == DType::Bool(burn_backend::BoolStore::Native) {
+            DType::Bool(burn_backend::BoolStore::U32)
+        } else {
+            data.dtype()
+        };
+        BackendTensor::build("bool_from_data", data.shape().clone(), dtype, || {
             if !data.dtype().is_bool() {
                 return Err(Error::InvalidParameter);
             }

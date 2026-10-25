@@ -1,6 +1,45 @@
 use d3os_nvidia::compute::Kernel;
 
 #[test]
+fn packed_storage_counts_physical_words_and_rejects_noncanonical_metadata() {
+    use d3os_nvidia::compute::storage::{self, Mode, Width};
+    let mut p = [0u32; 32];
+    p[..8].copy_from_slice(&[411, 2, 0, 0, 410, 0, 411, 0]);
+    p[8..16].fill(1);
+    p[8..10].copy_from_slice(&[3, 137]);
+    p[16..18].copy_from_slice(&[(-137i32) as u32, (-1i32) as u32]);
+    for (width, words, blocks) in [(Width::One, 103, 1), (Width::Two, 206, 2), (Width::Four, 411, 4), (Width::Eight, 822, 7)] {
+        p[2] = width as u32;
+        let work = Kernel::TensorStorage.work(&p).unwrap();
+        assert_eq!(work.extents[..2], [words, words]);
+        assert_eq!(
+            (work.blocks, work.threads, work.pointers, work.output, work.in_place),
+            (blocks, 128, 2, 1, false)
+        );
+        assert!(work.validate_aliases(&[0x1000, 0x1000]).is_err());
+        assert!(Kernel::TensorStorage.allocates_output());
+        for (field, value) in [(1, 9), (2, 4), (2, 2 << 8), (3, 1), (4, 409), (5, 1), (6, 410), (7, 1), (18, 1), (24, 1)] {
+            let mut bad = p;
+            bad[field] = value;
+            assert!(storage::validate(&bad).is_err());
+        }
+    }
+    assert_eq!(Width::Eight.words(i32::MAX as u32), 4294967294);
+    p[..8].copy_from_slice(&[3, 1, Width::Two as u32 | ((Mode::Fill as u32) << 8), 0xabcd, 0, 0, 3, 0]);
+    p[8..16].fill(1);
+    p[8] = 3;
+    p[16..24].fill(0);
+    p[16] = 1;
+    let work = Kernel::TensorStorage.work(&p).unwrap();
+    assert_eq!((work.extents[0], work.pointers, work.output), (2, 1, 0));
+    for (field, value) in [(3, 0x10000), (4, 1), (5, 1), (6, 4), (16, 0)] {
+        let mut bad = p;
+        bad[field] = value;
+        assert!(storage::validate(&bad).is_err());
+    }
+}
+
+#[test]
 fn ordered_scatter_assigns_one_lane_per_disjoint_destination_row() {
     use d3os_nvidia::compute::indexing::{Scatter, validate_scatter};
     let mut p = [0u32; 32];

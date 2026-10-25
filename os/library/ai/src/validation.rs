@@ -13,6 +13,7 @@ pub mod qwen_state;
 pub mod scan;
 pub mod scatter_updates;
 pub mod sort;
+pub mod storage;
 use alloc::{format, string::String};
 use burn::{
     module::{Module, Param},

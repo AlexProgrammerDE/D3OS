@@ -21,6 +21,7 @@ mod scatter;
 mod scatter_updates;
 mod selection;
 mod sort;
+mod storage;
 mod updates;
 mod words;
 use abi::elementwise::Elementwise;
@@ -194,6 +195,13 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     d3os_ai::validation::nd_indexing::run(&device, true, true, true)?;
     crate::report(format_args!(
         "BURN_ND_INDEXING_OK os=d3os backend=native dtypes=f32,i32 scatter_modes=5 widths=1,2,3 index_ranks=1,2,3 scatter_gradient_cases=15 gather_gradient_cases=3 scalar=true exact_i32=true duplicates=true empty_slices=true shared_views=true"
+    ));
+    storage::run(backend)?;
+    d3os_ai::validation::storage::run(&device, true)?;
+    d3os_ai::validation::storage::flex32_direct(&device)?;
+    crate::report(format_args!("BURN_STORAGE_FLEX32_DIRECT_OK os=d3os backend=native"));
+    crate::report(format_args!(
+        "BURN_STORAGE_CONFORMANCE_OK os=d3os backend=native dtypes=15 flex32=direct bytes=1,2,4,8 views=signed,broadcast,overlap fill=true bool_storage=explicit_backend reload=true half_bits=exhaustive empty=true scope=storage"
     ));
     convolution::run(backend).map_err(|e| format!("Burn native convolution: {e}"))?;
     linear::run(backend).map_err(|e| format!("Burn native linear: {e}"))?;

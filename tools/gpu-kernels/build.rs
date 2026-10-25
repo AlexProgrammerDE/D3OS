@@ -192,6 +192,46 @@ fn main() {
                 .replace("BURN_OP", &format!("{}u32", op as u32)),
         );
     }
+    println!("cargo:rerun-if-changed=src/burn-storage.rs.in");
+    let storage = fs::read_to_string("src/burn-storage.rs.in").expect("read ordinary storage source");
+    let geometry = (0..8)
+        .map(|a| format!("dim{a}"))
+        .chain((0..8).map(|a| format!("stride{a}")))
+        .collect::<Vec<_>>();
+    let mut names = ["count", "_rank", "kind", "scalar_low", "offset", "scalar_high", "extent", "_reserved"]
+        .map(str::to_owned)
+        .to_vec();
+    names.extend(geometry.clone());
+    names.extend((0..8).map(|a| format!("_unused{a}")));
+    let parameters = names.iter().map(|n| format!("{n}: u32")).collect::<Vec<_>>().join(", ");
+    let address = (0..8).rev().map(|a| {
+        let advance = if a == 0 { String::new() } else { format!("linear = linear / broadcast_scalar(dim{a}, shape![128]);\n") };
+        format!("let coordinate = linear % broadcast_scalar(dim{a}, shape![128]);\n{advance}let coordinate: Tile<i32, {{ [128] }}> = bitcast(coordinate);\naddress = address + coordinate * broadcast_scalar(signed(stride{a}), shape![128]);\n")
+    }).collect::<String>();
+    let copy_parameters = parameters.replace("scalar_low:", "_scalar_low:").replace("scalar_high:", "_scalar_high:");
+    let fill_parameters = names
+        .iter()
+        .map(|n| {
+            let name = if ["count", "kind", "scalar_low", "scalar_high"].contains(&n.as_str()) || n.starts_with('_') {
+                n.clone()
+            } else {
+                format!("_{n}")
+            };
+            format!("{name}: u32")
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    source.push_str(
+        &storage
+            .replace("STORAGE_COPY_PARAMETERS", &copy_parameters)
+            .replace("STORAGE_FILL_PARAMETERS", &fill_parameters)
+            .replace(
+                "STORAGE_GEOMETRY_PARAMETERS",
+                &geometry.iter().map(|n| format!("{n}: u32")).collect::<Vec<_>>().join(", "),
+            )
+            .replace("STORAGE_GEOMETRY_ARGUMENTS", &geometry.join(", "))
+            .replace("STORAGE_ADDRESSES", &address),
+    );
     println!("cargo:rerun-if-changed=src/burn-gather.rs.in");
     let gather = fs::read_to_string("src/burn-gather.rs.in").expect("read gather template");
     let mut parameters: Vec<String> = ["_rank", "axis", "count", "extent_a", "offset_a", "extent_b", "offset_b", "axis_length"]

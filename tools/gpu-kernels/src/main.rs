@@ -147,6 +147,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         inference.extend(d3os_nvidia::compute::sort::Mode::ALL.iter().skip(1).map(|mode| mode.symbol()));
         inference.extend(d3os_nvidia::compute::random::Mode::ALL.iter().skip(1).map(|op| op.symbol()));
         inference.extend(d3os_nvidia::compute::words::WordOp::ALL.iter().skip(1).map(|op| op.symbol()));
+        inference.extend(d3os_nvidia::compute::storage::Mode::ALL.iter().skip(1).map(|op| op.symbol()));
         inference.extend(d3os_nvidia::compute::indexing::Scatter::ENTRIES.iter().skip(1).map(|op| op.symbol()));
         inference.extend(["burn_avg_pool", "burn_adaptive_avg_pool", "burn_adaptive_avg_pool_backward"]);
         compile(&output, "inference", &inference, toolkit.as_deref())?;

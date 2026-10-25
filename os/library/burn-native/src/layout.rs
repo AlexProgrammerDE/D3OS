@@ -291,6 +291,32 @@ impl Layout {
         Ok(parameters)
     }
 
+    /// Encode logical element geometry with a packed physical word contract.
+    pub fn storage_parameters(&self, width: d3os_nvidia::compute::storage::Width, mode: d3os_nvidia::compute::storage::Mode, bits: u64) -> Result<[usize; 32]> {
+        use d3os_nvidia::compute::storage::{self, Mode};
+        let mut p = [0u32; 32];
+        p[..8].copy_from_slice(&[
+            self.len() as u32,
+            self.shape.num_dims().max(1) as u32,
+            width as u32 | ((mode as u32) << 8),
+            bits as u32,
+            self.offset as u32,
+            (bits >> 32) as u32,
+            self.storage_elements as u32,
+            0,
+        ]);
+        p[8..16].fill(1);
+        for (axis, &dim) in self.shape.iter().enumerate() {
+            p[8 + axis] = dim as u32;
+            p[16 + axis] = self.strides[axis] as i32 as u32;
+        }
+        if mode == Mode::Fill && self.shape.num_dims() == 0 {
+            p[16] = 1;
+        }
+        storage::validate(&p).map_err(|_| Error::InvalidParameter)?;
+        Ok(p.map(|v| v as usize))
+    }
+
     pub fn reduction_shape(&self, axis: usize) -> Result<Shape> {
         let mut shape = self.shape.to_vec();
         *shape.get_mut(axis).ok_or(Error::InvalidParameter)? = 1;

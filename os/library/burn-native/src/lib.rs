@@ -15,6 +15,7 @@ pub mod quantization;
 pub mod random;
 pub mod range;
 mod sort;
+mod storage;
 mod tensor;
 mod updates;
 mod vector;

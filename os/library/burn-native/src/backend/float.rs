@@ -5,7 +5,7 @@ use burn_backend::{BoolDType, Distribution, ExecutionError, FloatDType, IntDType
 impl FloatTensorOps<Self> for Native {
     fn float_from_data(data: TensorData, _device: &Device<Self>) -> FloatTensor<Self> {
         BackendTensor::build("float_from_data", data.shape().clone(), data.dtype(), || {
-            if data.dtype() != DType::F32 {
+            if !matches!(data.dtype(), DType::F64 | DType::F32 | DType::Flex32 | DType::F16 | DType::BF16) {
                 return Err(Error::InvalidParameter);
             }
             NativeTensor::from_data(data)
@@ -338,12 +338,12 @@ impl FloatTensorOps<Self> for Native {
     }
     fn float_ones(shape: Shape, _device: &NativeDevice, dtype: FloatDType) -> BackendTensor {
         BackendTensor::build("float_ones", shape.clone(), dtype.into(), || {
-            NativeTensor::full(shape, dtype.into(), 1f32.to_bits())
+            NativeTensor::full_scalar(shape, dtype.into(), Scalar::new(1f32, &dtype.into()))
         })
     }
     fn float_full(shape: Shape, fill_value: Scalar, _device: &NativeDevice, dtype: FloatDType) -> BackendTensor {
         BackendTensor::build("float_full", shape.clone(), dtype.into(), || {
-            NativeTensor::full(shape, dtype.into(), fill_value.elem::<f32>().to_bits())
+            NativeTensor::full_scalar(shape, dtype.into(), fill_value)
         })
     }
     fn float_neg(tensor: BackendTensor) -> BackendTensor {

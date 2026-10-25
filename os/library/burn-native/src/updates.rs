@@ -8,7 +8,7 @@ impl NativeTensor {
     /// Select exact stored words from `value` where `mask` is true. All three
     /// inputs broadcast, and unselected NaNs cannot affect the selected value.
     pub fn mask_where(&self, mask: &Self, value: &Self) -> Result<Self> {
-        if self.dtype != value.dtype || mask.dtype != DType::Bool(BoolStore::U32) {
+        if !crate::storage::word_sized(self.dtype) || self.dtype != value.dtype || mask.dtype != DType::Bool(BoolStore::U32) {
             return Err(Error::InvalidParameter);
         }
         let shape = crate::layout::broadcast(&crate::layout::broadcast(self.layout.shape(), value.layout.shape())?, mask.layout.shape())?;
@@ -43,7 +43,7 @@ impl NativeTensor {
     /// Copy the logical destination on the GPU, then replace a checked slice.
     /// The original tensor and every shared or overlapping source remain intact.
     pub fn slice_assign(&self, slices: &[Slice], value: &Self) -> Result<Self> {
-        if self.dtype != value.dtype {
+        if !crate::storage::word_sized(self.dtype) || self.dtype != value.dtype {
             return Err(Error::InvalidParameter);
         }
         let target = Layout::contiguous(self.layout.shape().clone())?.slice(slices)?;
@@ -63,6 +63,9 @@ impl NativeTensor {
     /// not dispatch writes. Every source is validated before output allocation.
     pub fn cat(tensors: &[Self], axis: usize) -> Result<Self> {
         let first = tensors.first().ok_or(Error::InvalidParameter)?;
+        if !crate::storage::word_sized(first.dtype) {
+            return Err(Error::InvalidParameter);
+        }
         let mut shape = first.layout.shape().to_vec();
         let length = shape.get_mut(axis).ok_or(Error::InvalidParameter)?;
         *length = 0;
@@ -112,7 +115,7 @@ impl NativeTensor {
 
     /// Add explicit padding to every dimension with an exact raw fill word.
     pub fn pad(&self, padding: &[(usize, usize)], word: u32) -> Result<Self> {
-        if padding.len() != self.layout.shape().num_dims() || (matches!(self.dtype, DType::Bool(_)) && word > 1) {
+        if !crate::storage::word_sized(self.dtype) || padding.len() != self.layout.shape().num_dims() || (matches!(self.dtype, DType::Bool(_)) && word > 1) {
             return Err(Error::InvalidParameter);
         }
         let dimensions: Vec<_> = self
