@@ -290,6 +290,15 @@ Their runtime now includes the additional unwind library.
 They establish successful compilation and GPU validation, while the wide timing spread keeps compilation parity open.
 The records are under `target/nvidia/compile-parity-q8/pinned-fpu-final/`.
 
+The same fixed kernel passes the complete GPU regression matrix.
+DOOM passes all 600 pixel-reference frames and records 1,518.872 FPS in the D3OS GPU timedemo.
+Qwen 0.8B passes the full layer, batched execution, cache, and tokenizer references.
+Qwen 9B and 27B each pass 32,033,280 independent FP32 logit references with zero tolerance failures.
+Warm D3OS decode records 48.930 and 48.892 tokens/s for 9B, and 14.421 and 14.284 tokens/s for 27B.
+MNIST checkpoint resume and fresh-VM inference preserve all 10,000 predictions, 99.26 percent accuracy, and prediction CRC32 `ce40d6c3`.
+These are D3OS regression measurements, with no new matched Linux sample.
+The logs are under `target/nvidia/compile-parity-q8/fpu-workloads/`.
+
 ## Compile portable kernels inside D3OS
 
 The host now exports Tile IR instead of injecting GPU machine code.
