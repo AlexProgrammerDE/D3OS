@@ -193,16 +193,18 @@ impl IntTensorOps<Self> for Native {
         })
     }
     fn int_div(lhs: IntTensor<Self>, rhs: IntTensor<Self>) -> IntTensor<Self> {
-        BackendTensor::unsupported("int_div", lhs.shape(), DType::I32, &[&lhs, &rhs], "int_div")
+        binary("int_div", &lhs, &rhs, lhs.dtype(), |a, b| a.word_binary(b, WordOp::Divide))
     }
-    fn int_div_scalar(lhs: IntTensor<Self>, _rhs: Scalar) -> IntTensor<Self> {
-        BackendTensor::unsupported("int_div_scalar", lhs.shape(), DType::I32, &[&lhs], "int_div_scalar")
+    fn int_div_scalar(lhs: IntTensor<Self>, rhs: Scalar) -> IntTensor<Self> {
+        one("int_div_scalar", &lhs, lhs.dtype(), |a| a.word_scalar(WordOp::Divide, rhs.elem::<i32>() as u32))
     }
     fn int_remainder(lhs: IntTensor<Self>, rhs: IntTensor<Self>) -> IntTensor<Self> {
-        BackendTensor::unsupported("int_remainder", lhs.shape(), DType::I32, &[&lhs, &rhs], "int_remainder")
+        binary("int_remainder", &lhs, &rhs, lhs.dtype(), |a, b| a.word_binary(b, WordOp::Remainder))
     }
-    fn int_remainder_scalar(lhs: IntTensor<Self>, _rhs: Scalar) -> IntTensor<Self> {
-        BackendTensor::unsupported("int_remainder_scalar", lhs.shape(), DType::I32, &[&lhs], "int_remainder_scalar")
+    fn int_remainder_scalar(lhs: IntTensor<Self>, rhs: Scalar) -> IntTensor<Self> {
+        one("int_remainder_scalar", &lhs, lhs.dtype(), |a| {
+            a.word_scalar(WordOp::Remainder, rhs.elem::<i32>() as u32)
+        })
     }
     fn int_matmul(lhs: IntTensor<Self>, rhs: IntTensor<Self>) -> IntTensor<Self> {
         BackendTensor::unsupported("int_matmul", lhs.shape(), DType::I32, &[&lhs, &rhs], "int_matmul")

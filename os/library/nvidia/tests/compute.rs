@@ -158,7 +158,7 @@ fn typed_words_check_flags_scalar_domains_and_original_storage_bounds() {
         (0, 0),
         (0, 5),
         (1, 9),
-        (2, 29),
+        (2, WordOp::ALL.len() as u32),
         (2, 1 << 17),
         (4, 4),
         (5, 1),

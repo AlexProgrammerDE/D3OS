@@ -90,8 +90,28 @@ unsafe fn BURN_ENTRY(a: *const u32, b: *const u32, output: *mut u32, BURN_PARAME
     } else if BURN_OP == 26u32 {
         let value = select(eq_tile(left, zero), broadcast_scalar(0f32, shape![128]), broadcast_scalar(1f32, shape![128]));
         bitcast(value)
-    } else {
+    } else if BURN_OP == 27u32 || BURN_OP == 28u32 {
         select(eq_tile(right, zero), left, broadcast_scalar(scalar, shape![128]))
+    } else {
+        // Unsigned magnitudes include abs(I32::MIN) exactly. Never route
+        // division through FP32 or evaluate a zero denominator in any lane.
+        let negative_x = lt_tile(x, zero_i);
+        let negative_y = lt_tile(y, zero_i);
+        let magnitude_x = select(negative_x, zero - left, left);
+        let magnitude_y = select(negative_y, zero - right, right);
+        let denominator = max_tile(magnitude_y, one);
+        let quotient = magnitude_x / denominator;
+        let signs_differ = negative_x ^ negative_y;
+        let quotient = select(signs_differ, zero - quotient, quotient);
+        if BURN_OP == 29u32 {
+            // Native extension for nonportable input: zero divisors return -1;
+            // MIN / -1 wraps to MIN. Ordinary quotients truncate toward zero.
+            select(eq_tile(right, zero), broadcast_scalar(unsigned(-1i32), shape![128]), quotient)
+        } else {
+            let remainder = left - quotient * right;
+            let remainder = select(signs_differ & ne_tile(remainder, zero), remainder + right, remainder);
+            select(eq_tile(right, zero), left, remainder)
+        }
     };
     unsafe { write_tile(output, i, result, mask) };
 }

@@ -18,7 +18,7 @@ All required methods have declarations or implementations. This count does not e
 The report also records 99 native helper bodies for manual review of dtype and shape restrictions.
 
 The tool follows syntactic associated backend calls and expands the pinned `dequant_op_quant!` and `dequant_op_flow!` macros.
-It identifies 74 methods with possible paths to explicit declines or panic declarations.
+It identifies 70 methods with possible paths to explicit declines or panic declarations.
 This number is not an unsupported-operation count. Some paths represent expected invalid-input errors or conditional restrictions.
 
 The analysis does not resolve method types, evaluate conditional compilation, or expand other macros and free helper functions.
@@ -49,8 +49,8 @@ Resident dequantization and requantization can implement some operations without
 
 The native FP32 erf implementation uses piecewise rational approximations adapted from FreeBSD msun and Rust libm 0.2.16.
 The kernel source retains the original permission notice.
-Native compute protocol 24 adds the erf opcode and the `burn_erf` entry.
-The inference bundle contains 188 entries. All 187 previous instruction and constant sections remain byte-identical.
+Native compute protocol 24 added the erf opcode and the `burn_erf` entry.
+That inference bundle contains 188 entries. All 187 previous instruction and constant sections remain byte-identical.
 
 The public Burn checks cover 2,656 erf inputs, exponent ranges, approximation boundaries, signed zeros, infinities, and NaNs.
 They also cover shared inputs, transposed and reversed views, empty tensors, erf gradients, and GELU forward and backward operations.
@@ -74,6 +74,29 @@ D3OS compiles all portable modules inside the VM. Each generated module matches 
 The full resident operator and quantization suites also pass.
 These runs establish correctness for the checked cases. They contain no execution-performance or compile-time parity measurement.
 
+## Native integer division and remainder
+
+Protocol 25 adds exact I32 division and floor remainder to the public Burn backend.
+Both tensor and scalar operations support broadcasting and signed views.
+Division truncates toward zero. A nonzero remainder has the divisor's sign and a smaller magnitude.
+The kernels use unsigned integer magnitudes, including the exact magnitude of `I32::MIN`.
+The source retains integer division semantics instead of a floating-point quotient.
+The NVIDIA compiler lowers division with a reciprocal estimate and integer correction, which preserves exact full-range results.
+
+The portable checks exclude zero divisors and `I32::MIN / -1` or `I32::MIN % -1`.
+Burn does not guarantee portable behavior for these remainder inputs.
+Native division by zero returns -1, and native remainder by zero returns the dividend.
+Native `I32::MIN / -1` wraps to `I32::MIN`, and the corresponding remainder is zero.
+These native extensions do not promise the same result on Linux.
+
+The shared conformance checks use independent I64 quotient and floor-modulo references.
+They cover full-range I32 values, scalar operands, broadcasting, reversed transposes, empty outputs, and shared input preservation.
+The low-level native suite also checks exceptional inputs, resident execution, partial tiles, and neighboring guards.
+Both Linux CUDA and D3OS pass the shared public checks on the physical GPU.
+D3OS also passes the complete operator suite after in-VM compilation, with all module hashes matching their host audits.
+The current bundle contains 190 entries. All 188 previous instruction and constant sections remain byte-identical.
+The I32 arithmetic capability declaration remains incomplete because matrix products and scans still require implementation.
+
 ## Remaining implementation areas
 
 The unresolved work includes ordinary dtypes, complete integer arithmetic, matrix products, scans, and additional floating-point operations.
@@ -95,7 +118,7 @@ Build the Linux probes with their default CUDA feature:
 
 ```bash
 cd tools/mnist-benchmark
-cargo build --release --locked --bin capabilities --bin erf
+cargo build --release --locked --bin capabilities --bin erf --bin integer
 cd ../..
 ```
 
@@ -108,6 +131,9 @@ python3 tools/nvidia/linux-reference.py \
 python3 tools/nvidia/linux-reference.py \
   --directory target/nvidia/linux-burn-erf \
   --burn-erf tools/mnist-benchmark/target/release/erf
+python3 tools/nvidia/linux-reference.py \
+  --directory target/nvidia/linux-burn-integer \
+  --burn-integer tools/mnist-benchmark/target/release/integer
 ```
 
 If the strict erf check fails, use a separate directory for its numerical diagnostic:
@@ -129,5 +155,7 @@ python3 tools/nvidia/run-qemu.py --firmware target/nvidia/firmware \
 The retained native evidence lives under `target/nvidia/burn-backend-validation/erf-final/`.
 The Linux evidence lives under `target/nvidia/burn-backend-audit/linux-capabilities-final/`, `linux-erf/`, and `linux-erf-profile/`.
 The audit directory contains `traits-final.json`, `capability-comparison.json`, and `erf-comparison.json`.
+The integer evidence lives under `target/nvidia/burn-backend-validation/integer-final/` and `target/nvidia/burn-backend-audit/linux-integer/`.
+The audit directory also contains the updated `traits-integer.json` and `integer-comparison.json`.
 Manifests record the shared validation source hashes, executable hashes, and execution backend.
 These generated local artifacts are not Git-tracked. The probes and audit tool are tracked for reproduction.

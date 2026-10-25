@@ -21,6 +21,24 @@ fn reference(op: WordOp, a: u32, b: u32) -> u32 {
         WordOp::Add => x.wrapping_add(y) as u32,
         WordOp::Subtract => x.wrapping_sub(y) as u32,
         WordOp::Multiply => x.wrapping_mul(y) as u32,
+        WordOp::Divide => {
+            if y == 0 {
+                u32::MAX
+            } else {
+                (i64::from(x) / i64::from(y)) as u32
+            }
+        }
+        WordOp::Remainder => {
+            if y == 0 {
+                return a;
+            }
+            let remainder = i64::from(x) % i64::from(y);
+            (if remainder != 0 && (remainder < 0) != (y < 0) {
+                remainder + i64::from(y)
+            } else {
+                remainder
+            }) as u32
+        }
         WordOp::Equal => u32::from(x == y),
         WordOp::Greater => u32::from(x > y),
         WordOp::GreaterEqual => u32::from(x >= y),
@@ -118,6 +136,13 @@ fn integers(backend: &Nvidia) -> Result<(), String> {
     }
     let expected: Vec<_> = ordered.iter().map(|&a| if (a as i32) > 0 { (-123_456_789i32) as u32 } else { a }).collect();
     check(&masked, &expected, DType::I32)?;
+    for op in [WordOp::Divide, WordOp::Remainder] {
+        for divisor in [0, u32::MAX, i32::MIN as u32, 1, 2, 7] {
+            let result = input.word_scalar(op, divisor).map_err(|e| e.to_string())?;
+            let expected: Vec<_> = ordered.iter().map(|&a| reference(op, a, divisor)).collect();
+            check(&result, &expected, DType::I32)?;
+        }
+    }
     for op in [WordOp::ShiftLeft, WordOp::ShiftRight] {
         for count in [0, 31, 32, 63, 64, u32::MAX] {
             let result = input.word_scalar(op, count).map_err(|e| e.to_string())?;
@@ -235,24 +260,26 @@ fn guards(backend: &Nvidia) -> Result<(), Error> {
     let input = backend.upload_words(&words)?;
     let output = backend.upload_words(&vec![0x6bad_beef; count + 2])?;
     let layout = Layout::contiguous(Shape::new([count]))?.flip(&[0])?;
-    let parameters = layout.word_parameters(&layout, WordOp::Add, i32::MAX as u32, true)?;
-    backend.dispatch_words(abi::Kernel::TensorWords, &[(&input, 1), (&input, 1), (&output, 1)], &parameters)?;
-    let mut expected = vec![0x6bad_beef];
-    expected.extend(values.iter().rev().map(|&v| v.wrapping_add(i32::MAX as u32)));
-    expected.push(0x6bad_beef);
     let mut actual = vec![0; count + 2];
-    backend.read_words_into(&output, 0, &mut actual)?;
-    if actual != expected {
-        return Err(Error::DeviceFault);
-    }
-    let mut invalid = parameters;
-    invalid[4] += count;
-    if backend.dispatch_words(abi::Kernel::TensorWords, &[(&input, 1), (&input, 1), (&output, 1)], &invalid) != Err(Error::InvalidParameter) {
-        return Err(Error::DeviceFault);
-    }
-    backend.read_words_into(&output, 0, &mut actual)?;
-    if actual != expected {
-        return Err(Error::DeviceFault);
+    for op in [WordOp::Add, WordOp::Divide, WordOp::Remainder] {
+        let parameters = layout.word_parameters(&layout, op, (-7i32) as u32, true)?;
+        backend.dispatch_words(abi::Kernel::TensorWords, &[(&input, 1), (&input, 1), (&output, 1)], &parameters)?;
+        let mut expected = vec![0x6bad_beef];
+        expected.extend(values.iter().rev().map(|&v| reference(op, v, (-7i32) as u32)));
+        expected.push(0x6bad_beef);
+        backend.read_words_into(&output, 0, &mut actual)?;
+        if actual != expected {
+            return Err(Error::DeviceFault);
+        }
+        let mut invalid = parameters;
+        invalid[4] += count;
+        if backend.dispatch_words(abi::Kernel::TensorWords, &[(&input, 1), (&input, 1), (&output, 1)], &invalid) != Err(Error::InvalidParameter) {
+            return Err(Error::DeviceFault);
+        }
+        backend.read_words_into(&output, 0, &mut actual)?;
+        if actual != expected {
+            return Err(Error::DeviceFault);
+        }
     }
     backend.read_words_into(&input, 0, &mut actual)?;
     if actual != words {
@@ -279,7 +306,7 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
         return Err(String::from("empty or ill-typed word operation"));
     }
     crate::report(format_args!(
-        "NVIDIA_BURN_WORDS_OK operations=29 integers=exact booleans=canonical casts=ok aliasing=ok guards=ok resident=ok backend=nvidia"
+        "NVIDIA_BURN_WORDS_OK operations=31 integers=exact booleans=canonical casts=ok aliasing=ok guards=ok resident=ok backend=nvidia"
     ));
     Ok(())
 }

@@ -1,6 +1,7 @@
 //! Independent gradient and checkpoint checks that also run inside D3OS.
 pub mod capabilities;
 pub mod erf;
+pub mod integer;
 pub mod quantization;
 pub mod qwen;
 pub mod qwen_state;

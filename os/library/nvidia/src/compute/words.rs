@@ -41,10 +41,12 @@ pub enum WordOp {
     BoolToFloat = 26,
     IntMaskFill = 27,
     BoolMaskFill = 28,
+    Divide = 29,
+    Remainder = 30,
 }
 
 impl WordOp {
-    pub const ALL: [Self; 29] = [
+    pub const ALL: [Self; 31] = [
         Self::Add,
         Self::Subtract,
         Self::Multiply,
@@ -74,6 +76,8 @@ impl WordOp {
         Self::BoolToFloat,
         Self::IntMaskFill,
         Self::BoolMaskFill,
+        Self::Divide,
+        Self::Remainder,
     ];
 
     pub fn from_raw(raw: u32) -> Result<Self> {
@@ -111,6 +115,8 @@ impl WordOp {
             Self::BoolToFloat => "burn_bool_to_f32",
             Self::IntMaskFill => "burn_i32_mask_fill",
             Self::BoolMaskFill => "burn_bool_mask_fill",
+            Self::Divide => "burn_i32_divide",
+            Self::Remainder => "burn_i32_remainder",
         }
     }
 
@@ -141,6 +147,8 @@ impl WordOp {
             Self::Add
                 | Self::Subtract
                 | Self::Multiply
+                | Self::Divide
+                | Self::Remainder
                 | Self::Equal
                 | Self::Greater
                 | Self::GreaterEqual

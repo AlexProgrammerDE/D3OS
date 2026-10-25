@@ -142,6 +142,10 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     ));
     integers::run(backend).map_err(|e| format!("Burn native integer reductions: {e}"))?;
     words::run(backend).map_err(|e| format!("Burn native words: {e}"))?;
+    d3os_ai::validation::integer::run(&device)?;
+    crate::report(format_args!(
+        "BURN_INTEGER_CONFORMANCE_OK os=d3os backend=native operations=div,remainder tensor=true scalar=true shared_views=true"
+    ));
     indexing::run(backend).map_err(|e| format!("Burn native indexing: {e}"))?;
     scatter::run(backend).map_err(|e| format!("Burn native scatter: {e}"))?;
     convolution::run(backend).map_err(|e| format!("Burn native convolution: {e}"))?;
