@@ -200,6 +200,12 @@ impl IntTensorOps<Self> for Native {
             |v| v[0].matmul(v[1]),
         )
     }
+    fn int_powi(lhs: IntTensor<Self>, rhs: IntTensor<Self>) -> IntTensor<Self> {
+        binary("int_powi", &lhs, &rhs, lhs.dtype(), |a, b| a.word_binary(b, WordOp::Power))
+    }
+    fn int_powi_scalar_impl(lhs: IntTensor<Self>, rhs: Scalar) -> IntTensor<Self> {
+        one("int_powi_scalar", &lhs, lhs.dtype(), |a| a.word_scalar(WordOp::Power, rhs.elem::<i32>() as u32))
+    }
     fn int_sum(tensor: IntTensor<Self>) -> IntTensor<Self> {
         reduce("int_sum", &tensor, None, Reduction::Sum, DType::I32)
     }

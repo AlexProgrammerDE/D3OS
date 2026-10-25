@@ -13,7 +13,7 @@ It also includes float, integer, boolean, quantized, module, activation, transac
 Each method records its signature, source location, conditional compilation attributes, and implementation or inherited default.
 Associated types and source SHA-256 hashes accompany the report.
 
-The current inventory contains 484 methods: 273 native overrides and 211 inherited defaults.
+The current inventory contains 484 methods: 275 native overrides and 209 inherited defaults.
 All required methods have declarations or implementations. This count does not establish runtime support.
 The report also records 126 native helper bodies for manual review of dtype and shape restrictions.
 
@@ -450,6 +450,36 @@ D3OS also passes the complete operator suite after in-VM compilation, with all m
 That bundle contains 190 entries. All 188 previous instruction and constant sections remain byte-identical.
 The I32 arithmetic capability declaration remains incomplete pending further operation and precision checks.
 
+## Native integer powers
+
+Protocol 38 adds exact I32 tensor powers and generic scalar powers through Burn's public API.
+The matching portable bundle contains 239 inference entries and 74 compute profiles.
+The new operation uses the existing typed-word layout and complete-writer contract.
+
+The inherited Burn fallback converts integer bases to floating point before exponentiation.
+That conversion can lose base precision, even when the exponent is one.
+The native replacement uses unsigned multiplication and exponentiation by squaring, with modulo-2^32 results.
+It interprets exponent bits as U32, matching the pinned Linux CUDA backend.
+A negative I32 exponent therefore represents a large unsigned exponent, rather than a fractional reciprocal.
+The result of zero raised to zero is one.
+Burn retains its existing scalar shortcuts for exponents zero, one, and two.
+
+The independent reference uses left-to-right binary exponentiation with I128 products and explicit modular reduction.
+Host checks compare it with primitive wrapping powers and modular group identities.
+The shared corpus checks 94 public cases, including signed views, broadcasting, rank eight, empty shapes, and retained source tensors.
+It includes all pairs of 15 boundary bases and 17 exponent patterns.
+The raw corpus checks ten guarded tensor/scalar cases at lengths 1, 127, 128, 129, and 257.
+Separate checks cover a scalar result, queued source lifetimes, allocation through one complete writer, and resident execution.
+Invalid aliases, invalid dtypes, incompatible shapes, and empty outputs enqueue no element work.
+
+Linux CUDA passes all 94 public cases on the same physical GPU.
+D3OS passes the same 94 public cases, all ten guarded cases, and the existing operator and quantization regressions.
+All three modules compiled inside D3OS match their host audit hashes.
+The new entry passes the spill audit without local loads or stores.
+All 238 earlier instruction entries and their constant sections remain byte-identical.
+These correctness checks do not establish execution-performance or compile-time parity.
+The broader I32 arithmetic capability remains conservative until the remaining contracts pass.
+
 ## Native integer matrix products
 
 Protocol 26 adds public I32 matrix multiplication with exact wrapping products and accumulation.
@@ -792,7 +822,7 @@ Build the Linux probes with their default CUDA feature:
 
 ```bash
 cd tools/mnist-benchmark
-cargo build --release --locked --bin capabilities --bin erf --bin integer --bin integer_matrix --bin scan --bin sort --bin cross --bin compaction --bin scatter_updates --bin quantized_empty --bin nd_indexing --bin storage --bin conversions --bin remainder --bin inverse --bin interpolate --bin spatial_convolution --bin deform
+cargo build --release --locked --bin capabilities --bin erf --bin integer --bin integer_power --bin integer_matrix --bin scan --bin sort --bin cross --bin compaction --bin scatter_updates --bin quantized_empty --bin nd_indexing --bin storage --bin conversions --bin remainder --bin inverse --bin interpolate --bin spatial_convolution --bin deform
 cd ../..
 ```
 
@@ -997,6 +1027,14 @@ For empty diagnostics, use fresh directories with `--burn-spatial-empty` and `--
 The `--burn-spatial-case` option selects one of the 14 shape groups for isolated diagnosis.
 D3OS retains both complete numerical corpora and both empty checks.
 
+Run the exact integer-power comparison:
+
+```bash
+python3 tools/nvidia/linux-reference.py \
+  --directory target/nvidia/linux-burn-integer-power \
+  --burn-integer-power tools/mnist-benchmark/target/release/integer_power
+```
+
 Run the strict deformable-convolution comparison and retain its diagnostic:
 
 ```bash
@@ -1091,3 +1129,6 @@ Its Linux counterparts use the `target/nvidia/burn-backend-audit/linux-deform-` 
 The audit directory contains `traits-deform-final.json`, `deform-comparison.json`, and `deform-section-comparison.json`.
 The coordinate-row diagnosis includes `deform-linux-row-index-diagnostic.json` and the archived pinned coordinate-kernel source.
 The pointer-inference compiler diagnostic remains under `deform-pointer-inference/`.
+
+The integer-power evidence uses `target/nvidia/burn-backend-validation/power-first/` and `target/nvidia/burn-backend-audit/linux-power/`.
+The audit directory contains `traits-power-final.json`, `power-comparison.json`, and `power-section-comparison.json`.

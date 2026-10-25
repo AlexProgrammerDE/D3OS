@@ -80,6 +80,7 @@ def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_fi
         "capabilities": "declared dtype flags; no execution conformance",
         "erf": "public erf and GELU conformance; no performance measurement",
         "integer": "public integer division and floor remainder conformance; no performance measurement",
+        "integer_power": "public exact wrapping I32 powers; independent I128 reference; no performance measurement",
         "integer_matrix": "public I32 matrix product conformance; no performance measurement",
         "scan": "public cumulative operations and gradients; no performance measurement",
         "cross": "public FP32 vector products and gradients; no performance measurement",
@@ -181,7 +182,7 @@ exec {program}{arguments}
         "executable": binary,
         "runner": ROOT / f"tools/mnist-benchmark/src/bin/{kind}.rs",
         "launcher": Path(__file__).resolve(),
-        "shared_validation": ROOT / f"os/library/ai/src/validation/{kind}.rs",
+        "shared_validation": ROOT / f"os/library/ai/src/validation/{'integer' if kind == 'integer_power' else kind}.rs",
         "cargo_lock": ROOT / "tools/mnist-benchmark/Cargo.lock",
         "libdevice": libdevice,
     }
@@ -1259,6 +1260,7 @@ def main():
     parser.add_argument("--burn-capabilities", type=Path, help="query Burn dtype usage declarations on the Linux CUDA device")
     parser.add_argument("--burn-erf", type=Path, help="run public erf and GELU conformance on Linux CUDA")
     parser.add_argument("--burn-erf-profile", action="store_true", help="report erf numerical errors separately from GELU conformance")
+    parser.add_argument("--burn-integer-power", type=Path, help="run exact public I32 integer power conformance on Linux CUDA")
     parser.add_argument("--burn-integer", type=Path, help="run public I32 division and floor remainder conformance on Linux CUDA")
     parser.add_argument("--burn-integer-matmul", type=Path, help="run public I32 matrix product conformance on Linux CUDA")
     parser.add_argument("--burn-integer-matmul-nonempty", action="store_true", help="run the nonempty I32 matrix cases separately from empty shapes")
@@ -1358,7 +1360,7 @@ def main():
     args = parser.parse_args()
     if args.nsight_directory and not args.quantized_profile:
         parser.error("--nsight-directory requires --quantized-profile")
-    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.burn_integer, args.burn_integer_matmul, args.burn_scatter_updates, args.burn_nd_indexing, args.burn_storage, args.burn_conversions, args.burn_remainder, args.burn_inverse, args.burn_spatial_convolution, args.burn_deform, args.burn_interpolate, args.burn_quantized_empty, args.burn_compaction, args.burn_cross, args.burn_scan, args.burn_sort, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
+    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.burn_integer_power, args.burn_integer, args.burn_integer_matmul, args.burn_scatter_updates, args.burn_nd_indexing, args.burn_storage, args.burn_conversions, args.burn_remainder, args.burn_inverse, args.burn_spatial_convolution, args.burn_deform, args.burn_interpolate, args.burn_quantized_empty, args.burn_compaction, args.burn_cross, args.burn_scan, args.burn_sort, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
         parser.error("--quantized-profile requires a separate diagnostic guest")
     if args.pin_vcpus and len(os.sched_getaffinity(0)) != 4:
         parser.error("--pin-vcpus requires an inherited affinity of four host CPUs")
@@ -1383,6 +1385,7 @@ def main():
                 bool(args.burn_quantization),
                 bool(args.burn_capabilities),
                 bool(args.burn_erf),
+                bool(args.burn_integer_power),
                 bool(args.burn_integer),
                 bool(args.burn_integer_matmul),
                 bool(args.burn_scatter_updates),
@@ -1417,6 +1420,8 @@ def main():
         parser.error("--burn-erf requires a built conformance executable")
     if args.burn_capabilities and not args.burn_capabilities.is_file():
         parser.error("--burn-capabilities requires a built capabilities executable")
+    if args.burn_integer_power and not args.burn_integer_power.is_file():
+        parser.error("--burn-integer-power requires a built conformance executable")
     if args.burn_integer and not args.burn_integer.is_file():
         parser.error("--burn-integer requires a built conformance executable")
     if args.burn_integer_matmul and not args.burn_integer_matmul.is_file():
@@ -1527,6 +1532,8 @@ def main():
         burn_probe(args.directory / "root", args.burn_capabilities.resolve(), "capabilities")
     elif args.burn_erf:
         burn_probe(args.directory / "root", args.burn_erf.resolve(), "erf", erf_profile=args.burn_erf_profile)
+    elif args.burn_integer_power:
+        burn_probe(args.directory / "root", args.burn_integer_power.resolve(), "integer_power")
     elif args.burn_integer:
         burn_probe(args.directory / "root", args.burn_integer.resolve(), "integer")
     elif args.burn_integer_matmul:
@@ -1705,6 +1712,8 @@ def main():
             raise RuntimeError("Linux CUDA Burn erf/GELU check did not complete")
     if args.burn_capabilities and "BURN_CAPABILITIES_OK os=linux backend=cuda rows=226 flags_only=true" not in text:
         raise RuntimeError("Linux CUDA Burn capability query did not complete")
+    if args.burn_integer_power and "BURN_INTEGER_POWER_OK os=linux backend=cuda cases=94 reference=i128 wrapping=exact exponent=u32_bits signed_views=true broadcast=true shared=true empty=true" not in text:
+        raise RuntimeError("Linux CUDA Burn integer power conformance did not complete")
     if args.burn_integer and "BURN_INTEGER_CONFORMANCE_OK os=linux backend=cuda operations=div,remainder tensor=true scalar=true shared_views=true" not in text:
         raise RuntimeError("Linux CUDA Burn integer conformance did not complete")
     if args.burn_integer_matmul:

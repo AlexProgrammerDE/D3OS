@@ -92,6 +92,20 @@ unsafe fn BURN_ENTRY(a: *const u32, b: *const u32, output: *mut u32, BURN_PARAME
         bitcast(value)
     } else if BURN_OP == 27u32 || BURN_OP == 28u32 {
         select(eq_tile(right, zero), left, broadcast_scalar(scalar, shape![128]))
+    } else if BURN_OP == 31u32 {
+        // Burn interprets the exponent's bits as u32, including negative I32
+        // values. Unsigned products wrap exactly without any FP32 conversion.
+        let mut exponent = right;
+        let mut factor = left;
+        let mut value = one;
+        let mut step = 0u32;
+        while step < 32u32 {
+            value = value * select(ne_tile(exponent & one, zero), factor, one);
+            factor = factor * factor;
+            exponent = exponent >> one;
+            step = step + 1u32;
+        }
+        value
     } else {
         // Unsigned magnitudes include abs(I32::MIN) exactly. Never route
         // division through FP32 or evaluate a zero denominator in any lane.

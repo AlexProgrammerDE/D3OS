@@ -9,7 +9,7 @@ use d3os_ai::{
     burn::backend::{BoolStore, DType, Shape, TensorData, TensorMetadata},
     native::{NativeTensor, layout::Layout},
 };
-use d3os_compute::{Error, nvidia::Nvidia};
+use d3os_compute::{Backend as _, Error, nvidia::Nvidia};
 use d3os_nvidia::compute::{
     self as abi,
     words::{ValueType, WordOp},
@@ -21,6 +21,7 @@ fn reference(op: WordOp, a: u32, b: u32) -> u32 {
         WordOp::Add => x.wrapping_add(y) as u32,
         WordOp::Subtract => x.wrapping_sub(y) as u32,
         WordOp::Multiply => x.wrapping_mul(y) as u32,
+        WordOp::Power => d3os_ai::validation::integer::power_reference(x, y) as u32,
         WordOp::Divide => {
             if y == 0 {
                 u32::MAX
@@ -255,7 +256,7 @@ fn guards(backend: &Nvidia) -> Result<(), Error> {
     let output = backend.upload_words(&vec![0x6bad_beef; count + 2])?;
     let layout = Layout::contiguous(Shape::new([count]))?.flip(&[0])?;
     let mut actual = vec![0; count + 2];
-    for op in [WordOp::Add, WordOp::Divide, WordOp::Remainder] {
+    for op in [WordOp::Add, WordOp::Divide, WordOp::Remainder, WordOp::Power] {
         let parameters = layout.word_parameters(&layout, op, (-7i32) as u32, true)?;
         backend.dispatch_words(abi::Kernel::TensorWords, &[(&input, 1), (&input, 1), (&output, 1)], &parameters)?;
         let mut expected = vec![0x6bad_beef];
@@ -282,7 +283,100 @@ fn guards(backend: &Nvidia) -> Result<(), Error> {
     Ok(())
 }
 
+fn power_contract(backend: &Nvidia) -> Result<(), String> {
+    let raw = || -> Result<(), Error> {
+        let guard = 0x6bad_beef;
+        for count in [1, 127, 128, 129, 257] {
+            let mut a = vec![guard];
+            a.extend((0..count).map(|i| (i as u32).wrapping_mul(0x9e37_79b9)));
+            a.push(guard);
+            let mut b = vec![guard];
+            b.extend((0..count).map(|i| [0, 1, 2, 31, 32, 33, i32::MAX as u32, i32::MIN as u32, u32::MAX][i % 9]));
+            b.push(guard);
+            let left = backend.upload_words(&a)?;
+            let right = backend.upload_words(&b)?;
+            let output = backend.upload_words(&vec![guard; count + 2])?;
+            let layout = Layout::contiguous(Shape::new([count]))?.flip(&[0])?;
+            for scalar in [false, true] {
+                let parameters = layout.word_parameters(&layout, WordOp::Power, if scalar { u32::MAX } else { 0 }, scalar)?;
+                backend.dispatch_words(abi::Kernel::TensorWords, &[(&left, 1), (&right, 1), (&output, 1)], &parameters)?;
+                let mut actual = vec![0; count + 2];
+                backend.read_words_into(&output, 0, &mut actual)?;
+                let expected: Vec<_> = (1..=count)
+                    .rev()
+                    .map(|i| reference(WordOp::Power, a[i], if scalar { u32::MAX } else { b[i] }))
+                    .collect();
+                if actual[0] != guard || actual[count + 1] != guard || actual[1..=count] != expected {
+                    return Err(Error::DeviceFault);
+                }
+                let before = backend.queue_profile()?;
+                if backend.dispatch_words(abi::Kernel::TensorWords, &[(&left, 1), (&right, 1), (&left, 1)], &parameters) != Err(Error::InvalidParameter)
+                    || backend.queue_profile()?.launches != before.launches
+                {
+                    return Err(Error::DeviceFault);
+                }
+            }
+            for (buffer, expected) in [(&left, &a), (&right, &b)] {
+                let mut actual = vec![0; count + 2];
+                backend.read_words_into(buffer, 0, &mut actual)?;
+                if &actual != expected {
+                    return Err(Error::DeviceFault);
+                }
+            }
+        }
+        Ok(())
+    };
+    raw().map_err(|e| e.to_string())?;
+    let values: Vec<_> = (0i32..129).map(|i| i.wrapping_mul(16_777_217)).collect();
+    let source = NativeTensor::from_data(TensorData::new(values.clone(), [129])).map_err(|e| e.to_string())?;
+    let powers = NativeTensor::from_data(TensorData::new(vec![-1i32], [1])).map_err(|e| e.to_string())?;
+    let before = backend.service_profile().map_err(|e| e.to_string())?;
+    let output = backend
+        .with_commands(|| {
+            let output = source.word_binary(&powers, WordOp::Power)?;
+            drop(source);
+            drop(powers);
+            Ok::<_, Error>(output)
+        })
+        .map_err(|e| e.to_string())?;
+    let after = backend.service_profile().map_err(|e| e.to_string())?;
+    resident(&before, &after)?;
+    if after[abi::LAUNCH_ALLOCATE as usize].calls - before[abi::LAUNCH_ALLOCATE as usize].calls != 1 {
+        return Err(String::from("integer power did not use a single full writer"));
+    }
+    check(
+        &output,
+        &values.iter().map(|&v| reference(WordOp::Power, v as u32, u32::MAX)).collect::<Vec<_>>(),
+        DType::I32,
+    )?;
+    let scalar = NativeTensor::from_data(TensorData::new(vec![16_777_217i32], [1]))
+        .and_then(|v| v.reshape(Shape::new([])))
+        .map_err(|e| e.to_string())?;
+    let output = scalar.word_scalar(WordOp::Power, 3).map_err(|e| e.to_string())?;
+    if !output.shape().as_slice().is_empty() {
+        return Err(String::from("integer power lost scalar rank"));
+    }
+    check(&output, &[50_331_649], DType::I32)?;
+    let empty = NativeTensor::full(Shape::new([0, 3]), DType::I32, 0).map_err(|e| e.to_string())?;
+    let wrong_type = NativeTensor::full(Shape::new([0, 3]), DType::F32, 0).map_err(|e| e.to_string())?;
+    let wrong_shape = NativeTensor::full(Shape::new([2, 2]), DType::I32, 0).map_err(|e| e.to_string())?;
+    let before = backend.queue_profile().map_err(|e| e.to_string())?;
+    if !empty.word_scalar(WordOp::Power, u32::MAX).map_err(|e| e.to_string())?.layout().is_empty()
+        || !empty.word_binary(&empty, WordOp::Power).map_err(|e| e.to_string())?.layout().is_empty()
+        || !matches!(empty.word_binary(&wrong_type, WordOp::Power), Err(Error::InvalidParameter))
+        || !matches!(empty.word_binary(&wrong_shape, WordOp::Power), Err(Error::ShapeMismatch))
+        || backend.queue_profile().map_err(|e| e.to_string())?.launches != before.launches
+    {
+        return Err(String::from("integer power invalid or empty work launched"));
+    }
+    crate::report(format_args!(
+        "NVIDIA_BURN_INTEGER_POWER_OK raw=10 guards=ok reference=i128 full_writer=verified resident=true queued_lifetime=verified scalar=true invalid_inputs=no_launch empty=no_launch"
+    ));
+    Ok(())
+}
+
 pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
+    power_contract(backend)?;
     integers(backend)?;
     booleans(backend)?;
     conversions(backend)?;
@@ -300,7 +394,7 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
         return Err(String::from("empty or ill-typed word operation"));
     }
     crate::report(format_args!(
-        "NVIDIA_BURN_WORDS_OK operations=31 integers=exact booleans=canonical casts=ok aliasing=ok guards=ok resident=ok backend=nvidia"
+        "NVIDIA_BURN_WORDS_OK operations=32 integers=exact booleans=canonical casts=ok aliasing=ok guards=ok resident=ok backend=nvidia"
     ));
     Ok(())
 }
