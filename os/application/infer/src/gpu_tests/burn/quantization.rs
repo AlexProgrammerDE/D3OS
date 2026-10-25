@@ -20,6 +20,8 @@ fn check<const D: usize>(tensor: Tensor<D>, expected: &[f32]) -> Result<(), Stri
 
 fn public(backend: &Nvidia, device: &Device) -> Result<(), String> {
     d3os_ai::validation::quantization::integer(device)?;
+    d3os_ai::validation::quantization::minifloat(device)?;
+    d3os_ai::validation::quantization::minifloat_native_additional(device)?;
     let scheme = QuantScheme::default().with_value(QuantValue::Q4S);
     let source = Tensor::<2>::from_data(TensorData::new((0..32).map(|i| i as f32 % 7.0 - 3.0).collect(), [2, 16]), device);
     let scales = Tensor::<1>::from_floats([1.], device);
@@ -149,7 +151,7 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     guards(backend).map_err(|e| format!("quantization guards: {e}"))?;
     device.sync().map_err(|e| format!("quantization synchronization: {e:?}"))?;
     crate::report(format_args!(
-        "NVIDIA_BURN_QUANTIZATION_OK api=public integer_bits=8,4,2 formats=6 rounding=ties_even scales=per_tensor,rectangular_block serialization=verified views=verified guards=verified backend=nvidia"
+        "NVIDIA_BURN_QUANTIZATION_OK api=public integer_bits=8,4,2 formats=9 minifloat=e4m3,e5m2,e2m1 boundaries=exhaustive rounding=ties_even scales=per_tensor,rectangular_block serialization=verified views=verified guards=verified backend=nvidia"
     ));
     Ok(())
 }

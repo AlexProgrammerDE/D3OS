@@ -172,7 +172,7 @@ mod tests {
             TensorData::from_bytes_vec(
                 alloc::vec![0; 8],
                 [4],
-                DType::QFloat(QuantScheme::default().with_value(burn_backend::quantization::QuantValue::E4M3)),
+                DType::QFloat(QuantScheme::default().per_tensor(burn_backend::quantization::ScaleDtype::F16)),
             ),
         ] {
             let tensor = Native::q_from_data(data, &NativeDevice);

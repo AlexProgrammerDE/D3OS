@@ -89,6 +89,7 @@ exec /burn-quantization
     sources = {
         "executable": binary,
         "runner": ROOT / "tools/mnist-benchmark/src/bin/quantization.rs",
+        "launcher": Path(__file__).resolve(),
         "shared_validation": ROOT / "os/library/ai/src/validation/quantization.rs",
         "cargo_lock": ROOT / "tools/mnist-benchmark/Cargo.lock",
         "libdevice": libdevice,
@@ -1414,7 +1415,7 @@ def main():
         raise RuntimeError("Linux compiler benchmark did not pass")
     if args.mnist_benchmark and "LINUX_MNIST_BENCH_OK backend=cuda" not in text:
         raise RuntimeError("Linux CUDA MNIST benchmark did not pass")
-    if args.burn_quantization and "BURN_QUANTIZATION_REFERENCE_OK os=linux backend=cuda formats=6" not in text:
+    if args.burn_quantization and "BURN_QUANTIZATION_REFERENCE_OK os=linux backend=cuda formats=9 minifloat=e4m3,e5m2,e2m1 boundaries=exhaustive" not in text:
         raise RuntimeError("Linux CUDA Burn quantization conformance did not pass")
     if args.alexnet_benchmark:
         validate_alexnet(text)

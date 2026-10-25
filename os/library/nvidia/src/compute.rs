@@ -14,7 +14,7 @@ pub mod reduction;
 pub mod updates;
 pub mod words;
 
-pub const VERSION: u32 = 21;
+pub const VERSION: u32 = 22;
 /// END_COMMANDS flag: an inner recording scope joins its parent's completion.
 /// The outermost scope always waits. Zero retains synchronous nested scopes.
 pub const DEFER_NESTED_COMPLETION: u64 = 1;

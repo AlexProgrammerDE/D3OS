@@ -10,10 +10,79 @@ unsafe fn burn_quantization_address(
     (bitcast(address), scale)
 }
 
+// Integer-only assembly keeps denormals, signed zeros, and NaN encodings
+// independent of the GPU's native FP8/FP4 instruction support.
+fn burn_minifloat_decode(field: Tile<u32, { [128] }>, codec: u32) -> Tile<f32, { [128] }> {
+    let zero = broadcast_scalar(0u32, shape![128]);
+    if codec == 4u32 {
+        let magnitude = field & broadcast_scalar(7u32, shape![128]);
+        let normal = (magnitude << broadcast_scalar(22u32, shape![128])) + broadcast_scalar(126u32 << 23u32, shape![128]);
+        let subnormal = select(eq_tile(magnitude, broadcast_scalar(1u32, shape![128])), broadcast_scalar(0x3f000000u32, shape![128]), zero);
+        let sign = (field & broadcast_scalar(8u32, shape![128])) << broadcast_scalar(28u32, shape![128]);
+        bitcast(select(gt_tile(magnitude, broadcast_scalar(1u32, shape![128])), normal, subnormal) | sign)
+    } else {
+        let mantissa_bits = if codec == 2u32 { 3u32 } else { 2u32 };
+        let bias = if codec == 2u32 { 7u32 } else { 15u32 };
+        let exponent = (field & broadcast_scalar(127u32, shape![128])) >> broadcast_scalar(mantissa_bits, shape![128]);
+        let mantissa = field & broadcast_scalar((1u32 << mantissa_bits) - 1u32, shape![128]);
+        let normal = ((exponent + broadcast_scalar(127u32 - bias, shape![128])) << broadcast_scalar(23u32, shape![128]))
+            | (mantissa << broadcast_scalar(23u32 - mantissa_bits, shape![128]));
+        let step = if codec == 2u32 { 0.001953125f32 } else { 0.0000152587890625f32 };
+        let subnormal: Tile<f32, { [128] }> = itof(mantissa, rounding::NearestEven);
+        let subnormal: Tile<u32, { [128] }> = bitcast(subnormal * broadcast_scalar(step, shape![128]));
+        let value = select(eq_tile(exponent, zero), subnormal, normal);
+        let value = if codec == 2u32 {
+            select(eq_tile(field & broadcast_scalar(127u32, shape![128]), broadcast_scalar(127u32, shape![128])), broadcast_scalar(0x7fc00000u32, shape![128]), value)
+        } else {
+            let special = select(eq_tile(mantissa, zero), broadcast_scalar(0x7f800000u32, shape![128]), broadcast_scalar(0x7fc00000u32, shape![128]));
+            select(eq_tile(exponent, broadcast_scalar(31u32, shape![128])), special, value)
+        };
+        bitcast(value | ((field & broadcast_scalar(128u32, shape![128])) << broadcast_scalar(24u32, shape![128])))
+    }
+}
+
+fn burn_minifloat_encode(value: Tile<f32, { [128] }>, codec: u32) -> Tile<u32, { [128] }> {
+    let bits: Tile<u32, { [128] }> = bitcast(value);
+    let magnitude_bits = bits & broadcast_scalar(0x7fffffffu32, shape![128]);
+    let magnitude: Tile<f32, { [128] }> = bitcast(magnitude_bits);
+    let zero = broadcast_scalar(0u32, shape![128]);
+    let one = broadcast_scalar(1u32, shape![128]);
+    if codec == 4u32 {
+        let mut code = select(gt_tile(magnitude, broadcast_scalar(0.25f32, shape![128])), one, zero);
+        code = code + select(ge_tile(magnitude, broadcast_scalar(0.75f32, shape![128])), one, zero);
+        code = code + select(gt_tile(magnitude, broadcast_scalar(1.25f32, shape![128])), one, zero);
+        code = code + select(ge_tile(magnitude, broadcast_scalar(1.75f32, shape![128])), one, zero);
+        code = code + select(gt_tile(magnitude, broadcast_scalar(2.5f32, shape![128])), one, zero);
+        code = code + select(ge_tile(magnitude, broadcast_scalar(3.5f32, shape![128])), one, zero);
+        code = code + select(gt_tile(magnitude, broadcast_scalar(5f32, shape![128])), one, zero);
+        code | ((bits >> broadcast_scalar(28u32, shape![128])) & broadcast_scalar(8u32, shape![128]))
+    } else {
+        let mantissa_bits = if codec == 2u32 { 3u32 } else { 2u32 };
+        let bias = if codec == 2u32 { 7u32 } else { 15u32 };
+        let shift = 23u32 - mantissa_bits;
+        let lsb = (magnitude_bits >> broadcast_scalar(shift, shape![128])) & one;
+        let normal = ((magnitude_bits + broadcast_scalar((1u32 << (shift - 1u32)) - 1u32, shape![128]) + lsb)
+            >> broadcast_scalar(shift, shape![128])) - broadcast_scalar((127u32 - bias) << mantissa_bits, shape![128]);
+        let min_normal = if codec == 2u32 { 0.015625f32 } else { 0.00006103515625f32 };
+        let subnormal_scale = if codec == 2u32 { 512f32 } else { 65536f32 };
+        // Discard normal/NaN lanes before ftoi so its input is always finite.
+        let small = select(lt_tile(magnitude, broadcast_scalar(min_normal, shape![128])), magnitude, broadcast_scalar(0f32, shape![128]));
+        let rounded: Tile<f32, { [128] }> = bitcast(burn_round_even(bitcast(small * broadcast_scalar(subnormal_scale, shape![128]))));
+        let subnormal: Tile<u32, { [128] }> = ftoi(rounded, rounding::NearestIntToZero);
+        let code = select(lt_tile(magnitude, broadcast_scalar(min_normal, shape![128])), subnormal, normal);
+        let max_value = if codec == 2u32 { 448f32 } else { 57344f32 };
+        let max_code = if codec == 2u32 { 126u32 } else { 123u32 };
+        let code = select(gt_tile(magnitude, broadcast_scalar(max_value, shape![128])), broadcast_scalar(max_code, shape![128]), code);
+        let nan_code = if codec == 2u32 { 127u32 } else { 126u32 };
+        let code = select(gt_tile(magnitude_bits, broadcast_scalar(0x7f800000u32, shape![128])), broadcast_scalar(nan_code, shape![128]), code);
+        code | ((bits >> broadcast_scalar(24u32, shape![128])) & broadcast_scalar(128u32, shape![128]))
+    }
+}
+
 #[cutile::entry()]
 unsafe fn QUANTIZATION_ENTRY(
     input: *const u32, scales: *const f32, metadata: *const u32, output: *mut u32,
-    count: u32, source: u32, scale_count: u32, bits: u32, _operation: u32, symmetric: u32, offset: u32, _reserved: u32,
+    count: u32, source: u32, scale_count: u32, bits: u32, _operation: u32, codec: u32, offset: u32, _reserved: u32,
 ) {
     let i = indices();
     let factor = 32u32 / bits;
@@ -27,9 +96,13 @@ unsafe fn QUANTIZATION_ENTRY(
         };
         let shift = (address % broadcast_scalar(factor, shape![128])) * broadcast_scalar(bits, shape![128]);
         let field = (word >> shift) & broadcast_scalar(field_mask, shape![128]);
-        let value = (field ^ broadcast_scalar(sign_bit, shape![128])) - broadcast_scalar(sign_bit, shape![128]);
-        let value: Tile<i32, { [128] }> = bitcast(value);
-        let value: Tile<f32, { [128] }> = itof(value, rounding::NearestEven);
+        let value: Tile<f32, { [128] }> = if codec < 2u32 {
+            let value = (field ^ broadcast_scalar(sign_bit, shape![128])) - broadcast_scalar(sign_bit, shape![128]);
+            let value: Tile<i32, { [128] }> = bitcast(value);
+            itof(value, rounding::NearestEven)
+        } else {
+            burn_minifloat_decode(field, codec)
+        };
         let scale = unsafe { read_tile(scales, scale_address, mask & lt_tile(scale_address, broadcast_scalar(scale_count, shape![128])), 0f32) };
         let result: Tile<u32, { [128] }> = bitcast(value * scale);
         unsafe { write_tile(output, i, result, mask) };
@@ -47,14 +120,23 @@ unsafe fn QUANTIZATION_ENTRY(
                 let value: Tile<f32, { [128] }> = bitcast(word);
                 let scale = unsafe { read_tile(scales, scale_address, valid & lt_tile(scale_address, broadcast_scalar(scale_count, shape![128])), 0f32) };
                 let scaled = divf(value, scale, rounding::NearestEven, ftz::Disabled);
-                let scaled: Tile<f32, { [128] }> = bitcast(burn_round_even(bitcast(scaled)));
-                let high = broadcast_scalar(float_u32(sign_bit - 1u32), shape![128]);
-                let low = broadcast_scalar(0f32 - float_u32(sign_bit - symmetric), shape![128]);
-                let clamped = select(lt_tile(scaled, low), low, select(gt_tile(scaled, high), high, scaled));
-                // NaNs and padding become zero before the conversion's finite domain.
-                let safe = select(valid & eq_tile(clamped, clamped), clamped, broadcast_scalar(0f32, shape![128]));
-                let integer: Tile<i32, { [128] }> = ftoi(safe, rounding::NearestIntToZero);
-                bitcast(integer)
+                if codec < 2u32 {
+                    let scaled: Tile<f32, { [128] }> = bitcast(burn_round_even(bitcast(scaled)));
+                    let high = broadcast_scalar(float_u32(sign_bit - 1u32), shape![128]);
+                    let low = broadcast_scalar(0f32 - float_u32(sign_bit - codec), shape![128]);
+                    let clamped = select(lt_tile(scaled, low), low, select(gt_tile(scaled, high), high, scaled));
+                    // NaNs and padding become zero before the conversion's finite domain.
+                    let safe = select(valid & eq_tile(clamped, clamped), clamped, broadcast_scalar(0f32, shape![128]));
+                    let integer: Tile<i32, { [128] }> = ftoi(safe, rounding::NearestIntToZero);
+                    bitcast(integer)
+                } else {
+                    // Burn clamps before encoding; CUDA min/max sends NaNs
+                    // to the positive endpoint, independent of their sign.
+                    let high = if codec == 2u32 { 448f32 } else if codec == 3u32 { 57344f32 } else { 6f32 };
+                    let high = broadcast_scalar(high, shape![128]);
+                    let scaled = select(eq_tile(scaled, scaled), scaled, high);
+                    select(valid, burn_minifloat_encode(scaled, codec), broadcast_scalar(0u32, shape![128]))
+                }
             } else {
                 let word = unsafe {
                     read_tile(input, address / broadcast_scalar(factor, shape![128]), valid & lt_tile(address, broadcast_scalar(source, shape![128])), 0u32)

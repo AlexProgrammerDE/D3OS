@@ -1,4 +1,4 @@
-//! Packed integer quantization and scale ownership for Burn tensors.
+//! Packed integer and floating-point quantization with GPU-resident scales.
 use crate::{NativeTensor, layout::Layout};
 use alloc::{sync::Arc, vec::Vec};
 use burn_backend::{
@@ -9,7 +9,10 @@ use d3os_compute::{
     Error, Result,
     nvidia::{GpuBuffer, Nvidia},
 };
-use d3os_nvidia::compute::{Kernel, quantization::Operation};
+use d3os_nvidia::compute::{
+    Kernel,
+    quantization::{Codec, Operation},
+};
 
 #[derive(Clone, Debug)]
 pub struct NativeQuantizedTensor {
@@ -25,12 +28,12 @@ pub(crate) fn supported_scheme(scheme: &QuantScheme) -> bool {
     scheme.mode == QuantMode::Symmetric
         && scheme.scale_dtype() == ScaleDtype::F32
         && !(scheme.block_scale().is_some() && scheme.tensor_scale().is_some())
-        && matches!(
-            scheme.value,
-            QuantValue::Q8S | QuantValue::Q8F | QuantValue::Q4S | QuantValue::Q4F | QuantValue::Q2S | QuantValue::Q2F
-        )
-        && matches!(scheme.store, QuantStore::PackedU32(0..8) | QuantStore::Native)
-        && (scheme.store != QuantStore::Native || scheme.value.size_bits() == 8)
+        && match scheme.store {
+            QuantStore::PackedU32(0..8) => true,
+            QuantStore::Native => scheme.value.size_bits() == 8,
+            QuantStore::PackedNative(0..8) => scheme.value == QuantValue::E2M1,
+            _ => false,
+        }
 }
 
 pub(crate) fn validate_scheme(shape: &Shape, scheme: &QuantScheme) -> Result<()> {
@@ -40,7 +43,7 @@ pub(crate) fn validate_scheme(shape: &Shape, scheme: &QuantScheme) -> Result<()>
     }
     match scheme.store {
         QuantStore::Native if scheme.value.size_bits() == 8 => {}
-        QuantStore::PackedU32(axis) if axis < shape.num_dims() => {
+        QuantStore::PackedU32(axis) | QuantStore::PackedNative(axis) if axis < shape.num_dims() => {
             if !shape[shape.num_dims() - 1 - axis].is_multiple_of(scheme.num_quants()) {
                 return Err(Error::InvalidShape);
             }
@@ -61,7 +64,7 @@ pub(crate) fn validate_scheme(shape: &Shape, scheme: &QuantScheme) -> Result<()>
 
 fn storage_axes(shape: &Shape, scheme: &QuantScheme) -> Vec<usize> {
     let mut axes: Vec<_> = (0..shape.num_dims()).collect();
-    if let QuantStore::PackedU32(axis) = scheme.store {
+    if let QuantStore::PackedU32(axis) | QuantStore::PackedNative(axis) = scheme.store {
         axes.swap(shape.num_dims() - 1 - axis, shape.num_dims() - 1);
     }
     axes
@@ -104,7 +107,13 @@ fn run(input: &GpuBuffer<u32>, layout: &Layout, scales: &NativeTensor, scheme: &
         scales.layout.len(),
         bits,
         operation as usize,
-        usize::from(scheme.value.is_symmetric()),
+        match scheme.value {
+            QuantValue::E4M3 => Codec::E4M3,
+            QuantValue::E5M2 => Codec::E5M2,
+            QuantValue::E2M1 => Codec::E2M1,
+            value if value.is_symmetric() => Codec::IntegerSymmetric,
+            _ => Codec::IntegerFull,
+        } as usize,
         layout.offset(),
         0,
     ];
@@ -183,7 +192,14 @@ impl NativeQuantizedTensor {
             * 4;
         let scale_bytes = scales_shape.num_elements().checked_mul(4).ok_or(Error::SizeOverflow)?;
         let prefix = data.as_bytes().len().checked_sub(scale_bytes).ok_or(Error::InvalidParameter)?;
-        let compact = if scheme.store == QuantStore::Native { shape.num_elements() } else { bytes };
+        let compact = match scheme.store {
+            QuantStore::Native | QuantStore::PackedNative(_) => shape
+                .num_elements()
+                .checked_mul(scheme.value.size_bits())
+                .ok_or(Error::SizeOverflow)?
+                .div_ceil(8),
+            QuantStore::PackedU32(_) => bytes,
+        };
         if prefix != compact && prefix != bytes {
             return Err(Error::InvalidParameter);
         }
@@ -219,8 +235,8 @@ impl NativeQuantizedTensor {
             Nvidia.read_words_into(&values, 0, &mut words)?;
         }
         let mut bytes: Vec<_> = words.into_iter().flat_map(u32::to_le_bytes).collect();
-        if self.scheme.store == QuantStore::Native {
-            bytes.truncate(layout.len());
+        if matches!(self.scheme.store, QuantStore::Native | QuantStore::PackedNative(_)) {
+            bytes.truncate(layout.len() * self.scheme.value.size_bits() / 8);
         }
         bytes.extend_from_slice(scales.read()?.as_bytes());
         TensorData::try_from_bytes_vec(bytes, self.shape(), DType::QFloat(self.scheme)).map_err(|_| Error::InvalidParameter)
@@ -263,10 +279,14 @@ impl NativeQuantizedTensor {
         let layout = self.layout.permute(axes)?;
         let mut scheme = self.scheme;
         scheme.permute_block_dims(axes.len(), axes);
-        if let QuantStore::PackedU32(axis) = scheme.store {
+        if let QuantStore::PackedU32(axis) | QuantStore::PackedNative(axis) = scheme.store {
             let packed_axis = axes.len() - 1 - axis;
             let index = axes.iter().position(|&a| a == packed_axis).ok_or(Error::InvalidParameter)?;
-            scheme.store = QuantStore::PackedU32(axes.len() - 1 - index);
+            let axis = axes.len() - 1 - index;
+            scheme.store = match scheme.store {
+                QuantStore::PackedNative(_) => QuantStore::PackedNative(axis),
+                _ => QuantStore::PackedU32(axis),
+            };
         }
         let scales = if scheme.block_size().is_some() {
             self.scales.clone().permute(axes)?
@@ -337,11 +357,26 @@ mod tests {
             QuantScheme::default().per_block([3], ScaleDtype::F32),
             QuantScheme::default().per_block([2, 2, 2], ScaleDtype::F32),
             QuantScheme::default().per_tensor(ScaleDtype::F16),
-            QuantScheme::default().with_value(QuantValue::E4M3),
+            QuantScheme::default().with_value(QuantValue::E2M1).with_store(QuantStore::Native),
         ] {
             assert!(validate_scheme(&shape, &scheme).is_err());
         }
         assert!(validate_scheme(&Shape::new([3]), &QuantScheme::default()).is_err());
         assert!(validate_scheme(&Shape::new([3]), &QuantScheme::default().with_store(QuantStore::Native)).is_ok());
+    }
+
+    #[test]
+    fn native_fp4_requires_complete_pairs_on_its_own_packing_axis() {
+        let native = QuantScheme::default().with_value(QuantValue::E2M1).with_store(QuantStore::PackedNative(0));
+        assert!(validate_scheme(&Shape::new([2]), &native).is_ok());
+        assert!(validate_scheme(&Shape::new([3]), &native).is_err());
+        assert!(validate_scheme(&Shape::new([2]), &native.with_store(QuantStore::PackedU32(0))).is_err());
+        assert!(validate_scheme(&Shape::new([8]), &native.with_store(QuantStore::PackedU32(0))).is_ok());
+        let outer = native.with_store(QuantStore::PackedNative(1));
+        let shape = Shape::new([2, 3]);
+        assert!(validate_scheme(&shape, &outer).is_ok());
+        assert_eq!(storage_axes(&shape, &outer), [1, 0]);
+        assert!(validate_scheme(&shape, &native).is_err());
+        assert!(validate_scheme(&shape, &outer.with_value(QuantValue::Q4F)).is_err());
     }
 }
