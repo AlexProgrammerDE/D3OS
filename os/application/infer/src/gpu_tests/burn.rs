@@ -11,6 +11,7 @@ mod float_rounding;
 mod indexed;
 mod indexing;
 mod integer_arithmetic;
+mod integer_reduction;
 mod integers;
 mod interpolate;
 mod inverse;
@@ -245,6 +246,7 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
         d3os_ai::validation::typed_power::CORPUS_VERSION,
         d3os_ai::validation::typed_power::success_footer(&power_options, &power_report)
     ));
+    integer_reduction::run(backend)?;
     typed_erf::run(backend)?;
     let erf_options = d3os_ai::validation::typed_erf::Options::default();
     let erf_report = d3os_ai::burn::tensor::try_read_sync(d3os_ai::validation::typed_erf::run(&device, &erf_options))

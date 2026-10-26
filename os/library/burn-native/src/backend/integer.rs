@@ -174,28 +174,22 @@ impl IntTensorOps<Self> for Native {
         one("int_powi_scalar", &lhs, lhs.dtype(), |a| a.integer_scalar(WordOp::Power, rhs))
     }
     fn int_sum(tensor: IntTensor<Self>) -> IntTensor<Self> {
-        reduce("int_sum", &tensor, None, Reduction::Sum, DType::I32)
+        reduce("int_sum", &tensor, None, Reduction::Sum, tensor.dtype())
     }
     fn int_sum_dim(tensor: IntTensor<Self>, dim: usize) -> IntTensor<Self> {
-        reduce("int_sum_dim", &tensor, Some(dim), Reduction::Sum, DType::I32)
+        reduce("int_sum_dim", &tensor, Some(dim), Reduction::Sum, tensor.dtype())
     }
     fn int_prod(tensor: IntTensor<Self>) -> IntTensor<Self> {
-        reduce("int_prod", &tensor, None, Reduction::Product, DType::I32)
+        reduce("int_prod", &tensor, None, Reduction::Product, tensor.dtype())
     }
     fn int_prod_dim(tensor: IntTensor<Self>, dim: usize) -> IntTensor<Self> {
-        reduce("int_prod_dim", &tensor, Some(dim), Reduction::Product, DType::I32)
+        reduce("int_prod_dim", &tensor, Some(dim), Reduction::Product, tensor.dtype())
     }
     fn int_mean(tensor: IntTensor<Self>) -> IntTensor<Self> {
-        BackendTensor::apply("int_mean", Shape::new([1]), DType::I32, &[&tensor], |v| {
-            // Integer means must sum once before division. A sequence of
-            // per-axis integer means would truncate at each intermediate axis.
-            let tensor = if v[0].layout().is_contiguous() { v[0].clone() } else { v[0].copy()? };
-            let length = tensor.layout().len();
-            tensor.reshape(Shape::new([length]))?.reduce(0, Reduction::Mean)
-        })
+        BackendTensor::apply("int_mean", Shape::new([1]), tensor.dtype(), &[&tensor], |v| v[0].integer_mean())
     }
     fn int_mean_dim(tensor: IntTensor<Self>, dim: usize) -> IntTensor<Self> {
-        reduce("int_mean_dim", &tensor, Some(dim), Reduction::Mean, DType::I32)
+        reduce("int_mean_dim", &tensor, Some(dim), Reduction::Mean, tensor.dtype())
     }
     fn int_cumsum(tensor: IntTensor<Self>, dim: usize) -> IntTensor<Self> {
         one("int_cumsum", &tensor, tensor.dtype(), |t| t.scan(dim, Scan::Sum))
@@ -216,16 +210,22 @@ impl IntTensorOps<Self> for Native {
         reduce("int_argmin", &tensor, Some(dim), Reduction::ArgMin, tensor.dtype())
     }
     fn int_min(tensor: IntTensor<Self>) -> IntTensor<Self> {
-        reduce("int_min", &tensor, None, Reduction::Min, DType::I32)
+        reduce("int_min", &tensor, None, Reduction::Min, tensor.dtype())
     }
     fn int_max(tensor: IntTensor<Self>) -> IntTensor<Self> {
-        reduce("int_max", &tensor, None, Reduction::Max, DType::I32)
+        reduce("int_max", &tensor, None, Reduction::Max, tensor.dtype())
     }
     fn int_min_dim(tensor: IntTensor<Self>, dim: usize) -> IntTensor<Self> {
-        reduce("int_min_dim", &tensor, Some(dim), Reduction::Min, DType::I32)
+        reduce("int_min_dim", &tensor, Some(dim), Reduction::Min, tensor.dtype())
     }
     fn int_max_dim(tensor: IntTensor<Self>, dim: usize) -> IntTensor<Self> {
-        reduce("int_max_dim", &tensor, Some(dim), Reduction::Max, DType::I32)
+        reduce("int_max_dim", &tensor, Some(dim), Reduction::Max, tensor.dtype())
+    }
+    fn int_min_dim_with_indices(tensor: IntTensor<Self>, dim: usize) -> (IntTensor<Self>, IntTensor<Self>) {
+        reduction_pair("int_min_dim_with_indices", &tensor, dim, Reduction::Min, tensor.dtype())
+    }
+    fn int_max_dim_with_indices(tensor: IntTensor<Self>, dim: usize) -> (IntTensor<Self>, IntTensor<Self>) {
+        reduction_pair("int_max_dim_with_indices", &tensor, dim, Reduction::Max, tensor.dtype())
     }
     fn int_neg(tensor: IntTensor<Self>) -> IntTensor<Self> {
         one("int_neg", &tensor, tensor.dtype(), |t| t.integer_unary(WordOp::Negate))

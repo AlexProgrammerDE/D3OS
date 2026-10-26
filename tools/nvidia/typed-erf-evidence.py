@@ -856,9 +856,10 @@ def _raw_counts(expected):
     return "Counts { " + ", ".join(f"{k}: {expected['counts'][k]}" for k in RAW_COUNT_KEYS) + " }"
 
 
-def validate_raw(serial, expected, manifest, bounds, *, execution_os="d3os", backend="nvidia", fusion="disabled", scope="forward_erf_only"):
+def validate_raw(serial, expected, manifest, bounds, *, execution_os="d3os", backend="nvidia", fusion="disabled", scope="forward_erf_only", protocol=50, profiles=82):
     """Validate raw inventory/route records using the independent raw plan."""
     require((execution_os, backend, fusion, scope) == ("d3os", "nvidia", "disabled", "forward_erf_only"), "Erf raw platform or scope differs")
+    require(type(protocol) is int and type(profiles) is int and (protocol, profiles) in ((50, 82), (51, 83)), "Erf raw unqualified protocol/profile pair")
     _manifest_identity(manifest)
     plan = raw_reference_plan(expected)
     records = _records(serial, "NVIDIA_BURN_TYPED_ERF_", execution_os)
@@ -872,7 +873,7 @@ def validate_raw(serial, expected, manifest, bounds, *, execution_os="d3os", bac
     accuracy, end = _decode(line[len(prefix):])
     require(line[len(prefix) + end:] == "", "Erf raw accuracy contains trailing data")
     c = expected["counts"]
-    footer = f"NVIDIA_BURN_TYPED_ERF_OK operations=1 formats=5 corpus_rows={c['corpus_rows']} corpus_batches={c['corpus_batches']} chunk=4096 raw_poison_variants=2 comparisons={expected['comparisons']} rows={json.dumps(expected['row_counts'])} counts={counts} route_names={routes} route_counts={route_counts} oddness_checks={json.dumps(expected['oddness_checks'])} policy_sha256={POLICY_SHA256} fixture_sha256={FIXTURE_SHA256} corpus_version=1 sdk_operations=25 protocol=50 profiles=82 kernel=81 guards=ok tails=zero raw_poison_independence=exact_bytes source_nan_payloads=preserved resident=true full_writer=verified raw_f32=FloatArithmetic native_f32=TensorElementwise queued_last_owner=verified errors=recoverable qualification=project_targets steps=2 half=f32_neighbor_image no_ftz=strict oddness=exact_sign_xor scope=forward_erf_only linux_parity=not_claimed backend=nvidia"
+    footer = f"NVIDIA_BURN_TYPED_ERF_OK operations=1 formats=5 corpus_rows={c['corpus_rows']} corpus_batches={c['corpus_batches']} chunk=4096 raw_poison_variants=2 comparisons={expected['comparisons']} rows={json.dumps(expected['row_counts'])} counts={counts} route_names={routes} route_counts={route_counts} oddness_checks={json.dumps(expected['oddness_checks'])} policy_sha256={POLICY_SHA256} fixture_sha256={FIXTURE_SHA256} corpus_version=1 sdk_operations=25 protocol={protocol} profiles={profiles} kernel=81 guards=ok tails=zero raw_poison_independence=exact_bytes source_nan_payloads=preserved resident=true full_writer=verified raw_f32=FloatArithmetic native_f32=TensorElementwise queued_last_owner=verified errors=recoverable qualification=project_targets steps=2 half=f32_neighbor_image no_ftz=strict oddness=exact_sign_xor scope=forward_erf_only linux_parity=not_claimed backend=nvidia"
     require(records["OK"][0] == footer, "Erf raw exact footer, counts, preservation or SDK identity differs")
     return validate_accuracy(accuracy, expected["cell_values"], expected["comparisons"], bounds, reference_plan=plan, oddness_expected=expected["oddness_checks"])
 

@@ -13,9 +13,9 @@ It also includes float, integer, boolean, quantized, module, activation, transac
 Each method records its signature, source location, conditional compilation attributes, and implementation or inherited default.
 Associated types and source SHA-256 hashes accompany the report.
 
-The current inventory contains 484 methods: 281 native overrides and 203 inherited defaults.
+The current inventory contains 484 methods: 292 native overrides and 192 inherited defaults.
 All required methods have declarations or implementations. This count does not establish runtime support.
-The report also records 145 native helper bodies for manual review of dtype and shape restrictions.
+The report also records 149 native helper bodies for manual review of dtype and shape restrictions.
 
 The tool follows syntactic associated backend calls and expands the pinned `dequant_op_quant!` and `dequant_op_flow!` macros.
 It identifies 8 methods with possible paths to explicit declines or panic declarations.
@@ -622,6 +622,75 @@ Run `python3 tools/nvidia/typed-power-generate.py --check` to reproduce the nume
 Run `python3 tools/nvidia/test-typed-power.py` to check the evidence validator without a GPU.
 Use `--burn-typed-power` with the Linux launcher and a fresh output directory for each attempt.
 The `--common-linux`, dtype, finite, rank-zero, and Flex32 filters declare the selected comparison domain.
+
+## Typed integer reductions
+
+Protocol 51 adds Sum, Product, Mean, Min, Max, ArgMin, ArgMax, and paired extrema across all eight ordinary integer formats.
+The portable bundle contains 250 entries and 83 compute profiles.
+All 248 preceding instruction sections remain byte-identical.
+
+Axis arithmetic wraps in a 32-bit accumulator for narrow integers and a 64-bit accumulator for I64 and U64.
+Axis mean divides before the final narrowing conversion.
+Global mean instead materializes the sum in the input dtype, then divides by a count representable in that dtype.
+For I8 `[127,127]`, axis mean returns `127` and global mean returns `-1` under this Native policy.
+Invalid global counts return recoverable errors before GPU work.
+
+Minima, maxima, and winner selection retain every input bit.
+Equal values select the first logical coordinate.
+Exposed integer indices retain their low bits after narrowing.
+Paired values come from an independent reduction of the original source, so a wrapped index cannot select the wrong value.
+These pairs require no tensor payload or bounds-status readback.
+The F32 paired path uses the same resident composition and preserves the requested index dtype.
+
+Short axes use one GPU lane per packed output word.
+Axes of at least 128 elements use one cooperative CTA per output word.
+Both paths write complete words and zero unused tail bytes.
+Wide loads and stores use two U32 words and support four-byte pointer alignment.
+Existing F32 and I32 reductions keep their cooperative kernels.
+For empty outputs, these legacy paths reuse storage without GPU work.
+Other integer formats allocate one placeholder and launch only the allocator's clear kernel.
+
+On the D3OS GPU, guarded and Native checks pass 4,445 result values.
+The shared corpus passes 323 valid cases and 42 recoverable-error cases, with another 2,360 result values.
+The Native scope checks source and alias preservation for all 365 cases.
+All 464 rejection checks pass, together with both poisoned-output passes, fresh writers, queued lifetimes, and resident value/index consumers.
+The complete earlier operator suite also passes, including classification gradients and MNIST training, checkpoint, and export checks.
+All three portable families compile inside D3OS and match their qualified host code bytes.
+
+The immutable GPU capture is `~/.cache/d3os/burn-integer-reduction-harness-complete/`.
+A separate host-only replay corrects the expected scope for the 42 additional error-preservation checks.
+It reruns every host gate without changing the 307-file capture or any runtime source.
+The three earlier failed captures remain separate evidence.
+
+The complete Linux CUDA run stops at the pinned CubeCL rank-zero layout rejection.
+With rank zero excluded, all eight formats pass 283 valid cases and 2,320 values.
+This filtered run includes 52 pair steps and 16 chains. It skips 34 invalid-input diagnostics.
+An isolated I8 global-mean count diagnostic triggers the pinned CubeCL scalar-conversion panic.
+Native rejects that count recoverably before GPU work.
+These results qualify the selected integer corpus, not complete Linux backend parity.
+The Linux captures remain under `~/.cache/d3os/burn-ir-linux-1/`, `burn-ir-linux-2/`, and `burn-ir-linux-3/`.
+
+These checks measure correctness, not execution speed.
+Further floating reductions, typed scans, quantized contracts, broader training support, and full backend and performance parity remain incomplete.
+The broad dtype usage flags remain disabled until their complete conversion and arithmetic contracts pass.
+
+Build the reference runner from the repository root:
+
+```bash
+cargo +1.98.1 build --manifest-path tools/mnist-benchmark/Cargo.toml --release --locked --bin integer_reduction
+```
+
+Run the Linux CUDA comparison in a fresh directory:
+
+```bash
+python3 tools/nvidia/linux-reference.py \
+  --directory /tmp/d3os-linux-ir \
+  --burn-integer-reduction tools/mnist-benchmark/target/release/integer_reduction
+```
+
+The runner's `--expected-summary` and `--diagnostics` commands initialize no device.
+The Linux launcher supports explicit dtype, rank-zero, and nonempty filters.
+Its isolated error-case flag runs one diagnostic instead of treating a panic as conformance.
 
 ## Typed Erf
 

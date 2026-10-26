@@ -534,10 +534,18 @@ impl NativeTensor {
         })
     }
 
-    /// Reduce one dimension, preserving its rank. FP32 extrema propagate the
-    /// first NaN. Both types select the first logical index for equal values.
-    /// I32 sum and product wrap; means divide the wrapped sum toward zero.
+    /// Reduce one dimension, preserving its rank and integer dtype. Extrema
+    /// select the first logical index for equal values. Integer arithmetic
+    /// wraps in the declared accumulator; means divide before narrowing.
     pub fn reduce(&self, axis: usize, operation: Reduction) -> Result<Self> {
+        if self.dtype.is_int() || self.dtype.is_uint() {
+            // Validation precedes empty handling, including zero-axis means
+            // and extrema. Keep the cooperative legacy I32 kernels intact.
+            if self.dtype != DType::I32 {
+                return self.integer_reduce(Some(axis), operation);
+            }
+            crate::integer_reduction::plan(&self.layout, self.dtype, Some(axis), operation)?;
+        }
         let operation = match self.dtype {
             DType::F32 if !operation.is_integer() => operation,
             DType::I32 => operation.integer(),
@@ -545,6 +553,9 @@ impl NativeTensor {
         };
         let layout = Layout::contiguous(self.layout.reduction_shape(axis)?)?;
         let dtype = if operation.index() { DType::I32 } else { self.dtype };
+        if self.layout.shape()[axis] == 0 && !operation.allows_empty() {
+            return Err(Error::InvalidParameter);
+        }
         if layout.is_empty() {
             return Ok(Self {
                 buffer: self.buffer.clone(),

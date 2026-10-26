@@ -377,6 +377,12 @@ Its rank-zero and Flex32 upload rejections remain separate diagnostics.
 The [coverage reference](burn-backend-coverage.md#typed-erf) describes the numerical policy and immutable capture.
 This forward checkpoint does not establish general typed autodiff, full backend coverage, or performance parity.
 
+All eight ordinary integer formats now support sums, products, means, extrema, indices, and resident value/index pairs through protocol 51.
+D3OS passes 6,805 new result values, all 42 recoverable-error cases, and every earlier GPU regression gate.
+The filtered Linux CUDA comparison passes 2,320 values across all eight formats. Its rank-zero rejection remains separate evidence.
+The [coverage reference](burn-backend-coverage.md#typed-integer-reductions) describes the accumulator, narrowing, empty-result, and error policies.
+This correctness checkpoint does not complete floating reductions, typed scans, the full backend, or performance parity.
+
 I32 tensor and generic scalar powers now use resident wrapping integer arithmetic without a floating-point intermediate.
 The exponent bits follow the same unsigned interpretation as the pinned Linux backend.
 FP32 deformable convolution now provides input, offset, weight, modulation-mask, and bias gradients on the native GPU.

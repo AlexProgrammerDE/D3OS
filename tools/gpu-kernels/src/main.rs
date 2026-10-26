@@ -157,7 +157,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         inference.extend(d3os_nvidia::compute::indexing::Scatter::ENTRIES.iter().skip(1).map(|op| op.symbol()));
-        inference.extend(["burn_avg_pool", "burn_adaptive_avg_pool", "burn_adaptive_avg_pool_backward"]);
+        inference.extend([
+            "burn_avg_pool",
+            "burn_adaptive_avg_pool",
+            "burn_adaptive_avg_pool_backward",
+            "burn_integer_reduce_tree",
+        ]);
         compile(&output, "inference", &inference, toolkit.as_deref())?;
     } else {
         let names: Vec<&str> = names.iter().map(String::as_str).collect();

@@ -324,6 +324,24 @@ impl FloatTensorOps<Self> for Native {
     fn float_argmin(tensor: FloatTensor<Self>, dim: usize, out_dtype: IntDType) -> IntTensor<Self> {
         reduce("float_argmin", &tensor, Some(dim), Reduction::ArgMin, out_dtype.into())
     }
+    fn float_min(tensor: FloatTensor<Self>) -> FloatTensor<Self> {
+        reduce("float_min", &tensor, None, Reduction::Min, tensor.dtype())
+    }
+    fn float_max(tensor: FloatTensor<Self>) -> FloatTensor<Self> {
+        reduce("float_max", &tensor, None, Reduction::Max, tensor.dtype())
+    }
+    fn float_min_dim(tensor: FloatTensor<Self>, dim: usize) -> FloatTensor<Self> {
+        reduce("float_min_dim", &tensor, Some(dim), Reduction::Min, tensor.dtype())
+    }
+    fn float_max_dim(tensor: FloatTensor<Self>, dim: usize) -> FloatTensor<Self> {
+        reduce("float_max_dim", &tensor, Some(dim), Reduction::Max, tensor.dtype())
+    }
+    fn float_min_dim_with_indices(tensor: FloatTensor<Self>, dim: usize, out_dtype: IntDType) -> (FloatTensor<Self>, IntTensor<Self>) {
+        reduction_pair("float_min_dim_with_indices", &tensor, dim, Reduction::Min, out_dtype.into())
+    }
+    fn float_max_dim_with_indices(tensor: FloatTensor<Self>, dim: usize, out_dtype: IntDType) -> (FloatTensor<Self>, IntTensor<Self>) {
+        reduction_pair("float_max_dim_with_indices", &tensor, dim, Reduction::Max, out_dtype.into())
+    }
     fn float_expand(tensor: FloatTensor<Self>, shape: Shape) -> FloatTensor<Self> {
         view("float_expand", &tensor, layout(&tensor).and_then(|l| l.expand(shape)))
     }

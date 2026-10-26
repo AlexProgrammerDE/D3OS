@@ -535,6 +535,16 @@ class ErfEvidence(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             e.validate_raw(serial, expected, self.manifest, self.bounds, execution_os="linux")
 
+    def test_append_only_protocol_requires_explicit_matching_profile_identity(self):
+        expected = copy.deepcopy(RAW_DEFAULT)
+        accuracy = synthetic_accuracy(expected, self.bounds, raw=True)
+        old = raw_serial(expected, accuracy)
+        current = old.replace("protocol=50 profiles=82", "protocol=51 profiles=83")
+        self.assertEqual(e.validate_raw(current, expected, self.manifest, self.bounds, protocol=51, profiles=83), accuracy)
+        for text, protocol, profiles in ((old, 51, 83), (current, 50, 82), (current, 51, 82), (current, 50, 83), (current, 52, 84), (current, True, 83)):
+            with self.subTest(protocol=protocol, profiles=profiles), self.assertRaises(RuntimeError):
+                e.validate_raw(text, expected, self.manifest, self.bounds, protocol=protocol, profiles=profiles)
+
     def test_reference_special_rules_allow_nan_output_payloads_but_keep_sources_exact(self):
         for fi in range(5):
             for source in (0, e.sign(fi), e.EXPONENTS[fi], e.EXPONENTS[fi] | e.sign(fi)):

@@ -6,6 +6,8 @@ Set TYPED_MATH_SCRATCH_PREVIOUS_ARTIFACTS to the corrected Power24 v2 export
 to check that it cannot enter under the corrected profile.
 Set TYPED_MATH_SCRATCH_REJECTED_ARTIFACTS to the first Erf25 export with the
 incomplete unary predicate to check that it cannot enter the final profile.
+Set TYPED_MATH_SCRATCH_PRIOR_ERF_REPORT to the accepted Erf25 v1 report to
+check that renewal preserves its certificate and rejects stale provenance.
 """
 
 import copy
@@ -614,6 +616,23 @@ class ScratchArtifactTests(unittest.TestCase):
                     self.assertRaises(ValueError),
                 ):
                     self.qualify(provenance=provenance)
+
+    def test_protocol_renewal_preserves_erf_certificate_and_rejects_old_provenance(
+        self,
+    ):
+        location = os.environ.get("TYPED_MATH_SCRATCH_PRIOR_ERF_REPORT")
+        if not location:
+            self.skipTest("requires the accepted Erf25 v1 report")
+        previous = json.loads(Path(location).read_text())["qualification"]
+        with self.assertRaises(ValueError):
+            self.qualify(provenance=previous["provenance"])
+        # Protocol registration may change provenance and artifact spelling,
+        # while every schedule, resource, constant and local bound stays exact.
+        renewed = json.loads(json.dumps(self.qualify()))
+        for field in ("profile", "provenance", "cubin_sha256", "sass_sha256"):
+            previous.pop(field)
+            renewed.pop(field)
+        self.assertEqual(renewed, previous)
 
     def test_historical_scratch_artifact_requires_its_own_profile(self):
         location = os.environ.get("TYPED_MATH_SCRATCH_HISTORICAL_ARTIFACTS")

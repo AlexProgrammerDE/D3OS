@@ -152,15 +152,19 @@ fn reduce(op: &'static str, tensor: &BackendTensor, axis: Option<usize>, reducti
         let reduced = if let Some(axis) = axis {
             v[0].reduce(axis, reduction)
         } else {
-            Nvidia.record_commands(|| {
-                let mut tensor = v[0].clone();
-                for axis in (0..tensor.shape().num_dims()).rev() {
-                    tensor = tensor.reduce(axis, reduction)?;
-                }
-                tensor.reshape(Shape::new([1]))
-            })
+            v[0].reduce_all(reduction)
         }?;
         if reduction.index() { reduced.cast(dtype) } else { Ok(reduced) }
+    })
+}
+
+fn reduction_pair(op: &'static str, tensor: &BackendTensor, axis: usize, reduction: Reduction, index_dtype: DType) -> (BackendTensor, BackendTensor) {
+    let mut shape = tensor.shape();
+    if let Some(dimension) = shape.get_mut(axis) {
+        *dimension = 1;
+    }
+    BackendTensor::pair(op, [shape.clone(), shape], [tensor.dtype(), index_dtype], &[tensor], |values| {
+        values[0].reduction_pair(axis, reduction, index_dtype)
     })
 }
 
@@ -181,4 +185,86 @@ fn cat(op: &'static str, tensors: Vec<BackendTensor>, dim: usize) -> BackendTens
 
 pub(crate) fn check_errors() -> Result<(), ExecutionError> {
     CONTEXT.check()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use burn_backend::{
+        IntDType,
+        ops::{FloatTensorOps, IntTensorOps},
+    };
+
+    #[test]
+    fn integer_reduction_failures_preserve_dtype_shape_and_the_original_error() {
+        for dtype in [DType::I64, DType::I32, DType::I16, DType::I8, DType::U64, DType::U32, DType::U16, DType::U8] {
+            let tensor = BackendTensor::build("input", Shape::new([2, 3]), dtype, || Err(Error::InvalidParameter));
+            assert!(!tensor.failure().unwrap().report().is_device_poisoned());
+            let failure = tensor.failure().unwrap();
+            for reduced in [
+                Native::int_sum(tensor.clone()),
+                Native::int_prod(tensor.clone()),
+                Native::int_mean(tensor.clone()),
+                Native::int_min(tensor.clone()),
+                Native::int_max(tensor.clone()),
+            ] {
+                assert_eq!(reduced.shape(), Shape::new([1]));
+                assert_eq!(reduced.dtype(), dtype);
+                assert!(alloc::sync::Arc::ptr_eq(&failure, &reduced.failure().unwrap()));
+                assert!(!reduced.read().unwrap_err().is_device_poisoned());
+            }
+            for reduced in [
+                Native::int_sum_dim(tensor.clone(), 1),
+                Native::int_prod_dim(tensor.clone(), 1),
+                Native::int_mean_dim(tensor.clone(), 1),
+                Native::int_min_dim(tensor.clone(), 1),
+                Native::int_max_dim(tensor.clone(), 1),
+                Native::int_argmin(tensor.clone(), 1),
+                Native::int_argmax(tensor.clone(), 1),
+            ] {
+                assert_eq!(reduced.shape(), Shape::new([2, 1]));
+                assert_eq!(reduced.dtype(), dtype);
+                assert!(alloc::sync::Arc::ptr_eq(&failure, &reduced.failure().unwrap()));
+            }
+            for (values, indices) in [
+                Native::int_min_dim_with_indices(tensor.clone(), 1),
+                Native::int_max_dim_with_indices(tensor.clone(), 1),
+            ] {
+                assert_eq!(values.shape(), Shape::new([2, 1]));
+                assert_eq!(indices.shape(), values.shape());
+                assert_eq!(values.dtype(), dtype);
+                assert_eq!(indices.dtype(), dtype);
+                assert!(alloc::sync::Arc::ptr_eq(&values.failure().unwrap(), &indices.failure().unwrap()));
+                assert!(alloc::sync::Arc::ptr_eq(&failure, &values.failure().unwrap()));
+            }
+        }
+    }
+
+    #[test]
+    fn float_pairs_keep_the_requested_index_metadata_and_shared_failure() {
+        let tensor = BackendTensor::build("input", Shape::new([3, 257]), DType::F32, || Err(Error::InvalidParameter));
+        assert!(!tensor.failure().unwrap().report().is_device_poisoned());
+        for index_dtype in [
+            IntDType::I64,
+            IntDType::I32,
+            IntDType::I16,
+            IntDType::I8,
+            IntDType::U64,
+            IntDType::U32,
+            IntDType::U16,
+            IntDType::U8,
+        ] {
+            for (values, indices) in [
+                Native::float_min_dim_with_indices(tensor.clone(), 1, index_dtype),
+                Native::float_max_dim_with_indices(tensor.clone(), 1, index_dtype),
+            ] {
+                assert_eq!(values.shape(), Shape::new([3, 1]));
+                assert_eq!(indices.shape(), values.shape());
+                assert_eq!(values.dtype(), DType::F32);
+                assert_eq!(indices.dtype(), DType::from(index_dtype));
+                assert!(alloc::sync::Arc::ptr_eq(&values.failure().unwrap(), &indices.failure().unwrap()));
+                assert!(!values.read().unwrap_err().is_device_poisoned());
+            }
+        }
+    }
 }

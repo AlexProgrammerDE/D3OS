@@ -10,6 +10,7 @@ pub mod elementwise;
 pub mod float_arithmetic;
 pub mod indexing;
 pub mod integer_arithmetic;
+pub mod integer_reduction;
 pub mod interpolate;
 pub mod optimizer;
 pub mod packed_gather;
@@ -28,7 +29,7 @@ pub mod storage;
 pub mod updates;
 pub mod words;
 
-pub const VERSION: u32 = 50;
+pub const VERSION: u32 = 51;
 /// END_COMMANDS flag: an inner recording scope joins its parent's completion.
 /// The outermost scope always waits. Zero retains synchronous nested scopes.
 pub const DEFER_NESTED_COMPLETION: u64 = 1;
@@ -62,7 +63,7 @@ pub struct MemoryProfile {
     pub device_cached_bytes: u64,
     pub device_retired_bytes: u64,
 }
-pub const KERNEL_COUNT: usize = 82;
+pub const KERNEL_COUNT: usize = 83;
 
 /// CPU service costs by request operation, including queue work within it.
 #[derive(Clone, Copy, Debug, Default)]
@@ -202,9 +203,10 @@ pub enum Kernel {
     PackedScatterAssign = 79,
     IntegerArithmetic = 80,
     FloatArithmetic = 81,
+    IntegerReduction = 82,
 }
 
-const _: () = assert!(Kernel::FloatArithmetic as usize + 1 == KERNEL_COUNT);
+const _: () = assert!(Kernel::IntegerReduction as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -272,6 +274,7 @@ impl Kernel {
                 | Self::TensorStorage
                 | Self::IntegerArithmetic
                 | Self::FloatArithmetic
+                | Self::IntegerReduction
                 | Self::PackedGather
                 | Self::PackedMaskWhere
                 | Self::TensorPredicate
@@ -394,6 +397,7 @@ impl Kernel {
             79 => Self::PackedScatterAssign,
             80 => Self::IntegerArithmetic,
             81 => Self::FloatArithmetic,
+            82 => Self::IntegerReduction,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -482,12 +486,14 @@ impl Kernel {
             Self::PackedScatterAssign => "burn_packed_scatter_assign",
             Self::IntegerArithmetic => "burn_integer_arithmetic",
             Self::FloatArithmetic => "burn_float_arithmetic",
+            Self::IntegerReduction => "burn_integer_reduce_short",
         }
     }
 
     /// Select the cuTile specialization without changing the public request ABI.
     pub fn entry(self, parameters: &[u32]) -> &'static str {
         match (self, parameters) {
+            (Self::IntegerReduction, p) => integer_reduction::symbol(p).unwrap_or(self.symbol()),
             (Self::Interpolate, p) if p.len() == interpolate::PARAMETERS => {
                 interpolate::Mode::from_raw(p[6]).map_or(self.symbol(), |mode| mode.symbol(p[14] != 0))
             }
@@ -721,6 +727,10 @@ impl Kernel {
             (Self::FloatArithmetic, p) => {
                 extents[..3].copy_from_slice(&float_arithmetic::validate(p)?);
                 (float_arithmetic::work_items(p)?, 3, 2, false)
+            }
+            (Self::IntegerReduction, p) => {
+                extents[..2].copy_from_slice(&integer_reduction::validate(p)?);
+                (integer_reduction::work_items(p)?, 2, 1, false)
             }
             (Self::IntegerArithmetic, p) => {
                 extents[..3].copy_from_slice(&integer_arithmetic::validate(p)?);

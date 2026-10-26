@@ -327,6 +327,8 @@ fn main() {
             .replace("INTEGER_PARAMETERS", &parameters)
             .replace("INTEGER_ADDRESSES", &addresses),
     );
+    println!("cargo:rerun-if-changed=src/burn-integer-reduction.rs.in");
+    source.push_str(&fs::read_to_string("src/burn-integer-reduction.rs.in").expect("read typed integer reduction"));
     println!("cargo:rerun-if-changed=src/burn-words.rs.in");
     let words = fs::read_to_string("src/burn-words.rs.in").expect("read Burn word template");
     for op in d3os_nvidia::compute::words::WordOp::ALL {

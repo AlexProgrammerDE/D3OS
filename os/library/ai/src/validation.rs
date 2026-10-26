@@ -9,6 +9,7 @@ pub mod float_rounding;
 pub mod integer;
 pub mod integer_arithmetic;
 pub mod integer_matrix;
+pub mod integer_reduction;
 pub mod interpolate;
 pub mod inverse;
 pub mod movement;
@@ -28,9 +29,9 @@ pub mod storage;
 pub mod typed_erf;
 pub mod typed_exp_log;
 pub mod typed_power;
+pub mod typed_remainder;
 pub mod typed_trig;
 pub mod typed_unary;
-pub mod typed_remainder;
 use alloc::{format, string::String};
 use burn::{
     module::{Module, Param},

@@ -12,6 +12,7 @@ mod float_arithmetic;
 mod indexing;
 mod indices;
 mod integer_arithmetic;
+mod integer_reduction;
 pub mod interpolate;
 pub mod layout;
 mod linear;

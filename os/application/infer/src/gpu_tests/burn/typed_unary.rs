@@ -985,7 +985,7 @@ pub(super) fn run(backend: &Nvidia) -> Result<()> {
     // Reject incompatible contracts before any GPU work, but still report all cells.
     let contract = if !FROZEN
         || abi::VERSION < 48
-        || abi::KERNEL_COUNT != 82
+        || abi::KERNEL_COUNT < 82
         || Kernel::FloatArithmetic as u32 != 81
         || float::Operation::ALL.len() < 23
         || oracle::DTYPES != FORMATS.map(|(dtype, _)| dtype)

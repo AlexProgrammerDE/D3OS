@@ -1085,8 +1085,8 @@ fn exercise(backend: &Nvidia, counts: &mut Counts, observed: &mut Observed) -> R
     public_errors(backend, counts, observed)
 }
 fn registration_ready() -> bool {
-    abi::VERSION == 50
-        && abi::KERNEL_COUNT == 82
+    abi::VERSION >= 50
+        && abi::KERNEL_COUNT >= 82
         && Kernel::FloatArithmetic as u32 == 81
         && Kernel::Zero as u32 == 19
         && float::Operation::ALL.len() == 25

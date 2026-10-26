@@ -167,14 +167,14 @@ fn classification(backend: &Nvidia, device: &Device) -> Result<(), String> {
     let loss = criterion.forward(logits.clone(), targets);
     let gradients = loss.clone().backward();
     let gradient = logits.grad(&gradients).ok_or("Burn classification gradient is missing")?;
-    // Burn's default maximum-with-indices and target selection each gather.
-    // Their two backward scatters also validate device indices. The detached
-    // maximum retains require_grad in Burn, so its separate branch runs too.
-    resident(backend, &before, 4)?;
+    // The maximum value and index use resident reductions. Target selection
+    // still gathers, and the two backward scatters validate device indices.
+    // The detached maximum retains require_grad, so its branch runs too.
+    resident(backend, &before, 3)?;
     let kernels_after = backend.profile().map_err(|e| format!("Burn classification kernels: {e}"))?;
-    if [abi::Kernel::Gather, abi::Kernel::Scatter]
+    if [(abi::Kernel::Gather, 1), (abi::Kernel::Scatter, 2)]
         .iter()
-        .any(|&kernel| kernels_after[kernel as usize].calls - kernels_before[kernel as usize].calls != 2)
+        .any(|&(kernel, calls)| kernels_after[kernel as usize].calls - kernels_before[kernel as usize].calls != calls)
     {
         return Err(String::from("Burn classification bounds reads do not match the indexed operations"));
     }
