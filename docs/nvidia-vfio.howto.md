@@ -249,6 +249,9 @@ The host audit also generates qualification records for the native loader.
 D3OS verifies the runtime assets and requires its compiled output to match the qualified output hash.
 These records qualify the unused launch-metadata slot and the supported CUDA data-pointer relocations.
 Regenerate the bundle with `--audit` after kernel source changes.
+The typed trigonometric entry also requires its reviewed SM89 library-scratch certificate.
+The audit binds its instruction schedule, constants, helper linkage, compiler provenance, and 96-byte frame.
+Changed code requires new qualification. Other previously spill-free entries retain their zero-local-memory checks.
 The compiler and generated modules remain inside D3OS. The module cache lasts until the VM stops.
 The boot log reports compilation and validation as separate load phases.
 The launcher waits for `NVIDIA_COMPILE_READY` before it starts a workload or its timeout.

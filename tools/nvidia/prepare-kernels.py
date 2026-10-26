@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shutil
+import struct
 import subprocess
 import tempfile
 from contextlib import contextmanager
@@ -62,7 +63,16 @@ def staging_directory(output):
             raise
 
 
-def audit(family, sass):
+def typed_math_scratch():
+    spec = importlib.util.spec_from_file_location(
+        "typed_math_scratch", Path(__file__).with_name("typed-math-scratch.py")
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def audit(family, sass, *, cubin=None, entries=None, provenance=None):
     """Check actual device instructions, not compiler source annotations."""
     bodies = dict(
         re.findall(
@@ -150,6 +160,16 @@ def audit(family, sass):
             "vector_project_q6k",
         ):
             body = bodies.get(name, "")
+            if name == "burn_float_arithmetic" and re.search(r"\b(?:LDL|STL)\b", body):
+                if cubin is None or entries is None or provenance is None:
+                    raise RuntimeError(
+                        f"{name}: library scratch requires cubin, entry metadata and compiler provenance"
+                    )
+                try:
+                    typed_math_scratch().qualify(cubin, sass, entries, provenance)
+                except (ValueError, KeyError, IndexError, UnicodeError, struct.error) as error:
+                    raise RuntimeError(f"{name}: library-scratch qualification failed: {error}") from error
+                continue
             if not body or re.search(r"\b(?:LDL|STL)\b", body):
                 raise RuntimeError(f"{name}: specialization must remain spill-free")
         for pattern in (r"\bLDL\b", r"\bSTL\b"):
@@ -213,6 +233,8 @@ def main():
     env["CUDA_TOOLKIT_PATH"] = str(toolkit)
     env["CARGO_TARGET_DIR"] = str(ROOT / "target/cutile-build")
     crate = ROOT / "tools/gpu-kernels"
+    scratch = typed_math_scratch() if args.audit else None
+    provenance = scratch.collect_provenance(crate, toolkit, disassembler) if scratch else None
     toolchain = tomllib.loads((crate / "rust-toolchain.toml").read_text())["toolchain"][
         "channel"
     ]
@@ -236,6 +258,8 @@ def main():
             check=True,
             timeout=900,
         )
+        if scratch and scratch.collect_provenance(crate, toolkit, disassembler) != provenance:
+            raise RuntimeError("typed-math source/compiler provenance changed during compilation")
         manifest = {
             "architecture": None,
             "format": "tile-ir",
@@ -267,8 +291,17 @@ def main():
                 text=True,
                 timeout=60,
             ).stdout
-            bodies = audit(family, sass)
             (staging / f"{family}.sass").write_text(sass)
+            cubin_bytes = cubin.read_bytes()
+            bodies = audit(
+                family, sass, cubin=cubin_bytes, entries=entries, provenance=provenance
+            )
+            if family == "inference" and re.search(
+                r"\b(?:LDL|STL)\b", bodies.get("burn_float_arithmetic", "")
+            ):
+                manifest["kernels"][family]["library_scratch_qualification"] = (
+                    scratch.qualify(cubin_bytes, sass, entries, provenance)
+                )
             if any(entry["entry"] not in bodies for entry in entries):
                 raise RuntimeError(f"{family}: an entry has no disassembled code")
             manifest["kernels"][family]["host_audit"] = {

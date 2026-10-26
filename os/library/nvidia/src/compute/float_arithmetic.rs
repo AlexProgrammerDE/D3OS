@@ -26,6 +26,9 @@ pub enum Operation {
     Sqrt = 14,
     Exp = 15,
     Log = 16,
+    Tanh = 18,
+    Sin = 19,
+    Cos = 20,
     Floor = 21,
     Ceil = 22,
     Round = 23,
@@ -35,7 +38,7 @@ pub enum Operation {
 }
 
 impl Operation {
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 19] = [
         Self::Add,
         Self::Subtract,
         Self::Multiply,
@@ -46,6 +49,9 @@ impl Operation {
         Self::Sqrt,
         Self::Exp,
         Self::Log,
+        Self::Tanh,
+        Self::Sin,
+        Self::Cos,
         Self::Floor,
         Self::Ceil,
         Self::Round,
@@ -71,6 +77,9 @@ impl Operation {
                 | Self::Sqrt
                 | Self::Exp
                 | Self::Log
+                | Self::Tanh
+                | Self::Sin
+                | Self::Cos
                 | Self::Floor
                 | Self::Ceil
                 | Self::Round

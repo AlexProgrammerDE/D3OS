@@ -570,6 +570,42 @@ Zero and the minimum subnormal differ by one representable step. The separate cl
 
 These checks cover forward Exp and Log. General typed autodiff, full backend coverage, and workload performance parity remain incomplete.
 
+## Typed trigonometric functions
+
+Protocol 47 adds Tanh, Sin, and Cos across F64, F32, Flex32, F16, and BF16.
+The floating entry supports 19 operations. The bundle retains 248 entries and 82 compute profiles.
+The other 247 entries retain 534 identical instruction and constant sections.
+
+F64 keeps double operands and results. Half inputs widen to F32, then round once to destination storage.
+Native F32 retains its existing elementwise entries. Guarded checks also exercise the typed F32 entry.
+
+The independent MPFR corpus contains 439,735 rows, including every F16 and BF16 encoding for each operation.
+It includes 175 additional rows for three-step chains that look up references using each actual stored intermediate.
+F64 Tanh permits one representable step; F64 Sin/Cos and F32/Flex32 permit two.
+Half results must belong to the destination rounding image of the five permitted F32 neighbors.
+Special values, zero signs, nonzero preservation, result signs, and the output range have separate gates.
+Finite normal/subnormal transitions remain diagnostic within the numerical allowance.
+
+These limits are project qualification targets, not vendor guarantees.
+
+The enlarged entry uses 71 registers, 106,112 code bytes, and a 96-byte frame with 128 threads.
+Its vendor argument-reduction routines use two 28-byte F32 arrays and one 40-byte F64 array.
+The host audit recognizes the complete reviewed instruction schedule, constants, helper linkage, resources, and compiler provenance.
+All 131 local instruction sites must match that certificate. Other previously spill-free entries retain their zero-local-memory checks.
+A changed schedule requires new qualification. This certificate does not prove arbitrary SASS dataflow or numerical accuracy.
+
+On D3OS, the guarded harness checks 5,634 launches and passes 2,239,480 comparisons with zero failures.
+The shared Burn corpus passes 1,815 cases and 1,024,565 result observations, including rank zero and direct Flex32 inputs.
+Checks include guards, zero packed tails, output-poison independence, source preservation, routing, queued ownership, and recoverable errors.
+All earlier GPU regression gates also pass. Guest-compiled code matches the qualified host output for all three modules.
+
+Linux CUDA's strict attempt stops at rank-zero readback. Excluding rank zero exposes the direct Flex32 upload rejection.
+Excluding both domains passes 979,334 observations across F64, F32, F16, and BF16 with zero qualification failures.
+The CUDA runner records fusion as enabled and materializes each chain step.
+The failing strict attempts and passing filtered result remain separate records.
+
+This checkpoint qualifies forward Tanh, Sin, and Cos. Broader typed autodiff, full backend coverage, and performance parity remain incomplete.
+
 ## Typed integer elementwise arithmetic
 
 Protocol 42 adds 15 integer operations across I8, I16, I32, I64, U8, U16, U32, and U64.
@@ -1861,3 +1897,25 @@ For the full Linux attempt, omit both diagnostic flags and use a fresh directory
 The finite filter retains finite inputs and expected outputs, including subnormal values.
 The dtype and operation filters narrow the declared comparison domain.
 The runner's `--expected-summary` reports selected counts before device creation.
+
+### Trigonometric qualification
+
+The Native archive uses `target/nvidia/burn-backend-validation/typed-trig-first/`.
+Linux archives use the `target/nvidia/burn-backend-audit/linux-typed-trig-` prefix.
+The `strict-first` and `no-rank-zero-first` records retain the upstream rejections.
+The `no-rank-zero-no-flex32-first` record contains the passing filtered CUDA result.
+
+Build the runner and verify its independent references:
+
+```bash
+cd tools/mnist-benchmark
+cargo build --release --locked --bin typed_trig
+cd ../..
+python3 tools/nvidia/typed-trig-generate.py --check
+python3 tools/nvidia/test-typed-trig.py
+```
+
+Use `prepare-kernels.py --audit` and the complete Native command above to test the current source.
+Select `--burn-typed-trig tools/mnist-benchmark/target/release/typed_trig` for the Linux launcher.
+The matching diagnostic flags are `--burn-typed-trig-skip-rank-zero` and `--burn-typed-trig-no-flex32`.
+Omit both flags for the strict attempt. Use a fresh output directory for each attempt.

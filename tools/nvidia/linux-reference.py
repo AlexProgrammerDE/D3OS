@@ -73,21 +73,29 @@ def stage_burn_program(root, binary, destination):
     return libdevice
 
 
-def typed_exp_log_expected_cells(binary, arguments, expected):
+def typed_math_expected_cells(binary, arguments, expected, operations, label):
     base = [argument for argument in arguments if not argument.startswith(("--dtype=", "--op="))]
-    values = [[0, 0] for _ in range(5)]
+    values = [[0] * len(operations) for _ in range(5)]
     for fi, dtype in enumerate(("f64", "f32", "flex32", "f16", "bf16")):
-        for oi, op in enumerate(("exp", "log")):
+        for oi, op in enumerate(operations):
             if expected["selected_dtype_operation_counts"][fi][oi] == 0:
                 continue
             command = [str(binary), "--expected-summary", *base, f"--dtype={dtype}", f"--op={op}"]
             cell = json.loads(subprocess.check_output(command, text=True, cwd=ROOT))
             if cell["tensor_rows"] != expected["selected_dtype_operation_counts"][fi][oi]:
-                raise RuntimeError("typed exp/log per-operation reference plan differs")
+                raise RuntimeError(f"typed {label} per-operation reference plan differs")
             values[fi][oi] = cell["values"]
     if sum(map(sum, values)) != expected["values"]:
-        raise RuntimeError("typed exp/log per-operation value plan differs")
+        raise RuntimeError(f"typed {label} per-operation value plan differs")
     return values
+
+
+def typed_exp_log_expected_cells(binary, arguments, expected):
+    return typed_math_expected_cells(binary, arguments, expected, ("exp", "log"), "exp/log")
+
+
+def typed_trig_expected_cells(binary, arguments, expected):
+    return typed_math_expected_cells(binary, arguments, expected, ("tanh", "sin", "cos"), "trig")
 
 
 def validate_typed_exp_log(text, expected, expected_cells, fixtures, *, execution_os, backend, fusion, scope):
@@ -174,7 +182,154 @@ def validate_typed_exp_log(text, expected, expected_cells, fixtures, *, executio
     return accuracy
 
 
-def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_finite=False, sort_compile_log=False, compaction_aligned=False, quantized_empty_case=None, scatter_finite=False, select_updates=False, nd_unique=False, nd_nonempty=False, nd_scalar_grad=False, nd_no_scalar=False, storage_flex_direct=False, storage_no_flex32=False, conversions_no_flex32=False, remainder_finite=False, remainder_wide=False, inverse_finite=False, inverse_diagnostic=False, interpolate_case="normal", spatial_empty=False, spatial_case=None, spatial_exact=False, spatial_empty_backward=False, deform_empty=False, deform_exact=False, deform_case=None, deform_forward_only=False, predicate_no_flex32=False, predicate_finite=False, movement_no_flex32=False, movement_skip_empty_bool_scatter=False, movement_matching_bool_masks=False, indexed_no_flex32=False, indexed_skip_scalar_nd=False, integer_arithmetic_dtype=None, integer_arithmetic_op=None, float_arithmetic_arguments=(), float_rounding_arguments=(), relu_arguments=(), typed_remainder_arguments=(), typed_exp_log_arguments=()):
+def validate_typed_trig(text, expected, expected_cells, fixtures, *, execution_os, backend, fusion, scope):
+    """Validate passing aggregate evidence without treating maxima as a plan."""
+    prefix = f"BURN_TYPED_TRIG_OK os={execution_os} backend={backend} fusion={fusion} corpus={fixtures['version']} totals="
+    if execution_os == "d3os":
+        pattern = re.compile(r"(?:\[[^\]\r\n]*\]\s*)*(" + re.escape(prefix) + r".*)")
+        lines = [match.group(1) for line in text.splitlines()
+                 if (match := pattern.fullmatch(re.sub(r"\x1b\[[0-9;]*m", "", line)))]
+    else:
+        lines = [line for line in text.splitlines() if line.startswith(prefix)]
+    if len(lines) != 1:
+        raise RuntimeError("typed trig requires one terminal qualification marker")
+
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate qualification JSON field")
+            result[key] = value
+        return result
+
+    def invalid_constant(value):
+        raise ValueError(f"nonfinite qualification JSON constant: {value}")
+
+    decoder = json.JSONDecoder(object_pairs_hook=unique_object, parse_constant=invalid_constant)
+    totals, end = decoder.raw_decode(lines[0][len(prefix):])
+    remaining = lines[0][len(prefix) + end:]
+    if (json.dumps(totals, sort_keys=True) != json.dumps(expected, sort_keys=True)
+            or not remaining.startswith(" accuracy=")):
+        raise RuntimeError("typed trig totals differ from the frozen corpus")
+    accuracy, end = decoder.raw_decode(remaining[len(" accuracy="):])
+    remaining = remaining[len(" accuracy=") + end:]
+    footer = (
+        f" policy_sha256={fixtures['policy_sha256']} fixture_sha256={fixtures['fixture_sha256']}"
+        " numerical_policy=project_qualification_targets staged_half=f32_neighbor_envelope"
+        " no_ftz=strict preserved_inputs=exact_bytes chain=materialized_known_refs"
+        " poison=retained_allocation scope=strict_native " + scope
+    )
+    if remaining != footer:
+        raise RuntimeError("typed trig policy, fixture identity, or scope differs")
+    return validate_typed_trig_accuracy(accuracy, expected_cells, expected["values"])
+
+
+def validate_typed_trig_accuracy(accuracy, expected_cells, expected_values):
+    """Check observed cells for both public and guarded raw qualification."""
+    if (type(expected_values) is not int or expected_values < 0
+            or not isinstance(expected_cells, list) or len(expected_cells) != 5
+            or any(not isinstance(row, list) or len(row) != 3
+                   or any(type(value) is not int or value < 0 for value in row)
+                   for row in expected_cells)
+            or sum(map(sum, expected_cells)) != expected_values):
+        raise RuntimeError("typed trig per-operation work plan is invalid")
+    if not isinstance(accuracy, dict) or type(accuracy.get("failures")) is not int or accuracy["failures"] != 0:
+        raise RuntimeError("typed trig accuracy reports qualification failures")
+    cells = accuracy.get("cells")
+    if not isinstance(cells, list) or len(cells) != 15:
+        raise RuntimeError("typed trig requires all fifteen accuracy cells")
+
+    def vector(value, length):
+        return (isinstance(value, list) and len(value) == length
+                and all(type(n) is int and n >= 0 for n in value))
+
+    def histogram(cell, key, count_key, maximum_key, limit):
+        counts, count, maximum = cell.get(key), cell[count_key], cell.get(maximum_key)
+        if not vector(counts, 7) or sum(counts) != count:
+            raise RuntimeError("typed trig histogram contradicts its observation count")
+        if count == 0:
+            if maximum is not None:
+                raise RuntimeError("typed trig empty histogram has a maximum")
+            return
+        if type(maximum) is not int or not 0 <= maximum <= limit:
+            raise RuntimeError("typed trig observed maximum exceeds its qualification target")
+        # Passing limits are at most two representable steps. Wider bins can
+        # never hold passing observations, including the half neighbor image.
+        if not counts[maximum] or any(counts[maximum + 1:]):
+            raise RuntimeError("typed trig maximum contradicts its histogram")
+
+    observed = 0
+    for index, cell in enumerate(cells):
+        fi, oi = divmod(index, 3)
+        identity = (("f64", "f32", "flex32", "f16", "bf16")[fi], ("tanh", "sin", "cos")[oi])
+        if not isinstance(cell, dict) or (cell.get("dtype"), cell.get("op")) != identity:
+            raise RuntimeError("typed trig accuracy cell identity differs")
+        counter_keys = (
+            "values", "failures", "classification_failures", "numerical_failures",
+            "exact_special_failures", "half_envelope_failures", "codomain_failures",
+            "unreferenced_results", "passing_finite_pairs", "finite_pairs", "ideal_finite_pairs",
+            "sign_mismatches", "nonzero_to_zero", "subnormal_preserved", "nan_payload_differences",
+            "quiet_nan_outputs", "negative_nan_outputs",
+        )
+        if (type(cell.get("values")) is not int or cell["values"] < 0
+                or any(type(cell.get(key)) is not int or not 0 <= cell[key] <= cell["values"] for key in counter_keys)):
+            raise RuntimeError("typed trig accuracy counters are invalid")
+        if any(cell[key] for key in (
+                "failures", "classification_failures", "numerical_failures", "exact_special_failures",
+                "half_envelope_failures", "codomain_failures", "unreferenced_results",
+                "sign_mismatches", "nonzero_to_zero")):
+            raise RuntimeError("typed trig cell reports qualification failures")
+        transitions = cell.get("transitions")
+        if not isinstance(transitions, list) or len(transitions) != 5 or any(not vector(row, 5) for row in transitions):
+            raise RuntimeError("typed trig classification matrix is invalid")
+        allowed = ({0}, {1, 2}, {1, 2}, set(), {4})
+        if any(count for row, columns in zip(transitions, allowed)
+               for actual, count in enumerate(row) if actual not in columns):
+            raise RuntimeError("typed trig classification matrix contradicts qualification")
+        columns = [sum(row[column] for row in transitions) for column in range(5)]
+        if (not vector(cell.get("observed_classes"), 5) or cell["observed_classes"] != columns
+                or sum(columns) != cell["values"] or transitions[1][1] != cell["subnormal_preserved"]):
+            raise RuntimeError("typed trig classification counts differ")
+        finite = sum(transitions[a][b] for a in (1, 2) for b in (1, 2))
+        if (cell["finite_pairs"] != finite or cell["passing_finite_pairs"] != finite
+                or cell["ideal_finite_pairs"] != finite):
+            raise RuntimeError("typed trig passing/finite counts contradict classifications")
+        nan_count = columns[4]
+        if any(cell[key] > nan_count for key in ("nan_payload_differences", "quiet_nan_outputs", "negative_nan_outputs")):
+            raise RuntimeError("typed trig NaN diagnostics contradict classifications")
+        limit = 1 if fi >= 3 or (fi == 0 and oi == 0) else 2
+        histogram(cell, "histogram", "finite_pairs", "max_ulp", limit)
+        histogram(cell, "passing_histogram", "passing_finite_pairs", "passing_max_ulp", limit)
+        histogram(cell, "ideal_histogram", "ideal_finite_pairs", "max_ideal_ulp", limit)
+        if cell["passing_histogram"] != cell["histogram"] or cell["passing_max_ulp"] != cell["max_ulp"]:
+            raise RuntimeError("typed trig passing metrics contradict all-passing observations")
+        if fi < 3 and (cell["ideal_histogram"] != cell["histogram"]
+                       or cell["max_ideal_ulp"] != cell["max_ulp"]):
+            raise RuntimeError("typed trig wide-format reference metrics differ")
+        for key in ("worst_input_bits", "worst_actual_bits"):
+            bits = cell.get(key)
+            if finite == 0:
+                if bits is not None:
+                    raise RuntimeError("typed trig empty finite observations have a worst witness")
+            elif not isinstance(bits, str) or not re.fullmatch(r"[0-9a-f]{16}", bits):
+                raise RuntimeError("typed trig worst witness bits are invalid")
+            elif int(bits, 16) >= 1 << (64 if fi == 0 else 32 if fi < 3 else 16):
+                raise RuntimeError("typed trig worst witness exceeds its storage width")
+        if finite:
+            width = 64 if fi == 0 else 32 if fi < 3 else 16
+            magnitude = int(cell["worst_actual_bits"], 16) & ((1 << (width - 1)) - 1)
+            one = (0x3ff0000000000000, 0x3f800000, 0x3f800000, 0x3c00, 0x3f80)[fi]
+            if not 0 < magnitude <= one:
+                raise RuntimeError("typed trig worst finite witness contradicts its codomain")
+        if cell["values"] != expected_cells[fi][oi]:
+            raise RuntimeError("typed trig per-operation observation count differs")
+        observed += cell["values"]
+    if observed != expected_values:
+        raise RuntimeError("typed trig measured value count differs from the corpus")
+    return accuracy
+
+
+def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_finite=False, sort_compile_log=False, compaction_aligned=False, quantized_empty_case=None, scatter_finite=False, select_updates=False, nd_unique=False, nd_nonempty=False, nd_scalar_grad=False, nd_no_scalar=False, storage_flex_direct=False, storage_no_flex32=False, conversions_no_flex32=False, remainder_finite=False, remainder_wide=False, inverse_finite=False, inverse_diagnostic=False, interpolate_case="normal", spatial_empty=False, spatial_case=None, spatial_exact=False, spatial_empty_backward=False, deform_empty=False, deform_exact=False, deform_case=None, deform_forward_only=False, predicate_no_flex32=False, predicate_finite=False, movement_no_flex32=False, movement_skip_empty_bool_scatter=False, movement_matching_bool_masks=False, indexed_no_flex32=False, indexed_skip_scalar_nd=False, integer_arithmetic_dtype=None, integer_arithmetic_op=None, float_arithmetic_arguments=(), float_rounding_arguments=(), relu_arguments=(), typed_remainder_arguments=(), typed_exp_log_arguments=(), typed_trig_arguments=()):
     purposes = {
         "quantization": "shared API conformance; no performance measurement",
         "quantized_empty": "empty quantized API diagnostic and record round trip; execution errors retained; no performance measurement",
@@ -187,6 +342,7 @@ def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_fi
         "relu": "typed ReLU and backward with independent IEEE bit references; no performance measurement",
         "typed_remainder": "typed remainder and scalar normalization with independent exact references; no performance measurement",
         "typed_exp_log": "typed exp/log qualification against independent MPFR references; no performance measurement",
+        "typed_trig": "typed tanh/sin/cos qualification against independent MPFR references; no performance measurement",
         "float_rounding": "typed square root and integral rounding with independent expected bits; no performance measurement",
         "float_arithmetic": "typed basic floating arithmetic with independent expected bits; no performance measurement",
         "integer_arithmetic": "exact integer elementwise arithmetic across eight formats; independent U128/I128 reference; no performance measurement",
@@ -209,13 +365,14 @@ def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_fi
     purpose = "erf error profile and GELU conformance; strict failures reported" if erf_profile else purposes[kind]
     program = f"/burn-{kind}"
     arguments = " --profile" if erf_profile else " --nonempty" if nonempty else ""
-    if kind in ("float_arithmetic", "float_rounding", "relu", "typed_remainder", "typed_exp_log"):
+    if kind in ("float_arithmetic", "float_rounding", "relu", "typed_remainder", "typed_exp_log", "typed_trig"):
         selected_arguments = {
             "float_arithmetic": float_arithmetic_arguments,
             "float_rounding": float_rounding_arguments,
             "relu": relu_arguments,
             "typed_remainder": typed_remainder_arguments,
             "typed_exp_log": typed_exp_log_arguments,
+            "typed_trig": typed_trig_arguments,
         }[kind]
         arguments += " " + " ".join(selected_arguments) if selected_arguments else ""
         summary_args = [str(binary), "--expected-summary", *selected_arguments]
@@ -224,6 +381,9 @@ def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_fi
         if kind == "typed_exp_log":
             cells = typed_exp_log_expected_cells(binary, selected_arguments, expected_summary)
             (root.parent / "burn-typed_exp_log-expected-cells.json").write_text(json.dumps(cells) + "\n")
+        if kind == "typed_trig":
+            cells = typed_trig_expected_cells(binary, selected_arguments, expected_summary)
+            (root.parent / "burn-typed_trig-expected-cells.json").write_text(json.dumps(cells) + "\n")
     if kind == "integer_arithmetic":
         summary_args = [str(binary), "--expected-summary"]
         for flag, value in (("dtype", integer_arithmetic_dtype), ("op", integer_arithmetic_op)):
@@ -340,7 +500,7 @@ exec {program}{arguments}
         "cargo_lock": ROOT / "tools/mnist-benchmark/Cargo.lock",
         "libdevice": libdevice,
     }
-    if kind in ("float_arithmetic", "float_rounding", "typed_remainder", "typed_exp_log"):
+    if kind in ("float_arithmetic", "float_rounding", "typed_remainder", "typed_exp_log", "typed_trig"):
         tool_prefix = kind.replace("_", "-")
         sources["expected_summary"] = root.parent / f"burn-{kind}-expected.json"
         sources["reference_fixture_index"] = ROOT / f"os/library/ai/src/validation/{kind}_fixtures.rs"
@@ -351,6 +511,8 @@ exec {program}{arguments}
             sources["reference_base_generator"] = ROOT / "tools/nvidia/float-arithmetic-generate.py"
         if kind == "typed_exp_log":
             sources["expected_cells"] = root.parent / "burn-typed_exp_log-expected-cells.json"
+        if kind == "typed_trig":
+            sources["expected_cells"] = root.parent / "burn-typed_trig-expected-cells.json"
     if kind == "relu":
         sources["expected_summary"] = root.parent / "burn-relu-expected.json"
     if kind == "integer_arithmetic":
@@ -1439,6 +1601,12 @@ def main():
     parser.add_argument("--burn-typed-exp-log-no-flex32", action="store_true", help="isolate direct Flex32 upload support")
     parser.add_argument("--burn-typed-exp-log-skip-rank-zero", action="store_true", help="isolate the pinned scalar diagnostic")
     parser.add_argument("--burn-typed-exp-log-finite", action="store_true", help="require finite inputs and expected results")
+    parser.add_argument("--burn-typed-trig", type=Path, help="qualify typed tanh/sin/cos against independent MPFR references")
+    parser.add_argument("--burn-typed-trig-dtype", choices=("f64", "f32", "flex32", "f16", "bf16"))
+    parser.add_argument("--burn-typed-trig-op", choices=("tanh", "sin", "cos"))
+    parser.add_argument("--burn-typed-trig-no-flex32", action="store_true", help="isolate direct Flex32 upload support")
+    parser.add_argument("--burn-typed-trig-skip-rank-zero", action="store_true", help="isolate the pinned scalar diagnostic")
+    parser.add_argument("--burn-typed-trig-finite", action="store_true", help="require finite inputs and expected results")
     parser.add_argument("--burn-typed-remainder", type=Path, help="run exact typed remainder and scalar normalization conformance")
     parser.add_argument("--burn-typed-remainder-dtype", choices=("f64", "f32", "flex32", "f16", "bf16"))
     parser.add_argument("--burn-typed-remainder-group", choices=("sign-and-multiples", "subnormal-and-boundary", "huge-quotient", "correction-rounding", "f64-precision-range", "ieee-exceptions"))
@@ -1574,7 +1742,7 @@ def main():
     args = parser.parse_args()
     if args.nsight_directory and not args.quantized_profile:
         parser.error("--nsight-directory requires --quantized-profile")
-    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.burn_typed_exp_log, args.burn_typed_remainder, args.burn_relu, args.burn_float_rounding, args.burn_float_arithmetic, args.burn_integer_arithmetic, args.burn_indexed, args.burn_movement, args.burn_predicate, args.burn_integer_power, args.burn_integer, args.burn_integer_matmul, args.burn_scatter_updates, args.burn_nd_indexing, args.burn_storage, args.burn_conversions, args.burn_remainder, args.burn_inverse, args.burn_spatial_convolution, args.burn_deform, args.burn_interpolate, args.burn_quantized_empty, args.burn_compaction, args.burn_cross, args.burn_scan, args.burn_sort, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
+    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.burn_typed_exp_log, args.burn_typed_trig, args.burn_typed_remainder, args.burn_relu, args.burn_float_rounding, args.burn_float_arithmetic, args.burn_integer_arithmetic, args.burn_indexed, args.burn_movement, args.burn_predicate, args.burn_integer_power, args.burn_integer, args.burn_integer_matmul, args.burn_scatter_updates, args.burn_nd_indexing, args.burn_storage, args.burn_conversions, args.burn_remainder, args.burn_inverse, args.burn_spatial_convolution, args.burn_deform, args.burn_interpolate, args.burn_quantized_empty, args.burn_compaction, args.burn_cross, args.burn_scan, args.burn_sort, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
         parser.error("--quantized-profile requires a separate diagnostic guest")
     if args.pin_vcpus and len(os.sched_getaffinity(0)) != 4:
         parser.error("--pin-vcpus requires an inherited affinity of four host CPUs")
@@ -1600,6 +1768,7 @@ def main():
                 bool(args.burn_capabilities),
                 bool(args.burn_erf),
                 bool(args.burn_typed_exp_log),
+                bool(args.burn_typed_trig),
                 bool(args.burn_typed_remainder),
                 bool(args.burn_relu),
                 bool(args.burn_float_rounding),
@@ -1654,6 +1823,17 @@ def main():
         parser.error("--burn-typed-exp-log requires a built conformance executable")
     if typed_exp_log_arguments and not args.burn_typed_exp_log:
         parser.error("typed exp/log filters require --burn-typed-exp-log")
+    typed_trig_arguments = []
+    for flag, value in (("dtype", args.burn_typed_trig_dtype), ("op", args.burn_typed_trig_op)):
+        if value is not None:
+            typed_trig_arguments.append(f"--{flag}={value}")
+    for flag, enabled in (("no-flex32", args.burn_typed_trig_no_flex32), ("skip-rank-zero", args.burn_typed_trig_skip_rank_zero), ("finite", args.burn_typed_trig_finite)):
+        if enabled:
+            typed_trig_arguments.append(f"--{flag}")
+    if args.burn_typed_trig and not args.burn_typed_trig.is_file():
+        parser.error("--burn-typed-trig requires a built conformance executable")
+    if typed_trig_arguments and not args.burn_typed_trig:
+        parser.error("typed trig filters require --burn-typed-trig")
     typed_remainder_arguments = []
     for flag, value in (("dtype", args.burn_typed_remainder_dtype), ("group", args.burn_typed_remainder_group)):
         if value is not None:
@@ -1827,6 +2007,8 @@ def main():
         burn_probe(args.directory / "root", args.burn_erf.resolve(), "erf", erf_profile=args.burn_erf_profile)
     elif args.burn_typed_exp_log:
         burn_probe(args.directory / "root", args.burn_typed_exp_log.resolve(), "typed_exp_log", typed_exp_log_arguments=typed_exp_log_arguments)
+    elif args.burn_typed_trig:
+        burn_probe(args.directory / "root", args.burn_typed_trig.resolve(), "typed_trig", typed_trig_arguments=typed_trig_arguments)
     elif args.burn_typed_remainder:
         burn_probe(args.directory / "root", args.burn_typed_remainder.resolve(), "typed_remainder", typed_remainder_arguments=typed_remainder_arguments)
     elif args.burn_relu:
@@ -2030,6 +2212,13 @@ def main():
         scope = f"no_flex32={str(args.burn_typed_exp_log_no_flex32).lower()} skip_rank_zero={str(args.burn_typed_exp_log_skip_rank_zero).lower()} finite={str(args.burn_typed_exp_log_finite).lower()} dtype={args.burn_typed_exp_log_dtype or 'all'} op={args.burn_typed_exp_log_op or 'all'}"
         accuracy = validate_typed_exp_log(text, expected, expected_cells, fixtures, execution_os="linux", backend="cuda", fusion="enabled_materialized_chain_steps", scope=scope)
         (args.directory / "typed-exp-log-accuracy.json").write_text(json.dumps(accuracy, indent=2) + "\n")
+    if args.burn_typed_trig:
+        expected = json.loads((args.directory / "burn-typed_trig-expected.json").read_text())
+        expected_cells = json.loads((args.directory / "burn-typed_trig-expected-cells.json").read_text())
+        fixtures = json.loads((ROOT / "tools/nvidia/typed-trig-manifest.json").read_text())
+        scope = f"no_flex32={str(args.burn_typed_trig_no_flex32).lower()} skip_rank_zero={str(args.burn_typed_trig_skip_rank_zero).lower()} finite={str(args.burn_typed_trig_finite).lower()} dtype={args.burn_typed_trig_dtype or 'all'} op={args.burn_typed_trig_op or 'all'}"
+        accuracy = validate_typed_trig(text, expected, expected_cells, fixtures, execution_os="linux", backend="cuda", fusion="enabled_materialized_chain_steps", scope=scope)
+        (args.directory / "typed-trig-accuracy.json").write_text(json.dumps(accuracy, indent=2) + "\n")
     if args.burn_typed_remainder:
         expected = json.loads((args.directory / "burn-typed_remainder-expected.json").read_text())
         fixtures = json.loads((ROOT / "tools/nvidia/typed-remainder-manifest.json").read_text())

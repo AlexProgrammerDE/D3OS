@@ -37,6 +37,7 @@ mod storage;
 mod typed_exp_log;
 mod typed_relu;
 mod typed_remainder;
+mod typed_trig;
 mod updates;
 mod words;
 use abi::elementwise::Elementwise;
@@ -217,6 +218,30 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     }
     integers::run(backend).map_err(|e| format!("Burn native integer reductions: {e}"))?;
     words::run(backend).map_err(|e| format!("Burn native words: {e}"))?;
+    typed_trig::run(backend)?;
+    let trig_options = d3os_ai::validation::typed_trig::Options::default();
+    let trig_report = d3os_ai::burn::tensor::try_read_sync(d3os_ai::validation::typed_trig::run(&device, &trig_options))
+        .ok_or_else(|| String::from("native typed trigonometric future did not complete"))??;
+    crate::report(format_args!(
+        "BURN_TYPED_TRIG_ACCURACY os=d3os backend=native corpus={} policy_sha256={} fixture_sha256={} qualification_passed={} totals={} accuracy={}",
+        d3os_ai::validation::typed_trig::CORPUS_VERSION,
+        d3os_ai::validation::typed_trig::POLICY_SHA256,
+        d3os_ai::validation::typed_trig::FIXTURE_SHA256,
+        trig_report.is_success(),
+        d3os_ai::validation::typed_trig::summary_json(&trig_report.summary),
+        d3os_ai::validation::typed_trig::accuracy_json(&trig_report.accuracy)
+    ));
+    if !trig_report.is_success() {
+        for example in &trig_report.failures.examples {
+            crate::report(format_args!("BURN_TYPED_TRIG_FAILURE {example}"));
+        }
+        return Err(format!("typed trigonometric qualification failed: {} failures", trig_report.failures.count));
+    }
+    crate::report(format_args!(
+        "BURN_TYPED_TRIG_OK os=d3os backend=native fusion=disabled corpus={} {}",
+        d3os_ai::validation::typed_trig::CORPUS_VERSION,
+        d3os_ai::validation::typed_trig::success_footer(&trig_options, &trig_report)
+    ));
     typed_exp_log::run(backend)?;
     let exp_log_options = d3os_ai::validation::typed_exp_log::Options::default();
     let exp_log_report = d3os_ai::burn::tensor::try_read_sync(d3os_ai::validation::typed_exp_log::run(&device, &exp_log_options))
