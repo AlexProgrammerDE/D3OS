@@ -24,6 +24,8 @@ pub enum Operation {
     Absolute = 12,
     Reciprocal = 13,
     Sqrt = 14,
+    Exp = 15,
+    Log = 16,
     Floor = 21,
     Ceil = 22,
     Round = 23,
@@ -33,7 +35,7 @@ pub enum Operation {
 }
 
 impl Operation {
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 16] = [
         Self::Add,
         Self::Subtract,
         Self::Multiply,
@@ -42,6 +44,8 @@ impl Operation {
         Self::Absolute,
         Self::Reciprocal,
         Self::Sqrt,
+        Self::Exp,
+        Self::Log,
         Self::Floor,
         Self::Ceil,
         Self::Round,
@@ -61,7 +65,17 @@ impl Operation {
     pub fn unary(self) -> bool {
         matches!(
             self,
-            Self::Negate | Self::Absolute | Self::Reciprocal | Self::Sqrt | Self::Floor | Self::Ceil | Self::Round | Self::Trunc | Self::Sign
+            Self::Negate
+                | Self::Absolute
+                | Self::Reciprocal
+                | Self::Sqrt
+                | Self::Exp
+                | Self::Log
+                | Self::Floor
+                | Self::Ceil
+                | Self::Round
+                | Self::Trunc
+                | Self::Sign
         )
     }
 

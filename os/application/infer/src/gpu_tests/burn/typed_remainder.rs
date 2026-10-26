@@ -988,7 +988,8 @@ fn public_errors(backend: &Nvidia, counts: &mut Counts) -> Result<()> {
     Ok(())
 }
 pub(super) fn run(backend: &Nvidia) -> Result<()> {
-    if abi::VERSION != 45 || abi::KERNEL_COUNT != 82 || OP as u32 != 34 || oracle::CORPUS_VERSION != 1 {
+    // Later protocol extensions retain this operation's original contract.
+    if abi::VERSION < 45 || abi::KERNEL_COUNT < 82 || OP as u32 != 34 || oracle::CORPUS_VERSION != 1 {
         return Err(String::from("typed remainder protocol/corpus contract changed"));
     }
     let mut counts = Counts::default();

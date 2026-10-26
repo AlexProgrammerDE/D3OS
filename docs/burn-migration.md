@@ -344,6 +344,14 @@ D3OS passes 692 public cases, every guarded remainder check, and the complete ea
 Linux retains rank-zero and Flex32 failures, plus numerical differences in the filtered four-format corpus.
 These are correctness results. Full backend and workload performance parity remain incomplete.
 
+Exp and Log now support all five ordinary floating formats on the native GPU through protocol 46.
+F64 retains double precision, with a correction from directed MPFR intervals at the Exp zero/subnormal boundary.
+D3OS passes 1,190 shared cases and 861,244 guarded comparisons. The complete earlier regression suite also passes.
+
+The Linux CUDA comparison retains rank-zero and Flex32 failures, plus 14 F64 Exp classification errors in its filtered corpus.
+These are forward correctness checks. Broader typed autodiff and performance parity remain incomplete.
+The [coverage reference](burn-backend-coverage.md#typed-exponential-and-logarithm) describes the numerical policy and preserved failure records.
+
 I32 tensor and generic scalar powers now use resident wrapping integer arithmetic without a floating-point intermediate.
 The exponent bits follow the same unsigned interpretation as the pinned Linux backend.
 FP32 deformable convolution now provides input, offset, weight, modulation-mask, and bias gradients on the native GPU.

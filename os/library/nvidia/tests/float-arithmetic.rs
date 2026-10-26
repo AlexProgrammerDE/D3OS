@@ -37,20 +37,20 @@ fn scalar(mut p: [u32; 32], bits: u64) -> [u32; 32] {
 }
 
 #[test]
-fn operation_registry_accepts_exactly_the_fourteen_float_primitives() {
+fn operation_registry_accepts_exactly_the_sixteen_float_primitives() {
     for elementwise in Elementwise::ALL {
-        let selected = matches!(elementwise as u32, 1..=4 | 11..=14 | 21..=25 | 34);
+        let selected = matches!(elementwise as u32, 1..=4 | 11..=16 | 21..=25 | 34);
         let operation = Operation::from_elementwise(elementwise);
         assert_eq!(operation.is_ok(), selected);
         if let Ok(op) = operation {
             assert_eq!(op as u32, elementwise as u32);
-            assert_eq!(op.unary(), matches!(elementwise as u32, 11..=14 | 21..=25));
+            assert_eq!(op.unary(), matches!(elementwise as u32, 11..=16 | 21..=25));
             assert_eq!(op.binary(), !op.unary());
         }
     }
-    assert_eq!(Operation::ALL.len(), 14);
+    assert_eq!(Operation::ALL.len(), 16);
     for raw in 0..=256 {
-        let selected = matches!(raw, 1..=4 | 11..=14 | 21..=25 | 34);
+        let selected = matches!(raw, 1..=4 | 11..=16 | 21..=25 | 34);
         assert_eq!(Operation::from_raw(raw).is_ok(), selected);
     }
     for op in Operation::ALL {
@@ -98,8 +98,8 @@ fn transposed_reversed_and_broadcast_views_retain_packed_storage_extents() {
 #[test]
 fn signed_geometry_matches_enumerated_addresses_for_either_reader() {
     for format in FORMATS {
-        for op in [Operation::Divide, Operation::Remainder] {
-            for input in 0..2 {
+        for op in [Operation::Divide, Operation::Remainder, Operation::Exp, Operation::Log] {
+            for input in 0..if op.binary() { 2 } else { 1 } {
                 for offset in 0..9 {
                     for outer in -3i32..=3 {
                         for inner in -3i32..=3 {
@@ -109,7 +109,9 @@ fn signed_geometry_matches_enumerated_addresses_for_either_reader() {
                             p[6 + input] = 9;
                             p[8..10].copy_from_slice(&[2, 3]);
                             p[16..18].copy_from_slice(&[3, 1]);
-                            p[24..26].copy_from_slice(&[3, 1]);
+                            if op.binary() {
+                                p[24..26].copy_from_slice(&[3, 1]);
+                            }
                             p[16 + input * 8..18 + input * 8].copy_from_slice(&[outer as u32, inner as u32]);
                             let reachable = (0..2).all(|row| (0..3).all(|column| (0..9).contains(&(offset as i32 + row * outer + column * inner))));
                             assert_eq!(float_arithmetic::validate(&p).is_ok(), reachable);
@@ -160,7 +162,12 @@ fn unused_rhs_geometry_and_scalar_widths_are_canonical() {
                     invalid[field] = 1;
                     assert!(float_arithmetic::validate(&invalid).is_err());
                 }
-                assert!(float_arithmetic::validate(&scalar(p, 0)).is_err());
+                for bit in 16..32 {
+                    let mut invalid = p;
+                    invalid[2] |= 1 << bit;
+                    assert!(float_arithmetic::validate(&invalid).is_err());
+                    assert!(Kernel::FloatArithmetic.work(&invalid).is_err());
+                }
             } else {
                 // All destination bit patterns, including NaNs and infinities,
                 // are valid scalar payloads. They are not integer ranges.

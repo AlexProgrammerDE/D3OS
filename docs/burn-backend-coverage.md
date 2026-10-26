@@ -490,6 +490,56 @@ The complete diagnostic remains in the serial log. No Linux passing subset or pe
 All 116 SDK tests, six shared host tests, four raw fixture audits, repository Clippy checks, and the production image build pass.
 These are correctness checks. Full Burn coverage, compile-time parity, and workload performance parity remain incomplete.
 
+## Typed exponential and logarithm
+
+Protocol 46 adds Exp and Log across F64, F32, Flex32, F16, and BF16.
+The floating entry supports 16 operations, with 247 bundle entries and 82 compute profiles.
+All other 246 entries retain 532 identical instruction and constant sections.
+The corrected floating entry uses 71 registers, 48,512 code bytes, and 128 threads.
+
+F64 retains double operands, computation, and results.
+Half operands retain their stored values, widen to F32, and round once to destination storage after Exp Full or Log.
+F32 retains its existing elementwise entries. Raw checks also cover the typed F32 entry.
+
+The independent generator uses directed MPFR intervals and exact integer destination rounding.
+Its 306,572 reference rows include every F16 and BF16 encoding for both operations.
+Three F16 inputs distinguish direct destination rounding from ideal F32 staging.
+The checks retain both reference schedules and their measured distances separately.
+
+The numerical policy defines project qualification targets:
+
+| Format | Finite nonzero target |
+| --- | --- |
+| F64 | Exp and Log within one representable step |
+| F32, Flex32 | Exp within two steps and Log within one step |
+| F16, BF16 | Destination RNE applied to permitted neighboring F32 results |
+
+NVIDIA publishes [empirical error figures](https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/mathematical-functions.html#exponential-functions).
+These figures do not guarantee every input. The project verifies classifications independently of finite numerical distance.
+An unexpected zero fails that classification check, including a lost minimum subnormal.
+Zeros and infinities require the expected sign. NaNs require classification, while preserved source tensors require every original byte.
+
+F64 Exp uses a cutoff from directed MPFR intervals at the zero/subnormal boundary.
+The first representable input greater than `ln(2^-1075)` is `0xc0874910d52d3051`.
+Smaller inputs return positive zero. For inputs at this cutoff or greater, a zero Full result becomes the minimum subnormal.
+The wrapper handles both zero signs and retains actual F64 computation.
+
+The first Native run exposed 14 lost-subnormal observations. The corrected kernel passes those checks without a policy or fixture change.
+
+D3OS passes 861,244 guarded comparisons and 1,190 shared cases with 709,814 observed values.
+The guarded plan checks 2,496 launches, 595 rejections, 200 empty operations, and 30 queued ownership cases.
+Guards, packed tails, residency, source preservation, recovery, and kernel routing also pass.
+The complete regression suite passes, including every earlier remainder and arithmetic gate.
+
+The complete Linux CUDA attempt stops at rank-zero readback in the pinned CubeCL implementation.
+Excluding rank zero exposes its direct Flex32 upload rejection.
+Excluding both domains completes 936 cases and 679,980 observations, with 14 F64 Exp classification errors.
+Those errors return zero for a minimum-subnormal reference. Other selected dtype/operation cells record zero failures.
+
+Zero and the minimum subnormal differ by one representable step. The separate classification gate still rejects that change.
+
+These checks cover forward Exp and Log. General typed autodiff, full backend coverage, and workload performance parity remain incomplete.
+
 ## Typed integer elementwise arithmetic
 
 Protocol 42 adds 15 integer operations across I8, I16, I32, I64, U8, U16, U32, and U64.
@@ -1722,3 +1772,62 @@ For the complete attempt, omit both diagnostic flags and use a fresh directory.
 The `--burn-typed-remainder-finite` option requires finite effective operands and finite expected results.
 The dtype and group filters select explicit diagnostic domains. A group selection omits scalar, geometry, and chain cases.
 The runner's `--expected-summary` reports exact selected counts before device construction.
+
+### Exp/log qualification
+
+The final Native archive uses `target/nvidia/burn-backend-validation/typed-exp-log-final/`.
+The first Native failure and the partial regression stop remain separate archives.
+Linux archives use the `target/nvidia/burn-backend-audit/linux-typed-exp-log-` prefix.
+The `v4` records retain the current launcher, executable, fixture, policy, and per-operation count identities.
+
+Build the runner from its pinned toolchain directory:
+
+```bash
+cd tools/mnist-benchmark
+cargo build --release --locked --bin typed_exp_log
+cd ../..
+```
+
+Verify the interval reference fixtures:
+
+```bash
+python3 tools/nvidia/typed-exp-log-generate.py --check
+```
+
+Prepare a portable kernel bundle in a fresh output directory:
+
+```bash
+python3 tools/nvidia/prepare-kernels.py --audit \
+  --output target/nvidia/burn-typed-exp-log-reproduce-kernels
+```
+
+Build the OS image:
+
+```bash
+cargo make --no-workspace --profile production image
+```
+
+Run the complete Native GPU checks:
+
+```bash
+python3 tools/nvidia/run-qemu.py \
+  --firmware target/nvidia/firmware \
+  --kernels target/nvidia/burn-typed-exp-log-reproduce-kernels \
+  --memory-mib 4096 --boot-check --inference gpu-self-test --timeout 1200
+```
+
+Reproduce the retained Linux classification errors in another fresh directory:
+
+```bash
+python3 tools/nvidia/linux-reference.py \
+  --directory target/nvidia/linux-burn-typed-exp-log-reproduce \
+  --burn-typed-exp-log tools/mnist-benchmark/target/release/typed_exp_log \
+  --burn-typed-exp-log-skip-rank-zero --burn-typed-exp-log-no-flex32 \
+  --memory-mib 12288 --timeout 900
+```
+
+For the full Linux attempt, omit both diagnostic flags and use a fresh directory.
+
+The finite filter retains finite inputs and expected outputs, including subnormal values.
+The dtype and operation filters narrow the declared comparison domain.
+The runner's `--expected-summary` reports selected counts before device creation.

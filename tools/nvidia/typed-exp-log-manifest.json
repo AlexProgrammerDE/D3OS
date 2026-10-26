@@ -1,0 +1,686 @@
+{
+  "binary_encoding": "dtype/op order f64,f32,flex32,f16,bf16 / exp,log; sorted inputs; five little-endian dtype-width words input,ideal,staged,allowed_low,allowed_high then u32 intermediate_f32; quiet canonical expected NaNs classify only",
+  "corpus_version": 1,
+  "counts": {
+    "bf16": {
+      "exp": {
+        "all": 65536,
+        "classes": {
+          "inf": 15567,
+          "nan": 254,
+          "normal": 34145,
+          "subnormal": 11,
+          "zero": 15559
+        },
+        "direct_staged_differences": 0,
+        "finite": 49714,
+        "precision_counts": {
+          "0": 29440,
+          "96": 36096
+        }
+      },
+      "log": {
+        "all": 65536,
+        "classes": {
+          "inf": 3,
+          "nan": 32894,
+          "normal": 32638,
+          "zero": 1
+        },
+        "direct_staged_differences": 0,
+        "finite": 32639,
+        "precision_counts": {
+          "0": 32898,
+          "96": 32638
+        }
+      }
+    },
+    "f16": {
+      "exp": {
+        "all": 65536,
+        "classes": {
+          "inf": 12917,
+          "nan": 2046,
+          "normal": 37479,
+          "subnormal": 891,
+          "zero": 12203
+        },
+        "direct_staged_differences": 2,
+        "finite": 50572,
+        "precision_counts": {
+          "0": 6144,
+          "96": 59392
+        }
+      },
+      "log": {
+        "all": 65536,
+        "classes": {
+          "inf": 3,
+          "nan": 33790,
+          "normal": 31742,
+          "zero": 1
+        },
+        "direct_staged_differences": 1,
+        "finite": 31743,
+        "precision_counts": {
+          "0": 33794,
+          "96": 31742
+        }
+      }
+    },
+    "f32": {
+      "exp": {
+        "all": 2621,
+        "classes": {
+          "inf": 609,
+          "nan": 14,
+          "normal": 1360,
+          "subnormal": 49,
+          "zero": 589
+        },
+        "direct_staged_differences": 0,
+        "finite": 1997,
+        "precision_counts": {
+          "0": 1063,
+          "96": 1558
+        }
+      },
+      "log": {
+        "all": 2621,
+        "classes": {
+          "inf": 3,
+          "nan": 1296,
+          "normal": 1321,
+          "zero": 1
+        },
+        "direct_staged_differences": 0,
+        "finite": 1322,
+        "precision_counts": {
+          "0": 1300,
+          "96": 1321
+        }
+      }
+    },
+    "f64": {
+      "exp": {
+        "all": 16972,
+        "classes": {
+          "inf": 4148,
+          "nan": 8,
+          "normal": 8615,
+          "subnormal": 46,
+          "zero": 4155
+        },
+        "direct_staged_differences": 0,
+        "finite": 12815,
+        "precision_counts": {
+          "0": 8236,
+          "192": 5,
+          "96": 8731
+        }
+      },
+      "log": {
+        "all": 16972,
+        "classes": {
+          "inf": 3,
+          "nan": 8486,
+          "normal": 8482,
+          "zero": 1
+        },
+        "direct_staged_differences": 0,
+        "finite": 8483,
+        "precision_counts": {
+          "0": 8490,
+          "192": 2,
+          "96": 8480
+        }
+      }
+    },
+    "flex32": {
+      "exp": {
+        "all": 2621,
+        "classes": {
+          "inf": 609,
+          "nan": 14,
+          "normal": 1360,
+          "subnormal": 49,
+          "zero": 589
+        },
+        "direct_staged_differences": 0,
+        "finite": 1997,
+        "precision_counts": {
+          "0": 1063,
+          "96": 1558
+        }
+      },
+      "log": {
+        "all": 2621,
+        "classes": {
+          "inf": 3,
+          "nan": 1296,
+          "normal": 1321,
+          "zero": 1
+        },
+        "direct_staged_differences": 0,
+        "finite": 1322,
+        "precision_counts": {
+          "0": 1300,
+          "96": 1321
+        }
+      }
+    }
+  },
+  "finite_operation_cases": 192604,
+  "fixture_bytes": 5415168,
+  "fixture_rust_sha256": "fdd42a3bddb85d830e4344fa4f102afcf3937c702daa0952201c4d6a094fbbda",
+  "fixture_sha256": "cda7620e1072aab7aa388f14d2e73142860fdaa21386cb47df8c9518b551437d",
+  "generator_sha256": "8900c11b50dbe1f75887a581fa3df1ef704f08a0aafee1c44365bdd4c9412782",
+  "half_envelope": "exact RNE image of neighboring ideal F32 codes; exact specials first; independent strict class/sign/nonzero gate",
+  "mpfr_version": "4.2.2",
+  "operation_cases": 306572,
+  "policy": {
+    "classification_diagnostics": [
+      "expected_normal_actual_zero",
+      "expected_subnormal_actual_zero",
+      "expected_zero_actual_nonzero",
+      "expected_nan_actual_non_nan",
+      "expected_inf_actual_other",
+      "expected_finite_actual_inf",
+      "zero_sign_mismatch",
+      "infinity_sign_mismatch",
+      "finite_sign_mismatch",
+      "subnormal_to_normal",
+      "normal_to_subnormal",
+      "nan_output_quiet_bit_and_payload_observation_only"
+    ],
+    "classification_qualification_target": {
+      "infinity": "Expected infinity requires matching infinity sign; unexpected infinity is a separate qualification failure.",
+      "nan": "Expected NaN requires actual NaN class; no payload/sign gate.",
+      "nonzero": "Expected finite nonzero requires actual finite nonzero with matching sign.",
+      "normal_subnormal_boundary": "Nonzero normal <-> subnormal transitions are separate diagnostics and remain subject to the numerical/set target.",
+      "normative_status": "Explicit strict project target; boundary failures can occur within a vendor empirical error allowance and must be reported separately.",
+      "zero": "Expected zero requires matching signed zero; unexpected zero is a separate qualification failure."
+    },
+    "comparator_order": [
+      "validate structural invariants",
+      "classify raw bits",
+      "apply exact_special_policy",
+      "evaluate separate classification_qualification_target and retain every transition",
+      "apply finite numerical target or half neighbor-image target",
+      "report distances from both half ideals and modeled-set membership",
+      "report observed maxima/histograms/worst inputs separately from deterministic expected_summary",
+      "report qualification pass only for the executed bounded cases, never as a vendor guarantee"
+    ],
+    "deterministic_case_counts": {
+      "bf16": {
+        "exp": {
+          "all": 65536,
+          "expected_inf": 15567,
+          "expected_nan": 254,
+          "expected_normal": 34145,
+          "expected_subnormal": 11,
+          "expected_zero": 15559,
+          "finite": 49714
+        },
+        "log": {
+          "all": 65536,
+          "expected_inf": 3,
+          "expected_nan": 32894,
+          "expected_normal": 32638,
+          "expected_subnormal": 0,
+          "expected_zero": 1,
+          "finite": 32639
+        }
+      },
+      "f16": {
+        "exp": {
+          "all": 65536,
+          "expected_inf": 12917,
+          "expected_nan": 2046,
+          "expected_normal": 37479,
+          "expected_subnormal": 891,
+          "expected_zero": 12203,
+          "finite": 50572
+        },
+        "log": {
+          "all": 65536,
+          "expected_inf": 3,
+          "expected_nan": 33790,
+          "expected_normal": 31742,
+          "expected_subnormal": 0,
+          "expected_zero": 1,
+          "finite": 31743
+        }
+      },
+      "f32": {
+        "exp": {
+          "all": 2621,
+          "expected_inf": 609,
+          "expected_nan": 14,
+          "expected_normal": 1360,
+          "expected_subnormal": 49,
+          "expected_zero": 589,
+          "finite": 1997
+        },
+        "log": {
+          "all": 2621,
+          "expected_inf": 3,
+          "expected_nan": 1296,
+          "expected_normal": 1321,
+          "expected_subnormal": 0,
+          "expected_zero": 1,
+          "finite": 1322
+        }
+      },
+      "f64": {
+        "exp": {
+          "all": 16972,
+          "expected_inf": 4148,
+          "expected_nan": 8,
+          "expected_normal": 8615,
+          "expected_subnormal": 46,
+          "expected_zero": 4155,
+          "finite": 12815
+        },
+        "log": {
+          "all": 16972,
+          "expected_inf": 3,
+          "expected_nan": 8486,
+          "expected_normal": 8482,
+          "expected_subnormal": 0,
+          "expected_zero": 1,
+          "finite": 8483
+        }
+      },
+      "flex32": {
+        "exp": {
+          "all": 2621,
+          "expected_inf": 609,
+          "expected_nan": 14,
+          "expected_normal": 1360,
+          "expected_subnormal": 49,
+          "expected_zero": 589,
+          "finite": 1997
+        },
+        "log": {
+          "all": 2621,
+          "expected_inf": 3,
+          "expected_nan": 1296,
+          "expected_normal": 1321,
+          "expected_subnormal": 0,
+          "expected_zero": 1,
+          "finite": 1322
+        }
+      }
+    },
+    "equality_rule": "expected_summary equality compares deterministic fields only. Qualification targets and corpus identity are frozen by hashes. Observed metrics and pass/fail results never participate.",
+    "exact_special_policy": {
+      "exp": {
+        "nan": "nan_class_only",
+        "negative_infinity": "positive_zero",
+        "negative_zero": "one",
+        "positive_infinity": "positive_infinity",
+        "positive_zero": "one"
+      },
+      "log": {
+        "nan": "nan_class_only",
+        "negative_finite_nonzero": "nan_class_only",
+        "negative_infinity": "nan_class_only",
+        "negative_zero": "negative_infinity",
+        "one": "positive_zero",
+        "positive_infinity": "positive_infinity",
+        "positive_zero": "negative_infinity"
+      },
+      "provenance": "mathematical policy with CUDA Math API 13.4 special-value support; TileIR end-to-end GPU conformance remains unmeasured"
+    },
+    "expected_summary_fields": [
+      "schema_version",
+      "policy_sha256",
+      "corpus_manifest_sha256",
+      "options",
+      "selected_case_count",
+      "selected_dtype_operation_counts",
+      "layout_case_count",
+      "structural_check_counts"
+    ],
+    "finite_metric": {
+      "binade_boundary": "integer representable-step distance, not real-error divided by a single chosen binade spacing",
+      "distance": "abs(rank(actual)-rank(reference)); only finite nonzero pairs",
+      "nan_infinity_zero": "no finite ULP metric",
+      "rank": "for width w: positive b -> b | (1<<(w-1)); negative b -> (~b)&((1<<w)-1)"
+    },
+    "half_acceptance_set": {
+      "algorithm": [
+        "Obtain c = interval-confirmed ideal RN32(f(exact stored half input)).",
+        "Let b = 2 for exp, 1 for log.",
+        "Enumerate all F32 codes with ordered representable-step rank from rank(c)-b through rank(c)+b, restricted to valid non-NaN values.",
+        "Apply exact destination RNE to each enumerated F32 value, including zero, subnormals and infinities.",
+        "Deduplicate destination encodings. Actual destination bits must belong to this set.",
+        "Apply the independent classification and nonzero rules even when set membership succeeds."
+      ],
+      "direct_reference": "Always retain ideal destination RN(f(x)) as a separate diagnostic. It never replaces the declared staged schedule.",
+      "exact_special_inputs": "Use exact_special_policy first. Do not widen acceptance for exp signed zero, log one, infinities or NaNs.",
+      "finite_input_f32_overflow_or_underflow": "If ideal RN32 is infinity or zero, retain class diagnostics and compare final destination class with the staged ideal. No finite ULP distance is defined there.",
+      "meaning": "A derived project qualification envelope for the declared F32 operation followed by one destination RNE; not proof of hidden intermediate GPU bits.",
+      "necessary_not_sufficient": "Destination set membership cannot prove which F32 intermediate the GPU actually computed."
+    },
+    "mandatory_structural_checks": [
+      "shape",
+      "preserved_dtype",
+      "output_byte_count",
+      "input_alias_bytes_unchanged_including_nan_payloads",
+      "guards_unchanged",
+      "empty_has_zero_launches"
+    ],
+    "no_ftz_policy": {
+      "initial_status": "strict project qualification target, not a stated vendor guarantee",
+      "minimum_subnormal": "Expected code 1 vs actual code 0 is a classification failure regardless of distance 1.",
+      "requirement": "Expected nonzero -> actual zero fails the separate project classification target, even if an ULP limit or half acceptance set permits it."
+    },
+    "numerical_criteria": [
+      {
+        "cuda_math_observed_ulp": 1,
+        "dtype": "f64",
+        "f32_intermediate_step_limit": null,
+        "finite_ulp_gate": 1,
+        "half_api_zero_ulp_not_applicable": false,
+        "mode": "finite_nonzero_representable_step_limit",
+        "operation": "exp",
+        "project_qualification_target": true,
+        "provenance": "CUDA Programming Guide v13.4.2 observed error table; TileIR Exp Full explicitly refers to CUDA Math API; TileIR Log transfer is an explicit project target",
+        "vendor_guaranteed": false
+      },
+      {
+        "cuda_math_observed_ulp": 1,
+        "dtype": "f64",
+        "f32_intermediate_step_limit": null,
+        "finite_ulp_gate": 1,
+        "half_api_zero_ulp_not_applicable": false,
+        "mode": "finite_nonzero_representable_step_limit",
+        "operation": "log",
+        "project_qualification_target": true,
+        "provenance": "CUDA Programming Guide v13.4.2 observed error table; TileIR Exp Full explicitly refers to CUDA Math API; TileIR Log transfer is an explicit project target",
+        "vendor_guaranteed": false
+      },
+      {
+        "cuda_math_observed_ulp": 2,
+        "dtype": "f32",
+        "f32_intermediate_step_limit": null,
+        "finite_ulp_gate": 2,
+        "half_api_zero_ulp_not_applicable": false,
+        "mode": "finite_nonzero_representable_step_limit",
+        "operation": "exp",
+        "project_qualification_target": true,
+        "provenance": "CUDA Programming Guide v13.4.2 observed error table; TileIR Exp Full explicitly refers to CUDA Math API; TileIR Log transfer is an explicit project target",
+        "vendor_guaranteed": false
+      },
+      {
+        "cuda_math_observed_ulp": 1,
+        "dtype": "f32",
+        "f32_intermediate_step_limit": null,
+        "finite_ulp_gate": 1,
+        "half_api_zero_ulp_not_applicable": false,
+        "mode": "finite_nonzero_representable_step_limit",
+        "operation": "log",
+        "project_qualification_target": true,
+        "provenance": "CUDA Programming Guide v13.4.2 observed error table; TileIR Exp Full explicitly refers to CUDA Math API; TileIR Log transfer is an explicit project target",
+        "vendor_guaranteed": false
+      },
+      {
+        "cuda_math_observed_ulp": 2,
+        "dtype": "flex32",
+        "f32_intermediate_step_limit": null,
+        "finite_ulp_gate": 2,
+        "half_api_zero_ulp_not_applicable": false,
+        "mode": "finite_nonzero_representable_step_limit",
+        "operation": "exp",
+        "project_qualification_target": true,
+        "provenance": "CUDA Programming Guide v13.4.2 observed error table; TileIR Exp Full explicitly refers to CUDA Math API; TileIR Log transfer is an explicit project target",
+        "vendor_guaranteed": false
+      },
+      {
+        "cuda_math_observed_ulp": 1,
+        "dtype": "flex32",
+        "f32_intermediate_step_limit": null,
+        "finite_ulp_gate": 1,
+        "half_api_zero_ulp_not_applicable": false,
+        "mode": "finite_nonzero_representable_step_limit",
+        "operation": "log",
+        "project_qualification_target": true,
+        "provenance": "CUDA Programming Guide v13.4.2 observed error table; TileIR Exp Full explicitly refers to CUDA Math API; TileIR Log transfer is an explicit project target",
+        "vendor_guaranteed": false
+      },
+      {
+        "cuda_math_observed_ulp": null,
+        "dtype": "f16",
+        "f32_intermediate_step_limit": 2,
+        "finite_ulp_gate": null,
+        "half_api_zero_ulp_not_applicable": true,
+        "mode": "f32_neighbor_destination_image",
+        "operation": "exp",
+        "project_qualification_target": true,
+        "provenance": "CUDA Programming Guide v13.4.2 observed error table; TileIR Exp Full explicitly refers to CUDA Math API; TileIR Log transfer is an explicit project target",
+        "vendor_guaranteed": false
+      },
+      {
+        "cuda_math_observed_ulp": null,
+        "dtype": "f16",
+        "f32_intermediate_step_limit": 1,
+        "finite_ulp_gate": null,
+        "half_api_zero_ulp_not_applicable": true,
+        "mode": "f32_neighbor_destination_image",
+        "operation": "log",
+        "project_qualification_target": true,
+        "provenance": "CUDA Programming Guide v13.4.2 observed error table; TileIR Exp Full explicitly refers to CUDA Math API; TileIR Log transfer is an explicit project target",
+        "vendor_guaranteed": false
+      },
+      {
+        "cuda_math_observed_ulp": null,
+        "dtype": "bf16",
+        "f32_intermediate_step_limit": 2,
+        "finite_ulp_gate": null,
+        "half_api_zero_ulp_not_applicable": true,
+        "mode": "f32_neighbor_destination_image",
+        "operation": "exp",
+        "project_qualification_target": true,
+        "provenance": "CUDA Programming Guide v13.4.2 observed error table; TileIR Exp Full explicitly refers to CUDA Math API; TileIR Log transfer is an explicit project target",
+        "vendor_guaranteed": false
+      },
+      {
+        "cuda_math_observed_ulp": null,
+        "dtype": "bf16",
+        "f32_intermediate_step_limit": 1,
+        "finite_ulp_gate": null,
+        "half_api_zero_ulp_not_applicable": true,
+        "mode": "f32_neighbor_destination_image",
+        "operation": "log",
+        "project_qualification_target": true,
+        "provenance": "CUDA Programming Guide v13.4.2 observed error table; TileIR Exp Full explicitly refers to CUDA Math API; TileIR Log transfer is an explicit project target",
+        "vendor_guaranteed": false
+      }
+    ],
+    "observed_only_fields": [
+      "max_observed_ulp",
+      "ulp_histogram",
+      "worst_input_bits",
+      "classification_transition_counts",
+      "expected_nonzero_actual_zero_counts",
+      "subnormal_preservation_counts",
+      "signed_zero_mismatch_counts",
+      "nan_payload_observations",
+      "gpu_metadata",
+      "compiler_metadata",
+      "linux_backend_selection",
+      "unsupported_case_errors",
+      "accuracy_qualification_status",
+      "qualification_pass",
+      "classification_qualification_failures",
+      "numerical_qualification_failures",
+      "half_envelope_membership_failures"
+    ],
+    "options": {
+      "dtype": "optional one of scope.formats, otherwise all",
+      "finite": "retain exactly finite input AND finite ideal output, including signed zeros/subnormals; negative log inputs and overflowing exp inputs excluded",
+      "no_flex32": "exclude only Flex32 cases",
+      "operation": "optional exp/15 or log/16, otherwise both",
+      "skip_rank_zero": "exclude only rank-0 layouts; rank-1 [1] remains"
+    },
+    "policy_id": "typed-exp-log-reference-v2-qualification-targets",
+    "references": {
+      "bf16": "primary staged RNB16(RN32(f(exactB16))); also report ideal RNB16(f(exactB16))",
+      "f16": "primary staged RN16(RN32(f(exact16))); also report ideal RN16(f(exact16))",
+      "f32": "RN32(f(exact32))",
+      "f64": "RN64(f(exact64))",
+      "flex32": "RN32(f(exact32)); preserve Flex32 metadata",
+      "inputs": "exact little-endian stored encodings",
+      "nan": "null ideal bits means class NaN; output payload/sign not specified"
+    },
+    "schema_version": 2,
+    "scope": {
+      "existing_f32_math_validator": "separate, unchanged by this policy",
+      "exp": 15,
+      "formats": [
+        "f64",
+        "f32",
+        "flex32",
+        "f16",
+        "bf16"
+      ],
+      "log": 16
+    },
+    "source_urls": {
+      "cuda_guide": "https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/mathematical-functions.html#exponential-functions",
+      "cuda_guide_version_observed": "13.4.2, local captured HTML version banner",
+      "cuda_math_version": "13.4",
+      "mpfr_version": "4.2.2",
+      "tileir": "https://docs.nvidia.com/cuda/tile-ir/13.4/sections/operations.html#cuda-tile-exp",
+      "vendor_compiler_version": "13.4.92"
+    },
+    "status": "frozen proposed project qualification contract; not a vendor guarantee; no GPU measurements",
+    "supersedes_for_qualification": {
+      "v1_file": "typed-exp-log-reference-policy.json",
+      "v1_preserved": true,
+      "v1_sha256": "dc6cb240bb4c9912279125baf1a0086e2307dc8b1904ed0ab1867112a4c90dcf"
+    }
+  },
+  "policy_sha256": "f93ec90c97502770fc68be7c51192c4cf708d2bbe99d10cbcf3723010ed1bf83",
+  "policy_source_bytes": "{\n  \"classification_diagnostics\": [\n    \"expected_normal_actual_zero\",\n    \"expected_subnormal_actual_zero\",\n    \"expected_zero_actual_nonzero\",\n    \"expected_nan_actual_non_nan\",\n    \"expected_inf_actual_other\",\n    \"expected_finite_actual_inf\",\n    \"zero_sign_mismatch\",\n    \"infinity_sign_mismatch\",\n    \"finite_sign_mismatch\",\n    \"subnormal_to_normal\",\n    \"normal_to_subnormal\",\n    \"nan_output_quiet_bit_and_payload_observation_only\"\n  ],\n  \"classification_qualification_target\": {\n    \"infinity\": \"Expected infinity requires matching infinity sign; unexpected infinity is a separate qualification failure.\",\n    \"nan\": \"Expected NaN requires actual NaN class; no payload/sign gate.\",\n    \"nonzero\": \"Expected finite nonzero requires actual finite nonzero with matching sign.\",\n    \"normal_subnormal_boundary\": \"Nonzero normal <-> subnormal transitions are separate diagnostics and remain subject to the numerical/set target.\",\n    \"normative_status\": \"Explicit strict project target; boundary failures can occur within a vendor empirical error allowance and must be reported separately.\",\n    \"zero\": \"Expected zero requires matching signed zero; unexpected zero is a separate qualification failure.\"\n  },\n  \"comparator_order\": [\n    \"validate structural invariants\",\n    \"classify raw bits\",\n    \"apply exact_special_policy\",\n    \"evaluate separate classification_qualification_target and retain every transition\",\n    \"apply finite numerical target or half neighbor-image target\",\n    \"report distances from both half ideals and modeled-set membership\",\n    \"report observed maxima/histograms/worst inputs separately from deterministic expected_summary\",\n    \"report qualification pass only for the executed bounded cases, never as a vendor guarantee\"\n  ],\n  \"deterministic_case_counts\": {\n    \"bf16\": {\n      \"exp\": {\n        \"all\": 65536,\n        \"expected_inf\": 15567,\n        \"expected_nan\": 254,\n        \"expected_normal\": 34145,\n        \"expected_subnormal\": 11,\n        \"expected_zero\": 15559,\n        \"finite\": 49714\n      },\n      \"log\": {\n        \"all\": 65536,\n        \"expected_inf\": 3,\n        \"expected_nan\": 32894,\n        \"expected_normal\": 32638,\n        \"expected_subnormal\": 0,\n        \"expected_zero\": 1,\n        \"finite\": 32639\n      }\n    },\n    \"f16\": {\n      \"exp\": {\n        \"all\": 65536,\n        \"expected_inf\": 12917,\n        \"expected_nan\": 2046,\n        \"expected_normal\": 37479,\n        \"expected_subnormal\": 891,\n        \"expected_zero\": 12203,\n        \"finite\": 50572\n      },\n      \"log\": {\n        \"all\": 65536,\n        \"expected_inf\": 3,\n        \"expected_nan\": 33790,\n        \"expected_normal\": 31742,\n        \"expected_subnormal\": 0,\n        \"expected_zero\": 1,\n        \"finite\": 31743\n      }\n    },\n    \"f32\": {\n      \"exp\": {\n        \"all\": 2621,\n        \"expected_inf\": 609,\n        \"expected_nan\": 14,\n        \"expected_normal\": 1360,\n        \"expected_subnormal\": 49,\n        \"expected_zero\": 589,\n        \"finite\": 1997\n      },\n      \"log\": {\n        \"all\": 2621,\n        \"expected_inf\": 3,\n        \"expected_nan\": 1296,\n        \"expected_normal\": 1321,\n        \"expected_subnormal\": 0,\n        \"expected_zero\": 1,\n        \"finite\": 1322\n      }\n    },\n    \"f64\": {\n      \"exp\": {\n        \"all\": 16972,\n        \"expected_inf\": 4148,\n        \"expected_nan\": 8,\n        \"expected_normal\": 8615,\n        \"expected_subnormal\": 46,\n        \"expected_zero\": 4155,\n        \"finite\": 12815\n      },\n      \"log\": {\n        \"all\": 16972,\n        \"expected_inf\": 3,\n        \"expected_nan\": 8486,\n        \"expected_normal\": 8482,\n        \"expected_subnormal\": 0,\n        \"expected_zero\": 1,\n        \"finite\": 8483\n      }\n    },\n    \"flex32\": {\n      \"exp\": {\n        \"all\": 2621,\n        \"expected_inf\": 609,\n        \"expected_nan\": 14,\n        \"expected_normal\": 1360,\n        \"expected_subnormal\": 49,\n        \"expected_zero\": 589,\n        \"finite\": 1997\n      },\n      \"log\": {\n        \"all\": 2621,\n        \"expected_inf\": 3,\n        \"expected_nan\": 1296,\n        \"expected_normal\": 1321,\n        \"expected_subnormal\": 0,\n        \"expected_zero\": 1,\n        \"finite\": 1322\n      }\n    }\n  },\n  \"equality_rule\": \"expected_summary equality compares deterministic fields only. Qualification targets and corpus identity are frozen by hashes. Observed metrics and pass/fail results never participate.\",\n  \"exact_special_policy\": {\n    \"exp\": {\n      \"nan\": \"nan_class_only\",\n      \"negative_infinity\": \"positive_zero\",\n      \"negative_zero\": \"one\",\n      \"positive_infinity\": \"positive_infinity\",\n      \"positive_zero\": \"one\"\n    },\n    \"log\": {\n      \"nan\": \"nan_class_only\",\n      \"negative_finite_nonzero\": \"nan_class_only\",\n      \"negative_infinity\": \"nan_class_only\",\n      \"negative_zero\": \"negative_infinity\",\n      \"one\": \"positive_zero\",\n      \"positive_infinity\": \"positive_infinity\",\n      \"positive_zero\": \"negative_infinity\"\n    },\n    \"provenance\": \"mathematical policy with CUDA Math API 13.4 special-value support; TileIR end-to-end GPU conformance remains unmeasured\"\n  },\n  \"expected_summary_fields\": [\n    \"schema_version\",\n    \"policy_sha256\",\n    \"corpus_manifest_sha256\",\n    \"options\",\n    \"selected_case_count\",\n    \"selected_dtype_operation_counts\",\n    \"layout_case_count\",\n    \"structural_check_counts\"\n  ],\n  \"finite_metric\": {\n    \"binade_boundary\": \"integer representable-step distance, not real-error divided by a single chosen binade spacing\",\n    \"distance\": \"abs(rank(actual)-rank(reference)); only finite nonzero pairs\",\n    \"nan_infinity_zero\": \"no finite ULP metric\",\n    \"rank\": \"for width w: positive b -> b | (1<<(w-1)); negative b -> (~b)&((1<<w)-1)\"\n  },\n  \"half_acceptance_set\": {\n    \"algorithm\": [\n      \"Obtain c = interval-confirmed ideal RN32(f(exact stored half input)).\",\n      \"Let b = 2 for exp, 1 for log.\",\n      \"Enumerate all F32 codes with ordered representable-step rank from rank(c)-b through rank(c)+b, restricted to valid non-NaN values.\",\n      \"Apply exact destination RNE to each enumerated F32 value, including zero, subnormals and infinities.\",\n      \"Deduplicate destination encodings. Actual destination bits must belong to this set.\",\n      \"Apply the independent classification and nonzero rules even when set membership succeeds.\"\n    ],\n    \"direct_reference\": \"Always retain ideal destination RN(f(x)) as a separate diagnostic. It never replaces the declared staged schedule.\",\n    \"exact_special_inputs\": \"Use exact_special_policy first. Do not widen acceptance for exp signed zero, log one, infinities or NaNs.\",\n    \"finite_input_f32_overflow_or_underflow\": \"If ideal RN32 is infinity or zero, retain class diagnostics and compare final destination class with the staged ideal. No finite ULP distance is defined there.\",\n    \"meaning\": \"A derived project qualification envelope for the declared F32 operation followed by one destination RNE; not proof of hidden intermediate GPU bits.\",\n    \"necessary_not_sufficient\": \"Destination set membership cannot prove which F32 intermediate the GPU actually computed.\"\n  },\n  \"mandatory_structural_checks\": [\n    \"shape\",\n    \"preserved_dtype\",\n    \"output_byte_count\",\n    \"input_alias_bytes_unchanged_including_nan_payloads\",\n    \"guards_unchanged\",\n    \"empty_has_zero_launches\"\n  ],\n  \"no_ftz_policy\": {\n    \"initial_status\": \"strict project qualification target, not a stated vendor guarantee\",\n    \"minimum_subnormal\": \"Expected code 1 vs actual code 0 is a classification failure regardless of distance 1.\",\n    \"requirement\": \"Expected nonzero -> actual zero fails the separate project classification target, even if an ULP limit or half acceptance set permits it.\"\n  },\n  \"numerical_criteria\": [\n    {\n      \"cuda_math_observed_ulp\": 1,\n      \"dtype\": \"f64\",\n      \"f32_intermediate_step_limit\": null,\n      \"finite_ulp_gate\": 1,\n      \"half_api_zero_ulp_not_applicable\": false,\n      \"mode\": \"finite_nonzero_representable_step_limit\",\n      \"operation\": \"exp\",\n      \"project_qualification_target\": true,\n      \"provenance\": \"CUDA Programming Guide v13.4.2 observed error table; TileIR Exp Full explicitly refers to CUDA Math API; TileIR Log transfer is an explicit project target\",\n      \"vendor_guaranteed\": false\n    },\n    {\n      \"cuda_math_observed_ulp\": 1,\n      \"dtype\": \"f64\",\n      \"f32_intermediate_step_limit\": null,\n      \"finite_ulp_gate\": 1,\n      \"half_api_zero_ulp_not_applicable\": false,\n      \"mode\": \"finite_nonzero_representable_step_limit\",\n      \"operation\": \"log\",\n      \"project_qualification_target\": true,\n      \"provenance\": \"CUDA Programming Guide v13.4.2 observed error table; TileIR Exp Full explicitly refers to CUDA Math API; TileIR Log transfer is an explicit project target\",\n      \"vendor_guaranteed\": false\n    },\n    {\n      \"cuda_math_observed_ulp\": 2,\n      \"dtype\": \"f32\",\n      \"f32_intermediate_step_limit\": null,\n      \"finite_ulp_gate\": 2,\n      \"half_api_zero_ulp_not_applicable\": false,\n      \"mode\": \"finite_nonzero_representable_step_limit\",\n      \"operation\": \"exp\",\n      \"project_qualification_target\": true,\n      \"provenance\": \"CUDA Programming Guide v13.4.2 observed error table; TileIR Exp Full explicitly refers to CUDA Math API; TileIR Log transfer is an explicit project target\",\n      \"vendor_guaranteed\": false\n    },\n    {\n      \"cuda_math_observed_ulp\": 1,\n      \"dtype\": \"f32\",\n      \"f32_intermediate_step_limit\": null,\n      \"finite_ulp_gate\": 1,\n      \"half_api_zero_ulp_not_applicable\": false,\n      \"mode\": \"finite_nonzero_representable_step_limit\",\n      \"operation\": \"log\",\n      \"project_qualification_target\": true,\n      \"provenance\": \"CUDA Programming Guide v13.4.2 observed error table; TileIR Exp Full explicitly refers to CUDA Math API; TileIR Log transfer is an explicit project target\",\n      \"vendor_guaranteed\": false\n    },\n    {\n      \"cuda_math_observed_ulp\": 2,\n      \"dtype\": \"flex32\",\n      \"f32_intermediate_step_limit\": null,\n      \"finite_ulp_gate\": 2,\n      \"half_api_zero_ulp_not_applicable\": false,\n      \"mode\": \"finite_nonzero_representable_step_limit\",\n      \"operation\": \"exp\",\n      \"project_qualification_target\": true,\n      \"provenance\": \"CUDA Programming Guide v13.4.2 observed error table; TileIR Exp Full explicitly refers to CUDA Math API; TileIR Log transfer is an explicit project target\",\n      \"vendor_guaranteed\": false\n    },\n    {\n      \"cuda_math_observed_ulp\": 1,\n      \"dtype\": \"flex32\",\n      \"f32_intermediate_step_limit\": null,\n      \"finite_ulp_gate\": 1,\n      \"half_api_zero_ulp_not_applicable\": false,\n      \"mode\": \"finite_nonzero_representable_step_limit\",\n      \"operation\": \"log\",\n      \"project_qualification_target\": true,\n      \"provenance\": \"CUDA Programming Guide v13.4.2 observed error table; TileIR Exp Full explicitly refers to CUDA Math API; TileIR Log transfer is an explicit project target\",\n      \"vendor_guaranteed\": false\n    },\n    {\n      \"cuda_math_observed_ulp\": null,\n      \"dtype\": \"f16\",\n      \"f32_intermediate_step_limit\": 2,\n      \"finite_ulp_gate\": null,\n      \"half_api_zero_ulp_not_applicable\": true,\n      \"mode\": \"f32_neighbor_destination_image\",\n      \"operation\": \"exp\",\n      \"project_qualification_target\": true,\n      \"provenance\": \"CUDA Programming Guide v13.4.2 observed error table; TileIR Exp Full explicitly refers to CUDA Math API; TileIR Log transfer is an explicit project target\",\n      \"vendor_guaranteed\": false\n    },\n    {\n      \"cuda_math_observed_ulp\": null,\n      \"dtype\": \"f16\",\n      \"f32_intermediate_step_limit\": 1,\n      \"finite_ulp_gate\": null,\n      \"half_api_zero_ulp_not_applicable\": true,\n      \"mode\": \"f32_neighbor_destination_image\",\n      \"operation\": \"log\",\n      \"project_qualification_target\": true,\n      \"provenance\": \"CUDA Programming Guide v13.4.2 observed error table; TileIR Exp Full explicitly refers to CUDA Math API; TileIR Log transfer is an explicit project target\",\n      \"vendor_guaranteed\": false\n    },\n    {\n      \"cuda_math_observed_ulp\": null,\n      \"dtype\": \"bf16\",\n      \"f32_intermediate_step_limit\": 2,\n      \"finite_ulp_gate\": null,\n      \"half_api_zero_ulp_not_applicable\": true,\n      \"mode\": \"f32_neighbor_destination_image\",\n      \"operation\": \"exp\",\n      \"project_qualification_target\": true,\n      \"provenance\": \"CUDA Programming Guide v13.4.2 observed error table; TileIR Exp Full explicitly refers to CUDA Math API; TileIR Log transfer is an explicit project target\",\n      \"vendor_guaranteed\": false\n    },\n    {\n      \"cuda_math_observed_ulp\": null,\n      \"dtype\": \"bf16\",\n      \"f32_intermediate_step_limit\": 1,\n      \"finite_ulp_gate\": null,\n      \"half_api_zero_ulp_not_applicable\": true,\n      \"mode\": \"f32_neighbor_destination_image\",\n      \"operation\": \"log\",\n      \"project_qualification_target\": true,\n      \"provenance\": \"CUDA Programming Guide v13.4.2 observed error table; TileIR Exp Full explicitly refers to CUDA Math API; TileIR Log transfer is an explicit project target\",\n      \"vendor_guaranteed\": false\n    }\n  ],\n  \"observed_only_fields\": [\n    \"max_observed_ulp\",\n    \"ulp_histogram\",\n    \"worst_input_bits\",\n    \"classification_transition_counts\",\n    \"expected_nonzero_actual_zero_counts\",\n    \"subnormal_preservation_counts\",\n    \"signed_zero_mismatch_counts\",\n    \"nan_payload_observations\",\n    \"gpu_metadata\",\n    \"compiler_metadata\",\n    \"linux_backend_selection\",\n    \"unsupported_case_errors\",\n    \"accuracy_qualification_status\",\n    \"qualification_pass\",\n    \"classification_qualification_failures\",\n    \"numerical_qualification_failures\",\n    \"half_envelope_membership_failures\"\n  ],\n  \"options\": {\n    \"dtype\": \"optional one of scope.formats, otherwise all\",\n    \"finite\": \"retain exactly finite input AND finite ideal output, including signed zeros/subnormals; negative log inputs and overflowing exp inputs excluded\",\n    \"no_flex32\": \"exclude only Flex32 cases\",\n    \"operation\": \"optional exp/15 or log/16, otherwise both\",\n    \"skip_rank_zero\": \"exclude only rank-0 layouts; rank-1 [1] remains\"\n  },\n  \"policy_id\": \"typed-exp-log-reference-v2-qualification-targets\",\n  \"references\": {\n    \"bf16\": \"primary staged RNB16(RN32(f(exactB16))); also report ideal RNB16(f(exactB16))\",\n    \"f16\": \"primary staged RN16(RN32(f(exact16))); also report ideal RN16(f(exact16))\",\n    \"f32\": \"RN32(f(exact32))\",\n    \"f64\": \"RN64(f(exact64))\",\n    \"flex32\": \"RN32(f(exact32)); preserve Flex32 metadata\",\n    \"inputs\": \"exact little-endian stored encodings\",\n    \"nan\": \"null ideal bits means class NaN; output payload/sign not specified\"\n  },\n  \"schema_version\": 2,\n  \"scope\": {\n    \"existing_f32_math_validator\": \"separate, unchanged by this policy\",\n    \"exp\": 15,\n    \"formats\": [\n      \"f64\",\n      \"f32\",\n      \"flex32\",\n      \"f16\",\n      \"bf16\"\n    ],\n    \"log\": 16\n  },\n  \"source_urls\": {\n    \"cuda_guide\": \"https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/mathematical-functions.html#exponential-functions\",\n    \"cuda_guide_version_observed\": \"13.4.2, local captured HTML version banner\",\n    \"cuda_math_version\": \"13.4\",\n    \"mpfr_version\": \"4.2.2\",\n    \"tileir\": \"https://docs.nvidia.com/cuda/tile-ir/13.4/sections/operations.html#cuda-tile-exp\",\n    \"vendor_compiler_version\": \"13.4.92\"\n  },\n  \"status\": \"frozen proposed project qualification contract; not a vendor guarantee; no GPU measurements\",\n  \"supersedes_for_qualification\": {\n    \"v1_file\": \"typed-exp-log-reference-policy.json\",\n    \"v1_preserved\": true,\n    \"v1_sha256\": \"dc6cb240bb4c9912279125baf1a0086e2307dc8b1904ed0ab1867112a4c90dcf\"\n  }\n}\n",
+  "preparation_corpus_manifest_sha256": "63b98afcb862fcf934de753554c28e85e55ac45566f33cc60ed9f39e6a9c4884",
+  "preparation_model_sha256": "d249067c7972f545061aa6492ecb2d29772a04705a401cdaa19a3c9b1d77ba18",
+  "primary_sources": {
+    "cuda-guide-13.2.0-math.html": {
+      "bytes": 244769,
+      "resolved_url": "https://docs.nvidia.com/cuda/archive/13.2.0/cuda-programming-guide/05-appendices/mathematical-functions.html",
+      "retrieved_utc": "2026-10-25T23:14:12.512435+00:00",
+      "sha256": "49aa98a4f3cece0ab1f4ef470f8ed1edf922ea4920b240acc330f9059e6075b9",
+      "url": "https://docs.nvidia.com/cuda/archive/13.2.0/cuda-programming-guide/05-appendices/mathematical-functions.html"
+    },
+    "cuda-guide-current-math.html": {
+      "bytes": 245348,
+      "resolved_url": "https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/mathematical-functions.html",
+      "retrieved_utc": "2026-10-25T23:14:12.346408+00:00",
+      "sha256": "4277615c7d34b1f24fa9dd7908b7f71e63cc87d516740cc89bf56f05b5be7f77",
+      "url": "https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/mathematical-functions.html"
+    },
+    "cuda-math-13.4-double.html": {
+      "bytes": 245449,
+      "resolved_url": "https://docs.nvidia.com/cuda/cuda-math-api/cuda_math_api/group__CUDA__MATH__DOUBLE.html",
+      "retrieved_utc": "2026-10-25T23:14:12.217697+00:00",
+      "sha256": "33fedd606826502cf91036bc5f054dc3ef266d3228930ca667d30e5fa1fa7855",
+      "url": "https://docs.nvidia.com/cuda/cuda-math-api/cuda_math_api/group__CUDA__MATH__DOUBLE.html"
+    },
+    "cuda-math-13.4-single.html": {
+      "bytes": 243054,
+      "resolved_url": "https://docs.nvidia.com/cuda/cuda-math-api/cuda_math_api/group__CUDA__MATH__SINGLE.html",
+      "retrieved_utc": "2026-10-25T23:14:12.060736+00:00",
+      "sha256": "de1b072026dae5d016001e21574daa1cb566ed21c424dccc29b069bad21b4195",
+      "url": "https://docs.nvidia.com/cuda/cuda-math-api/cuda_math_api/group__CUDA__MATH__SINGLE.html"
+    },
+    "mpfr-4.2.2-manual.html": {
+      "bytes": 562991,
+      "resolved_url": "https://www.mpfr.org/mpfr-4.2.2/mpfr.html",
+      "retrieved_utc": "2026-10-25T23:14:12.902433+00:00",
+      "sha256": "ee996f3dcc11d1f88393da162bdd90c3fa29191ca658c0fc594ffd38a22638bc",
+      "url": "https://www.mpfr.org/mpfr-4.2.2/mpfr.html"
+    },
+    "tileir-13.4-operations.html": {
+      "bytes": 1177348,
+      "resolved_url": "https://docs.nvidia.com/cuda/tile-ir/13.4/sections/operations.html",
+      "retrieved_utc": "2026-10-25T23:14:11.874698+00:00",
+      "sha256": "b05512d7cc3b1571adacb29ab40e209ade6e826fc8d38cb0b760881e2b281773",
+      "url": "https://docs.nvidia.com/cuda/tile-ir/13.4/sections/operations.html"
+    }
+  },
+  "qualification_status": "predeclared project targets, not vendor guarantees; GPU unmeasured",
+  "reference": "adaptive directed MPFR intervals; exact rational destination RNE; no production arithmetic or observed GPU expectations",
+  "schema_version": 2,
+  "self_checks": {
+    "half_roundtrips": 131072,
+    "independent_struct_decode_and_f16_encode": true,
+    "ties_ranges_signs_and_96_vs_384": true
+  },
+  "shared_scope": "primitive/public exp/log; ranks 0..8; empty/tails/views; exact retained sources/aliases/poison; materialized known-reference chains; launch counters and physical padding require raw harness",
+  "source_dependencies": {
+    "Ops.td": {
+      "bytes": 203041,
+      "path": "/home/alex/.cargo/git/checkouts/cuda-rust-27a4e94e7e45d2f6/2f47ad0/cutile-rs/cuda-tile-rs/cuda-tile/include/cuda_tile/Dialect/CudaTile/IR/Ops.td",
+      "sha256": "1db40da82ff66ac7011e3ca31767a05dcac7ce8281f234b0c142f200021c7232"
+    },
+    "Types.td": {
+      "bytes": 18558,
+      "path": "/home/alex/.cargo/git/checkouts/cuda-rust-27a4e94e7e45d2f6/2f47ad0/cutile-rs/cuda-tile-rs/cuda-tile/include/cuda_tile/Dialect/CudaTile/IR/Types.td",
+      "sha256": "5cceb7b5d26774cf6f934a98b70f3b2a9b66738156b475885913f08cecf8812f"
+    },
+    "burn-backend-0.22.1-cargo_vcs_info.json": {
+      "bytes": 113,
+      "path": "/home/alex/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/burn-backend-0.22.1/.cargo_vcs_info.json",
+      "sha256": "14f661b0ae563e2f0fd176f411f1eed236d54e443b75df0f65656851496291c4"
+    },
+    "burn-cubecl-0.22.1-cargo_vcs_info.json": {
+      "bytes": 112,
+      "path": "/home/alex/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/burn-cubecl-0.22.1/.cargo_vcs_info.json",
+      "sha256": "36d089884436b76ad90a9808c4376bfb36dcd12b8ebe20713b565dc5ea206eae"
+    },
+    "compiler-qualification.txt": {
+      "bytes": 13143,
+      "path": "/home/alex/.cache/d3os/typed-exp-log-compiler-qualification.txt",
+      "sha256": "cb2f2e8c51858028245f4afe3e0a5150c4c231918a7ce41c92b6e224c8cedb05"
+    },
+    "cubecl-cpp-0.11.3-cargo_vcs_info.json": {
+      "bytes": 111,
+      "path": "/home/alex/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cubecl-cpp-0.11.3/.cargo_vcs_info.json",
+      "sha256": "09ab1cfa02b656ebf0739d44b0b30bb91d521548a1ad5eb24a314151eb75d1d0"
+    },
+    "cubecl-cuda-0.11.3-cargo_vcs_info.json": {
+      "bytes": 112,
+      "path": "/home/alex/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cubecl-cuda-0.11.3/.cargo_vcs_info.json",
+      "sha256": "61097cdf4279207321ce123c8407df762952252dd55fec158a4ad11d55b6aa04"
+    },
+    "cubecl-libdevice.rs": {
+      "bytes": 2371,
+      "path": "/home/alex/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cubecl-llvm-0.11.3/src/nvptx/libdevice.rs",
+      "sha256": "39807f7f63cfc551e91dad7e907f4bec8242ada3c96435093876ee27fc80b083"
+    },
+    "cubecl-llvm-0.11.3-cargo_vcs_info.json": {
+      "bytes": 112,
+      "path": "/home/alex/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cubecl-llvm-0.11.3/.cargo_vcs_info.json",
+      "sha256": "82e10d06b9ff96ca780b4526fd1b8f84a4813ed3fa06170a7282dd698a7416d5"
+    },
+    "cubecl-llvm-math.rs": {
+      "bytes": 19486,
+      "path": "/home/alex/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cubecl-llvm-0.11.3/src/shared/to_llvm/math.rs",
+      "sha256": "e843529cae0f6acce1d5d0c716d8fe0977615ec3d934a69927d2c1016cf19fa9"
+    },
+    "cuda-math-functions.h": {
+      "bytes": 243685,
+      "path": "/home/alex/.t3/worktrees/D3OS/t3-41013c62/target/nvidia/cutile-toolkit/packages/nvidia/cu13/include/crt/math_functions.h",
+      "sha256": "c6446ed6276ffa2fc56852355c795d6a24c6aee125393ad8a68a3eb5dabc123d"
+    },
+    "cutile-core.rs": {
+      "bytes": 162664,
+      "path": "/home/alex/.cargo/git/checkouts/cuda-rust-27a4e94e7e45d2f6/2f47ad0/cutile-rs/cutile/src/_core.rs",
+      "sha256": "a22300b5eecc329e69c6b17ae8d60de8b16b8771fd6fc040d5b4cece6a912aa9"
+    }
+  },
+  "version": 1
+}

@@ -1,6 +1,7 @@
 // Floating arithmetic and sqrt retain their type and round to nearest even.
 // Typed half division uses tileiras's documented F32 emulation internally.
 // Half remainder explicitly computes and corrects in F32 before one output rounding.
+// Half exp/log explicitly promote to F32 before one destination RNE rounding.
 fn float_arithmetic_width(format: u32) -> u32 {
     if format == 0u32 { 3u32 } else if format <= 2u32 { 2u32 } else { 1u32 }
 }
@@ -107,6 +108,23 @@ fn float_arithmetic_f64(a: Tile<u64, {[128]}>, b: Tile<u64, {[128]}>, op: u32) -
     else if op == 3u32 { bitcast(mulf(x, y, rounding::NearestEven, ftz::Disabled)) }
     else if op == 4u32 { bitcast(divf(x, y, rounding::NearestEven, ftz::Disabled)) }
     else if op == 14u32 { bitcast(sqrt(x, rounding::NearestEven, ftz::Disabled)) }
+    else if op == 15u32 {
+        let zero = broadcast_scalar(0u64, shape![128]);
+        let minimum = broadcast_scalar(1u64, shape![128]);
+        let sign = minimum << broadcast_scalar(63u64, shape![128]);
+        // First F64 above ln(2^-1075), the zero/minimum-subnormal RNE midpoint.
+        let high = broadcast_scalar(1082607888u64, shape![128]) << broadcast_scalar(32u64, shape![128]);
+        let low = (broadcast_scalar(54573u64, shape![128]) << broadcast_scalar(16u64, shape![128])) | broadcast_scalar(12369u64, shape![128]);
+        let cutoff_bits = (high | low) ^ sign;
+        let cutoff: Tile<f64, {[128]}> = bitcast(cutoff_bits);
+        let underflow = lt_tile(x, cutoff);
+        let result: Tile<u64, {[128]}> = bitcast(unsafe { exp_with_rounding(x, rounding::Full) });
+        // An observed one-ULP error can erase the minimum subnormal.
+        // The project requires nonzero results to stay nonzero.
+        let nonzero = select(eq_tile(result & (sign - minimum), zero), minimum, result);
+        select(underflow, zero, nonzero)
+    }
+    else if op == 16u32 { bitcast(log(x)) }
     else if op == 34u32 {
         let residue = remf(x, y);
         let bits: Tile<u64, {[128]}> = bitcast(residue);
@@ -144,6 +162,8 @@ fn float_arithmetic_f32(a: Tile<u32, {[128]}>, b: Tile<u32, {[128]}>, op: u32) -
     else if op == 3u32 { bitcast(mulf(x, y, rounding::NearestEven, ftz::Disabled)) }
     else if op == 4u32 { bitcast(divf(x, y, rounding::NearestEven, ftz::Disabled)) }
     else if op == 14u32 { bitcast(sqrt(x, rounding::NearestEven, ftz::Disabled)) }
+    else if op == 15u32 { bitcast(unsafe { exp_with_rounding(x, rounding::Full) }) }
+    else if op == 16u32 { bitcast(log(x)) }
     else if op == 34u32 { bitcast(float_arithmetic_remainder_f32(x, y)) }
     else { bitcast(divf(one, x, rounding::NearestEven, ftz::Disabled)) }
 }
@@ -157,6 +177,12 @@ fn float_arithmetic_f16(a: Tile<u16, {[128]}>, b: Tile<u16, {[128]}>, op: u32) -
     else if op == 3u32 { bitcast(mulf(x, y, rounding::NearestEven, ftz::Disabled)) }
     else if op == 4u32 { bitcast(divf(x, y, rounding::NearestEven, ftz::Disabled)) }
     else if op == 14u32 { bitcast(sqrt(x, rounding::NearestEven, ftz::Disabled)) }
+    else if op == 15u32 || op == 16u32 {
+        let promoted: Tile<f32, {[128]}> = ftof(x, rounding::NearestEven);
+        let result = if op == 15u32 { unsafe { exp_with_rounding(promoted, rounding::Full) } } else { log(promoted) };
+        let rounded: Tile<f16, {[128]}> = ftof(result, rounding::NearestEven);
+        bitcast(rounded)
+    }
     else if op == 34u32 {
         // Native already normalized a scalar operand to this storage format.
         let x_staged: Tile<f32, {[128]}> = ftof(x, rounding::NearestEven);
@@ -177,6 +203,12 @@ fn float_arithmetic_bf16(a: Tile<u16, {[128]}>, b: Tile<u16, {[128]}>, op: u32) 
     else if op == 3u32 { bitcast(mulf(x, y, rounding::NearestEven, ftz::Disabled)) }
     else if op == 4u32 { bitcast(divf(x, y, rounding::NearestEven, ftz::Disabled)) }
     else if op == 14u32 { bitcast(sqrt(x, rounding::NearestEven, ftz::Disabled)) }
+    else if op == 15u32 || op == 16u32 {
+        let promoted: Tile<f32, {[128]}> = ftof(x, rounding::NearestEven);
+        let result = if op == 15u32 { unsafe { exp_with_rounding(promoted, rounding::Full) } } else { log(promoted) };
+        let rounded: Tile<bf16, {[128]}> = ftof(result, rounding::NearestEven);
+        bitcast(rounded)
+    }
     else if op == 34u32 {
         // Native already normalized a scalar operand to this storage format.
         let x_staged: Tile<f32, {[128]}> = ftof(x, rounding::NearestEven);
@@ -242,7 +274,7 @@ unsafe fn burn_float_arithmetic(a: *const u32, b: *const u32, output: *mut u32, 
     let format = (operation >> 8u32) & 255u32;
     let op = operation & 255u32;
     let scalar_rhs = operation & 16777216u32 != 0u32;
-    let unary = (op >= 11u32 && op <= 14u32) || (op >= 21u32 && op <= 25u32);
+    let unary = (op >= 11u32 && op <= 16u32) || (op >= 21u32 && op <= 25u32);
     let width = float_arithmetic_width(format);
     let per_word = if width == 3u32 { 1u32 } else { 4u32 >> width };
     let writers = (count + per_word - 1u32) / per_word;

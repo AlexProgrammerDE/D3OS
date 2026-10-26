@@ -73,7 +73,108 @@ def stage_burn_program(root, binary, destination):
     return libdevice
 
 
-def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_finite=False, sort_compile_log=False, compaction_aligned=False, quantized_empty_case=None, scatter_finite=False, select_updates=False, nd_unique=False, nd_nonempty=False, nd_scalar_grad=False, nd_no_scalar=False, storage_flex_direct=False, storage_no_flex32=False, conversions_no_flex32=False, remainder_finite=False, remainder_wide=False, inverse_finite=False, inverse_diagnostic=False, interpolate_case="normal", spatial_empty=False, spatial_case=None, spatial_exact=False, spatial_empty_backward=False, deform_empty=False, deform_exact=False, deform_case=None, deform_forward_only=False, predicate_no_flex32=False, predicate_finite=False, movement_no_flex32=False, movement_skip_empty_bool_scatter=False, movement_matching_bool_masks=False, indexed_no_flex32=False, indexed_skip_scalar_nd=False, integer_arithmetic_dtype=None, integer_arithmetic_op=None, float_arithmetic_arguments=(), float_rounding_arguments=(), relu_arguments=(), typed_remainder_arguments=()):
+def typed_exp_log_expected_cells(binary, arguments, expected):
+    base = [argument for argument in arguments if not argument.startswith(("--dtype=", "--op="))]
+    values = [[0, 0] for _ in range(5)]
+    for fi, dtype in enumerate(("f64", "f32", "flex32", "f16", "bf16")):
+        for oi, op in enumerate(("exp", "log")):
+            if expected["selected_dtype_operation_counts"][fi][oi] == 0:
+                continue
+            command = [str(binary), "--expected-summary", *base, f"--dtype={dtype}", f"--op={op}"]
+            cell = json.loads(subprocess.check_output(command, text=True, cwd=ROOT))
+            if cell["tensor_rows"] != expected["selected_dtype_operation_counts"][fi][oi]:
+                raise RuntimeError("typed exp/log per-operation reference plan differs")
+            values[fi][oi] = cell["values"]
+    if sum(map(sum, values)) != expected["values"]:
+        raise RuntimeError("typed exp/log per-operation value plan differs")
+    return values
+
+
+def validate_typed_exp_log(text, expected, expected_cells, fixtures, *, execution_os, backend, fusion, scope):
+    if not isinstance(expected_cells, list) or len(expected_cells) != 5 or any(not isinstance(row, list) or len(row) != 2 or any(type(value) is not int or value < 0 for value in row) for row in expected_cells) or sum(map(sum, expected_cells)) != expected["values"]:
+        raise RuntimeError("typed exp/log per-operation work plan is invalid")
+    prefix = f"BURN_TYPED_EXP_LOG_OK os={execution_os} backend={backend} fusion={fusion} corpus={fixtures['version']} totals="
+    if execution_os == "d3os":
+        pattern = re.compile(r"(?:\[[^\]\r\n]*\]\s*)*(" + re.escape(prefix) + r".*)")
+        lines = [match.group(1) for line in text.splitlines() if (match := pattern.fullmatch(re.sub(r"\x1b\[[0-9;]*m", "", line)))]
+    else:
+        lines = [line for line in text.splitlines() if line.startswith(prefix)]
+    if len(lines) != 1:
+        raise RuntimeError("typed exp/log requires one terminal qualification marker")
+    decoder = json.JSONDecoder()
+    totals, end = decoder.raw_decode(lines[0][len(prefix):])
+    remaining = lines[0][len(prefix) + end:]
+    if totals != expected or not remaining.startswith(" accuracy="):
+        raise RuntimeError("typed exp/log totals differ from the frozen corpus")
+    accuracy, end = decoder.raw_decode(remaining[len(" accuracy="):])
+    remaining = remaining[len(" accuracy=") + end:]
+    policy = (
+        f" policy_sha256={fixtures['policy_sha256']} fixture_sha256={fixtures['fixture_sha256']}"
+        " numerical_policy=project_qualification_targets staged_half=f32_neighbor_envelope"
+        " no_ftz=strict preserved_inputs=exact_bytes chain=materialized_known_refs"
+        " poison=retained_allocation scope=strict_native " + scope
+    )
+    if remaining != policy:
+        raise RuntimeError("typed exp/log policy, fixture identity, or scope differs")
+    if not isinstance(accuracy, dict) or type(accuracy.get("failures")) is not int or accuracy["failures"] != 0:
+        raise RuntimeError("typed exp/log accuracy reports qualification failures")
+    cells = accuracy.get("cells")
+    dtypes = ("f64", "f32", "flex32", "f16", "bf16")
+    if not isinstance(cells, list) or len(cells) != 10:
+        raise RuntimeError("typed exp/log accuracy requires all dtype/operation cells")
+    observed_values = 0
+    for index, cell in enumerate(cells):
+        if not isinstance(cell, dict) or (cell.get("dtype"), cell.get("op")) != (dtypes[index // 2], ("exp", "log")[index % 2]):
+            raise RuntimeError("typed exp/log accuracy cell identity differs")
+        counters = ("values", "failures", "classification_failures", "numerical_failures", "exact_special_failures", "half_envelope_failures", "finite_pairs", "ideal_finite_pairs", "sign_mismatches", "nonzero_to_zero", "subnormal_preserved", "nan_payload_differences", "quiet_nan_outputs", "negative_nan_outputs")
+        if any(type(cell.get(key)) is not int or not 0 <= cell[key] <= cell["values"] for key in counters):
+            raise RuntimeError("typed exp/log accuracy counters are invalid")
+        if any(cell[key] for key in ("failures", "classification_failures", "numerical_failures", "exact_special_failures", "half_envelope_failures", "sign_mismatches", "nonzero_to_zero")):
+            raise RuntimeError("typed exp/log cell reports qualification failures")
+        transitions = cell.get("transitions")
+        if not isinstance(transitions, list) or len(transitions) != 5 or any(not isinstance(row, list) or len(row) != 5 or any(type(value) is not int or value < 0 for value in row) for row in transitions):
+            raise RuntimeError("typed exp/log classification matrix is invalid")
+        if sum(map(sum, transitions)) != cell["values"] or transitions[1][1] != cell["subnormal_preserved"]:
+            raise RuntimeError("typed exp/log classification counts differ")
+        allowed = ({0}, {1, 2}, {1, 2}, {3}, {4})
+        if any(count for row, columns in zip(transitions, allowed) for observed, count in enumerate(row) if observed not in columns):
+            raise RuntimeError("typed exp/log classification matrix contradicts qualification")
+        finite_pairs = sum(transitions[wanted][actual] for wanted in (1, 2) for actual in (1, 2))
+        # Direct and staged references have identical classes in this corpus.
+        # The three half rounding differences all retain normal finite results.
+        if cell["finite_pairs"] != finite_pairs or cell["ideal_finite_pairs"] != finite_pairs:
+            raise RuntimeError("typed exp/log finite-pair counts contradict classifications")
+        for histogram_key, count_key, maximum_key in (("histogram", "finite_pairs", "max_ulp"), ("ideal_histogram", "ideal_finite_pairs", "max_ideal_ulp")):
+            histogram = cell.get(histogram_key)
+            maximum = cell.get(maximum_key)
+            if not isinstance(histogram, list) or len(histogram) != 7 or any(type(value) is not int or value < 0 for value in histogram) or sum(histogram) != cell[count_key]:
+                raise RuntimeError("typed exp/log accuracy histogram differs")
+            if (cell[count_key] == 0 and maximum is not None) or (cell[count_key] != 0 and (type(maximum) is not int or maximum < 0)):
+                raise RuntimeError("typed exp/log observed maximum is invalid")
+            if maximum is not None:
+                bucket = 0 if maximum == 0 else 1 if maximum == 1 else 2 if maximum == 2 else 3 if maximum <= 4 else 4 if maximum <= 8 else 5 if maximum <= 16 else 6
+                if not histogram[bucket] or any(histogram[bucket + 1:]):
+                    raise RuntimeError("typed exp/log observed maximum contradicts its histogram")
+                if index < 6:
+                    limit = 1 if index < 2 or index % 2 == 1 else 2
+                    if maximum > limit or any(histogram[limit + 1:]):
+                        raise RuntimeError("typed exp/log wide-format accuracy exceeds its qualification target")
+                # Every frozen half envelope contains both reference ideals
+                # and spans at most one destination step. This is a necessary
+                # aggregate check, not a replacement for per-value membership.
+                elif maximum > 1 or any(histogram[2:]):
+                    raise RuntimeError("typed exp/log half accuracy contradicts the frozen envelopes")
+        if index < 6 and (cell["histogram"] != cell["ideal_histogram"] or cell["max_ulp"] != cell["max_ideal_ulp"]):
+            raise RuntimeError("typed exp/log wide-format references must agree")
+        if cell["values"] != expected_cells[index // 2][index % 2]:
+            raise RuntimeError("typed exp/log per-operation observation count differs")
+        observed_values += cell["values"]
+    if observed_values != expected["values"]:
+        raise RuntimeError("typed exp/log measured value count differs from the corpus")
+    return accuracy
+
+
+def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_finite=False, sort_compile_log=False, compaction_aligned=False, quantized_empty_case=None, scatter_finite=False, select_updates=False, nd_unique=False, nd_nonempty=False, nd_scalar_grad=False, nd_no_scalar=False, storage_flex_direct=False, storage_no_flex32=False, conversions_no_flex32=False, remainder_finite=False, remainder_wide=False, inverse_finite=False, inverse_diagnostic=False, interpolate_case="normal", spatial_empty=False, spatial_case=None, spatial_exact=False, spatial_empty_backward=False, deform_empty=False, deform_exact=False, deform_case=None, deform_forward_only=False, predicate_no_flex32=False, predicate_finite=False, movement_no_flex32=False, movement_skip_empty_bool_scatter=False, movement_matching_bool_masks=False, indexed_no_flex32=False, indexed_skip_scalar_nd=False, integer_arithmetic_dtype=None, integer_arithmetic_op=None, float_arithmetic_arguments=(), float_rounding_arguments=(), relu_arguments=(), typed_remainder_arguments=(), typed_exp_log_arguments=()):
     purposes = {
         "quantization": "shared API conformance; no performance measurement",
         "quantized_empty": "empty quantized API diagnostic and record round trip; execution errors retained; no performance measurement",
@@ -85,6 +186,7 @@ def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_fi
         "movement": "ordinary stored-value movement, packed masks and Boolean consumers; independent byte-record reference; no performance measurement",
         "relu": "typed ReLU and backward with independent IEEE bit references; no performance measurement",
         "typed_remainder": "typed remainder and scalar normalization with independent exact references; no performance measurement",
+        "typed_exp_log": "typed exp/log qualification against independent MPFR references; no performance measurement",
         "float_rounding": "typed square root and integral rounding with independent expected bits; no performance measurement",
         "float_arithmetic": "typed basic floating arithmetic with independent expected bits; no performance measurement",
         "integer_arithmetic": "exact integer elementwise arithmetic across eight formats; independent U128/I128 reference; no performance measurement",
@@ -107,17 +209,21 @@ def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_fi
     purpose = "erf error profile and GELU conformance; strict failures reported" if erf_profile else purposes[kind]
     program = f"/burn-{kind}"
     arguments = " --profile" if erf_profile else " --nonempty" if nonempty else ""
-    if kind in ("float_arithmetic", "float_rounding", "relu", "typed_remainder"):
+    if kind in ("float_arithmetic", "float_rounding", "relu", "typed_remainder", "typed_exp_log"):
         selected_arguments = {
             "float_arithmetic": float_arithmetic_arguments,
             "float_rounding": float_rounding_arguments,
             "relu": relu_arguments,
             "typed_remainder": typed_remainder_arguments,
+            "typed_exp_log": typed_exp_log_arguments,
         }[kind]
         arguments += " " + " ".join(selected_arguments) if selected_arguments else ""
         summary_args = [str(binary), "--expected-summary", *selected_arguments]
         expected_summary = json.loads(subprocess.check_output(summary_args, text=True, cwd=ROOT))
         (root.parent / f"burn-{kind}-expected.json").write_text(json.dumps(expected_summary, indent=2) + "\n")
+        if kind == "typed_exp_log":
+            cells = typed_exp_log_expected_cells(binary, selected_arguments, expected_summary)
+            (root.parent / "burn-typed_exp_log-expected-cells.json").write_text(json.dumps(cells) + "\n")
     if kind == "integer_arithmetic":
         summary_args = [str(binary), "--expected-summary"]
         for flag, value in (("dtype", integer_arithmetic_dtype), ("op", integer_arithmetic_op)):
@@ -234,7 +340,7 @@ exec {program}{arguments}
         "cargo_lock": ROOT / "tools/mnist-benchmark/Cargo.lock",
         "libdevice": libdevice,
     }
-    if kind in ("float_arithmetic", "float_rounding", "typed_remainder"):
+    if kind in ("float_arithmetic", "float_rounding", "typed_remainder", "typed_exp_log"):
         tool_prefix = kind.replace("_", "-")
         sources["expected_summary"] = root.parent / f"burn-{kind}-expected.json"
         sources["reference_fixture_index"] = ROOT / f"os/library/ai/src/validation/{kind}_fixtures.rs"
@@ -243,6 +349,8 @@ exec {program}{arguments}
         sources["reference_manifest"] = ROOT / f"tools/nvidia/{tool_prefix}-manifest.json"
         if kind == "float_rounding":
             sources["reference_base_generator"] = ROOT / "tools/nvidia/float-arithmetic-generate.py"
+        if kind == "typed_exp_log":
+            sources["expected_cells"] = root.parent / "burn-typed_exp_log-expected-cells.json"
     if kind == "relu":
         sources["expected_summary"] = root.parent / "burn-relu-expected.json"
     if kind == "integer_arithmetic":
@@ -1325,6 +1433,12 @@ def main():
     parser.add_argument("--burn-capabilities", type=Path, help="query Burn dtype usage declarations on the Linux CUDA device")
     parser.add_argument("--burn-erf", type=Path, help="run public erf and GELU conformance on Linux CUDA")
     parser.add_argument("--burn-erf-profile", action="store_true", help="report erf numerical errors separately from GELU conformance")
+    parser.add_argument("--burn-typed-exp-log", type=Path, help="qualify typed exp/log against independent MPFR references")
+    parser.add_argument("--burn-typed-exp-log-dtype", choices=("f64", "f32", "flex32", "f16", "bf16"))
+    parser.add_argument("--burn-typed-exp-log-op", choices=("exp", "log"))
+    parser.add_argument("--burn-typed-exp-log-no-flex32", action="store_true", help="isolate direct Flex32 upload support")
+    parser.add_argument("--burn-typed-exp-log-skip-rank-zero", action="store_true", help="isolate the pinned scalar diagnostic")
+    parser.add_argument("--burn-typed-exp-log-finite", action="store_true", help="require finite inputs and expected results")
     parser.add_argument("--burn-typed-remainder", type=Path, help="run exact typed remainder and scalar normalization conformance")
     parser.add_argument("--burn-typed-remainder-dtype", choices=("f64", "f32", "flex32", "f16", "bf16"))
     parser.add_argument("--burn-typed-remainder-group", choices=("sign-and-multiples", "subnormal-and-boundary", "huge-quotient", "correction-rounding", "f64-precision-range", "ieee-exceptions"))
@@ -1460,7 +1574,7 @@ def main():
     args = parser.parse_args()
     if args.nsight_directory and not args.quantized_profile:
         parser.error("--nsight-directory requires --quantized-profile")
-    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.burn_typed_remainder, args.burn_relu, args.burn_float_rounding, args.burn_float_arithmetic, args.burn_integer_arithmetic, args.burn_indexed, args.burn_movement, args.burn_predicate, args.burn_integer_power, args.burn_integer, args.burn_integer_matmul, args.burn_scatter_updates, args.burn_nd_indexing, args.burn_storage, args.burn_conversions, args.burn_remainder, args.burn_inverse, args.burn_spatial_convolution, args.burn_deform, args.burn_interpolate, args.burn_quantized_empty, args.burn_compaction, args.burn_cross, args.burn_scan, args.burn_sort, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
+    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.burn_typed_exp_log, args.burn_typed_remainder, args.burn_relu, args.burn_float_rounding, args.burn_float_arithmetic, args.burn_integer_arithmetic, args.burn_indexed, args.burn_movement, args.burn_predicate, args.burn_integer_power, args.burn_integer, args.burn_integer_matmul, args.burn_scatter_updates, args.burn_nd_indexing, args.burn_storage, args.burn_conversions, args.burn_remainder, args.burn_inverse, args.burn_spatial_convolution, args.burn_deform, args.burn_interpolate, args.burn_quantized_empty, args.burn_compaction, args.burn_cross, args.burn_scan, args.burn_sort, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
         parser.error("--quantized-profile requires a separate diagnostic guest")
     if args.pin_vcpus and len(os.sched_getaffinity(0)) != 4:
         parser.error("--pin-vcpus requires an inherited affinity of four host CPUs")
@@ -1485,6 +1599,7 @@ def main():
                 bool(args.burn_quantization),
                 bool(args.burn_capabilities),
                 bool(args.burn_erf),
+                bool(args.burn_typed_exp_log),
                 bool(args.burn_typed_remainder),
                 bool(args.burn_relu),
                 bool(args.burn_float_rounding),
@@ -1528,6 +1643,17 @@ def main():
         parser.error("--burn-erf requires a built conformance executable")
     if args.burn_capabilities and not args.burn_capabilities.is_file():
         parser.error("--burn-capabilities requires a built capabilities executable")
+    typed_exp_log_arguments = []
+    for flag, value in (("dtype", args.burn_typed_exp_log_dtype), ("op", args.burn_typed_exp_log_op)):
+        if value is not None:
+            typed_exp_log_arguments.append(f"--{flag}={value}")
+    for flag, enabled in (("no-flex32", args.burn_typed_exp_log_no_flex32), ("skip-rank-zero", args.burn_typed_exp_log_skip_rank_zero), ("finite", args.burn_typed_exp_log_finite)):
+        if enabled:
+            typed_exp_log_arguments.append(f"--{flag}")
+    if args.burn_typed_exp_log and not args.burn_typed_exp_log.is_file():
+        parser.error("--burn-typed-exp-log requires a built conformance executable")
+    if typed_exp_log_arguments and not args.burn_typed_exp_log:
+        parser.error("typed exp/log filters require --burn-typed-exp-log")
     typed_remainder_arguments = []
     for flag, value in (("dtype", args.burn_typed_remainder_dtype), ("group", args.burn_typed_remainder_group)):
         if value is not None:
@@ -1699,6 +1825,8 @@ def main():
         burn_probe(args.directory / "root", args.burn_capabilities.resolve(), "capabilities")
     elif args.burn_erf:
         burn_probe(args.directory / "root", args.burn_erf.resolve(), "erf", erf_profile=args.burn_erf_profile)
+    elif args.burn_typed_exp_log:
+        burn_probe(args.directory / "root", args.burn_typed_exp_log.resolve(), "typed_exp_log", typed_exp_log_arguments=typed_exp_log_arguments)
     elif args.burn_typed_remainder:
         burn_probe(args.directory / "root", args.burn_typed_remainder.resolve(), "typed_remainder", typed_remainder_arguments=typed_remainder_arguments)
     elif args.burn_relu:
@@ -1895,6 +2023,13 @@ def main():
             raise RuntimeError("Linux CUDA Burn erf/GELU check did not complete")
     if args.burn_capabilities and "BURN_CAPABILITIES_OK os=linux backend=cuda rows=226 flags_only=true" not in text:
         raise RuntimeError("Linux CUDA Burn capability query did not complete")
+    if args.burn_typed_exp_log:
+        expected = json.loads((args.directory / "burn-typed_exp_log-expected.json").read_text())
+        expected_cells = json.loads((args.directory / "burn-typed_exp_log-expected-cells.json").read_text())
+        fixtures = json.loads((ROOT / "tools/nvidia/typed-exp-log-manifest.json").read_text())
+        scope = f"no_flex32={str(args.burn_typed_exp_log_no_flex32).lower()} skip_rank_zero={str(args.burn_typed_exp_log_skip_rank_zero).lower()} finite={str(args.burn_typed_exp_log_finite).lower()} dtype={args.burn_typed_exp_log_dtype or 'all'} op={args.burn_typed_exp_log_op or 'all'}"
+        accuracy = validate_typed_exp_log(text, expected, expected_cells, fixtures, execution_os="linux", backend="cuda", fusion="enabled_materialized_chain_steps", scope=scope)
+        (args.directory / "typed-exp-log-accuracy.json").write_text(json.dumps(accuracy, indent=2) + "\n")
     if args.burn_typed_remainder:
         expected = json.loads((args.directory / "burn-typed_remainder-expected.json").read_text())
         fixtures = json.loads((ROOT / "tools/nvidia/typed-remainder-manifest.json").read_text())

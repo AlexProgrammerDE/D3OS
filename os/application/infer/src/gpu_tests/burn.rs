@@ -34,6 +34,7 @@ mod selection;
 mod sort;
 mod spatial_convolution;
 mod storage;
+mod typed_exp_log;
 mod typed_relu;
 mod typed_remainder;
 mod updates;
@@ -216,6 +217,30 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     }
     integers::run(backend).map_err(|e| format!("Burn native integer reductions: {e}"))?;
     words::run(backend).map_err(|e| format!("Burn native words: {e}"))?;
+    typed_exp_log::run(backend)?;
+    let exp_log_options = d3os_ai::validation::typed_exp_log::Options::default();
+    let exp_log_report = d3os_ai::burn::tensor::try_read_sync(d3os_ai::validation::typed_exp_log::run(&device, &exp_log_options))
+        .ok_or_else(|| String::from("native typed exp/log future did not complete"))??;
+    crate::report(format_args!(
+        "BURN_TYPED_EXP_LOG_ACCURACY os=d3os backend=native corpus={} policy_sha256={} fixture_sha256={} qualification_passed={} totals={} accuracy={}",
+        d3os_ai::validation::typed_exp_log::CORPUS_VERSION,
+        d3os_ai::validation::typed_exp_log::POLICY_SHA256,
+        d3os_ai::validation::typed_exp_log::FIXTURE_SHA256,
+        exp_log_report.is_success(),
+        d3os_ai::validation::typed_exp_log::summary_json(&exp_log_report.summary),
+        d3os_ai::validation::typed_exp_log::accuracy_json(&exp_log_report.accuracy)
+    ));
+    if !exp_log_report.is_success() {
+        for example in &exp_log_report.failures.examples {
+            crate::report(format_args!("BURN_TYPED_EXP_LOG_FAILURE {example}"));
+        }
+        return Err(format!("typed exp/log qualification failed: {} failures", exp_log_report.failures.count));
+    }
+    crate::report(format_args!(
+        "BURN_TYPED_EXP_LOG_OK os=d3os backend=native fusion=disabled corpus={} {}",
+        d3os_ai::validation::typed_exp_log::CORPUS_VERSION,
+        d3os_ai::validation::typed_exp_log::success_footer(&exp_log_options, &exp_log_report)
+    ));
     typed_remainder::run(backend)?;
     let remainder_options = d3os_ai::validation::typed_remainder::Options::default();
     let remainder_summary = d3os_ai::burn::tensor::try_read_sync(d3os_ai::validation::typed_remainder::run(&device, &remainder_options))
