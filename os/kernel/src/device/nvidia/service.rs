@@ -365,7 +365,7 @@ fn allocate(device: &Device, compute: &mut super::rm::Compute, bytes: u64) -> Re
 fn gpu_result(result: super::Result<()>) -> Result<(), Errno> {
     result.map_err(|error| {
         log::warn!("NVIDIA compute operation failed: {error}");
-        Errno::EUNKN
+        error.errno()
     })
 }
 

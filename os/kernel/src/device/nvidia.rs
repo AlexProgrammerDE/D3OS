@@ -7,20 +7,23 @@ use alloc::vec::Vec;
 use core::ptr::NonNull;
 use d3os_nvidia::firmware;
 
-mod compute;
 mod compiler;
+mod compute;
+mod cubin;
 mod flcn;
 mod gsp;
 mod mmu;
+mod relocation;
 mod rm;
 mod service;
 mod transfer;
-pub(crate) use service::{release_process, request as compute_request};
 pub(crate) use compiler::schedule as schedule_compiler;
+pub(crate) use service::{release_process, request as compute_request};
 
 #[derive(Debug)]
 enum Error {
     Protocol(d3os_nvidia::Error),
+    Module(cubin::AdapterError),
     Register(usize),
     Alignment,
     Firmware,
@@ -32,6 +35,11 @@ impl core::fmt::Display for Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Protocol(error) => write!(f, "firmware protocol error: {error:?}"),
+            Self::Module(error) => write!(
+                f,
+                "CUDA module {:?}: {} (section={:?}, record={:?})",
+                error.code, error.reason, error.section, error.record
+            ),
             Self::Register(offset) => write!(f, "invalid register or state at {offset:#x}"),
             Self::Firmware => f.write_str("invalid firmware state or boot data"),
             Self::Rpc { function, result } => write!(f, "GSP RPC {function:#x} failed: {result:#x}"),
@@ -49,6 +57,22 @@ impl From<d3os_nvidia::Error> for Error {
     }
 }
 type Result<T> = core::result::Result<T, Error>;
+
+impl Error {
+    fn errno(&self) -> syscall::return_vals::Errno {
+        use syscall::return_vals::Errno;
+        let code = match self {
+            Self::Module(error) => error.code,
+            Self::Protocol(error) => *error,
+            _ => return Errno::EUNKN,
+        };
+        match code {
+            d3os_nvidia::Error::Unsupported => Errno::ENOTSUP,
+            d3os_nvidia::Error::Truncated | d3os_nvidia::Error::InvalidField => Errno::EINVAL,
+            _ => Errno::EUNKN,
+        }
+    }
+}
 use log::{info, warn};
 use pci_types::{Bar, CommandRegister};
 use spin::{Mutex, Once};

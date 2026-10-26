@@ -3,3 +3,7 @@ name = "d3os-nvidia"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
+
+[dev-dependencies]
+goblin = { version = "=0.9.3", default-features = false, features = ["elf32", "elf64", "endian_fd"] }
+sha2 = { version = "0.10", default-features = false }

@@ -490,6 +490,36 @@ The complete diagnostic remains in the serial log. No Linux passing subset or pe
 All 116 SDK tests, six shared host tests, four raw fixture audits, repository Clippy checks, and the production image build pass.
 These are correctness checks. Full Burn coverage, compile-time parity, and workload performance parity remain incomplete.
 
+## CUDA module data pointers
+
+F64 sine and cosine require pointers to coefficient and argument-reduction tables.
+The native loader supports the observed SM89 ELF64 `REL` type-2 form with zero implicit addends.
+It computes each pointer from the GPU virtual base, the packed section offset, and the symbol offset.
+The physical VRAM address selects the upload destination only.
+
+The loader validates the complete module and its entry metadata before GPU allocation.
+It rejects unknown live relocations, invalid symbol extents, duplicate slots, and unsupported addends.
+One uploaded image retains the metadata for all entries. Cached entry loads reuse its patched pointers.
+Validation and patch writes are atomic. This does not establish allocator or hardware rollback after a device fault.
+
+The unused Tile launch-metadata slot requires a generated qualification record.
+The host checker requires complete instruction coverage and rejects accesses that can reach that slot within its supported disassembly profile.
+It permits the observed fixed-bank CB2 indexing and the specified CB4 table-pointer operands.
+This check does not provide a general SASS decoder or dataflow proof.
+
+D3OS verifies the immutable compiler assets, portable input, and qualification record.
+The generated cubin must match the qualified host output hash before admission.
+The launcher stages the portable code and qualification records. Host cubin files remain audit artifacts.
+Rebuilding a bundle generates new records without a permanent output-hash list in Rust.
+
+The diagnostic kernel uses F64 sine and cosine with 12 MPFR reference inputs, including very large arguments.
+D3OS passes 48 comparisons across four launches, including an empty case, with a maximum error of one representable step.
+Guards, untouched tails, source preservation, and image-cache reuse also pass.
+All three guest-compiled modules match the qualified host output hashes.
+The preceding bundle's 534 instruction and constant sections remain byte-identical.
+This diagnostic does not establish full typed trigonometric support through Burn.
+The complete earlier D3OS GPU regression suite also passes.
+
 ## Typed exponential and logarithm
 
 Protocol 46 adds Exp and Log across F64, F32, Flex32, F16, and BF16.

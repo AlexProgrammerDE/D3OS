@@ -1,6 +1,9 @@
 //! CUDA ELF metadata records needed by the native launch path.
 use crate::{Error, Result};
 
+pub mod qualification;
+pub mod relocation;
+
 /// Fixed CTA dimensions emitted by cuTile and other CUDA compilers.
 /// A caller must honor all three dimensions when this record is present.
 pub fn required_threads(info: &[u8]) -> Result<Option<[u32; 3]>> {

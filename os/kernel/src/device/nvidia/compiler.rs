@@ -1,10 +1,14 @@
 //! Compile portable kernels in userspace before publishing executable modules.
-use super::{DEVICE, Error, Result};
+use super::{
+    DEVICE, Error, Result,
+    cubin::{LegacyPolicy, LegacyQualification},
+};
 use alloc::{format, string::String, vec, vec::Vec};
 use core::{
     fmt::Write,
     sync::atomic::{AtomicU8, Ordering},
 };
+use d3os_nvidia::cubin::qualification::{self, InputKind, ModuleQualification, RuntimeInventory};
 use sha2::{Digest, Sha256};
 use spin::Once;
 use syscall::return_vals::Errno;
@@ -21,7 +25,86 @@ const FAMILIES: [&str; 3] = ["vector-add", "tensor-matmul", "inference"];
 static COMPLETION: Once<crate::sync::wait_queue::WaitQueue> = Once::new();
 // 0: not ready, 1: all modules compiled and validated, 2: failed.
 static STATUS: AtomicU8 = AtomicU8::new(0);
-static MODULES: Once<[Vec<u8>; 3]> = Once::new();
+static MODULES: Once<[CompiledModule; 3]> = Once::new();
+static FAILURE: Once<Errno> = Once::new();
+
+struct CompiledModule {
+    bytes: Vec<u8>,
+    qualification: ModuleQualification,
+    evidence: String,
+}
+
+/// Static initrd assets stay immutable while compiler processes use them.
+struct CompilerAssets {
+    bindings: Vec<(String, &'static [u8])>,
+    sha256: [u8; 32],
+}
+
+fn immutable_file(path: &str) -> Result<&'static [u8]> {
+    api::immutable_data(path)
+        .map_err(|_| Error::Firmware)?
+        .ok_or(d3os_nvidia::Error::Unsupported.into())
+}
+
+impl CompilerAssets {
+    fn load() -> Result<Self> {
+        let bytes = immutable_file("/usr/share/nvidia/runtime.qualification")?;
+        let inventory = RuntimeInventory::parse(bytes)?;
+        let mut bindings = Vec::new();
+        for asset in inventory.records() {
+            let path = format!("/{}", asset.path());
+            let data = immutable_file(&path)?;
+            if data.len() as u64 != asset.bytes() || <[u8; 32]>::from(Sha256::digest(data)) != *asset.sha256() {
+                log::warn!("NVIDIA_COMPILE_REJECT asset={path} reason=runtime_identity");
+                return Err(d3os_nvidia::Error::Unsupported.into());
+            }
+            bindings.push((path, data));
+        }
+        // Retain the inventory binding as well as its covered runtime assets.
+        bindings.push((String::from("/usr/share/nvidia/runtime.qualification"), bytes));
+        Ok(Self {
+            bindings,
+            sha256: Sha256::digest(inventory.canonical_bytes()).into(),
+        })
+    }
+
+    fn binding(&self, path: &str) -> Result<&'static [u8]> {
+        self.bindings
+            .iter()
+            .find(|(name, _)| name == path)
+            .map(|(_, data)| *data)
+            .ok_or(d3os_nvidia::Error::Unsupported.into())
+    }
+
+    fn verify_bindings(&self) -> Result<()> {
+        for (path, bytes) in &self.bindings {
+            if !core::ptr::eq(immutable_file(path)?, *bytes) {
+                log::warn!("NVIDIA_COMPILE_REJECT asset={path} reason=runtime_binding_changed");
+                return Err(d3os_nvidia::Error::Unsupported.into());
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Admission belongs to the registered immutable module, not equal-content
+/// bytes supplied by another caller. Other modules use the strict default.
+pub(super) fn legacy_policy(bytes: &'static [u8]) -> Result<LegacyPolicy<'static>> {
+    let Some(module) = MODULES
+        .get()
+        .and_then(|modules| modules.iter().find(|module| core::ptr::eq(module.bytes.as_slice(), bytes)))
+    else {
+        return Ok(LegacyPolicy::Reject);
+    };
+    let qualified = LegacyQualification::from_trusted_admission(
+        bytes,
+        *module.qualification.cubin_sha256(),
+        qualification::COMPILER_VERSION,
+        module.evidence.as_str(),
+    )
+    .map_err(Error::Module)?;
+    Ok(LegacyPolicy::QualifiedUnused(qualified))
+}
 
 fn input(family: &str) -> Result<(String, bool)> {
     let tile = format!("/usr/share/nvidia/{family}.tilebc");
@@ -49,29 +132,40 @@ pub(crate) fn schedule() {
 pub(super) fn wait() -> core::result::Result<(), Errno> {
     match STATUS.load(Ordering::Acquire) {
         1 => return Ok(()),
-        2 => return Err(Errno::EUNKN),
+        2 => return Err(*FAILURE.get().unwrap_or(&Errno::EUNKN)),
         _ => (),
     }
     let completion = COMPLETION.get().ok_or(Errno::ENOTSUP)?;
     completion.wait(|| STATUS.load(Ordering::Acquire) != 0, "GPU compilation");
-    if STATUS.load(Ordering::Acquire) == 1 { Ok(()) } else { Err(Errno::EUNKN) }
+    if STATUS.load(Ordering::Acquire) == 1 {
+        Ok(())
+    } else {
+        Err(*FAILURE.get().unwrap_or(&Errno::EUNKN))
+    }
 }
 
 pub(super) fn inference() -> Option<&'static [u8]> {
-    MODULES.get().map(|modules| modules[2].as_slice())
+    MODULES.get().map(|modules| modules[2].bytes.as_slice())
 }
 
 fn sha256(bytes: &[u8]) -> String {
+    sha256_hex(&Sha256::digest(bytes))
+}
+
+pub(super) fn sha256_hex(digest: &[u8]) -> String {
     let mut result = String::with_capacity(64);
-    for byte in Sha256::digest(bytes) {
+    for byte in digest {
         let _ = write!(result, "{byte:02x}");
     }
     result
 }
 
-fn compile(family: &str, target: &str, sm: u32) -> Result<Vec<u8>> {
+fn compile(family: &str, target: &str, sm: u32, assets: &CompilerAssets) -> Result<CompiledModule> {
     let (input, tile) = input(family)?;
-    let source = crate::linux::read_file(&input).map_err(|_| Error::Firmware)?;
+    let source = assets.binding(&input)?;
+    let receipt_path = format!("/usr/share/nvidia/{family}.qualification");
+    let receipt_bytes = immutable_file(&receipt_path)?;
+    let qualification = ModuleQualification::parse(receipt_bytes)?;
     let input_hash = sha256(&source);
     let output = format!("/tmp/{family}-{target}.cubin");
     match api::unlink(&output) {
@@ -79,6 +173,17 @@ fn compile(family: &str, target: &str, sm: u32) -> Result<Vec<u8>> {
         Err(_) => return Err(Error::Firmware),
     }
     let compiler = if tile { "/usr/cuda/bin/tileiras" } else { "/usr/cuda/bin/ptxas" };
+    let input_kind = if tile { InputKind::TileIr } else { InputKind::Ptx };
+    if qualification.input_kind() != input_kind
+        || *qualification.source_sha256() != <[u8; 32]>::from(Sha256::digest(source))
+        || *qualification.compiler_sha256() != <[u8; 32]>::from(Sha256::digest(assets.binding(compiler)?))
+        || *qualification.runtime_sha256() != assets.sha256
+        || sm != 89
+    {
+        log::warn!("NVIDIA_COMPILE_REJECT family={family} reason=qualification_input_identity");
+        return Err(d3os_nvidia::Error::Unsupported.into());
+    }
+    assets.verify_bindings()?;
     let target_option = format!("--gpu-name={target}");
     let options = vec![target_option.as_str(), "--opt-level=3", input.as_str(), "-o", output.as_str()];
     let start = crate::timer().systime_ms();
@@ -94,7 +199,18 @@ fn compile(family: &str, target: &str, sm: u32) -> Result<Vec<u8>> {
         log::warn!("NVIDIA_COMPILE_FAIL family={family} target={target} exit={status}");
         return Err(Error::Firmware);
     }
+    assets.verify_bindings()?;
+    if !core::ptr::eq(immutable_file(&receipt_path)?, receipt_bytes) {
+        return Err(d3os_nvidia::Error::Unsupported.into());
+    }
     let bytes = crate::linux::read_file(&output).map_err(|_| Error::Firmware)?.into_owned();
+    if <[u8; 32]>::from(Sha256::digest(&bytes)) != *qualification.cubin_sha256() {
+        log::warn!(
+            "NVIDIA_COMPILE_REJECT family={family} reason=qualified_output_identity sha256={}",
+            sha256(&bytes)
+        );
+        return Err(d3os_nvidia::Error::Unsupported.into());
+    }
     let elf = goblin::elf::Elf::parse(&bytes).map_err(|_| Error::Firmware)?;
     if elf.header.e_machine != 190 || (elf.header.e_flags >> 8) & 0xff != sm {
         log::warn!(
@@ -118,7 +234,12 @@ fn compile(family: &str, target: &str, sm: u32) -> Result<Vec<u8>> {
     // The resident cache owns a private immutable copy. Temporary compiler
     // output cannot change an executable module after publication.
     api::unlink(&output).map_err(|_| Error::Firmware)?;
-    Ok(bytes)
+    let evidence = format!("{} sass_sha256={}", qualification::PROFILE_LABEL, sha256_hex(qualification.sass_sha256()));
+    Ok(CompiledModule {
+        bytes,
+        qualification,
+        evidence,
+    })
 }
 
 fn prepare() -> Result<()> {
@@ -135,10 +256,11 @@ fn prepare() -> Result<()> {
         "NVIDIA_COMPILE_START os=d3os target={target} boot0={boot0:#x} compiler_cpus={} phase=load",
         crate::process::scheduler::cpu_count()
     );
+    let assets = CompilerAssets::load()?;
     let modules = [
-        compile(FAMILIES[0], target, sm)?,
-        compile(FAMILIES[1], target, sm)?,
-        compile(FAMILIES[2], target, sm)?,
+        compile(FAMILIES[0], target, sm, &assets)?,
+        compile(FAMILIES[1], target, sm, &assets)?,
+        compile(FAMILIES[2], target, sm, &assets)?,
     ];
     let compile_ms = crate::timer().systime_ms() - start;
     let modules = MODULES.call_once(|| modules);
@@ -146,12 +268,13 @@ fn prepare() -> Result<()> {
     let mut device = device.lock();
     let mut compute = device.compute.take().ok_or(Error::Firmware)?;
     let result = (|| {
-        compute.vector_add_test(&device, &modules[0])?;
-        compute.tensor_test(&device, &modules[1])?;
-        compute.inference_module = Some(&modules[2]);
-        compute.timestamp_test(&device, &modules[2])?;
+        compute.vector_add_test(&device, &modules[0].bytes)?;
+        compute.tensor_test(&device, &modules[1].bytes)?;
+        compute.inference_module = Some(&modules[2].bytes);
+        compute.timestamp_test(&device, &modules[2].bytes)?;
         compute.log_clocks(&mut device)?;
-        compute.local_stack_test(&device, &modules[2])?;
+        compute.local_stack_test(&device, &modules[2].bytes)?;
+        compute.relocation_test(&device, &modules[2].bytes)?;
         compute.prepare_staging(&device)?;
         compute.transfer_test(&device)
     })();
@@ -169,6 +292,7 @@ extern "sysv64" fn run() {
     let status = match prepare() {
         Ok(()) => 1,
         Err(error) => {
+            FAILURE.call_once(|| error.errno());
             log::warn!("NVIDIA_COMPILE_FAIL os=d3os error={error}");
             2
         }

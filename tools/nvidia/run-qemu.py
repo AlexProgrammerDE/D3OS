@@ -709,6 +709,12 @@ def main():
                         raise RuntimeError(
                             "native GPU kernel verification did not succeed"
                         )
+                    if args.kernels and not re.search(
+                        r"NVIDIA_RELOCATION_OK inputs=12 cases=4 comparisons=48 max_ulp=[01] "
+                        r"table_addresses=gpu_virtual guards=ok tails=preserved source=preserved "
+                        r"image_cache=reused backend=nvidia", text
+                    ):
+                        raise RuntimeError("native CUDA table relocation verification did not succeed")
                     if args.kernels:
                         for symbol in ("tensor_matmul_f16", "tensor_matmul_bf16"):
                             if f"NVIDIA_TENSOR_OK kernel={symbol} cases=5" not in text:

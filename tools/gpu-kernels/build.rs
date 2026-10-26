@@ -30,6 +30,7 @@ fn main() {
         "delta-split.rs",
         "raster.rs",
         "diagnostic.rs",
+        "relocation-probe.rs",
     ] {
         println!("cargo:rerun-if-changed=src/{file}");
         source.push_str(&fs::read_to_string(format!("src/{file}")).expect("read tile source"));

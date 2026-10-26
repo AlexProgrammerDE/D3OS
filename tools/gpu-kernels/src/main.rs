@@ -139,6 +139,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "embedding_q6k",
             "timestamp_probe",
             "local_stack_probe",
+            "relocation_probe",
         ]);
         inference.extend(d3os_nvidia::compute::elementwise::Elementwise::ALL.iter().skip(1).map(|op| op.symbol()));
         inference.extend(d3os_nvidia::compute::reduction::Reduction::ALL.iter().skip(1).map(|op| op.symbol()));

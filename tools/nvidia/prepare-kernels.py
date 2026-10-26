@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 
 import tomllib
@@ -45,6 +46,20 @@ TENSOR_INSTRUCTIONS = {
         "project_bf16_split": r"\bHMMA\.16816\.F32\.BF16\s",
     },
 }
+
+
+@contextmanager
+def staging_directory(output):
+    """Keep failed compiler/audit output without replacing a working bundle."""
+    with tempfile.TemporaryDirectory(prefix="cutile-", dir=output.parent) as temporary:
+        staging = Path(temporary)
+        try:
+            yield staging
+        except Exception:
+            failure = Path(tempfile.mkdtemp(prefix=f"{output.name}-failed-", dir=output.parent))
+            shutil.copytree(staging, failure, dirs_exist_ok=True)
+            print(f"Retained failed build artifacts: {failure}", flush=True)
+            raise
 
 
 def audit(family, sass):
@@ -144,13 +159,20 @@ def audit(family, sass):
             for pattern in (r"\bLDG\.E\.U8\b", r"\bSTG\.E\.U8\b"):
                 if not re.search(pattern, bodies.get(name, "")):
                     raise RuntimeError(f"{name}: missing byte memory instruction")
-    # CB0 holds arguments; CB2 holds compiler constants. Reject banks used
-    # by device allocation or other unsupported guest runtime calls.
+    # CB0 holds arguments; CB2 holds compiler constants. CB4 contains the
+    # qualified math-table pointers. The complete qualifier checks widths
+    # and operand forms after this existing runtime-bank audit.
     for name, body in bodies.items():
         instructions = "\n".join(
             line for line in body.splitlines() if re.search(r"/\*[0-9a-f]+\*/", line)
         )
-        if re.search(r"c\[0x(?:[13456789a-f][0-9a-f]*|2[0-9a-f]+)\]", instructions):
+        for match in re.finditer(r"c\[0x([0-9a-f]+)\](?:\[0x([0-9a-f]+)\])?", instructions):
+            bank = int(match[1], 16)
+            offset = int(match[2], 16) if match[2] is not None else None
+            if bank in (0, 2):
+                continue
+            if bank == 4 and offset in (8, 12, 16, 20):
+                continue
             raise RuntimeError(f"{name}: unsupported device runtime constant bank")
     return bodies
 
@@ -172,6 +194,11 @@ def main():
     )
     parser.add_argument("--output", type=Path, default=ROOT / "target/nvidia/kernels")
     args = parser.parse_args()
+    qualification_spec = importlib.util.spec_from_file_location(
+        "cubin_qualification", Path(__file__).with_name("cubin-qualification.py")
+    )
+    qualification = importlib.util.module_from_spec(qualification_spec)
+    qualification_spec.loader.exec_module(qualification)
     if args.toolkit:
         toolkit = args.toolkit.resolve()
     else:
@@ -190,10 +217,7 @@ def main():
         "channel"
     ]
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(
-        prefix="cutile-", dir=args.output.parent
-    ) as temporary:
-        staging = Path(temporary)
+    with staging_directory(args.output) as staging:
         subprocess.run(
             [
                 "cargo",
@@ -248,11 +272,20 @@ def main():
             if any(entry["entry"] not in bodies for entry in entries):
                 raise RuntimeError(f"{family}: an entry has no disassembled code")
             manifest["kernels"][family]["host_audit"] = {
+                "cubin": f"host-audit/{family}.cubin",
+                "sass": f"host-audit/{family}.sass",
                 "architecture": "sm_89",
                 "sha256": hashlib.sha256(cubin.read_bytes()).hexdigest(),
                 "bytes": cubin.stat().st_size,
                 "sass_verified": True,
             }
+            manifest["kernels"][family]["legacy_qualification"] = (
+                qualification.qualify(cubin.read_bytes(), sass)
+                | {
+                    "source_sha256": manifest["kernels"][family]["sha256"],
+                    "source_bytes": ir.stat().st_size,
+                }
+            )
         (staging / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
         args.output.mkdir(parents=True, exist_ok=True)
         for artifact in staging.iterdir():

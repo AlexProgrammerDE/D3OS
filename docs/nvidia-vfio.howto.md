@@ -238,13 +238,17 @@ Build the kernels and run the boot checks:
 
 ```bash
 rustup toolchain install 1.98.1 --profile minimal --component clippy,rustfmt
-python3 tools/nvidia/prepare-kernels.py
+python3 tools/nvidia/prepare-kernels.py --audit
 python3 tools/nvidia/run-qemu.py --firmware target/nvidia/firmware \
     --kernels target/nvidia/kernels --memory-mib 4096 --boot-check
 ```
 
 The build downloads checksum-pinned compiler tools and headers without installing a GPU driver.
 The launcher stages `.tilebc` inputs and the compiler runtime. It does not stage `.cubin` files.
+The host audit also generates qualification records for the native loader.
+D3OS verifies the runtime assets and requires its compiled output to match the qualified output hash.
+These records qualify the unused launch-metadata slot and the supported CUDA data-pointer relocations.
+Regenerate the bundle with `--audit` after kernel source changes.
 The compiler and generated modules remain inside D3OS. The module cache lasts until the VM stops.
 The boot log reports compilation and validation as separate load phases.
 The launcher waits for `NVIDIA_COMPILE_READY` before it starts a workload or its timeout.
@@ -335,7 +339,7 @@ It never falls back to CPU execution.
 
 The portable `inference.tilebc` module contains TF32 matrix kernels and FP32 elementwise operators.
 Each matrix tile combines three `HMMA.1688.F32.TF32` products with compensated FP32 accumulation.
-The optional host `--audit` verifies Tensor Core instructions in both matrix entry points.
+The required host `--audit` also verifies Tensor Core instructions in both matrix entry points.
 Convolution uses GPU `im2col` followed by tensor matrix multiplication.
 Fully connected layers use a tensor kernel that reads transposed weights directly.
 ReLU, bias, pooling, and softmax also run on the GPU.

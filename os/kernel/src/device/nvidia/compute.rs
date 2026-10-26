@@ -1,13 +1,9 @@
 //! SASS loading, QMD construction, and submission to the native compute FIFO.
 
-use super::{Device, Error, Result, gsp::DmaRegion, rm::Compute};
+use super::{Device, Error, Result, compiler, cubin, gsp::DmaRegion, mmu::Allocation, rm::Compute};
 use alloc::vec::Vec;
 use core::sync::atomic::{Ordering, fence};
 use d3os_nvidia::{Field, Record, abi::*};
-use goblin::elf::{
-    Elf,
-    section_header::{SHF_ALLOC, SHT_PROGBITS},
-};
 use log::{info, warn};
 
 #[derive(Clone)]
@@ -18,6 +14,20 @@ pub(super) struct Program {
     source: (usize, usize),
     // Launch addresses and dependency links belong only to submission copies.
     qmd: Record<256>,
+}
+
+/// One uploaded module retains its validated per-entry metadata.
+pub(super) struct ProgramImage {
+    allocation: Allocation,
+    entries: Vec<cubin::EntryMetadata<'static>>,
+}
+
+fn module_error(error: cubin::AdapterError) -> Error {
+    warn!(
+        "NVIDIA_PROGRAM_REJECT reason={} section={:?} record={:?}",
+        error.reason, error.section, error.record
+    );
+    Error::Module(error)
 }
 
 // Two owned waves overlap CPU recording with GPU execution. Each wave keeps
@@ -182,90 +192,62 @@ impl Compute {
             }
             return Ok(program.clone());
         }
-        let elf = Elf::parse(cubin).map_err(|_| Error::Firmware)?;
-        let mut image = Vec::new();
-        let mut entry = None;
-        let mut registers = 0;
-        let mut stack_bytes = 0;
-        let mut shared_bytes = 0x400u64;
-        let mut required_threads = None;
-        let mut constants = [None; 8];
-        for section in &elf.section_headers {
-            if elf.shdr_strtab.get_at(section.sh_name).and_then(|name| name.strip_prefix(".nv.info.")) == Some(symbol) {
-                let metadata = cubin
-                    .get(section.sh_offset as usize..section.sh_offset.checked_add(section.sh_size).ok_or(Error::Firmware)? as usize)
-                    .ok_or(Error::Firmware)?;
-                required_threads = d3os_nvidia::cubin::required_threads(metadata).map_err(|_| Error::Firmware)?;
+        if !self.program_images.contains_key(&source) {
+            // Parse the complete module and reject unsupported live relocations
+            // before reserving GPU memory. Only compiler-owned immutable bytes
+            // can receive the qualified unused Tile launch-metadata exception.
+            let prepared = cubin::prepare_module(cubin, compiler::legacy_policy(cubin)?).map_err(module_error)?;
+            let entry = prepared.entry(symbol).map_err(module_error)?.clone();
+            let entries = prepared.entries().to_vec();
+            let patches = prepared.plan().patches().len();
+            let legacy_slots = prepared.legacy_slots().len();
+            let image_bytes = prepared.pristine_bytes().len();
+            let sections = prepared.sections().iter().flatten().count();
+            let debug_relocations = prepared.ignored_debug_records();
+            if let Some(admission) = prepared.qualification() {
+                info!(
+                    "NVIDIA_PROGRAM_ADMISSION sha256={} compiler={} evidence={}",
+                    compiler::sha256_hex(admission.sha256()),
+                    admission.compiler(),
+                    admission.evidence()
+                );
             }
-            if elf.shdr_strtab.get_at(section.sh_name).and_then(|name| name.strip_prefix(".nv.shared.")) == Some(symbol) {
-                // CUDA reserves a 1 KiB shared-memory prefix. The static section
-                // is NOBITS and needs allocation, rather than a VRAM image copy.
-                shared_bytes = u64::from(d3os_nvidia::cubin::shared_bytes(section.sh_size).map_err(|_| Error::Firmware)?);
-            }
-            if elf.shdr_strtab.get_at(section.sh_name) == Some(".nv.info") {
-                let metadata = cubin
-                    .get(section.sh_offset as usize..section.sh_offset.checked_add(section.sh_size).ok_or(Error::Firmware)? as usize)
-                    .ok_or(Error::Firmware)?;
-                stack_bytes = stack_bytes.max(d3os_nvidia::cubin::stack_bytes(metadata).map_err(|_| Error::Firmware)?);
-            }
-            if section.sh_type != SHT_PROGBITS || section.sh_flags & u64::from(SHF_ALLOC) == 0 {
-                continue;
-            }
-            let alignment = section.sh_addralign.max(128) as usize;
-            if !alignment.is_power_of_two() {
-                return Err(Error::Firmware);
-            }
-            let offset = image.len().checked_add(alignment - 1).ok_or(Error::Firmware)? & !(alignment - 1);
-            let bytes = cubin
-                .get(section.sh_offset as usize..section.sh_offset.checked_add(section.sh_size).ok_or(Error::Firmware)? as usize)
-                .ok_or(Error::Firmware)?;
-            image.resize(offset, 0);
-            image.extend_from_slice(bytes);
-            if let Some(name) = elf.shdr_strtab.get_at(section.sh_name).and_then(|name| name.strip_prefix(".nv.constant")) {
-                let (bank, scope) = name.split_once('.').map_or((name, None), |(bank, scope)| (bank, Some(scope)));
-                if let Ok(bank) = bank.parse::<usize>() {
-                    if (1..8).contains(&bank) && scope.is_none_or(|scope| scope == symbol) {
-                        let size = u32::try_from(section.sh_size).map_err(|_| Error::Firmware)?;
-                        if size > 65536 {
-                            return Err(Error::Firmware);
-                        }
-                        constants[bank] = Some((offset as u64, size));
-                    }
-                }
-            }
-            if elf.shdr_strtab.get_at(section.sh_name).and_then(|name| name.strip_prefix(".text.")) == Some(symbol) {
-                entry = Some((offset as u64, section.sh_size));
-                registers = (section.sh_info >> 24) as u64;
-            }
-        }
-        let (entry, code_bytes) = entry.ok_or(Error::Firmware)?;
-        // Every entry uses the same section layout. Upload the immutable image
-        // once, while retaining entry-specific register and constant metadata.
-        let program = if let Some(&allocation) = self.program_images.get(&source) {
-            allocation
-        } else {
             self.flush_pending(device)?;
-            let allocation = self.memory.allocate(device, image.len() as u64 + 4096, 4096)?;
-            while image.len() & 3 != 0 {
-                image.push(0);
-            }
+            let allocation = self.memory.allocate(device, prepared.allocation_bytes(), 4096)?;
+            // Relocations address the GPU virtual mapping. The physical address
+            // only selects the destination of the CPU's VRAM upload.
+            let program = self.module_program(source, allocation.virtual_address, &entry)?;
+            let image = prepared.apply(allocation.virtual_address).map_err(module_error)?;
             device.vram.as_ref().ok_or(Error::Firmware)?.copy_from(allocation.physical as usize, &image)?;
-            self.program_images.insert(source, allocation);
-            info!("NVIDIA_PROGRAM_IMAGE_READY bytes={} images={}", image.len(), self.program_images.len());
-            allocation
-        };
-        let address = program.virtual_address + entry;
-        let constants = constants.map(|binding| binding.map(|(offset, size)| (program.virtual_address + offset, size)));
-        let qmd = self.program_qmd(address, code_bytes, registers, shared_bytes, &constants)?;
-        let program = Program {
-            registers,
-            local_bytes: u64::from(stack_bytes).checked_add(0x240).ok_or(Error::Firmware)?,
-            required_threads,
-            source,
-            qmd,
-        };
+            self.program_images.insert(source, ProgramImage { allocation, entries });
+            info!(
+                "NVIDIA_PROGRAM_IMAGE_READY bytes={image_bytes} images={} relocations={patches} legacy_slots={legacy_slots} sections={sections} debug_relocations={debug_relocations} virtual={:#x}",
+                self.program_images.len(),
+                allocation.virtual_address
+            );
+            self.programs.insert(symbol, program.clone());
+            return Ok(program);
+        }
+        let module = self.program_images.get(&source).ok_or(Error::Firmware)?;
+        let entry = module.entries.iter().find(|entry| entry.name == symbol).ok_or(Error::Firmware)?;
+        let program = self.module_program(source, module.allocation.virtual_address, entry)?;
         self.programs.insert(symbol, program.clone());
         Ok(program)
+    }
+
+    fn module_program(&self, source: (usize, usize), base: u64, entry: &cubin::EntryMetadata<'_>) -> Result<Program> {
+        let address = base.checked_add(entry.image_offset as u64).ok_or(Error::Firmware)?;
+        let constants = entry
+            .constants
+            .map(|binding| binding.map(|binding| (base + binding.offset as u64, binding.bytes)));
+        let qmd = self.program_qmd(address, entry.code_bytes, u64::from(entry.registers), u64::from(entry.shared_bytes), &constants)?;
+        Ok(Program {
+            registers: u64::from(entry.registers),
+            local_bytes: entry.local_bytes,
+            required_threads: entry.required_threads,
+            source,
+            qmd,
+        })
     }
 
     fn program_qmd(&self, address: u64, bytes: u64, registers: u64, shared_bytes: u64, constants: &[Option<(u64, u32)>; 8]) -> Result<Record<256>> {

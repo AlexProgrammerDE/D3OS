@@ -39,7 +39,7 @@ pub(super) struct Compute {
     pub(super) put: usize,
     pub(super) engine_configured: bool,
     pub(super) programs: BTreeMap<&'static str, super::compute::Program>,
-    pub(super) program_images: BTreeMap<(usize, usize), Allocation>,
+    pub(super) program_images: BTreeMap<(usize, usize), super::compute::ProgramImage>,
     pub(super) submission: Option<super::compute::Submission>,
     pub(super) buffers: super::service::Buffers,
     pub(super) healthy: bool,
