@@ -149,7 +149,7 @@ pub fn detach(ptr:*mut u8) -> isize {
     let process = process_manager().read().current_process();
 
     // lock table here to make detach atomic in relation to other shm functions
-    let table = shm_tables().write();
+    let mut table = shm_tables().write();
 
     // get vma of current process for pointer (error if no vma for pointer)
     let vma = match process.virtual_address_space.vma_for_address(ptr as u64) {
@@ -163,24 +163,28 @@ pub fn detach(ptr:*mut u8) -> isize {
         _ => return Errno::EINVAL.into(),
     };
 
-    // remove vma from virtual adress space of process
-    process.virtual_address_space.unmap_vma(vma, false);
-
-    let entry = match table.entry_table.get(&id) {
-        Some(e) => e,
-        None => return Errno::EINVAL.into()
-    };
-
-    // decrease counter
-    let old_counter = entry.counter.fetch_sub(1, Ordering::SeqCst);
-    
-    // delete if unlinked and no process attached
-    if old_counter == 1 && entry.unlinked.load(Ordering::SeqCst) {
-        drop(table);
-        delete(id);
+    if !table.entry_table.contains_key(&id) {
+        return Errno::EINVAL.into();
     }
 
+    // Unmap before releasing the attachment that keeps the backing frames alive.
+    process.virtual_address_space.unmap_vma(vma, false);
+    release_attachment(&mut table, id);
+
     return 0;
+}
+
+// The exiting address space has already unmapped this attachment without freeing frames.
+pub(super) fn detach_on_exit(id: usize) {
+    let mut table = shm_tables().write();
+    release_attachment(&mut table, id);
+}
+
+fn release_attachment(table: &mut ShmTables, id: usize) {
+    let entry = table.entry_table.get(&id).expect("shared VMA has no SHM entry");
+    let old_counter = entry.counter.fetch_sub(1, Ordering::SeqCst);
+    assert!(old_counter > 0, "shared VMA has no SHM attachment");
+    delete(table, id);
 }
 
 pub fn unlink(name: String) -> isize {
@@ -202,22 +206,23 @@ pub fn unlink(name: String) -> isize {
     // set unlinked flag
     entry.unlinked.store(true, Ordering::SeqCst);
 
-    // delete if no one connected
-    if entry.counter.load(Ordering::SeqCst) == 0 {
-        drop(table);
-        delete(id);
-    }
+    delete(&mut table, id);
     //info!("unlinked");
 
     return 0;
 }
 
-fn delete(id: usize) {
-    let mut table = shm_tables().write();
+fn delete(table: &mut ShmTables, id: usize) {
+    // Keep the eligibility check and removal atomic with respect to attach.
+    let Some(entry) = table.entry_table.get(&id) else { return };
+    if !entry.unlinked.load(Ordering::SeqCst) || entry.counter.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+
     // remove entry from entry_table
     let entry = match table.entry_table.remove(&id) {
         Some(entry) => entry,
-        None => return // possible because lock got dropped but not a problem
+        None => return
     };
 
     // free physical frames

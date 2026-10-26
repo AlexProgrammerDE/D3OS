@@ -618,9 +618,17 @@ impl VirtualAddressSpace {
 
 impl Drop for VirtualAddressSpace {
     fn drop(&mut self) {
-        for vma in self.virtual_memory_areas.read().iter() {
-            if vma.1.typ != VmaType::DeviceMemory {
-                self.page_tables.unmap(vma.1.range, true);
+        // Destruction has exclusive access. Do not hold the VMA lock when
+        // releasing SHM attachments: attach/detach take the SHM table lock first.
+        let areas = core::mem::take(self.virtual_memory_areas.get_mut());
+        for (_, vma) in areas {
+            match vma.typ {
+                VmaType::SharedMemory { id } => {
+                    self.page_tables.unmap(vma.range, false);
+                    memory::shm::detach_on_exit(id);
+                }
+                VmaType::DeviceMemory => {}
+                _ => self.page_tables.unmap(vma.range, true),
             }
         }
     }

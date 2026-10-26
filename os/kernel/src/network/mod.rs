@@ -249,9 +249,11 @@ pub fn open_icmp() -> SocketHandle {
 }
 
 pub fn close_socket(handle: SocketHandle) {
-    let mut sockets = SOCKETS.get().expect("Socket set not initialized!").write();
-
     check_ownership(handle);
+
+    // Match process cleanup's map-before-sockets lock order.
+    let mut process_map = SOCKET_PROCESS.write();
+    let mut sockets = SOCKETS.get().expect("Socket set not initialized!").write();
 
     let socket_ref = sockets.iter_mut()
         .find(|(h, _)| *h == handle)
@@ -269,7 +271,7 @@ pub fn close_socket(handle: SocketHandle) {
 
     // Remove permission for the process
     // The socket remains in the set until poll_sockets() garbage collects it.
-    SOCKET_PROCESS.write().remove(&handle).unwrap();
+    process_map.remove(&handle).unwrap();
 }
 
 pub fn bind_udp(handle: SocketHandle, addr: IpAddress, port: u16) -> Result<(), udp::BindError> {
@@ -491,7 +493,7 @@ fn poll_sockets() -> Option<()> {
     // Remove closed sockets
     let mut sockets_to_remove = Vec::new();
 
-    let socket_map = SOCKET_PROCESS.read();
+    let socket_map = SOCKET_PROCESS.try_read()?;
     let dns_handle = DNS_SOCKET.get().expect("DNS socket does not exist yet");
 
     for (handle, socket) in sockets.iter() {
