@@ -328,6 +328,7 @@ pub extern "C" fn start(multiboot2_magic: u32, multiboot2_addr: *const BootInfor
     // Scan PCI bus
     info!("Scanning PCI bus");
     init_pci();
+    crate::device::nvidia::init();
 
     virtio::init_devices(fb_start_phys_addr, fb_end_phys_addr); // Framebuffer Start und Endadresse von Multiboot-LFB
 
@@ -370,6 +371,7 @@ pub extern "C" fn start(multiboot2_magic: u32, multiboot2_addr: *const BootInfor
 
     // Load initial ramdisk
     init_initrd(initrd_tag);
+    crate::device::nvidia::bootstrap();
 
     // Init naming service
     naming::api::init();

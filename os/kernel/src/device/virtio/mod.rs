@@ -75,10 +75,17 @@ pub fn init_devices(fb_start_phys_addr: u64, fb_end_phys_addr: u64) {
                 function: address.function(),
             };
 
-            for bar_index in 0..6 {
-            if let Ok(Some(BarInfo::Memory { address, size, .. })) =
-                pci_root.bar_info(device_function, bar_index)
-            {
+            // A 64-bit BAR consumes two slots. Probing its upper word as a new
+            // BAR can leave that word set to all ones after a sizing error.
+            let bars = match pci_root.bars(device_function) {
+                Ok(bars) => bars,
+                Err(error) => {
+                    warn!("Cannot read VirtIO BARs for {:?}: {:?}", device_function, error);
+                    continue;
+                }
+            };
+            for (bar_index, bar) in bars.into_iter().enumerate() {
+            if let Some(BarInfo::Memory { address, size, .. }) = bar {
                 if size == 0 {
                     continue;
                 }

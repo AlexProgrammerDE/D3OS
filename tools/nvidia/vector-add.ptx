@@ -1,0 +1,36 @@
+// Fixed vector-add demo. Assemble on the host for sm_89.
+.version 8.0
+.target sm_89
+.address_size 64
+
+.visible .entry vector_add(
+    .param .u64 a,
+    .param .u64 b,
+    .param .u64 out,
+    .param .u32 n
+) {
+    .reg .pred %p;
+    .reg .b32 %r<6>;
+    .reg .b64 %rd<8>;
+    .reg .f32 %f<4>;
+    ld.param.u64 %rd1, [a];
+    ld.param.u64 %rd2, [b];
+    ld.param.u64 %rd3, [out];
+    ld.param.u32 %r1, [n];
+    mov.u32 %r2, %ctaid.x;
+    mov.u32 %r3, %ntid.x;
+    mov.u32 %r4, %tid.x;
+    mad.lo.u32 %r5, %r2, %r3, %r4;
+    setp.ge.u32 %p, %r5, %r1;
+    @%p bra done;
+    mul.wide.u32 %rd4, %r5, 4;
+    add.u64 %rd5, %rd1, %rd4;
+    add.u64 %rd6, %rd2, %rd4;
+    add.u64 %rd7, %rd3, %rd4;
+    ld.global.f32 %f1, [%rd5];
+    ld.global.f32 %f2, [%rd6];
+    add.f32 %f3, %f1, %f2;
+    st.global.f32 [%rd7], %f3;
+done:
+    ret;
+}

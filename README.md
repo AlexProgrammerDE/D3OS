@@ -142,3 +142,5 @@ Also take a look at that script and fill in the constants at the top.
 
 If you want to run D3OS on a different device, build with `cargo make --no-workspace image` and copy over `qemu-pci.sh`, `RELEASEX64_OVMF.fd` and `d3os.img`.
 Run it with `./qemu-pci.sh -bios RELEASEX64_OVMF.fd -hda d3os.img`.
+
+For the native NVIDIA initialization and vector-add demo, see the [NVIDIA demo guide](docs/nvidia-demo.howto.md).

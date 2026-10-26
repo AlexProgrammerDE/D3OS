@@ -1,8 +1,13 @@
+use acpi::mcfg::Mcfg;
 use alloc::vec::Vec;
+use core::ptr::NonNull;
 use log::info;
 use pci_types::{BaseClass, ConfigRegionAccess, EndpointHeader, HeaderType, PciAddress, PciHeader, PciPciBridgeHeader, SubClass};
 use spin::{Mutex, RwLock};
 use x86_64::instructions::port::{Port, PortWriteOnly};
+use x86_64::structures::paging::PageTableFlags;
+
+use crate::memory::vma::VmaType;
 
 use virtio::transport::pci::bus::ConfigurationAccess as VirtioConfigAccess;
 
@@ -10,19 +15,61 @@ const MAX_DEVICES_PER_BUS: u8 = 32;
 const MAX_FUNCTIONS_PER_DEVICE: u8 = 8;
 const INVALID: u16 = 0xffff;
 
+/// One PCIe function's complete 4 KiB configuration space, mapped through MCFG.
+pub struct EcamFunction {
+    base: NonNull<u32>,
+}
+
+// The device owns this mapping for the VM lifetime; register access is volatile.
+unsafe impl Send for EcamFunction {}
+
+impl EcamFunction {
+    pub fn map(address: PciAddress) -> Option<Self> {
+        let tables = crate::acpi_tables().lock();
+        let mcfg = tables.find_table::<Mcfg>().ok()?;
+        let entry = mcfg.entries().iter().find(|entry| {
+            entry.pci_segment_group == address.segment()
+                && (entry.bus_number_start..=entry.bus_number_end).contains(&address.bus())
+        })?;
+        let offset = (u64::from(address.bus() - entry.bus_number_start) << 20)
+            | (u64::from(address.device()) << 15)
+            | (u64::from(address.function()) << 12);
+        let physical = entry.base_address.checked_add(offset)?;
+        let kernel = crate::process_manager().read().kernel_process()?;
+        kernel.virtual_address_space.kernel_map_devm_identity(
+            physical,
+            physical.checked_add(4096)?,
+            PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_CACHE | PageTableFlags::NO_EXECUTE,
+            VmaType::DeviceMemory,
+            "pcie-configuration",
+        );
+        Some(Self { base: NonNull::new(physical as *mut u32)? })
+    }
+
+    pub fn read(&self, offset: u16) -> Option<u32> {
+        if offset & 3 != 0 || offset >= 4096 {
+            return None;
+        }
+        Some(unsafe { self.base.as_ptr().add(usize::from(offset) / 4).read_volatile() })
+    }
+}
+
 pub struct PciBus {
     config_space: ConfigurationSpace,
     devices: Vec<RwLock<EndpointHeader>>,
 }
 
 pub struct ConfigurationSpace {
-    ports: Mutex<ConfigurationPorts>,
+    ports: &'static Mutex<ConfigurationPorts>,
 }
+
+// CF8/CFC are shared hardware registers, including across cloned accessors.
+static CONFIGURATION_PORTS: Mutex<ConfigurationPorts> = Mutex::new(ConfigurationPorts::new());
 
 impl Clone for ConfigurationSpace {
     fn clone(&self) -> Self {
         Self {
-            ports: Mutex::new(ConfigurationPorts::new()),
+            ports: self.ports,
         }
     }
 }
@@ -44,7 +91,7 @@ impl ConfigurationPorts {
 impl ConfigurationSpace {
     const fn new() -> Self {
         Self {
-            ports: Mutex::new(ConfigurationPorts::new()),
+            ports: &CONFIGURATION_PORTS,
         }
     }
 
@@ -102,11 +149,11 @@ impl PciBus {
             devices: Vec::new(),
         };
 
-        let root = PciHeader::new(PciAddress::new(0x8000, 0, 0, 0));
+        let root = PciHeader::new(PciAddress::new(0, 0, 0, 0));
         if root.has_multiple_functions(&pci.config_space) {
             info!("Multiple PCI host controllers detected");
             for i in 0..MAX_FUNCTIONS_PER_DEVICE {
-                let address = PciAddress::new(0x8000, 0, 0, i);
+                let address = PciAddress::new(0, 0, 0, i);
                 let header = PciHeader::new(address);
                 if header.id(&pci.config_space).0 == INVALID {
                     break;
@@ -116,7 +163,7 @@ impl PciBus {
             }
         } else {
             info!("Single PCI host controller detected");
-            pci.scan_bus(PciAddress::new(0x8000, 0, 0, 0));
+            pci.scan_bus(PciAddress::new(0, 0, 0, 0));
         }
 
         pci
@@ -192,7 +239,7 @@ impl PciBus {
         if device.header_type(self.config_space()) == HeaderType::PciPciBridge {
             info!("Found PCI-to-PCI bridge on bus [{}]", address.bus());
             let bridge = PciPciBridgeHeader::from_header(device, self.config_space()).unwrap();
-            self.scan_bus(PciAddress::new(0x8000, bridge.secondary_bus_number(self.config_space()), 0, 0));
+            self.scan_bus(PciAddress::new(0, bridge.secondary_bus_number(self.config_space()), 0, 0));
         } else {
             info!("Found PCI device [0x{:0>4x}:0x{:0>4x}] at [{:02x}:{:02x}.{:x}]", id.0, id.1, address.bus(), address.device(), address.function());
             self.devices

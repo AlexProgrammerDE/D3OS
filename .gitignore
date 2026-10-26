@@ -142,3 +142,6 @@ rustc-ice-*.txt
 .rustfmt.toml
 .idea/copilot*
 .gdb_history
+
+# Python tooling caches
+__pycache__/

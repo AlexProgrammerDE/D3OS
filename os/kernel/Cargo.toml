@@ -20,6 +20,7 @@ frame_alloc_locking = []
 
 [dependencies]
 # Local dependencies
+d3os-nvidia = { path = "../library/nvidia" }
 graphic = { path = "../library/graphic" }
 stream = { path = "../library/stream" }
 syscall = { path = "../library/syscall", default-features = false }

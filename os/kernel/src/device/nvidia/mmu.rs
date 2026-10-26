@@ -1,0 +1,125 @@
+//! GPU-owned VRAM and Ada's five-level virtual address space.
+
+use super::{Device, Error, Result};
+use alloc::vec::Vec;
+
+#[derive(Clone, Copy)]
+pub(super) struct Allocation {
+    pub physical: u64,
+    pub virtual_address: u64,
+    pub bytes: u64,
+}
+
+pub(super) struct Memory {
+    pub root: u64,
+    physical: u64,
+    virtual_address: u64,
+    limit: u64,
+    tables: Vec<(usize, u64, u64)>,
+}
+
+impl Memory {
+    pub(super) fn new(device: &Device) -> Result<Self> {
+        let mut memory = Self {
+            root: 0,
+            physical: 16 << 20,
+            virtual_address: 0x1000000000,
+            limit: device.vram_size.checked_sub(256 << 20).ok_or(Error::Alignment)?,
+            tables: Vec::new(),
+        };
+        memory.root = memory.allocate_physical(device, 4096, 4096)?;
+        Ok(memory)
+    }
+
+    pub(super) fn allocate_physical(&mut self, device: &Device, bytes: u64, alignment: u64) -> Result<u64> {
+        if bytes == 0 || !alignment.is_power_of_two() {
+            return Err(Error::Alignment);
+        }
+        let start = self.physical.checked_add(alignment - 1).ok_or(Error::Alignment)? & !(alignment - 1);
+        let end = start.checked_add(bytes).and_then(|n| n.checked_add(4095)).ok_or(Error::Alignment)? & !4095;
+        if end > self.limit {
+            return Err(Error::Alignment);
+        }
+        let vram = device.vram.as_ref().ok_or(Error::Firmware)?;
+        for offset in (start..end).step_by(4) {
+            vram.write(offset as usize, 0)?;
+        }
+        self.physical = end;
+        Ok(start)
+    }
+
+    pub(super) fn reserve_virtual(&mut self, bytes: u64, alignment: u64) -> Result<u64> {
+        if bytes == 0 || !alignment.is_power_of_two() {
+            return Err(Error::Alignment);
+        }
+        let start = self.virtual_address.checked_add(alignment - 1).ok_or(Error::Alignment)? & !(alignment - 1);
+        self.virtual_address = start.checked_add(bytes).ok_or(Error::Alignment)?;
+        if self.virtual_address >= 1 << 48 {
+            return Err(Error::Alignment);
+        }
+        Ok(start)
+    }
+
+    fn write64(device: &Device, address: u64, value: u64) -> Result<()> {
+        let vram = device.vram.as_ref().ok_or(Error::Firmware)?;
+        vram.write(address as usize, value as u32)?;
+        vram.write(address as usize + 4, (value >> 32) as u32)
+    }
+
+    pub(super) fn page_tables(&mut self, device: &Device, address: u64, depth: usize) -> Result<Vec<u64>> {
+        if address >= 1 << 48 || depth == 0 || depth > 5 {
+            return Err(Error::Alignment);
+        }
+        let shifts = [47, 38, 29, 21, 12];
+        let mut table = self.root;
+        let mut result = alloc::vec![table];
+        for level in 1..depth {
+            let prefix = address >> shifts[level - 1];
+            let next = if let Some((_, _, physical)) = self.tables.iter().find(|(l, p, _)| *l == level && *p == prefix) {
+                *physical
+            } else {
+                let physical = self.allocate_physical(device, 4096, 4096)?;
+                let index = (address >> shifts[level - 1])
+                    & if level == 1 {
+                        3
+                    } else if level == 4 {
+                        255
+                    } else {
+                        511
+                    };
+                if level == 4 {
+                    // PDE0 has separate 64 KiB and 4 KiB entries. Select
+                    // the small-page aperture in the upper 64-bit word.
+                    Self::write64(device, table + index * 16, 1 << 5)?;
+                    Self::write64(device, table + index * 16 + 8, 2 | ((physical >> 12) << 8))?;
+                } else {
+                    Self::write64(device, table + index * 8, 0x22 | ((physical >> 12) << 8))?;
+                }
+                self.tables.push((level, prefix, physical));
+                physical
+            };
+            result.push(next);
+            table = next;
+        }
+        Ok(result)
+    }
+
+    pub(super) fn allocate(&mut self, device: &Device, bytes: u64, alignment: u64) -> Result<Allocation> {
+        let bytes = bytes.checked_add(4095).ok_or(Error::Alignment)? & !4095;
+        let physical = self.allocate_physical(device, bytes, alignment.max(4096))?;
+        let virtual_address = self.reserve_virtual(bytes, alignment.max(4096))?;
+        for offset in (0..bytes).step_by(4096) {
+            let va = virtual_address + offset;
+            let tables = self.page_tables(device, va, 5)?;
+            let pte = 1 | (1 << 3) | (((physical + offset) >> 12) << 8) | (6u64 << 56);
+            Self::write64(device, tables[4] + ((va >> 12) & 511) * 8, pte)?;
+        }
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        device.registers.write(0xb830b0, (1 << 0) | (1 << 1) | (1 << 6) | (1 << 31))?;
+        Ok(Allocation {
+            physical,
+            virtual_address,
+            bytes,
+        })
+    }
+}
