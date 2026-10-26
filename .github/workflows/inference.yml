@@ -75,9 +75,9 @@ jobs:
             target/inference-qemu-self-test/qemu.log
             target/inference-qemu-self-test/failure.gdb.log
 
-  cpu-and-cutile:
+  cpu-and-inference:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
         with:
@@ -114,13 +114,6 @@ jobs:
         run: python3 tools/nvidia/test-quantized-profile.py
       - name: Verify sharded GGUF firmware preparation
         run: python3 tools/nvidia/test-qwen-shards.py
-      - name: Install cuTile host compiler dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y libclang-dev
-          rustup toolchain install 1.98.1 --profile minimal --component clippy,rustfmt
-      - name: Compile and audit cuTile kernels without GPU hardware
-        run: python3 tools/inference/test-cutile-kernels.py
       - name: Install model and OS build dependencies
         if: inputs.pretrained
         run: |
@@ -150,10 +143,41 @@ jobs:
           if-no-files-found: ignore
           path: |
             target/inference/manifest.json
-            target/nvidia/kernels/manifest.json
-            target/nvidia/kernels/*.json
             target/inference-qemu-*/serial.log
             target/inference-qemu-*/qemu.log
+
+  cutile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tools/gpu-kernels -> ../../target/cutile-build
+      - name: Install cuTile host compiler dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libclang-dev
+      - name: Compile and audit cuTile kernels without GPU hardware
+        run: python3 tools/inference/test-cutile-kernels.py
+      - name: Upload compiler verification records
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cutile-verification
+          if-no-files-found: ignore
+          path: |
+            target/nvidia/kernels/manifest.json
+            target/nvidia/kernels/*.json
+            target/nvidia/kernels/host-audit/*.sass
+            target/nvidia/kernels-failed-*/*.json
+            target/nvidia/kernels-failed-*/*.sass
 
   qwen:
     if: github.event_name == 'workflow_dispatch' && inputs.qwen
