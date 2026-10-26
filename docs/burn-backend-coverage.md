@@ -570,6 +570,59 @@ Zero and the minimum subnormal differ by one representable step. The separate cl
 
 These checks cover forward Exp and Log. General typed autodiff, full backend coverage, and workload performance parity remain incomplete.
 
+## Typed floating power
+
+Protocol 49 adds mathematical Power across F64, F32, Flex32, F16, and BF16.
+The floating entry contains 24 operations. The portable bundle retains 248 entries and 82 compute profiles.
+F64 preserves double operands and results. Half operands widen to F32, then round once to destination storage.
+
+Native and Dispatch preserve the original scalar variant through canonical destination conversion.
+The scalar wrappers retain Burn's five stored shortcuts for exponents `0`, `1`, `2`, `-1`, and `-2`.
+Square and square-then-reciprocal therefore follow stored arithmetic, which can differ from mathematical power.
+The public Float `powi_scalar` constructor produces a floating scalar.
+Native rejects fractional or nonfinite scalar integer exponents through recoverable errors.
+The backend integer-tensor route casts exponents to the base dtype before mathematical power.
+Empty zero-exponent wrappers allocate storage through the normal allocation and zeroing path.
+
+Project qualification permits two representable steps for F64 and four for F32/Flex32 mathematical power.
+Half results must belong to the destination rounding image of four F32 neighbors on each side of the correctly rounded F32 reference.
+Special classes, result signs, exact identities, and zero/nonzero preservation have separate gates.
+The F64 helper implements the named identities and classifies power-of-two underflow with exact integer significands.
+Its boundary proof includes subnormal bases and negative-base exponent parity.
+The remaining generic approximation still depends on the pinned math implementation and its tested error allowance.
+
+The independent MPFR registry contains 369,836 records for mathematical and stored-wrapper schedules.
+On the D3OS GPU, the guarded suite passes 5,141,923 comparisons across 145 planned observation cells.
+The shared Burn API suite passes 2,076 cases and 506,214 values across 160 planned cells.
+All earlier GPU regression gates pass. All three portable families compile inside D3OS and match their qualified host code bytes.
+The other 247 instruction entries remain unchanged from the accepted unary checkpoint.
+
+The host certificate binds 80 registers, 182,272 code bytes, a 96-byte frame, and all 194 library-scratch instruction sites.
+The tests bind both operands, scalar routes, stored schedules, class populations, error metrics, and worst-case reference witnesses.
+Both earlier stopped Native attempts remain failure evidence. One exposed F64 numerical errors, and both exposed incomplete empty-allocation test expectations.
+
+Three Linux CUDA attempts stop in the pinned scalar-integer probe.
+Rank-zero and Flex32 exclusions do not remove that panic.
+The explicit common-Linux four-format run checks 452,063 values and retains 116 F64 qualification failures.
+A separate filtered F32 CUDA run passes 331 cases and 41,152 values.
+These runs measure correctness only. General typed autodiff, full Burn coverage, and performance parity remain incomplete.
+
+The accepted Native archive is `target/nvidia/burn-backend-validation/typed-power-final/`.
+The earlier `typed-power-first/` and `typed-power-corrected/` directories retain their terminal failures.
+Linux archives use `target/nvidia/burn-backend-audit/linux-typed-power-`.
+Comparison records use the `target/nvidia/burn-backend-audit/typed-power-` prefix.
+
+Build the Linux runner from the repository root:
+
+```bash
+cargo +1.98.1 build --manifest-path tools/mnist-benchmark/Cargo.toml --release --locked --bin typed_power
+```
+
+Run `python3 tools/nvidia/typed-power-generate.py --check` to reproduce the numerical registry.
+Run `python3 tools/nvidia/test-typed-power.py` to check the evidence validator without a GPU.
+Use `--burn-typed-power` with the Linux launcher and a fresh output directory for each attempt.
+The `--common-linux`, dtype, finite, rank-zero, and Flex32 filters declare the selected comparison domain.
+
 ## Typed Log1p, Sinh, Cosh, and Tan
 
 Protocol 48 adds Log1p, Sinh, Cosh, and Tan across F64, F32, Flex32, F16, and BF16.

@@ -984,10 +984,10 @@ pub(super) fn run(backend: &Nvidia) -> Result<()> {
     let mut observed = Observed::default();
     // Reject incompatible contracts before any GPU work, but still report all cells.
     let contract = if !FROZEN
-        || abi::VERSION != 48
+        || abi::VERSION < 48
         || abi::KERNEL_COUNT != 82
         || Kernel::FloatArithmetic as u32 != 81
-        || float::Operation::ALL.len() != 23
+        || float::Operation::ALL.len() < 23
         || oracle::DTYPES != FORMATS.map(|(dtype, _)| dtype)
         || oracle::OPERATIONS.map(Operation::opcode) != [17, 30, 31, 32]
         || oracle::CORPUS_VERSION != 1
@@ -1035,7 +1035,7 @@ pub(super) fn run(backend: &Nvidia) -> Result<()> {
         return Err(format!("typed unary project qualification failed comparisons={}", observed.accuracy.failures));
     }
     crate::report(format_args!(
-        "NVIDIA_BURN_TYPED_UNARY_OK operations=4 formats=5 corpus_rows={} corpus_batches={} chunk=4096 raw_poison_variants=2 comparisons={compared} rows_log1p_sinh_cosh_tan={ROW_COUNTS:?} raw={} fresh={} native={} public={} geometry={} rejected={} empty={} queued={} f32_routes={} typed_routes={} policy_sha256={POLICY} fixture_sha256={FIXTURE} corpus_version=1 sdk_operations=23 protocol={} profiles={} kernel={} guards=ok tails=zero raw_poison_independence=exact_bytes source_nan_payloads=preserved resident=true full_writer=verified raw_f32=FloatArithmetic native_f32=TensorElementwise queued_last_owner=verified errors=recoverable qualification=project_targets linux_parity=not_claimed backend=nvidia",
+        "NVIDIA_BURN_TYPED_UNARY_OK operations=4 formats=5 corpus_rows={} corpus_batches={} chunk=4096 raw_poison_variants=2 comparisons={compared} rows_log1p_sinh_cosh_tan={ROW_COUNTS:?} raw={} fresh={} native={} public={} geometry={} rejected={} empty={} queued={} f32_routes={} typed_routes={} policy_sha256={POLICY} fixture_sha256={FIXTURE} corpus_version=1 sdk_operations={} protocol={} profiles={} kernel={} guards=ok tails=zero raw_poison_independence=exact_bytes source_nan_payloads=preserved resident=true full_writer=verified raw_f32=FloatArithmetic native_f32=TensorElementwise queued_last_owner=verified errors=recoverable qualification=project_targets linux_parity=not_claimed backend=nvidia",
         counts.corpus_rows,
         counts.corpus_batches,
         counts.raw,
@@ -1048,6 +1048,7 @@ pub(super) fn run(backend: &Nvidia) -> Result<()> {
         counts.queued,
         counts.f32_routes,
         counts.typed_routes,
+        float::Operation::ALL.len(),
         abi::VERSION,
         abi::KERNEL_COUNT,
         Kernel::FloatArithmetic as usize,

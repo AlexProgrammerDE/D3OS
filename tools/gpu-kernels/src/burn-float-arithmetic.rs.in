@@ -99,6 +99,97 @@ fn float_arithmetic_integral_u64(bits: Tile<u64, {[128]}>, op: u32, fraction: u6
     select(lt_tile(exponent, base), small, select(ge_tile(exponent, base + f), bits, middle))
 }
 
+fn float_arithmetic_power_f64(a: Tile<u64, {[128]}>, b: Tile<u64, {[128]}>) -> Tile<u64, {[128]}> {
+    let zero = broadcast_scalar(0u64, shape![128]);
+    let unit = broadcast_scalar(1u64, shape![128]);
+    let sign = unit << broadcast_scalar(63u64, shape![128]);
+    let implicit = unit << broadcast_scalar(52u64, shape![128]);
+    let fraction_mask = implicit - unit;
+    let one = broadcast_scalar(1023u64, shape![128]) << broadcast_scalar(52u64, shape![128]);
+    let infinity = broadcast_scalar(2047u64, shape![128]) << broadcast_scalar(52u64, shape![128]);
+    let nan = infinity | (unit << broadcast_scalar(51u64, shape![128]));
+    let negative_one = sign | one;
+    let x_negative_one = eq_tile(a, negative_one);
+    let ax = a & (sign - unit);
+    let ay = b & (sign - unit);
+    let ex = ax >> broadcast_scalar(52u64, shape![128]);
+    let ey = ay >> broadcast_scalar(52u64, shape![128]);
+    let fx = ax & fraction_mask;
+    let fy = ay & fraction_mask;
+    let x_negative = ne_tile(a & sign, zero);
+    let y_negative = ne_tile(b & sign, zero);
+    let y_finite = lt_tile(ay, infinity);
+    let x_large = gt_tile(ax, one);
+    let x_nan = gt_tile(ax, infinity);
+    let y_nan = gt_tile(ay, infinity);
+    let y_infinite = eq_tile(ay, infinity);
+
+    // Decode integer parity from the stored exponent, with every shift in 0..=52.
+    let bounded_ey = min_tile(max_tile(ey, broadcast_scalar(1023u64, shape![128])), broadcast_scalar(1075u64, shape![128]));
+    let parity_shift = broadcast_scalar(1075u64, shape![128]) - bounded_ey;
+    let significand = implicit | fy;
+    let integer = y_finite & (eq_tile(ay, zero) | (ge_tile(ey, broadcast_scalar(1023u64, shape![128])) & eq_tile(significand & ((unit << parity_shift) - unit), zero)));
+    let odd = integer & ge_tile(ey, broadcast_scalar(1023u64, shape![128])) & le_tile(ey, broadcast_scalar(1075u64, shape![128])) & ne_tile((significand >> parity_shift) & unit, zero);
+    let result_sign = select(odd, a & sign, zero);
+
+    // A subnormal power of two has one fraction bit. Find its index in six steps.
+    let mut bits = fx;
+    let mut index = zero;
+    let upper = ne_tile(bits >> broadcast_scalar(32u64, shape![128]), zero);
+    bits = select(upper, bits >> broadcast_scalar(32u64, shape![128]), bits);
+    index = index + select(upper, broadcast_scalar(32u64, shape![128]), zero);
+    let upper = ne_tile(bits >> broadcast_scalar(16u64, shape![128]), zero);
+    bits = select(upper, bits >> broadcast_scalar(16u64, shape![128]), bits);
+    index = index + select(upper, broadcast_scalar(16u64, shape![128]), zero);
+    let upper = ne_tile(bits >> broadcast_scalar(8u64, shape![128]), zero);
+    bits = select(upper, bits >> broadcast_scalar(8u64, shape![128]), bits);
+    index = index + select(upper, broadcast_scalar(8u64, shape![128]), zero);
+    let upper = ne_tile(bits >> broadcast_scalar(4u64, shape![128]), zero);
+    bits = select(upper, bits >> broadcast_scalar(4u64, shape![128]), bits);
+    index = index + select(upper, broadcast_scalar(4u64, shape![128]), zero);
+    let upper = ne_tile(bits >> broadcast_scalar(2u64, shape![128]), zero);
+    bits = select(upper, bits >> broadcast_scalar(2u64, shape![128]), bits);
+    index = index + select(upper, broadcast_scalar(2u64, shape![128]), zero);
+    index = index + select(ne_tile(bits >> unit, zero), unit, zero);
+    let subnormal = eq_tile(ex, zero);
+    let power_of_two = (subnormal & ne_tile(fx, zero) & eq_tile(fx & (fx - unit), zero))
+        | (ne_tile(ex, zero) & lt_tile(ax, infinity) & eq_tile(fx, zero));
+    let k_negative = lt_tile(ex, broadcast_scalar(1023u64, shape![128]));
+    let k_magnitude = select(subnormal, broadcast_scalar(1074u64, shape![128]) - index,
+        select(k_negative, broadcast_scalar(1023u64, shape![128]) - ex, ex - broadcast_scalar(1023u64, shape![128])));
+    let eligible = power_of_two & ne_tile(k_magnitude, zero) & y_finite & (eq_tile(a & sign, zero) | integer);
+    let decays = eligible & (k_negative ^ y_negative);
+
+    // For |x|=2^k, RNE is zero exactly when k*y <= -1075, including the tie.
+    // |y|<=1 cannot cross. In 1<|y|<1075, compare exact integer products.
+    // M*|k| < 1074*2^53 < 2^64. The clamped shift stays in 42..=52 in every lane.
+    let cutoff = broadcast_scalar(0x4090cc00u64, shape![128]) << broadcast_scalar(32u64, shape![128]);
+    let bounded_ey = min_tile(max_tile(ey, broadcast_scalar(1023u64, shape![128])), broadcast_scalar(1033u64, shape![128]));
+    let cutoff_shift = broadcast_scalar(1075u64, shape![128]) - bounded_ey;
+    let crosses = ge_tile(ay, cutoff) | (gt_tile(ay, one) & ge_tile(significand * k_magnitude, broadcast_scalar(1075u64, shape![128]) << cutoff_shift));
+    let x: Tile<f64, {[128]}> = bitcast(a);
+    let y: Tile<f64, {[128]}> = bitcast(b);
+    let vendor: Tile<u64, {[128]}> = bitcast(pow(x, y));
+    // A zero on the nonzero side becomes the minimum subnormal with the exact sign.
+    // Its two-step accuracy still requires the vendor error premise near underflow.
+    let nonzero = select(eq_tile(vendor & (sign - unit), zero), result_sign | unit, vendor);
+    let mut result = select(decays, select(crosses, result_sign, nonzero), vendor);
+
+    // Mathematical identities and special classes precede the generic result.
+    // Stored wrapper shortcut schedules remain separate from this Power operation.
+    result = select(eq_tile(b, one), a, result);
+    result = select(x_negative_one & integer, select(odd, negative_one, one), result);
+    result = select(x_negative & lt_tile(ax, infinity) & ne_tile(ax, zero) & y_finite & (integer ^ broadcast_scalar(true, shape![128])), nan, result);
+    result = select(eq_tile(ax, zero), result_sign | select(y_negative, infinity, zero), result);
+    result = select(eq_tile(ax, infinity), result_sign | select(y_negative, zero, infinity), result);
+    let infinite_exponent = select(x_large ^ y_negative, infinity, zero);
+    result = select(y_infinite, infinite_exponent, result);
+    result = select(x_nan | y_nan, nan, result);
+    result = select(x_negative_one & y_infinite, one, result);
+    result = select(eq_tile(a, one), one, result);
+    select(eq_tile(ay, zero), one, result)
+}
+
 fn float_arithmetic_f64(a: Tile<u64, {[128]}>, b: Tile<u64, {[128]}>, op: u32) -> Tile<u64, {[128]}> {
     let x: Tile<f64, {[128]}> = bitcast(a);
     let y: Tile<f64, {[128]}> = bitcast(b);
@@ -129,6 +220,7 @@ fn float_arithmetic_f64(a: Tile<u64, {[128]}>, b: Tile<u64, {[128]}>, op: u32) -
     else if op == 18u32 { bitcast(unsafe { tanh_with_rounding(x, rounding::Full) }) }
     else if op == 19u32 { bitcast(sin(x)) }
     else if op == 20u32 { bitcast(cos(x)) }
+    else if op == 29u32 { float_arithmetic_power_f64(a, b) }
     else if op == 30u32 { bitcast(sinh(x)) }
     else if op == 31u32 { bitcast(cosh(x)) }
     else if op == 32u32 { bitcast(tan(x)) }
@@ -175,6 +267,7 @@ fn float_arithmetic_f32(a: Tile<u32, {[128]}>, b: Tile<u32, {[128]}>, op: u32) -
     else if op == 18u32 { bitcast(unsafe { tanh_with_rounding(x, rounding::Full) }) }
     else if op == 19u32 { bitcast(sin(x)) }
     else if op == 20u32 { bitcast(cos(x)) }
+    else if op == 29u32 { bitcast(unsafe { fpowf(x, y) }) }
     else if op == 30u32 { bitcast(sinh(x)) }
     else if op == 31u32 { bitcast(cosh(x)) }
     else if op == 32u32 { bitcast(tan(x)) }
@@ -209,6 +302,14 @@ fn float_arithmetic_f16(a: Tile<u16, {[128]}>, b: Tile<u16, {[128]}>, op: u32) -
         let result = if op == 17u32 { bitcast(float_math_log1p_f32(bitcast(promoted))) }
             else if op == 30u32 { sinh(promoted) }
             else if op == 31u32 { cosh(promoted) } else { tan(promoted) };
+        let rounded: Tile<f16, {[128]}> = ftof(result, rounding::NearestEven);
+        bitcast(rounded)
+    }
+    else if op == 29u32 {
+        // Both operands, including a scalar exponent, already have storage precision.
+        let x_staged: Tile<f32, {[128]}> = ftof(x, rounding::NearestEven);
+        let y_staged: Tile<f32, {[128]}> = ftof(y, rounding::NearestEven);
+        let result = unsafe { fpowf(x_staged, y_staged) };
         let rounded: Tile<f16, {[128]}> = ftof(result, rounding::NearestEven);
         bitcast(rounded)
     }
@@ -250,6 +351,14 @@ fn float_arithmetic_bf16(a: Tile<u16, {[128]}>, b: Tile<u16, {[128]}>, op: u32) 
         let result = if op == 17u32 { bitcast(float_math_log1p_f32(bitcast(promoted))) }
             else if op == 30u32 { sinh(promoted) }
             else if op == 31u32 { cosh(promoted) } else { tan(promoted) };
+        let rounded: Tile<bf16, {[128]}> = ftof(result, rounding::NearestEven);
+        bitcast(rounded)
+    }
+    else if op == 29u32 {
+        // Both operands, including a scalar exponent, already have storage precision.
+        let x_staged: Tile<f32, {[128]}> = ftof(x, rounding::NearestEven);
+        let y_staged: Tile<f32, {[128]}> = ftof(y, rounding::NearestEven);
+        let result = unsafe { fpowf(x_staged, y_staged) };
         let rounded: Tile<bf16, {[128]}> = ftof(result, rounding::NearestEven);
         bitcast(rounded)
     }

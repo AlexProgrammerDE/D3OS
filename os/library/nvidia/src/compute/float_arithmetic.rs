@@ -35,6 +35,7 @@ pub enum Operation {
     Round = 23,
     Trunc = 24,
     Sign = 25,
+    Power = 29,
     Sinh = 30,
     Cosh = 31,
     Tan = 32,
@@ -42,7 +43,7 @@ pub enum Operation {
 }
 
 impl Operation {
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 24] = [
         Self::Add,
         Self::Subtract,
         Self::Multiply,
@@ -62,6 +63,7 @@ impl Operation {
         Self::Round,
         Self::Trunc,
         Self::Sign,
+        Self::Power,
         Self::Sinh,
         Self::Cosh,
         Self::Tan,

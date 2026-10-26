@@ -35,6 +35,7 @@ mod sort;
 mod spatial_convolution;
 mod storage;
 mod typed_exp_log;
+mod typed_power;
 mod typed_relu;
 mod typed_remainder;
 mod typed_trig;
@@ -219,6 +220,30 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     }
     integers::run(backend).map_err(|e| format!("Burn native integer reductions: {e}"))?;
     words::run(backend).map_err(|e| format!("Burn native words: {e}"))?;
+    typed_power::run(backend)?;
+    let power_options = d3os_ai::validation::typed_power::Options::default();
+    let power_report = d3os_ai::burn::tensor::try_read_sync(d3os_ai::validation::typed_power::run(&device, &power_options))
+        .ok_or_else(|| String::from("native typed power future did not complete"))??;
+    crate::report(format_args!(
+        "BURN_TYPED_POWER_ACCURACY os=d3os backend=native corpus={} policy_sha256={} fixture_sha256={} qualification_passed={} totals={} accuracy={}",
+        d3os_ai::validation::typed_power::CORPUS_VERSION,
+        d3os_ai::validation::typed_power::POLICY_SHA256,
+        d3os_ai::validation::typed_power::FIXTURE_SHA256,
+        power_report.is_success(),
+        d3os_ai::validation::typed_power::summary_json(&power_report.summary),
+        d3os_ai::validation::typed_power::accuracy_json(&power_report.accuracy)
+    ));
+    if !power_report.is_success() {
+        for example in &power_report.failures.examples {
+            crate::report(format_args!("BURN_TYPED_POWER_FAILURE {example}"));
+        }
+        return Err(format!("typed power qualification failed: {} failures", power_report.failures.count));
+    }
+    crate::report(format_args!(
+        "BURN_TYPED_POWER_OK os=d3os backend=native fusion=disabled corpus={} {}",
+        d3os_ai::validation::typed_power::CORPUS_VERSION,
+        d3os_ai::validation::typed_power::success_footer(&power_options, &power_report)
+    ));
     typed_unary::run(backend)?;
     let unary_options = d3os_ai::validation::typed_unary::Options::default();
     let unary_report = d3os_ai::burn::tensor::try_read_sync(d3os_ai::validation::typed_unary::run(&device, &unary_options))

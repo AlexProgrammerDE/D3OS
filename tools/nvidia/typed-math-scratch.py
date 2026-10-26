@@ -1,8 +1,8 @@
-"""Recognize the reviewed SM89 registered 23-operation typed-math schedule.
+"""Recognize the reviewed SM89 registered 24-operation typed-math schedule.
 
 This certificate is deliberately narrower than a SASS dataflow proof. It binds
 every instruction, predicate, register, immediate and control-flow destination
-in the reviewed entry and its six helpers. Only whitespace, label spelling,
+in the reviewed entry and its seven helpers. Only whitespace, label spelling,
 compiler helper numbering and helper placement may vary. Any other code change
 requires a new review, including the address-bound argument below. Input SASS
 must be freshly produced from the supplied cubin by the pinned nvdisasm binary.
@@ -19,13 +19,13 @@ from pathlib import Path
 
 ENTRY = "burn_float_arithmetic"
 TEXT = f".text.{ENTRY}"
-PROFILE = "sm89-typed-unary23-library-scratch-v1"
+PROFILE = "sm89-typed-power24-library-scratch-v2"
 REVISION = "2f47ad0036a7c18ec11d460f70b297a5824f9788"
 # Crate-relative keys are also consumed by prepare-kernels.py before/after
 # compilation. Bind the effective entry helpers, affected generated-module
-# inputs, expansion/host code and the local operation registry, not just Log1p.
+# inputs, expansion/host code, SDK protocol 49 and the 24-operation registry.
 SOURCE_HASHES = {
-    "src/burn-float-arithmetic.rs.in": "3c24a4a548004aaf19d892f0f7556e931e4b58a73787670303a15e20e41ba2da",
+    "src/burn-float-arithmetic.rs.in": "467b76876351532d86f1152eee3a363f4775adf759f73e50337f21d904fb5c3f",
     "src/common.rs": "8a005c8bbd8c3074b5cdee6b6fe57d9c4e42da485d59f9784ba278d9d12f487f",
     "src/burn-packed-common.rs": "e6fb080724e8b8d1c29b778b37ac34bbe01480325e71549c7e1874fbe6aec413",
     "src/burn-log1p.rs": "bab09c1fdc36e13fdff5dbfcc60a1bedc9b6b778adf8ca442cae4aeddebed9b8",
@@ -40,8 +40,8 @@ SOURCE_HASHES = {
     "Cargo.lock": "13923daab0897a3f175cae8c314ec58476e959b32c6d2b296e7e5b6bc5ea0f43",
     "rust-toolchain.toml": "85db324345b7937c49ea2ac8b962d741f710719f4f751cab809985cbe6afbe3c",
     "../../os/library/nvidia/Cargo.toml": "1ad5bf6f4f02f27238599265ef024f37ae08114cf48ad2c5db8ee8a32f8cad11",
-    "../../os/library/nvidia/src/compute.rs": "3d37f6ae8353e19d87e9ab29a75fa0988ac99d8b28faa2ffcf0b254851297e36",
-    "../../os/library/nvidia/src/compute/float_arithmetic.rs": "d34d37b37cb3d92f7731f780368db735f9d794f1f388d2ba78c657953bc39a5e",
+    "../../os/library/nvidia/src/compute.rs": "0691d99f937a979b12588fb2a53ebe94151d8385ee7393f202aa294afb5a9829",
+    "../../os/library/nvidia/src/compute/float_arithmetic.rs": "44d1603795fbfb9b648d70e0e33e4dbb7e035393c252e31cb03d02a87a18ad3d",
 }
 TOOL_HASHES = {
     "tileiras": "8733d2ef6ae234ba5b415d185c957b8cc37577507a2850313a8c0e5c7c3ac54d",
@@ -56,42 +56,47 @@ PROVENANCE = {
     "compile_options": "default;num_worker_warps_per_cta=4;sm_89;tile_ir=13.4;O3",
 }
 TRIG = f"${ENTRY}$__internal_trig_reduction_slowpathd"
-CB2_BYTES = 1120
-CB2_SHA256 = "7e6b93cec9d41f7dcafe6040ea84b5a45b459f58efe14753e2188b8864a1e9e2"
+CB2_BYTES = 1152
+CB2_SHA256 = "ee863dd2d6d163eb1cad6ce55575a0c6eb3e1426f91acf4f44a2286d22eadbd6"
 # SHA256 of JSON instruction rows, using separators=(',', ':'). Destinations
 # resolve to [function identity, byte offset within that function]. Hashes bind
 # the entire schedule, including guards, address construction, calls, returns,
 # arithmetic and padding, rather than just the local instruction inventory.
 SCHEDULES = {
     "burn_float_arithmetic": (
-        145104,
-        "0827208f8c64f8e9c2a18006e9e6b114f517723581cadadcd67a2ced5cb007b6",
+        172432,
+        "b5790b84fe8ca14086761df9639f455d20a28d44438d62689948d43c34972a9b",
     ),
     "$__cuda_sm20_dblrcp_rn_slowpath_v3": (
-        704,
-        "1a57a03a8ba43e0caffe7e132bfe7cc790a765ee3d16651311c28f8aa2b94819",
+        720,
+        "a1eb38aed84f18ae7a90b5cf908694bd673bf0854fc1822b3b69133dd4f6a808",
     ),
     "$__cuda_sm20_div_rn_f64_full": (
         1456,
-        "1e910b82e232e38d1f1a6acdf5cfe83937b65e629e58e9d6d0b62409f2287a50",
+        "c1d1c15927fd60fdd0d3d7f0861f8b74531e4c4362867100ea72592eef79ffaa",
     ),
     "$__cuda_sm20_dsqrt_rn_f64_mediumpath_v1": (
         768,
-        "85a3a98de683c7dacd7e90c7c19689f55b7bebbaaecd8b8f4f1904ecf80a847f",
+        "692164375a47a8f033ff7d8603ec681444e8a626f46d48d9822bb35abb7a70a5",
     ),
     "$__cuda_sm20_sqrt_rn_f32_slowpath": (
         368,
-        "4f9028fef220bbbc805f264a5c60e6f4f1311578566eafd0f5fcffb8ddee17e0",
+        "32627e1bf075a0e2e1bef5167f95281fd92144c4934df0d0e998c86aa62ca0e9",
     ),
     "$__cuda_sm3x_div_rn_noftz_f32_slowpath": (
         1712,
-        "a1f3b0bfdabe35eff4d4584197cd953b7cfc356cf84bba027aeea7854d712775",
+        "3ce5911c9c0ebf77657149b8523707da1d42e5c0a93db18e1719868e66ca85f1",
+    ),
+    "$burn_float_arithmetic$__internal_accurate_pow": (
+        2096,
+        "6ebac723a5a7e2c7e965e7cc0e577393ddf43da997ef2e2a9b4a900182025b61",
     ),
     "$burn_float_arithmetic$__internal_trig_reduction_slowpathd": (
         2720,
-        "f95141610b59a685a2d5f08ec28ec5aa85d4962a1825fd53783cf710a3f13cd4",
+        "502b1ccd974791e4db2b1feea03d938d1e1c2bb9359792db6b51c2f2c53f9f94",
     ),
 }
+
 TABLES = {
     8: (
         "__cudart_i2opi_d",
@@ -359,10 +364,10 @@ def schedule(cubin, sass, qualifier):
 
 def resources(cubin, entries, functions):
     text = cubin.named[TEXT]
-    expected = {"entry": ENTRY, "code_bytes": 152832, "registers": 79, "threads": 128}
+    expected = {"entry": ENTRY, "code_bytes": 182272, "registers": 80, "threads": 128}
     if [entry for entry in entries if entry.get("entry") == ENTRY] != [expected]:
         raise ValueError("entry metadata exceeds or differs from reviewed resources")
-    if text["size"] != expected["code_bytes"] or text["info"] >> 24 != 79:
+    if text["size"] != expected["code_bytes"] or text["info"] >> 24 != 80:
         raise ValueError("ELF code/register resources differ from reviewed limits")
     shared = cubin.named.get(f".nv.shared.{ENTRY}")
     if shared and shared["size"]:
@@ -481,37 +486,39 @@ def classify(rows):
     # These are reduction-product arrays, not saves of live application
     # registers across calls. Each store is fed by the inlined integer 2/pi
     # product/carry chain; the three indexed reads feed the reduced argument.
-    # Tan adds nine copies to the previous eighteen Sin/Cos copies. Log1p's
-    # inlined polynomial/divisions introduce no local sites. Complete schedule
-    # hashes above bind those claims and every pointer/guard definition.
+    # Eighteen Sin/Cos copies use [28,56); nine Tan copies use [0,28).
+    # Power adds no local accesses, including in its new accurate_pow helper.
+    # Its calls reuse no reduction-product slots for application temporaries.
+    # Complete schedule hashes bind every product/carry chain, pointer, guard
+    # and call, including the trig helper's revised input-register prefix.
     groups = (
-        (28, "R35", "@P0"),
-        (28, "R35", "@P1"),
-        (28, "R34", "@P1"),
-        (28, "R36", "@P0"),
-        (28, "R36", "@P1"),
-        (28, "R35", "@P0"),
-        (28, "R36", "@P0"),
-        (28, "R36", "@P1"),
-        (28, "R35", "@P0"),
-        (28, "R54", "@P0"),
-        (28, "R54", "@P0"),
-        (28, "R54", "@P1"),
-        (28, "R54", "@P0"),
-        (28, "R54", "@P0"),
-        (28, "R54", "@P1"),
-        (28, "R54", "@P0"),
-        (28, "R54", "@P1"),
-        (28, "R54", "@P1"),
-        (0, "R14", "@P0"),
-        (0, "R11", "@P1"),
-        (0, "R11", "@P1"),
-        (0, "R7", "@P0"),
-        (0, "R11", "@P1"),
-        (0, "R12", "@P0"),
-        (0, "R7", "@P0"),
-        (0, "R11", "@P1"),
-        (0, "R12", "@P0"),
+        (28, "R15", "@P0"),
+        (28, "R15", "@P1"),
+        (28, "R15", "@P1"),
+        (28, "R16", "@P0"),
+        (28, "R16", "@P1"),
+        (28, "R15", "@P0"),
+        (28, "R16", "@P0"),
+        (28, "R16", "@P1"),
+        (28, "R15", "@P0"),
+        (28, "R52", "@P0"),
+        (28, "R52", "@P0"),
+        (28, "R52", "@P1"),
+        (28, "R52", "@P0"),
+        (28, "R52", "@P0"),
+        (28, "R52", "@P1"),
+        (28, "R52", "@P0"),
+        (28, "R52", "@P1"),
+        (28, "R52", "@P1"),
+        (0, "R16", "@P0"),
+        (0, "R13", "@P1"),
+        (0, "R13", "@P1"),
+        (0, "R16", "@P0"),
+        (0, "R13", "@P1"),
+        (0, "R16", "@P0"),
+        (0, "R16", "@P0"),
+        (0, "R13", "@P1"),
+        (0, "R13", "@P0"),
     )
     for index, (frame_start, base, load_predicate) in enumerate(groups):
         group = local[index * 7 : (index + 1) * 7]
@@ -543,11 +550,11 @@ def classify(rows):
         )
     # Address construction and the loop guards are bound by the helper hash.
     if [(p, op, operands) for _, p, op, operands in local[189:]] != [
-        ("", "STL.64", "[R33], R4"),
-        ("", "STL.64", "[R71+-0x78], R32"),
-        ("@P0", "LDL.64", "R30, [R1+0x40]"),
-        ("", "LDL.64", "R2, [R1+0x48]"),
-        ("", "LDL.64", "R4, [R1+0x50]"),
+        ("", "STL.64", "[R13], R6"),
+        ("", "STL.64", "[R69+-0x78], R12"),
+        ("@P0", "LDL.64", "R8, [R1+0x40]"),
+        ("", "LDL.64", "R4, [R1+0x48]"),
+        ("", "LDL.64", "R6, [R1+0x50]"),
     ]:
         raise ValueError("unclassified F64 scratch access")
     # Reviewed guards admit finite large F32 fields 143..254. The index is
@@ -597,8 +604,13 @@ def qualify(cubin, sass, entries, provenance):
         "entry": ENTRY,
         "frame_bytes": 96,
         "minimum_stack_bytes": 96,
-        "registers": 79,
-        "code_bytes": 152832,
+        "helper_frame_bytes": {
+            identity(symbol["name"]): 0
+            for symbol in functions
+            if symbol["name"] != ENTRY
+        },
+        "registers": 80,
+        "code_bytes": 182272,
         "threads": [128, 1, 1],
         "local_load_sites": 84,
         "local_store_sites": 110,

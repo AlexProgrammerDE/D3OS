@@ -1,0 +1,473 @@
+{
+  "burn": "0.22.1",
+  "checks": {
+    "center_policy": 369836,
+    "half_roundtrip": 128768,
+    "higher_precision": 2519,
+    "range_gate": 10
+  },
+  "corpus_version": 1,
+  "cubecl": "0.11.3",
+  "dtype_order": [
+    "f64",
+    "f32",
+    "flex32",
+    "f16",
+    "bf16"
+  ],
+  "encoding": "dtype-width little-endian lhs,rhs,ideal,staged,allowed_low,allowed_high; uint32 F32 center; uint8 schedule; uint8 exact-special",
+  "fixture_bytes": 8806380,
+  "fixture_sha256": "8767f0d381c19fe2c8ac90aece3a9bc96d36b5c9b2c042812364a442821290bd",
+  "formats": {
+    "bf16": {
+      "chain_closure_populations": [
+        [
+          1,
+          1,
+          1
+        ],
+        [
+          1,
+          1,
+          1
+        ],
+        [
+          1,
+          1,
+          1
+        ]
+      ],
+      "classes": {
+        "inf": 24698,
+        "nan": 37177,
+        "normal": 59414,
+        "subnormal": 793,
+        "zero": 23747
+      },
+      "core_mathematical_pairs": 144340,
+      "offset_bytes": 6181458,
+      "precision": {
+        "0": 38409,
+        "128": 107420
+      },
+      "record_bytes": 18,
+      "rows": 145829,
+      "scalar_inputs": 92,
+      "scalar_specs": 51,
+      "schedule_classes": {
+        "Identity": {
+          "inf": 2,
+          "nan": 6,
+          "normal": 76,
+          "subnormal": 6,
+          "zero": 2
+        },
+        "Mathematical": {
+          "inf": 24670,
+          "nan": 37153,
+          "normal": 58943,
+          "subnormal": 783,
+          "zero": 23723
+        },
+        "Ones": {
+          "normal": 184
+        },
+        "Reciprocal": {
+          "inf": 6,
+          "nan": 6,
+          "normal": 76,
+          "subnormal": 4,
+          "zero": 2
+        },
+        "Square": {
+          "inf": 8,
+          "nan": 6,
+          "normal": 69,
+          "zero": 12
+        },
+        "SquareReciprocal": {
+          "inf": 12,
+          "nan": 6,
+          "normal": 66,
+          "zero": 8
+        }
+      },
+      "schedules": {
+        "Identity": 92,
+        "Mathematical": 145272,
+        "Ones": 184,
+        "Reciprocal": 94,
+        "Square": 95,
+        "SquareReciprocal": 92
+      }
+    },
+    "f16": {
+      "chain_closure_populations": [
+        [
+          1,
+          1,
+          1
+        ],
+        [
+          1,
+          1,
+          1
+        ],
+        [
+          1,
+          1,
+          1
+        ]
+      ],
+      "classes": {
+        "inf": 23939,
+        "nan": 39451,
+        "normal": 55919,
+        "subnormal": 7847,
+        "zero": 15282
+      },
+      "core_mathematical_pairs": 141602,
+      "offset_bytes": 3617574,
+      "precision": {
+        "0": 40636,
+        "128": 101802
+      },
+      "record_bytes": 18,
+      "rows": 142438,
+      "scalar_inputs": 91,
+      "scalar_specs": 51,
+      "schedule_classes": {
+        "Identity": {
+          "inf": 2,
+          "nan": 6,
+          "normal": 75,
+          "subnormal": 6,
+          "zero": 2
+        },
+        "Mathematical": {
+          "inf": 23894,
+          "nan": 39427,
+          "normal": 55488,
+          "subnormal": 7837,
+          "zero": 15241
+        },
+        "Ones": {
+          "normal": 182
+        },
+        "Reciprocal": {
+          "inf": 6,
+          "nan": 6,
+          "normal": 75,
+          "subnormal": 4,
+          "zero": 2
+        },
+        "Square": {
+          "inf": 25,
+          "nan": 6,
+          "normal": 51,
+          "zero": 12
+        },
+        "SquareReciprocal": {
+          "inf": 12,
+          "nan": 6,
+          "normal": 48,
+          "zero": 25
+        }
+      },
+      "schedules": {
+        "Identity": 91,
+        "Mathematical": 141887,
+        "Ones": 182,
+        "Reciprocal": 93,
+        "Square": 94,
+        "SquareReciprocal": 91
+      }
+    },
+    "f32": {
+      "chain_closure_populations": [
+        [
+          1,
+          9,
+          9
+        ],
+        [
+          1,
+          9,
+          9
+        ],
+        [
+          1,
+          9,
+          9
+        ]
+      ],
+      "classes": {
+        "inf": 3074,
+        "nan": 4548,
+        "normal": 5748,
+        "subnormal": 180,
+        "zero": 2849
+      },
+      "core_mathematical_pairs": 14740,
+      "offset_bytes": 2633634,
+      "precision": {
+        "0": 5792,
+        "128": 10607
+      },
+      "record_bytes": 30,
+      "rows": 16399,
+      "scalar_inputs": 93,
+      "scalar_specs": 51,
+      "schedule_classes": {
+        "Identity": {
+          "inf": 2,
+          "nan": 6,
+          "normal": 77,
+          "subnormal": 6,
+          "zero": 2
+        },
+        "Mathematical": {
+          "inf": 3046,
+          "nan": 4524,
+          "normal": 5231,
+          "subnormal": 170,
+          "zero": 2825
+        },
+        "Ones": {
+          "normal": 186
+        },
+        "Reciprocal": {
+          "inf": 6,
+          "nan": 6,
+          "normal": 93,
+          "subnormal": 4,
+          "zero": 2
+        },
+        "Square": {
+          "inf": 8,
+          "nan": 6,
+          "normal": 94,
+          "zero": 12
+        },
+        "SquareReciprocal": {
+          "inf": 12,
+          "nan": 6,
+          "normal": 67,
+          "zero": 8
+        }
+      },
+      "schedules": {
+        "Identity": 93,
+        "Mathematical": 15796,
+        "Ones": 186,
+        "Reciprocal": 111,
+        "Square": 120,
+        "SquareReciprocal": 93
+      }
+    },
+    "f64": {
+      "chain_closure_populations": [
+        [
+          1,
+          5,
+          5
+        ],
+        [
+          1,
+          5,
+          5
+        ],
+        [
+          1,
+          5,
+          5
+        ]
+      ],
+      "classes": {
+        "inf": 10710,
+        "nan": 11451,
+        "normal": 15911,
+        "subnormal": 267,
+        "zero": 10432
+      },
+      "core_mathematical_pairs": 46994,
+      "offset_bytes": 0,
+      "precision": {
+        "0": 12712,
+        "128": 36059
+      },
+      "record_bytes": 54,
+      "rows": 48771,
+      "scalar_inputs": 94,
+      "scalar_specs": 51,
+      "schedule_classes": {
+        "Identity": {
+          "inf": 2,
+          "nan": 6,
+          "normal": 78,
+          "subnormal": 6,
+          "zero": 2
+        },
+        "Mathematical": {
+          "inf": 10683,
+          "nan": 11427,
+          "normal": 15406,
+          "subnormal": 257,
+          "zero": 10409
+        },
+        "Ones": {
+          "normal": 188
+        },
+        "Reciprocal": {
+          "inf": 6,
+          "nan": 6,
+          "normal": 86,
+          "subnormal": 4,
+          "zero": 2
+        },
+        "Square": {
+          "inf": 7,
+          "nan": 6,
+          "normal": 84,
+          "zero": 12
+        },
+        "SquareReciprocal": {
+          "inf": 12,
+          "nan": 6,
+          "normal": 69,
+          "zero": 7
+        }
+      },
+      "schedules": {
+        "Identity": 94,
+        "Mathematical": 48182,
+        "Ones": 188,
+        "Reciprocal": 104,
+        "Square": 109,
+        "SquareReciprocal": 94
+      }
+    },
+    "flex32": {
+      "chain_closure_populations": [
+        [
+          1,
+          9,
+          9
+        ],
+        [
+          1,
+          9,
+          9
+        ],
+        [
+          1,
+          9,
+          9
+        ]
+      ],
+      "classes": {
+        "inf": 3074,
+        "nan": 4548,
+        "normal": 5748,
+        "subnormal": 180,
+        "zero": 2849
+      },
+      "core_mathematical_pairs": 14740,
+      "offset_bytes": 3125604,
+      "precision": {
+        "0": 5792,
+        "128": 10607
+      },
+      "record_bytes": 30,
+      "rows": 16399,
+      "scalar_inputs": 93,
+      "scalar_specs": 51,
+      "schedule_classes": {
+        "Identity": {
+          "inf": 2,
+          "nan": 6,
+          "normal": 77,
+          "subnormal": 6,
+          "zero": 2
+        },
+        "Mathematical": {
+          "inf": 3046,
+          "nan": 4524,
+          "normal": 5231,
+          "subnormal": 170,
+          "zero": 2825
+        },
+        "Ones": {
+          "normal": 186
+        },
+        "Reciprocal": {
+          "inf": 6,
+          "nan": 6,
+          "normal": 93,
+          "subnormal": 4,
+          "zero": 2
+        },
+        "Square": {
+          "inf": 8,
+          "nan": 6,
+          "normal": 94,
+          "zero": 12
+        },
+        "SquareReciprocal": {
+          "inf": 12,
+          "nan": 6,
+          "normal": 67,
+          "zero": 8
+        }
+      },
+      "schedules": {
+        "Identity": 93,
+        "Mathematical": 15796,
+        "Ones": 186,
+        "Reciprocal": 111,
+        "Square": 120,
+        "SquareReciprocal": 93
+      }
+    }
+  },
+  "generator_sha256": "7e2f44acb96b5ef4b1c6e27dd559af26baf2ddd98a6602d47262ed245f2e3feb",
+  "gpu_executed": false,
+  "linux_extension_filter": "--common-linux explicitly omits inherited backend panic/rejection probes; Native defaults retain them",
+  "mpfr": "4.2.2",
+  "numerical_backend_claim": false,
+  "opcode": 29,
+  "operation": "Power",
+  "policy": {
+    "classes": "strict NaN/domain/sign/zero/nonzero/overflow; normal-subnormal transitions diagnostic within budget",
+    "f32_flex32_steps": 4,
+    "f64_steps": 2,
+    "fast_math": false,
+    "half": "destination RNE image of +/-4 F32 neighbors",
+    "nan": "output classification except Identity byte alias",
+    "wrappers": "exact stored RNE schedules; mathematical ideal retained separately"
+  },
+  "policy_sha256": "98fa20bdf8ac17b6f6c2a2779b633b2b963448b11a71ee2f598d04a357d7b77b",
+  "provenance": {
+    "compiler_report": "feasibility only; no numerical authority",
+    "half_native": false,
+    "nvidia_table": 49,
+    "nvidia_url": "https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/mathematical-functions.html#power-functions",
+    "pow_ulp": 2,
+    "powf_ulp": 4,
+    "source_routes": [
+      "burn-std/src/element/scalar.rs:Scalar::new/try_as_integer",
+      "burn-backend/src/backend/ops/tensor.rs:float_powf_scalar/float_powi/float_powi_scalar",
+      "burn-tensor/src/tensor/api/numeric.rs:powi_scalar",
+      "cubecl-cpp/src/shared/binary.rs:Powf no_half"
+    ]
+  },
+  "schedule_order": [
+    "Mathematical",
+    "Ones",
+    "Identity",
+    "Square",
+    "Reciprocal",
+    "SquareReciprocal"
+  ],
+  "schema": 1
+}

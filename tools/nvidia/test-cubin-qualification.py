@@ -92,6 +92,30 @@ def qualify_instructions(*instructions):
 
 
 class QualificationTests(unittest.TestCase):
+    def test_power_half_comparisons_retain_register_only_admission(self):
+        observed = (
+            "HSETP2.NEU.AND P0, PT, R35.H0_H0, RZ.H0_H0, PT",
+            "HSETP2.EQ.OR P0, PT, R2.H0_H0, 1, 1, !P0",
+            "HSETP2.EQ.OR P0, PT, R2.H0_H0, RZ.H0_H0, !P0",
+            "@!P1 HSETP2.GEU.AND P3, PT, R35.H0_H0, RZ.H0_H0, PT",
+            "HSETP2.EQ.AND P0, PT, R2.H0_H0, -1, -1, !P0",
+        )
+        result = qualify_instructions(*observed)
+        self.assertEqual(result["instruction_count"], len(observed))
+        self.assertEqual(result["cb4_accesses"], [])
+        for instruction in (
+            observed[0].replace("NEU.AND", "UNKNOWN.AND"),
+            observed[0].replace("H0_H0", "H1_H1", 1),
+            observed[0].replace("RZ.H0_H0", "c[0x4][0x8]"),
+            observed[0].replace("RZ.H0_H0", "c[0x2][0x8]"),
+            observed[0].replace("RZ.H0_H0", "R4.H0_H0"),
+            observed[1].replace("1, 1", "2, 2"),
+            observed[4].replace("-1, -1", "-2, -2"),
+            observed[4].replace("!P0", "R0"),
+        ):
+            with self.subTest(instruction=instruction), self.assertRaises(ValueError):
+                qualify_instructions(instruction)
+
     def test_direct_table_pointer_widths_and_evidence(self):
         result = qualify_instructions(
             "IADD3 R2, P0, R4, c[0x4][0x10], RZ",

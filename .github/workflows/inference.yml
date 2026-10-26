@@ -108,6 +108,8 @@ jobs:
         run: python3 tools/nvidia/test-mnist-comparison.py
       - name: Verify compiler profiling intervals
         run: python3 tools/nvidia/test-compiler-profile.py
+      - name: Verify typed power qualification gates
+        run: python3 tools/nvidia/test-typed-power.py
       - name: Verify typed unary qualification gates
         run: python3 tools/nvidia/test-typed-unary.py
       - name: Verify typed trigonometric qualification gates

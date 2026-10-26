@@ -34,6 +34,16 @@ CB4_FORMS = {
     "IMAD.WIDE": (8, rf"R\d+,\s*{REGISTER},\s*{REGISTER},\s*{CB4}"),
     "IMAD.WIDE.U32": (8, rf"R\d+,\s*{REGISTER},\s*{REGISTER},\s*{CB4}"),
 }
+# The typed Power entry uses these packed-half comparisons for special cases.
+# Admit only the observed register/immediate forms, with no constant-bank read.
+HALF_PREDICATE = r"!?P(?:\d+|T)"
+HALF_COMPARE_PREFIX = r"P\d+,\s*PT,\s*R\d+\.H0_H0,\s*"
+HALF_COMPARE_FORMS = {
+    "HSETP2.NEU.AND": HALF_COMPARE_PREFIX + rf"RZ\.H0_H0,\s*{HALF_PREDICATE}",
+    "HSETP2.GEU.AND": HALF_COMPARE_PREFIX + rf"RZ\.H0_H0,\s*{HALF_PREDICATE}",
+    "HSETP2.EQ.OR": HALF_COMPARE_PREFIX + rf"(?:1,\s*1|RZ\.H0_H0),\s*{HALF_PREDICATE}",
+    "HSETP2.EQ.AND": HALF_COMPARE_PREFIX + rf"-1,\s*-1,\s*{HALF_PREDICATE}",
+}
 # Observed instruction families. Unknown/undecoded mnemonics fail closed even
 # when no explicit constant operand is printed. CB4 has the narrower forms above.
 OPCODES = frozenset(
@@ -295,7 +305,13 @@ def qualify(cubin: bytes, sass: str) -> dict:
                 raise ValueError(
                     f"{active}:{offset:#x}: incomplete or duplicate instruction inventory"
                 )
-            if opcode.split(".")[0] not in OPCODES:
+            half_compare = HALF_COMPARE_FORMS.get(opcode)
+            if half_compare is not None:
+                if not re.fullmatch(half_compare, operands):
+                    raise ValueError(
+                        f"{active}:{offset:#x}: unsupported packed-half comparison form"
+                    )
+            elif opcode.split(".")[0] not in OPCODES:
                 raise ValueError(
                     f"{active}:{offset:#x}: unsupported/undecoded instruction {opcode}"
                 )

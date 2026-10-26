@@ -2,6 +2,8 @@
 
 Optionally set TYPED_MATH_SCRATCH_BASELINE_SASS to the old inference-family
 disassembly to exercise the complete production audit with both entry versions.
+Set TYPED_MATH_SCRATCH_PREVIOUS_ARTIFACTS to the superseded Power24 export
+to check that it cannot enter under the corrected profile.
 """
 
 import copy
@@ -80,11 +82,13 @@ class ScratchArtifactTests(unittest.TestCase):
             {(0, 28), (28, 56), (56, 96)},
         )
         self.assertEqual(result["unclassified_local_sites"], [])
-        self.assertEqual(len(result["call_sites"]), 72)
-        self.assertEqual(result["registers"], 79)
-        self.assertEqual(result["code_bytes"], 152832)
+        self.assertEqual(len(result["call_sites"]), 75)
+        self.assertEqual(result["registers"], 80)
+        self.assertEqual(result["code_bytes"], 182272)
         self.assertEqual(result["frame_bytes"], 96)
         self.assertEqual(result["minimum_stack_bytes"], 96)
+        self.assertEqual(len(result["helper_frame_bytes"]), 7)
+        self.assertEqual(set(result["helper_frame_bytes"].values()), {0})
         self.assertEqual(result["local_load_sites"], 84)
         self.assertEqual(result["local_store_sites"], 110)
         self.assertEqual(sum(a["frame_range"] == [28, 56] for a in arrays), 18)
@@ -93,25 +97,25 @@ class ScratchArtifactTests(unittest.TestCase):
     def test_unknown_local_forms_bases_offsets_and_slots_fail(self):
         changes = {
             "unknown local opcode": (
-                0x5D90,
+                0x6EF0,
                 lambda row: row.replace("LDL ", "LDL.128 "),
             ),
-            "unknown store base": (0x5C10, lambda row: row.replace("[R1+", "[R2+")),
-            "out-of-array store": (0x5C10, lambda row: row.replace("+0x1c]", "+0x60]")),
-            "unknown load base": (0x5D90, lambda row: row.replace("[R35+", "[R36+")),
-            "out-of-array load": (0x5D90, lambda row: row.replace("+0x18]", "+0x1c]")),
+            "unknown store base": (0x6D80, lambda row: row.replace("[R1+", "[R2+")),
+            "out-of-array store": (0x6D80, lambda row: row.replace("+0x1c]", "+0x60]")),
+            "unknown load base": (0x6EF0, lambda row: row.replace("[R15+", "[R17+")),
+            "out-of-array load": (0x6EF0, lambda row: row.replace("+0x18]", "+0x1c]")),
             "new save slot": (
-                0x5DC0,
+                0x6F20,
                 lambda row: re.sub(r"@P0 SHF.*;", "STL [R1+0x60], R0 ;", row),
             ),
-            "F32 bound": (0x5D40, lambda row: row.replace("0x5,", "0x4,")),
-            "F32 pointer scale": (0x5D60, lambda row: row.replace("-0x4,", "-0x8,")),
-            "F64 pointer base": (0x24AF0, lambda row: row.replace("0x38,", "0x40,")),
-            "F64 loop bound": (0x24B40, lambda row: row.replace("0x12,", "0x13,")),
-            "F64 pointer stride": (0x24D30, lambda row: row.replace("0x8,", "0x10,")),
-            "F64 final offset": (0x24E50, lambda row: row.replace("-0x78]", "-0x70]")),
-            "missing predicate": (0x24E60, lambda row: row.replace("@P0", "   ")),
-            "return address": (0x3650, lambda row: row.replace("0x3670", "0x3680")),
+            "F32 bound": (0x6E50, lambda row: row.replace("0x5,", "0x4,")),
+            "F32 pointer scale": (0x6EC0, lambda row: row.replace("-0x4,", "-0x8,")),
+            "F64 pointer base": (0x2BDE0, lambda row: row.replace("0x38,", "0x40,")),
+            "F64 loop bound": (0x2BE30, lambda row: row.replace("0x12,", "0x13,")),
+            "F64 pointer stride": (0x2C020, lambda row: row.replace("0x8,", "0x10,")),
+            "F64 final offset": (0x2C140, lambda row: row.replace("-0x78]", "-0x70]")),
+            "missing predicate": (0x2C150, lambda row: row.replace("@P0", "   ")),
+            "return address": (0x3660, lambda row: row.replace("0x3680", "0x3690")),
         }
         for name, (offset, transform) in changes.items():
             with self.subTest(name=name), self.assertRaises(ValueError):
@@ -121,16 +125,16 @@ class ScratchArtifactTests(unittest.TestCase):
         for target in (
             "missing_helper",
             "$__internal_0_$__cuda_sm20_dblrcp_rn_slowpath_v3",
-            ".L_x_571",
+            ".L_x_627",
         ):
             changed = self.change_instruction(
-                0x2000,
+                0x2020,
                 lambda row, target=target: re.sub(r"`\([^)]+\)", f"`({target})", row),
             )
             with self.subTest(target=target), self.assertRaises(ValueError):
                 self.qualify(sass=changed)
         changed = self.change_instruction(
-            0x24AC0, lambda row: row.replace(".L_x_571", ".L_x_572")
+            0x2BDB0, lambda row: row.replace(".L_x_627", ".L_x_628")
         )
         with self.assertRaises(ValueError):
             self.qualify(sass=changed)
@@ -147,21 +151,160 @@ class ScratchArtifactTests(unittest.TestCase):
             with self.subTest(offset=offset), self.assertRaises(ValueError):
                 self.qualify(sass=changed)
 
+    def test_every_local_site_rejects_application_spills_without_hash_checks(self):
+        _, rows, _, _ = scratch.schedule(self.elf, self.sass, scratch.load_qualifier())
+        scratch.classify(rows)
+        for index, row in enumerate(rows):
+            if row[2].split(".")[0] not in ("LDL", "STL"):
+                continue
+            changed = rows.copy()
+            changed[index] = (row[0], "", "STL", "[R1+0x60], R0")
+            with self.subTest(offset=row[0]), self.assertRaises(ValueError):
+                scratch.classify(changed)
+        with self.assertRaises(ValueError):
+            scratch.classify([*rows, (rows[-1][0] + 16, "", "STL", "[R1], R0")])
+
+    def test_every_actual_call_rejects_a_different_resolved_helper(self):
+        calls = self.qualify()["call_sites"]
+        helpers = [
+            symbol["name"]
+            for symbol in self.elf.symbols
+            if symbol["kind"] == 2 and symbol["name"] != scratch.ENTRY
+        ]
+        power = f"${scratch.ENTRY}$__internal_accurate_pow"
+        self.assertEqual(sum(call["target"] == power for call in calls), 3)
+        for call in calls:
+            target = next(
+                helper
+                for helper in helpers
+                if scratch.identity(helper) != call["target"]
+            )
+            changed = self.change_instruction(
+                call["offset"],
+                lambda row, target=target: re.sub(r"`\([^)]+\)", f"`({target})", row),
+            )
+            with self.subTest(offset=call["offset"]), self.assertRaises(ValueError):
+                self.qualify(sass=changed)
+
+    def test_every_reduction_pointer_and_f64_call_guard_is_bound(self):
+        _, rows, calls, _ = scratch.schedule(
+            self.elf, self.sass, scratch.load_qualifier()
+        )
+        for array in self.qualify()["classified_arrays"][:-1]:
+            read = next(row for row in rows if row[0] == array["sites"][4])
+            base = re.search(r"\[(R\d+)\+", read[3])[1]
+            pointer = next(
+                row
+                for row in reversed(rows)
+                if row[0] < read[0]
+                and row[2] == "IMAD"
+                and re.fullmatch(rf"{base}, R\d+, -0x4, R(?:1|52)", row[3])
+            )
+            changed = self.change_instruction(
+                pointer[0], lambda row: row.replace("-0x4,", "-0x8,")
+            )
+            with self.subTest(pointer=pointer[0]), self.assertRaises(ValueError):
+                self.qualify(sass=changed)
+        trig_calls = [call for call in calls if call["target"] == scratch.TRIG]
+        self.assertEqual(len(trig_calls), 9)
+        for call in trig_calls:
+            guard = next(
+                row
+                for row in reversed(rows)
+                if row[0] < call["offset"]
+                and row[2] == "DSETP.GE.AND"
+                and "2.14748364800000000000e+09" in row[3]
+            )
+            changed = self.change_instruction(
+                guard[0], lambda row: row.replace("DSETP.GE.AND", "DSETP.LE.AND")
+            )
+            with self.subTest(guard=guard[0]), self.assertRaises(ValueError):
+                self.qualify(sass=changed)
+
+    def test_power_computation_and_revised_trig_inputs_are_bound(self):
+        # Power has no local accesses. Bind its arithmetic and the trig helper's
+        # changed input-register setup as strictly as the reduction arrays.
+        changes = {
+            0x2B570: lambda row: row.replace("DMUL", "DADD"),
+            0x2BD60: lambda row: row.replace("0x14,", "0x15,"),
+            0x2BD70: lambda row: row.replace("R3 ;", "R4 ;"),
+            0x2BD80: lambda row: row.replace("RZ ;", "0x1 ;"),
+            0x2BD90: lambda row: row.replace("0x7ff,", "0x7fe,"),
+            0x2BDF0: lambda row: row.replace("SRZ", "SR_CLOCKLO"),
+        }
+        for offset, transform in changes.items():
+            with self.subTest(offset=offset), self.assertRaises(ValueError):
+                self.qualify(sass=self.change_instruction(offset, transform))
+
+    def test_every_helper_rejects_a_nonzero_frame(self):
+        helpers = [
+            symbol
+            for symbol in self.elf.symbols
+            if symbol["kind"] == 2 and symbol["name"] != scratch.ENTRY
+        ]
+        for helper in helpers:
+
+            def add_frame(data, offset, length, helper_index=helper["index"]):
+                for position in range(offset, offset + length, 8):
+                    if struct.unpack_from("<I", data, position)[0] == helper_index:
+                        struct.pack_into("<I", data, position + 4, 16)
+                        return
+                return False
+
+            with self.subTest(helper=helper["name"]), self.assertRaises(ValueError):
+                self.qualify(cubin=self.mutate_record(".nv.info", 0x11, add_frame))
+
+    def test_f64_power_integer_cutoff_and_identities_are_bound(self):
+        changes = {
+            "parity limit": (0x42F0, lambda row: row.replace("0x433,", "0x434,")),
+            "cutoff shift clamp": (0x45C0, lambda row: row.replace("0x409,", "0x40a,")),
+            "integer product": (
+                0x4700,
+                lambda row: row.replace("IMAD.WIDE.U32", "IMAD.HI.U32"),
+            ),
+            "product low comparison": (
+                0x4740,
+                lambda row: row.replace("GE.U32", "GT.U32"),
+            ),
+            "product high comparison": (
+                0x4750,
+                lambda row: row.replace("GE.U32", "GT.U32"),
+            ),
+            "large exponent cutoff": (
+                0x4790,
+                lambda row: row.replace("0x4090cbff", "0x4090cbfe"),
+            ),
+            "nonzero repair": (0x46F0, lambda row: row.replace("0x1,", "0x2,")),
+            "exponent one identity": (0x4A20, lambda row: row.replace("R2,", "R3,")),
+            "negative one infinite identity": (
+                0x4CA0,
+                lambda row: row.replace("P2 ;", "!P2 ;"),
+            ),
+            "base one identity": (0x4CC0, lambda row: row.replace("P5 ;", "!P5 ;")),
+            "exponent zero identity": (
+                0x4CE0,
+                lambda row: row.replace("P1 ;", "!P1 ;"),
+            ),
+        }
+        for name, (offset, transform) in changes.items():
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                self.qualify(sass=self.change_instruction(offset, transform))
+
     def test_nonlocal_computation_and_guards_are_bound(self):
         changes = {
-            "frame base": (0x14F0, lambda row: row.replace("0x1c,", "0x20,")),
-            "finite guard": (0x5B90, lambda row: row.replace("NEU", "EQU")),
-            "large guard": (0x5B00, lambda row: row.replace("105615", "65535")),
+            "frame base": (0x1510, lambda row: row.replace("0x1c,", "0x20,")),
+            "finite guard": (0x6CF0, lambda row: row.replace("NEU", "EQU")),
+            "large guard": (0x6C60, lambda row: row.replace("105615", "65535")),
             "reduction product": (
-                0x5BF0,
+                0x6D60,
                 lambda row: row.replace("0x3c439041", "0x3c439040"),
             ),
             "F64 helper computation": (
-                0x24CD0,
-                lambda row: row.replace("R57,", "R56,"),
+                0x2BF90,
+                lambda row: row.replace("R19,", "R18,"),
             ),
             "F64 table pointer scale": (
-                0x24B90,
+                0x2BE80,
                 lambda row: row.replace("0x8", "0x10"),
             ),
         }
@@ -170,7 +313,7 @@ class ScratchArtifactTests(unittest.TestCase):
                 self.qualify(sass=self.change_instruction(offset, transform))
 
     def test_malformed_decoded_inventory_fails(self):
-        offset = 0x5C10
+        offset = 0x6D80
         pattern = rf"^\s*/\*{offset:04x}\*/[^\n]+$"
         row = re.search(pattern, self.sass, re.MULTILINE)[0]
         changes = (
@@ -297,11 +440,11 @@ class ScratchArtifactTests(unittest.TestCase):
             "<I",
             data,
             table + self.elf.named[scratch.TEXT]["index"] * 64 + 44,
-            80 << 24,
+            81 << 24,
         )
         with self.assertRaises(ValueError):
             self.qualify(cubin=bytes(data))
-        for key, value in (("registers", 80), ("code_bytes", 152960), ("threads", 256)):
+        for key, value in (("registers", 81), ("code_bytes", 182400), ("threads", 256)):
             entries = copy.deepcopy(self.entries)
             entries[0][key] = value
             with self.subTest(key=key), self.assertRaises(ValueError):
@@ -343,7 +486,7 @@ class ScratchArtifactTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 self.qualify(provenance=provenance)
         changed = self.change_instruction(
-            0x24BC0, lambda row: row.replace("c[0x4][0x8]", "c[0x4][R1]")
+            0x2BEC0, lambda row: row.replace("c[0x4][0x8]", "c[0x4][R1]")
         )
         with self.assertRaises(ValueError):
             self.qualify(sass=changed)
@@ -356,7 +499,7 @@ class ScratchArtifactTests(unittest.TestCase):
         )
         for index, transform in enumerate(forms):
             with self.subTest(form=index), self.assertRaises(ValueError):
-                self.qualify(sass=self.change_instruction(0x24BC0, transform))
+                self.qualify(sass=self.change_instruction(0x2BEC0, transform))
         relocation = self.elf.named[".rel.nv.constant4"]
         for mutation in ("duplicate slot", "unknown slot", "unknown kind"):
             data = bytearray(self.cubin)
@@ -386,6 +529,18 @@ class ScratchArtifactTests(unittest.TestCase):
         location = os.environ.get("TYPED_MATH_SCRATCH_HISTORICAL_ARTIFACTS")
         if not location:
             self.skipTest("requires the retained nineteen-operation checkpoint")
+        directory = Path(location)
+        with self.assertRaises(ValueError):
+            self.qualify(
+                cubin=(directory / "kernels.cubin").read_bytes(),
+                sass=(directory / "kernels.sass").read_text(),
+                entries=json.loads((directory / "kernels.json").read_text()),
+            )
+
+    def test_previous_power_artifact_requires_its_own_profile(self):
+        location = os.environ.get("TYPED_MATH_SCRATCH_PREVIOUS_ARTIFACTS")
+        if not location:
+            self.skipTest("requires the superseded Power24 export")
         directory = Path(location)
         with self.assertRaises(ValueError):
             self.qualify(
@@ -434,6 +589,94 @@ class ScratchArtifactTests(unittest.TestCase):
                 entries=self.entries,
                 provenance=scratch.PROVENANCE,
             )
+
+    def test_combined_family_inventory_preserves_entry_and_peer_checks(self):
+        location = os.environ.get("TYPED_MATH_SCRATCH_BASELINE_SASS")
+        if not location:
+            self.skipTest("requires the retained complete inference-family export")
+        baseline = Path(location)
+        peer_elf = scratch.Cubin(baseline.with_suffix(".cubin").read_bytes())
+        peers = [
+            section
+            for section in peer_elf.sections
+            if section["flags"] & 4
+            and section["size"]
+            and section["name"] != scratch.TEXT
+        ]
+        # This is a structural fixture made from actual executable bytes. It
+        # exercises complete-family admission without producing a linked export.
+        data = bytearray(self.cubin)
+        header = list(struct.unpack_from("<16sHHIQQQIHHHHHH", data))
+        sections = [
+            list(struct.unpack_from("<IIQQQQIIQQ", data, header[6] + i * 64))
+            for i in range(header[12])
+        ]
+        names = bytearray(self.elf.contents(self.elf.section(header[13])))
+        blocks = {
+            name: block
+            for block, name in re.findall(
+                r"(^\s*\.section\s+([^,\s]+),[^\n]*\n.*?)(?=^\s*\.section\s+|\Z)",
+                baseline.read_text(),
+                re.MULTILINE | re.DOTALL,
+            )
+        }
+        combined_sass = self.sass
+        for peer in peers:
+            name_offset = len(names)
+            names.extend(peer["name"].encode() + b"\0")
+            data.extend(bytes(-len(data) % 128))
+            sections.append(
+                [
+                    name_offset,
+                    1,
+                    6,
+                    0,
+                    len(data),
+                    peer["size"],
+                    0,
+                    0,
+                    128,
+                    0,
+                ]
+            )
+            data.extend(peer_elf.contents(peer))
+            combined_sass += "\n" + blocks[peer["name"]]
+        sections[header[13]][4:6] = len(data), len(names)
+        data.extend(names)
+        data.extend(bytes(-len(data) % 8))
+        header[6], header[12] = len(data), len(sections)
+        for section in sections:
+            data.extend(struct.pack("<IIQQQQIIQQ", *section))
+        struct.pack_into("<16sHHIQQQIHHHHHH", data, 0, *header)
+        entries = json.loads((baseline.parent.parent / "inference.json").read_text())
+        entries = [entry for entry in entries if entry["entry"] != scratch.ENTRY]
+        entries.extend(self.entries)
+        self.assertEqual(len(peers) + 1, 248)
+        self.assertEqual(len(entries), 248)
+        combined_cubin = bytes(data)
+        result = self.qualify(cubin=combined_cubin, sass=combined_sass, entries=entries)
+        self.assertEqual(result["schedule_sha256"], self.qualify()["schedule_sha256"])
+        production = scratch.load_qualifier().qualify(combined_cubin, combined_sass)
+        self.assertEqual(len(production["sections"]), len(peers) + 1)
+        bodies = prepare.audit(
+            "inference",
+            combined_sass,
+            cubin=combined_cubin,
+            entries=entries,
+            provenance=scratch.PROVENANCE,
+        )
+        for name in ("burn_adam", "burn_remainder", "burn_integer_arithmetic"):
+            changed = combined_sass.replace(bodies[name], "\n/*0000*/ STL [R1], R0;\n")
+            with self.subTest(entry=name), self.assertRaises(RuntimeError):
+                prepare.audit(
+                    "inference",
+                    changed,
+                    cubin=combined_cubin,
+                    entries=entries,
+                    provenance=scratch.PROVENANCE,
+                )
+        with self.assertRaises(ValueError):
+            self.qualify(cubin=combined_cubin, sass=self.sass, entries=entries)
 
 
 if __name__ == "__main__":

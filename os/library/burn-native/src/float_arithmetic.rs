@@ -5,6 +5,38 @@ use burn_backend::{DType, Scalar, bf16, f16};
 use d3os_compute::{Error, Result, nvidia::Nvidia};
 use d3os_nvidia::compute::{Kernel, elementwise::Elementwise, float_arithmetic as abi};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PowerShortcut {
+    Ones,
+    Identity,
+    Square,
+    Reciprocal,
+    SquareReciprocal,
+}
+
+/// Inspect only exact shortcuts, without converting arbitrary exponents to I64.
+pub(crate) fn power_scalar_shortcut(scalar: Scalar) -> Option<PowerShortcut> {
+    match scalar {
+        Scalar::Float(0.0) | Scalar::Int(0) | Scalar::UInt(0) | Scalar::Bool(false) => Some(PowerShortcut::Ones),
+        Scalar::Float(1.0) | Scalar::Int(1) | Scalar::UInt(1) | Scalar::Bool(true) => Some(PowerShortcut::Identity),
+        Scalar::Float(2.0) | Scalar::Int(2) | Scalar::UInt(2) => Some(PowerShortcut::Square),
+        Scalar::Float(-1.0) | Scalar::Int(-1) => Some(PowerShortcut::Reciprocal),
+        Scalar::Float(-2.0) | Scalar::Int(-2) => Some(PowerShortcut::SquareReciprocal),
+        _ => None,
+    }
+}
+
+/// Accept integer variants and finite integral floats across their full ranges.
+/// Fractional and nonfinite floats are invalid integer exponents, not truncations.
+pub(crate) fn validate_powi_scalar(scalar: Scalar) -> Result<()> {
+    if let Scalar::Float(value) = scalar
+        && (!value.is_finite() || value % 1.0 != 0.0)
+    {
+        return Err(Error::InvalidParameter);
+    }
+    Ok(())
+}
+
 /// Match the pinned Linux InputScalar conversion schedule through F64 and F32.
 /// Half scalars round to their storage format before the arithmetic operation.
 pub(crate) fn float_scalar_bits(dtype: DType, scalar: Scalar) -> Result<u64> {
@@ -112,6 +144,97 @@ impl NativeTensor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn power_shortcuts_match_exact_exponents_in_every_scalar_variant() {
+        for (exponent, shortcut) in [
+            (0, PowerShortcut::Ones),
+            (1, PowerShortcut::Identity),
+            (2, PowerShortcut::Square),
+            (-1, PowerShortcut::Reciprocal),
+            (-2, PowerShortcut::SquareReciprocal),
+        ] {
+            assert_eq!(power_scalar_shortcut(Scalar::Int(exponent)), Some(shortcut));
+            assert_eq!(power_scalar_shortcut(Scalar::Float(exponent as f64)), Some(shortcut));
+            if exponent >= 0 {
+                assert_eq!(power_scalar_shortcut(Scalar::UInt(exponent as u64)), Some(shortcut));
+            }
+        }
+        assert_eq!(power_scalar_shortcut(Scalar::Float(-0.0)), Some(PowerShortcut::Ones));
+        assert_eq!(power_scalar_shortcut(Scalar::Bool(false)), Some(PowerShortcut::Ones));
+        assert_eq!(power_scalar_shortcut(Scalar::Bool(true)), Some(PowerShortcut::Identity));
+    }
+
+    #[test]
+    fn arbitrary_power_exponents_never_narrow_into_shortcuts() {
+        for exponent in [
+            Scalar::Int(i64::MIN),
+            Scalar::Int(i64::MAX),
+            Scalar::UInt(u64::MAX),
+            Scalar::Float(f64::MAX),
+            Scalar::Float(f64::MIN),
+            Scalar::Float(f64::NAN),
+            Scalar::Float(f64::INFINITY),
+            Scalar::Float(f64::NEG_INFINITY),
+            Scalar::Float(f64::from_bits(1)),
+            Scalar::Float(f64::from_bits(1.0f64.to_bits() - 1)),
+            Scalar::Float(f64::from_bits(1.0f64.to_bits() + 1)),
+            Scalar::Float(f64::from_bits(2.0f64.to_bits() - 1)),
+            Scalar::Float(f64::from_bits(2.0f64.to_bits() + 1)),
+            Scalar::Float(f64::from_bits((-1.0f64).to_bits() + 1)),
+            Scalar::Float(f64::from_bits((-2.0f64).to_bits() + 1)),
+        ] {
+            assert_eq!(power_scalar_shortcut(exponent), None);
+        }
+    }
+
+    #[test]
+    fn integer_power_validation_accepts_full_ranges_without_truncating_weak_floats() {
+        for exponent in [
+            Scalar::Int(i64::MIN),
+            Scalar::Int(i64::MAX),
+            Scalar::UInt(u64::MAX),
+            Scalar::Bool(false),
+            Scalar::Bool(true),
+            Scalar::Float(-0.0),
+            Scalar::Float(-2.0),
+            Scalar::Float(3.0),
+            Scalar::Float(i64::MIN as f64),
+            Scalar::Float(u64::MAX as f64),
+            Scalar::Float(f64::MIN),
+            Scalar::Float(f64::MAX),
+        ] {
+            assert_eq!(validate_powi_scalar(exponent), Ok(()));
+        }
+        for exponent in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.5, -0.5, 2.5, -2.5, f64::from_bits(1)] {
+            assert_eq!(validate_powi_scalar(Scalar::Float(exponent)), Err(Error::InvalidParameter));
+        }
+    }
+
+    #[test]
+    fn generic_power_scalars_keep_the_original_precision_and_variant_conversion() {
+        let exponent = f64::from_bits(2.0f64.to_bits() + 1);
+        assert_eq!(power_scalar_shortcut(Scalar::Float(exponent)), None);
+        assert_eq!(float_scalar_bits(DType::F64, Scalar::Float(exponent)), Ok(exponent.to_bits()));
+        assert_eq!(float_scalar_bits(DType::F32, Scalar::Float(exponent)), Ok(u64::from(2.0f32.to_bits())));
+        // All variants use the canonical conversion, including Bool and UInt above I64.
+        for scalar in [Scalar::Float(3.0), Scalar::Int(3), Scalar::UInt(3)] {
+            assert_eq!(float_scalar_bits(DType::F64, scalar), Ok(3.0f64.to_bits()));
+        }
+        assert_eq!(float_scalar_bits(DType::F64, Scalar::Bool(true)), Ok(1.0f64.to_bits()));
+        assert_eq!(float_scalar_bits(DType::F64, Scalar::UInt(u64::MAX)), Ok((u64::MAX as f64).to_bits()));
+        // (-1)^(2^24 + 1) needs the odd F64 exponent; an F32 intermediate makes it even.
+        let odd_exponent = (1i64 << 24) + 1;
+        for scalar in [
+            Scalar::Float(odd_exponent as f64),
+            Scalar::Int(odd_exponent),
+            Scalar::new(odd_exponent, &DType::F64),
+        ] {
+            assert_eq!(power_scalar_shortcut(scalar), None);
+            assert_eq!(float_scalar_bits(DType::F64, scalar), Ok(0x4170_0000_1000_0000));
+            assert_eq!(float_scalar_bits(DType::F32, scalar), Ok(0x4b80_0000));
+        }
+    }
 
     #[test]
     fn f64_scalar_bits_preserve_precision_range_and_subnormals() {

@@ -39,7 +39,7 @@ fn scalar(mut p: [u32; 32], bits: u64) -> [u32; 32] {
 #[test]
 fn operation_registry_matches_supported_float_primitives() {
     for elementwise in Elementwise::ALL {
-        let selected = matches!(elementwise as u32, 1..=4 | 11..=25 | 30..=32 | 34);
+        let selected = matches!(elementwise as u32, 1..=4 | 11..=25 | 29..=32 | 34);
         let operation = Operation::from_elementwise(elementwise);
         assert_eq!(operation.is_ok(), selected);
         if let Ok(op) = operation {
@@ -48,9 +48,9 @@ fn operation_registry_matches_supported_float_primitives() {
             assert_eq!(op.binary(), !op.unary());
         }
     }
-    assert_eq!(Operation::ALL.len(), 23);
+    assert_eq!(Operation::ALL.len(), 24);
     for raw in 0..=256 {
-        let selected = matches!(raw, 1..=4 | 11..=25 | 30..=32 | 34);
+        let selected = matches!(raw, 1..=4 | 11..=25 | 29..=32 | 34);
         assert_eq!(Operation::from_raw(raw).is_ok(), selected);
     }
     for op in Operation::ALL {
@@ -101,6 +101,7 @@ fn signed_geometry_matches_enumerated_addresses_for_either_reader() {
         for op in [
             Operation::Divide,
             Operation::Remainder,
+            Operation::Power,
             Operation::Exp,
             Operation::Log,
             Operation::Log1p,
@@ -377,6 +378,47 @@ fn remainder_tensor_and_scalar_boundaries_retain_signed_halfword_offsets() {
                 invalid[field] = 2 * count;
                 assert!(float_arithmetic::validate(&invalid).is_err());
             }
+        }
+    }
+}
+
+#[test]
+fn power_scalar_exponents_keep_destination_bits_and_canonical_rhs_geometry() {
+    for (format, exponents) in [
+        (
+            Format::F64,
+            [0, 0x8000_0000_0000_0000, 0x3ff0_0000_0000_0001, 0x7ff0_0000_0000_0000, 0x7ff8_0000_0000_0123],
+        ),
+        (Format::F32, [0, 0x8000_0000, 0x3f80_0001, 0x7f80_0000, 0x7fc0_0123]),
+        (Format::Flex32, [0, 0x8000_0000, 0x3f80_0001, 0x7f80_0000, 0x7fc0_0123]),
+        (Format::F16, [0, 0x8000, 0x3c01, 0x7c00, 0x7e23]),
+        (Format::BF16, [0, 0x8000, 0x3f81, 0x7f80, 0x7fc3]),
+    ] {
+        let mut p = parameters(Operation::Power, format, 3);
+        p[4] = 5;
+        p[6] = 6;
+        p[16] = (-2i32) as u32;
+        for bits in exponents {
+            let encoded = scalar(p, bits);
+            let work = Kernel::FloatArithmetic.work(&encoded).unwrap();
+            assert_eq!(work.extents[..3], [format.width().words(6), 1, format.width().words(3)]);
+            for field in [7, 24, 25, 26, 27, 28, 29, 30, 31] {
+                let mut invalid = encoded;
+                invalid[field] = 1;
+                assert!(Kernel::FloatArithmetic.work(&invalid).is_err());
+            }
+            let width = format.width().bytes() * 8;
+            for bit in width..64 {
+                assert!(Kernel::FloatArithmetic.work(&scalar(p, bits | (1u64 << bit))).is_err());
+            }
+            for bit in (16..24).chain(25..32) {
+                let mut invalid = encoded;
+                invalid[2] |= 1 << bit;
+                assert!(Kernel::FloatArithmetic.work(&invalid).is_err());
+            }
+            let mut invalid = encoded;
+            invalid[4] = 3;
+            assert!(Kernel::FloatArithmetic.work(&invalid).is_err());
         }
     }
 }

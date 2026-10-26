@@ -360,6 +360,15 @@ The filtered Linux CUDA corpus retains 163,294 Log1p failures; its observed Sinh
 The [coverage reference](burn-backend-coverage.md#typed-log1p-sinh-cosh-and-tan) describes the targets and retained archives.
 Full backend coverage and workload performance parity remain incomplete.
 
+Floating Power now supports all five ordinary floating formats through protocol 49.
+Native preserves scalar precision, stored shortcut schedules, and integer-tensor exponent casts.
+D3OS passes 5,141,923 guarded comparisons, 506,214 shared API values, and all earlier GPU regression gates.
+The corrected F64 path preserves exact identities and power-of-two underflow classification.
+The filtered four-format Linux CUDA run retains 116 F64 failures under the project policy.
+Its separate filtered F32 run passes 41,152 values.
+The [coverage reference](burn-backend-coverage.md#typed-floating-power) describes the routes, numerical targets, and retained failure archives.
+General typed autodiff, remaining backend APIs, and workload performance parity remain incomplete.
+
 I32 tensor and generic scalar powers now use resident wrapping integer arithmetic without a floating-point intermediate.
 The exponent bits follow the same unsigned interpretation as the pinned Linux backend.
 FP32 deformable convolution now provides input, offset, weight, modulation-mask, and bias gradients on the native GPU.

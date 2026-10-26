@@ -73,6 +73,15 @@ def stage_burn_program(root, binary, destination):
     return libdevice
 
 
+def typed_power_evidence():
+    spec = importlib.util.spec_from_file_location(
+        "typed_power_evidence", Path(__file__).with_name("typed-power-evidence.py")
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def typed_unary_evidence():
     spec = importlib.util.spec_from_file_location(
         "typed_unary_evidence", Path(__file__).with_name("typed-unary-evidence.py")
@@ -338,7 +347,7 @@ def validate_typed_trig_accuracy(accuracy, expected_cells, expected_values):
     return accuracy
 
 
-def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_finite=False, sort_compile_log=False, compaction_aligned=False, quantized_empty_case=None, scatter_finite=False, select_updates=False, nd_unique=False, nd_nonempty=False, nd_scalar_grad=False, nd_no_scalar=False, storage_flex_direct=False, storage_no_flex32=False, conversions_no_flex32=False, remainder_finite=False, remainder_wide=False, inverse_finite=False, inverse_diagnostic=False, interpolate_case="normal", spatial_empty=False, spatial_case=None, spatial_exact=False, spatial_empty_backward=False, deform_empty=False, deform_exact=False, deform_case=None, deform_forward_only=False, predicate_no_flex32=False, predicate_finite=False, movement_no_flex32=False, movement_skip_empty_bool_scatter=False, movement_matching_bool_masks=False, indexed_no_flex32=False, indexed_skip_scalar_nd=False, integer_arithmetic_dtype=None, integer_arithmetic_op=None, float_arithmetic_arguments=(), float_rounding_arguments=(), relu_arguments=(), typed_remainder_arguments=(), typed_exp_log_arguments=(), typed_trig_arguments=(), typed_unary_arguments=()):
+def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_finite=False, sort_compile_log=False, compaction_aligned=False, quantized_empty_case=None, scatter_finite=False, select_updates=False, nd_unique=False, nd_nonempty=False, nd_scalar_grad=False, nd_no_scalar=False, storage_flex_direct=False, storage_no_flex32=False, conversions_no_flex32=False, remainder_finite=False, remainder_wide=False, inverse_finite=False, inverse_diagnostic=False, interpolate_case="normal", spatial_empty=False, spatial_case=None, spatial_exact=False, spatial_empty_backward=False, deform_empty=False, deform_exact=False, deform_case=None, deform_forward_only=False, predicate_no_flex32=False, predicate_finite=False, movement_no_flex32=False, movement_skip_empty_bool_scatter=False, movement_matching_bool_masks=False, indexed_no_flex32=False, indexed_skip_scalar_nd=False, integer_arithmetic_dtype=None, integer_arithmetic_op=None, float_arithmetic_arguments=(), float_rounding_arguments=(), relu_arguments=(), typed_remainder_arguments=(), typed_exp_log_arguments=(), typed_trig_arguments=(), typed_unary_arguments=(), typed_power_arguments=()):
     purposes = {
         "quantization": "shared API conformance; no performance measurement",
         "quantized_empty": "empty quantized API diagnostic and record round trip; execution errors retained; no performance measurement",
@@ -353,6 +362,7 @@ def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_fi
         "typed_exp_log": "typed exp/log qualification against independent MPFR references; no performance measurement",
         "typed_trig": "typed tanh/sin/cos qualification against independent MPFR references; no performance measurement",
         "typed_unary": "typed log1p/sinh/cosh/tan qualification against independent MPFR references; no performance measurement",
+        "typed_power": "typed tensor/scalar power and stored wrapper schedules against independent MPFR references; no performance measurement",
         "float_rounding": "typed square root and integral rounding with independent expected bits; no performance measurement",
         "float_arithmetic": "typed basic floating arithmetic with independent expected bits; no performance measurement",
         "integer_arithmetic": "exact integer elementwise arithmetic across eight formats; independent U128/I128 reference; no performance measurement",
@@ -375,7 +385,7 @@ def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_fi
     purpose = "erf error profile and GELU conformance; strict failures reported" if erf_profile else purposes[kind]
     program = f"/burn-{kind}"
     arguments = " --profile" if erf_profile else " --nonempty" if nonempty else ""
-    if kind in ("float_arithmetic", "float_rounding", "relu", "typed_remainder", "typed_exp_log", "typed_trig", "typed_unary"):
+    if kind in ("float_arithmetic", "float_rounding", "relu", "typed_remainder", "typed_exp_log", "typed_trig", "typed_unary", "typed_power"):
         selected_arguments = {
             "float_arithmetic": float_arithmetic_arguments,
             "float_rounding": float_rounding_arguments,
@@ -384,11 +394,14 @@ def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_fi
             "typed_exp_log": typed_exp_log_arguments,
             "typed_trig": typed_trig_arguments,
             "typed_unary": typed_unary_arguments,
+            "typed_power": typed_power_arguments,
         }[kind]
         arguments += " " + " ".join(selected_arguments) if selected_arguments else ""
         summary_args = [str(binary), "--expected-summary", *selected_arguments]
         expected_summary = json.loads(subprocess.check_output(summary_args, text=True, cwd=ROOT))
         (root.parent / f"burn-{kind}-expected.json").write_text(json.dumps(expected_summary, indent=2) + "\n")
+        if kind == "typed_power":
+            typed_power_evidence().planned_cells(expected_summary)
         if kind == "typed_unary":
             typed_unary_evidence().validate_plan(expected_summary)
         if kind == "typed_exp_log":
@@ -513,7 +526,7 @@ exec {program}{arguments}
         "cargo_lock": ROOT / "tools/mnist-benchmark/Cargo.lock",
         "libdevice": libdevice,
     }
-    if kind in ("float_arithmetic", "float_rounding", "typed_remainder", "typed_exp_log", "typed_trig", "typed_unary"):
+    if kind in ("float_arithmetic", "float_rounding", "typed_remainder", "typed_exp_log", "typed_trig", "typed_unary", "typed_power"):
         tool_prefix = kind.replace("_", "-")
         sources["expected_summary"] = root.parent / f"burn-{kind}-expected.json"
         sources["reference_fixture_index"] = ROOT / f"os/library/ai/src/validation/{kind}_fixtures.rs"
@@ -526,6 +539,8 @@ exec {program}{arguments}
             sources["expected_cells"] = root.parent / "burn-typed_exp_log-expected-cells.json"
         if kind == "typed_trig":
             sources["expected_cells"] = root.parent / "burn-typed_trig-expected-cells.json"
+    if kind == "typed_power":
+        sources["evidence_validator"] = ROOT / "tools/nvidia/typed-power-evidence.py"
     if kind == "typed_unary":
         sources["evidence_validator"] = ROOT / "tools/nvidia/typed-unary-evidence.py"
     if kind == "relu":
@@ -1616,6 +1631,12 @@ def main():
     parser.add_argument("--burn-typed-exp-log-no-flex32", action="store_true", help="isolate direct Flex32 upload support")
     parser.add_argument("--burn-typed-exp-log-skip-rank-zero", action="store_true", help="isolate the pinned scalar diagnostic")
     parser.add_argument("--burn-typed-exp-log-finite", action="store_true", help="require finite inputs and expected results")
+    parser.add_argument("--burn-typed-power", type=Path, help="qualify stored tensor/scalar power and wrapper schedules")
+    parser.add_argument("--burn-typed-power-dtype", choices=("f64", "f32", "flex32", "f16", "bf16"))
+    parser.add_argument("--burn-typed-power-no-flex32", action="store_true", help="isolate direct Flex32 upload support")
+    parser.add_argument("--burn-typed-power-skip-rank-zero", action="store_true", help="isolate the pinned scalar diagnostic")
+    parser.add_argument("--burn-typed-power-finite", action="store_true", help="require finite effective operands and expected results")
+    parser.add_argument("--burn-typed-power-common-linux", action="store_true", help="exclude declared inherited scalar panic routes and Native rejection probes")
     parser.add_argument("--burn-typed-unary", type=Path, help="qualify typed log1p/sinh/cosh/tan against independent MPFR references")
     parser.add_argument("--burn-typed-unary-dtype", choices=("f64", "f32", "flex32", "f16", "bf16"))
     parser.add_argument("--burn-typed-unary-op", choices=("log1p", "sinh", "cosh", "tan"))
@@ -1763,7 +1784,7 @@ def main():
     args = parser.parse_args()
     if args.nsight_directory and not args.quantized_profile:
         parser.error("--nsight-directory requires --quantized-profile")
-    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.burn_typed_exp_log, args.burn_typed_trig, args.burn_typed_unary, args.burn_typed_remainder, args.burn_relu, args.burn_float_rounding, args.burn_float_arithmetic, args.burn_integer_arithmetic, args.burn_indexed, args.burn_movement, args.burn_predicate, args.burn_integer_power, args.burn_integer, args.burn_integer_matmul, args.burn_scatter_updates, args.burn_nd_indexing, args.burn_storage, args.burn_conversions, args.burn_remainder, args.burn_inverse, args.burn_spatial_convolution, args.burn_deform, args.burn_interpolate, args.burn_quantized_empty, args.burn_compaction, args.burn_cross, args.burn_scan, args.burn_sort, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
+    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.burn_typed_exp_log, args.burn_typed_trig, args.burn_typed_unary, args.burn_typed_power, args.burn_typed_remainder, args.burn_relu, args.burn_float_rounding, args.burn_float_arithmetic, args.burn_integer_arithmetic, args.burn_indexed, args.burn_movement, args.burn_predicate, args.burn_integer_power, args.burn_integer, args.burn_integer_matmul, args.burn_scatter_updates, args.burn_nd_indexing, args.burn_storage, args.burn_conversions, args.burn_remainder, args.burn_inverse, args.burn_spatial_convolution, args.burn_deform, args.burn_interpolate, args.burn_quantized_empty, args.burn_compaction, args.burn_cross, args.burn_scan, args.burn_sort, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
         parser.error("--quantized-profile requires a separate diagnostic guest")
     if args.pin_vcpus and len(os.sched_getaffinity(0)) != 4:
         parser.error("--pin-vcpus requires an inherited affinity of four host CPUs")
@@ -1791,6 +1812,7 @@ def main():
                 bool(args.burn_typed_exp_log),
                 bool(args.burn_typed_trig),
                 bool(args.burn_typed_unary),
+                bool(args.burn_typed_power),
                 bool(args.burn_typed_remainder),
                 bool(args.burn_relu),
                 bool(args.burn_float_rounding),
@@ -1856,6 +1878,16 @@ def main():
         parser.error("--burn-typed-trig requires a built conformance executable")
     if typed_trig_arguments and not args.burn_typed_trig:
         parser.error("typed trig filters require --burn-typed-trig")
+    typed_power_arguments = []
+    if args.burn_typed_power_dtype is not None:
+        typed_power_arguments.append(f"--dtype={args.burn_typed_power_dtype}")
+    for flag, enabled in (("no-flex32", args.burn_typed_power_no_flex32), ("skip-rank-zero", args.burn_typed_power_skip_rank_zero), ("finite", args.burn_typed_power_finite), ("common-linux", args.burn_typed_power_common_linux)):
+        if enabled:
+            typed_power_arguments.append(f"--{flag}")
+    if args.burn_typed_power and not args.burn_typed_power.is_file():
+        parser.error("--burn-typed-power requires a built conformance executable")
+    if typed_power_arguments and not args.burn_typed_power:
+        parser.error("typed power filters require --burn-typed-power")
     typed_unary_arguments = []
     for flag, value in (("dtype", args.burn_typed_unary_dtype), ("op", args.burn_typed_unary_op)):
         if value is not None:
@@ -2040,6 +2072,8 @@ def main():
         burn_probe(args.directory / "root", args.burn_erf.resolve(), "erf", erf_profile=args.burn_erf_profile)
     elif args.burn_typed_exp_log:
         burn_probe(args.directory / "root", args.burn_typed_exp_log.resolve(), "typed_exp_log", typed_exp_log_arguments=typed_exp_log_arguments)
+    elif args.burn_typed_power:
+        burn_probe(args.directory / "root", args.burn_typed_power.resolve(), "typed_power", typed_power_arguments=typed_power_arguments)
     elif args.burn_typed_unary:
         burn_probe(args.directory / "root", args.burn_typed_unary.resolve(), "typed_unary", typed_unary_arguments=typed_unary_arguments)
     elif args.burn_typed_trig:
@@ -2247,6 +2281,13 @@ def main():
         scope = f"no_flex32={str(args.burn_typed_exp_log_no_flex32).lower()} skip_rank_zero={str(args.burn_typed_exp_log_skip_rank_zero).lower()} finite={str(args.burn_typed_exp_log_finite).lower()} dtype={args.burn_typed_exp_log_dtype or 'all'} op={args.burn_typed_exp_log_op or 'all'}"
         accuracy = validate_typed_exp_log(text, expected, expected_cells, fixtures, execution_os="linux", backend="cuda", fusion="enabled_materialized_chain_steps", scope=scope)
         (args.directory / "typed-exp-log-accuracy.json").write_text(json.dumps(accuracy, indent=2) + "\n")
+    if args.burn_typed_power:
+        expected = json.loads((args.directory / "burn-typed_power-expected.json").read_text())
+        evidence = typed_power_evidence()
+        fixtures, references, limits = evidence.load_references(ROOT / "tools/nvidia/typed-power-manifest.json")
+        scope = f"no_flex32={str(args.burn_typed_power_no_flex32).lower()} skip_rank_zero={str(args.burn_typed_power_skip_rank_zero).lower()} finite={str(args.burn_typed_power_finite).lower()} common_linux={str(args.burn_typed_power_common_linux).lower()} dtype={args.burn_typed_power_dtype or 'all'}"
+        accuracy = evidence.validate(text, expected, fixtures, references, limits, execution_os="linux", backend="cuda", fusion="enabled_materialized_chain_steps", scope=scope)
+        (args.directory / "typed-power-accuracy.json").write_text(json.dumps(accuracy, indent=2) + "\n")
     if args.burn_typed_unary:
         expected = json.loads((args.directory / "burn-typed_unary-expected.json").read_text())
         evidence = typed_unary_evidence()

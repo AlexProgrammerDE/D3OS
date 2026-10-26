@@ -566,6 +566,10 @@ impl FloatTensorOps<Self> for Dispatch {
         B::float_powi_scalar_impl(lhs, rhs)
     }
 
+    fn float_powi_scalar(lhs: FloatTensor<Self>, rhs: Scalar) -> FloatTensor<Self> {
+        B::float_powi_scalar(lhs, rhs)
+    }
+
     fn float_powf_scalar(tensor: FloatTensor<Self>, value: Scalar) -> FloatTensor<Self> {
         B::float_powf_scalar(tensor, value)
     }

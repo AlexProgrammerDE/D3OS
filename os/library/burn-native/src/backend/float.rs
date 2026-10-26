@@ -1,4 +1,5 @@
 use super::*;
+use crate::float_arithmetic::{PowerShortcut, power_scalar_shortcut, validate_powi_scalar};
 use burn_backend::ops::*;
 use burn_backend::tensor::{BoolTensor, Device, FloatTensor, IndexingUpdateOp, IntTensor};
 use burn_backend::{BoolDType, Distribution, ExecutionError, FloatDType, IntDType, Scalar, Shape, Slice, TensorData};
@@ -232,10 +233,30 @@ impl FloatTensorOps<Self> for Native {
     fn float_powf(lhs: FloatTensor<Self>, rhs: FloatTensor<Self>) -> FloatTensor<Self> {
         binary("float_powf", &lhs, &rhs, lhs.dtype(), |a, b| a.binary(b, Elementwise::Power))
     }
-    fn float_powf_scalar_impl(tensor: FloatTensor<Self>, value: Scalar) -> FloatTensor<Self> {
-        one("float_powf_scalar", &tensor, tensor.dtype(), |t| {
-            t.scalar(Elementwise::Power, value.elem::<f32>())
+    fn float_powf_scalar(tensor: FloatTensor<Self>, value: Scalar) -> FloatTensor<Self> {
+        match power_scalar_shortcut(value) {
+            Some(PowerShortcut::Ones) => Self::float_ones(tensor.shape(), &tensor.device(), tensor.dtype().into()),
+            Some(PowerShortcut::Identity) => tensor,
+            Some(PowerShortcut::Square) => Self::float_mul(tensor.clone(), tensor),
+            Some(PowerShortcut::Reciprocal) => Self::float_recip(tensor),
+            Some(PowerShortcut::SquareReciprocal) => Self::float_recip(Self::float_mul(tensor.clone(), tensor)),
+            None => Self::float_powf_scalar_impl(tensor, value),
+        }
+    }
+    fn float_powi_scalar(tensor: FloatTensor<Self>, value: Scalar) -> FloatTensor<Self> {
+        if let Err(error) = validate_powi_scalar(value) {
+            return one("float_powi_scalar", &tensor, tensor.dtype(), |_| Err(error));
+        }
+        Self::float_powf_scalar(tensor, value)
+    }
+    fn float_powi_scalar_impl(tensor: FloatTensor<Self>, value: Scalar) -> FloatTensor<Self> {
+        one("float_powi_scalar", &tensor, tensor.dtype(), |t| {
+            validate_powi_scalar(value)?;
+            t.float_scalar(Elementwise::Power, value)
         })
+    }
+    fn float_powf_scalar_impl(tensor: FloatTensor<Self>, value: Scalar) -> FloatTensor<Self> {
+        one("float_powf_scalar", &tensor, tensor.dtype(), |t| t.float_scalar(Elementwise::Power, value))
     }
     fn float_sqrt(tensor: FloatTensor<Self>) -> FloatTensor<Self> {
         one("float_sqrt", &tensor, tensor.dtype(), |t| t.unary(Elementwise::Sqrt))
