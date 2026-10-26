@@ -1016,7 +1016,7 @@ fn audit_geometry(case: &Case) -> Result<()> {
     Ok(())
 }
 fn contract(cases: &[Case]) -> Result<()> {
-    if abi::VERSION != 51 || abi::KERNEL_COUNT != 83 || Kernel::IntegerReduction as usize != 82 || oracle::CORPUS_VERSION != 1 {
+    if abi::VERSION < 51 || abi::KERNEL_COUNT < 83 || Kernel::IntegerReduction as usize != 82 || oracle::CORPUS_VERSION != 1 {
         return Err(String::from("integer reduction protocol/registration mismatch"));
     }
     let shared = oracle::expected_summary(&oracle::Options::default());
@@ -1114,7 +1114,9 @@ pub(super) fn run(backend: &Nvidia) -> Result<()> {
     }
     crate::report(format_args!("{} os=d3os backend=native fusion=disabled", footer?));
     crate::report(format_args!(
-        "NVIDIA_BURN_INTEGER_REDUCTION_STRICT_OK reference_sha256={REFERENCE_SHA256} protocol=51 kernels=83 expected={expected:?} observed={:?}",
+        "NVIDIA_BURN_INTEGER_REDUCTION_STRICT_OK reference_sha256={REFERENCE_SHA256} protocol={} kernels={} expected={expected:?} observed={:?}",
+        abi::VERSION,
+        abi::KERNEL_COUNT,
         observed.counts
     ));
     Ok(())

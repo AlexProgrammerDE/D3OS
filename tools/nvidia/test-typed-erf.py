@@ -540,8 +540,10 @@ class ErfEvidence(unittest.TestCase):
         accuracy = synthetic_accuracy(expected, self.bounds, raw=True)
         old = raw_serial(expected, accuracy)
         current = old.replace("protocol=50 profiles=82", "protocol=51 profiles=83")
+        extrema = old.replace("protocol=50 profiles=82", "protocol=52 profiles=84")
         self.assertEqual(e.validate_raw(current, expected, self.manifest, self.bounds, protocol=51, profiles=83), accuracy)
-        for text, protocol, profiles in ((old, 51, 83), (current, 50, 82), (current, 51, 82), (current, 50, 83), (current, 52, 84), (current, True, 83)):
+        self.assertEqual(e.validate_raw(extrema, expected, self.manifest, self.bounds, protocol=52, profiles=84), accuracy)
+        for text, protocol, profiles in ((old, 51, 83), (current, 50, 82), (current, 51, 82), (current, 50, 83), (current, 52, 84), (extrema, 52, 83), (extrema, 51, 84), (extrema, 53, 85), (current, True, 83)):
             with self.subTest(protocol=protocol, profiles=profiles), self.assertRaises(RuntimeError):
                 e.validate_raw(text, expected, self.manifest, self.bounds, protocol=protocol, profiles=profiles)
 

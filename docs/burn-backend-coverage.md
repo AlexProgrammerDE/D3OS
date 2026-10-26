@@ -15,7 +15,7 @@ Associated types and source SHA-256 hashes accompany the report.
 
 The current inventory contains 484 methods: 292 native overrides and 192 inherited defaults.
 All required methods have declarations or implementations. This count does not establish runtime support.
-The report also records 149 native helper bodies for manual review of dtype and shape restrictions.
+The report also records 150 native helper bodies for manual review of dtype and shape restrictions.
 
 The tool follows syntactic associated backend calls and expands the pinned `dequant_op_quant!` and `dequant_op_flow!` macros.
 It identifies 8 methods with possible paths to explicit declines or panic declarations.
@@ -691,6 +691,70 @@ python3 tools/nvidia/linux-reference.py \
 The runner's `--expected-summary` and `--diagnostics` commands initialize no device.
 The Linux launcher supports explicit dtype, rank-zero, and nonempty filters.
 Its isolated error-case flag runs one diagnostic instead of treating a panic as conformance.
+
+## Typed floating extrema
+
+Protocol 52 adds typed floating extrema with 252 portable entries and 84 compute profiles.
+All 250 preceding instruction sections remain byte-identical.
+Min, Max, ArgMin, ArgMax, and value/index pairs support F64, F32, Flex32, F16, and BF16.
+Index outputs support all eight ordinary integer formats.
+Existing F32 cooperative reductions retain their kernel and empty-storage behavior.
+
+Selection compares stored values without reducing their precision.
+The first logical NaN wins, including its original payload, sign, and signaling bit.
+Equal numeric values, including opposite signed zeros, select the first logical coordinate.
+Exposed indices retain their low destination bits.
+Paired values use an independent fold of the original source, so narrow indices cannot select an incorrect value.
+Both folds remain resident and require no bounds-status readback.
+
+Short and cooperative paths write complete output words with zero tail bytes.
+F64 bindings permit four-byte alignment and load both U32 halves.
+Legacy F32 empty outputs share source storage without allocation or GPU work.
+The four additional formats allocate an independent one-word placeholder and clear it through the allocator.
+Ownership checks cover individual outputs, pairs, source aliases, and the source after output release.
+
+On the D3OS GPU, the new guarded and Native checks pass 11,400 values and 360 rejection checks.
+The shared corpus passes another 735 values across 116 valid cases and 18 recoverable-error cases.
+Checks include signed views, both broadcast directions, rank eight, packed tails, poisoned outputs, queued lifetimes, and exact ownership.
+The complete earlier operator suite also passes.
+All three portable families compile inside D3OS and match their qualified host code bytes.
+The corrected VM and strict host harness both exit zero.
+
+The immutable successful capture is `~/.cache/d3os/burn-float-extrema-harness-corrected/`.
+Its external inventory binds 724 files, including source, compiler, image, result, and serial records.
+The first capture remains failed evidence: image assembly stopped before QEMU because its target path was relative.
+The corrected harness uses an absolute image directory and passes an independent path review.
+
+The full Linux CUDA comparison stops at the pinned CubeCL rank-zero layout rejection.
+With rank zero excluded, the all-format run stops at the pinned backend's direct Flex32 upload rejection.
+Separate dtype runs retain the strict Native source-bit policy and exclude rank zero explicitly.
+
+| Linux CUDA format | Attempted cases | Passed cases | Cases with source-bit differences |
+| --- | --- | --- | --- |
+| F64 | 23 | 14 | 9 |
+| F32 | 23 | 20 | 3 |
+| F16 | 22 | 19 | 3 |
+| BF16 | 21 | 12 | 9 |
+
+All 24 differing cases concern signed-zero ties or NaN payload/signaling bits.
+They describe a source-bit policy difference, not a finite arithmetic tolerance comparison.
+The six Linux captures remain under `~/.cache/d3os/burn-fe-linux-1/` through `burn-fe-linux-6/`.
+No filtered run establishes complete Linux parity.
+These correctness checks do not establish general floating arithmetic reductions, typed autodiff, full backend coverage, or performance parity.
+
+Build and run the Linux reference from the repository root:
+
+```bash
+cargo +1.98.1 build --manifest-path tools/mnist-benchmark/Cargo.toml \
+  --release --locked --target x86_64-unknown-linux-gnu --bin float_extrema
+python3 tools/nvidia/linux-reference.py \
+  --directory /tmp/d3os-linux-fe \
+  --burn-float-extrema tools/mnist-benchmark/target/x86_64-unknown-linux-gnu/release/float_extrema
+```
+
+The runner's `--expected-summary` and `--diagnostics` commands initialize no device.
+The launcher supports explicit dtype, rank-zero, nonempty, and isolated error-case diagnostics.
+Each filtered run requires a fresh directory and retains its selected scope.
 
 ## Typed Erf
 

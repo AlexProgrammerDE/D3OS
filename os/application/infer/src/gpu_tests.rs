@@ -79,6 +79,21 @@ fn verify_syscall_direction_flag(backend: &Nvidia) -> Result<(), d3os_compute::E
 }
 
 pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
+    use d3os_nvidia::compute as abi;
+
+    let info = abi::Request {
+        version: abi::VERSION,
+        operation: abi::INFO,
+        ..abi::Request::default()
+    };
+    let protocol =
+        syscall::syscall(syscall::SystemCall::GpuCompute, &[&info as *const abi::Request as usize]).map_err(|error| format!("NVIDIA INFO: {error:?}"))?;
+    if protocol != abi::VERSION as usize {
+        return Err(format!("NVIDIA protocol mismatch: {protocol}"));
+    }
+    // PROFILE accepts only the driver's exact entry count.
+    let profiles = backend.profile().map_err(|error| format!("NVIDIA profile inventory: {error:?}"))?;
+    crate::report(format_args!("NVIDIA_INFO protocol={protocol} profiles={}", profiles.len()));
     verify_syscall_direction_flag(backend).map_err(|error| format!("{error}"))?;
     verify_command_scopes(backend).map_err(|error| format!("{error}"))?;
     verify_buffer_reuse(backend).map_err(|error| format!("{error}"))?;

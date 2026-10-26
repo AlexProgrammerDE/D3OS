@@ -8,7 +8,7 @@ use d3os_compute::{
 };
 use d3os_nvidia::compute::scan::Scan;
 use d3os_nvidia::compute::words::{ValueType, WordOp};
-use d3os_nvidia::compute::{Kernel, elementwise::Elementwise, indexing::Scatter, reduction::Reduction};
+use d3os_nvidia::compute::{Kernel, elementwise::Elementwise, indexing::Scatter};
 
 /// A Burn tensor primitive backed by shared, process-owned GPU storage.
 #[derive(Clone, Debug)]
@@ -531,44 +531,6 @@ impl NativeTensor {
             buffer: Arc::new(buffer),
             layout,
             dtype: self.dtype,
-        })
-    }
-
-    /// Reduce one dimension, preserving its rank and integer dtype. Extrema
-    /// select the first logical index for equal values. Integer arithmetic
-    /// wraps in the declared accumulator; means divide before narrowing.
-    pub fn reduce(&self, axis: usize, operation: Reduction) -> Result<Self> {
-        if self.dtype.is_int() || self.dtype.is_uint() {
-            // Validation precedes empty handling, including zero-axis means
-            // and extrema. Keep the cooperative legacy I32 kernels intact.
-            if self.dtype != DType::I32 {
-                return self.integer_reduce(Some(axis), operation);
-            }
-            crate::integer_reduction::plan(&self.layout, self.dtype, Some(axis), operation)?;
-        }
-        let operation = match self.dtype {
-            DType::F32 if !operation.is_integer() => operation,
-            DType::I32 => operation.integer(),
-            _ => return Err(Error::InvalidParameter),
-        };
-        let layout = Layout::contiguous(self.layout.reduction_shape(axis)?)?;
-        let dtype = if operation.index() { DType::I32 } else { self.dtype };
-        if self.layout.shape()[axis] == 0 && !operation.allows_empty() {
-            return Err(Error::InvalidParameter);
-        }
-        if layout.is_empty() {
-            return Ok(Self {
-                buffer: self.buffer.clone(),
-                layout,
-                dtype,
-            });
-        }
-        let parameters = self.layout.reduction_parameters(axis, operation)?;
-        let buffer = Nvidia.produce_words(layout.len(), Kernel::TensorReduction, &[(&self.buffer, 0)], &parameters)?;
-        Ok(Self {
-            buffer: Arc::new(buffer),
-            layout,
-            dtype,
         })
     }
 

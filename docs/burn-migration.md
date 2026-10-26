@@ -383,6 +383,13 @@ The filtered Linux CUDA comparison passes 2,320 values across all eight formats.
 The [coverage reference](burn-backend-coverage.md#typed-integer-reductions) describes the accumulator, narrowing, empty-result, and error policies.
 This correctness checkpoint does not complete floating reductions, typed scans, the full backend, or performance parity.
 
+Protocol 52 extends floating extrema to F64, F32, Flex32, F16, and BF16, with all eight integer index dtypes.
+D3OS passes 12,135 new value checks, 360 rejection checks, and every earlier GPU regression gate.
+Source-bit selection preserves the first logical NaN and the first numeric tie, including signed zeros.
+Resident pairs avoid status readback, and empty-result checks verify source and output ownership directly.
+The [coverage reference](burn-backend-coverage.md#typed-floating-extrema) records the immutable capture and Linux diagnostics.
+Floating sums, products, means, typed scans, broader training support, and full backend and performance parity remain incomplete.
+
 I32 tensor and generic scalar powers now use resident wrapping integer arithmetic without a floating-point intermediate.
 The exponent bits follow the same unsigned interpretation as the pinned Linux backend.
 FP32 deformable convolution now provides input, offset, weight, modulation-mask, and bias gradients on the native GPU.

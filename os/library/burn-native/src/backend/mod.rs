@@ -149,6 +149,9 @@ fn reduce(op: &'static str, tensor: &BackendTensor, axis: Option<usize>, reducti
         *d = 1;
     }
     BackendTensor::apply(op, shape, dtype, &[tensor], |v| {
+        if reduction.index() && v[0].dtype.is_float() {
+            return v[0].float_extrema(axis, reduction, dtype);
+        }
         let reduced = if let Some(axis) = axis {
             v[0].reduce(axis, reduction)
         } else {
@@ -242,28 +245,69 @@ mod tests {
 
     #[test]
     fn float_pairs_keep_the_requested_index_metadata_and_shared_failure() {
-        let tensor = BackendTensor::build("input", Shape::new([3, 257]), DType::F32, || Err(Error::InvalidParameter));
-        assert!(!tensor.failure().unwrap().report().is_device_poisoned());
-        for index_dtype in [
-            IntDType::I64,
-            IntDType::I32,
-            IntDType::I16,
-            IntDType::I8,
-            IntDType::U64,
-            IntDType::U32,
-            IntDType::U16,
-            IntDType::U8,
-        ] {
-            for (values, indices) in [
-                Native::float_min_dim_with_indices(tensor.clone(), 1, index_dtype),
-                Native::float_max_dim_with_indices(tensor.clone(), 1, index_dtype),
+        for dtype in [DType::F64, DType::F32, DType::Flex32, DType::F16, DType::BF16] {
+            let tensor = BackendTensor::build("input", Shape::new([3, 257]), dtype, || Err(Error::InvalidParameter));
+            assert!(!tensor.failure().unwrap().report().is_device_poisoned());
+            for index_dtype in [
+                IntDType::I64,
+                IntDType::I32,
+                IntDType::I16,
+                IntDType::I8,
+                IntDType::U64,
+                IntDType::U32,
+                IntDType::U16,
+                IntDType::U8,
             ] {
-                assert_eq!(values.shape(), Shape::new([3, 1]));
-                assert_eq!(indices.shape(), values.shape());
-                assert_eq!(values.dtype(), DType::F32);
-                assert_eq!(indices.dtype(), DType::from(index_dtype));
-                assert!(alloc::sync::Arc::ptr_eq(&values.failure().unwrap(), &indices.failure().unwrap()));
-                assert!(!values.read().unwrap_err().is_device_poisoned());
+                for (values, indices) in [
+                    Native::float_min_dim_with_indices(tensor.clone(), 1, index_dtype),
+                    Native::float_max_dim_with_indices(tensor.clone(), 1, index_dtype),
+                ] {
+                    assert_eq!(values.shape(), Shape::new([3, 1]));
+                    assert_eq!(indices.shape(), values.shape());
+                    assert_eq!(values.dtype(), dtype);
+                    assert_eq!(indices.dtype(), DType::from(index_dtype));
+                    assert!(alloc::sync::Arc::ptr_eq(&values.failure().unwrap(), &indices.failure().unwrap()));
+                    assert!(!values.read().unwrap_err().is_device_poisoned());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn float_extrema_propagate_deferred_errors_with_reduced_metadata() {
+        for dtype in [DType::F64, DType::F32, DType::Flex32, DType::F16, DType::BF16] {
+            let tensor = BackendTensor::build("input", Shape::new([0, 257]), dtype, || Err(Error::InvalidParameter));
+            let failure = tensor.failure().unwrap();
+            assert!(!failure.report().is_device_poisoned());
+            for reduced in [Native::float_min(tensor.clone()), Native::float_max(tensor.clone())] {
+                assert_eq!(reduced.shape(), Shape::new([1]));
+                assert_eq!(reduced.dtype(), dtype);
+                assert!(alloc::sync::Arc::ptr_eq(&failure, &reduced.failure().unwrap()));
+            }
+            for reduced in [Native::float_min_dim(tensor.clone(), 1), Native::float_max_dim(tensor.clone(), 1)] {
+                assert_eq!(reduced.shape(), Shape::new([0, 1]));
+                assert_eq!(reduced.dtype(), dtype);
+                assert!(alloc::sync::Arc::ptr_eq(&failure, &reduced.failure().unwrap()));
+            }
+            for index_dtype in [
+                IntDType::I64,
+                IntDType::I32,
+                IntDType::I16,
+                IntDType::I8,
+                IntDType::U64,
+                IntDType::U32,
+                IntDType::U16,
+                IntDType::U8,
+            ] {
+                for reduced in [
+                    Native::float_argmin(tensor.clone(), 1, index_dtype),
+                    Native::float_argmax(tensor.clone(), 1, index_dtype),
+                ] {
+                    assert_eq!(reduced.shape(), Shape::new([0, 1]));
+                    assert_eq!(reduced.dtype(), DType::from(index_dtype));
+                    assert!(alloc::sync::Arc::ptr_eq(&failure, &reduced.failure().unwrap()));
+                    assert!(!reduced.read().unwrap_err().is_device_poisoned());
+                }
             }
         }
     }

@@ -1,0 +1,208 @@
+// Exact source-bit extrema. Each owner writes a complete word or two wide words.
+// The tree selects U32 coordinates with U32 cross-lane reductions only.
+fn fe_width(format: u32) -> u32 {
+    if format == 0u32 || format == 5u32 || format == 9u32 { 3u32 }
+    else if format <= 2u32 || format == 6u32 || format == 10u32 { 2u32 }
+    else if format <= 4u32 || format == 7u32 || format == 11u32 { 1u32 }
+    else { 0u32 }
+}
+fn fe_sign(format: u32) -> u64 {
+    let shift = if format == 0u32 { 63u64 } else if format <= 2u32 { 31u64 } else { 15u64 };
+    let sign: Tile<u64, {[]}> = scalar_to_tile(1u64) << scalar_to_tile(shift);
+    tile_to_scalar(sign)
+}
+fn fe_infinity(format: u32) -> u64 {
+    if format == 0u32 {
+        let bits: Tile<u64, {[]}> = scalar_to_tile(0x7ff00000u64) << scalar_to_tile(32u64);
+        tile_to_scalar(bits)
+    } else if format <= 2u32 { 0x7f800000u64 }
+    else if format == 3u32 { 0x7c00u64 }
+    else { 0x7f80u64 }
+}
+fn fe_key(raw: Tile<u64, {[128]}>, format: u32) -> (Tile<u64, {[128]}>, Tile<bool, {[128]}>) {
+    let zero = broadcast_scalar(0u64, shape![128]);
+    let sign_value = fe_sign(format);
+    let sign = broadcast_scalar(sign_value, shape![128]);
+    let magnitude = raw & broadcast_scalar(sign_value - 1u64, shape![128]);
+    let nan = gt_tile(magnitude, broadcast_scalar(fe_infinity(format), shape![128]));
+    // Both zero signs compare equal. The winning source bits are reloaded later.
+    let normalized = select(eq_tile(magnitude, zero), zero, raw);
+    let mask = broadcast_scalar(sign_value | (sign_value - 1u64), shape![128]);
+    (select(ne_tile(normalized & sign, zero), normalized ^ mask, normalized | sign), nan)
+}
+fn fe_signed(value: u32) -> i32 {
+    let value: Tile<u32, {[]}> = scalar_to_tile(value);
+    let value: Tile<i32, {[]}> = bitcast(value);
+    tile_to_scalar(value)
+}
+fn fe_mask(width: u32) -> Tile<u64, {[128]}> {
+    let sign = broadcast_scalar(1u64, shape![128]) << broadcast_scalar(63u64, shape![128]);
+    let shift: Tile<u64, {[128]}> = exti(broadcast_scalar(64u32 - (8u32 << width), shape![128]));
+    (sign | (sign - broadcast_scalar(1u64, shape![128]))) >> shift
+}
+fn fe_address(row: Tile<u32, {[128]}>, col: Tile<u32, {[128]}>, axis: u32, offset: u32, d0: u32, d1: u32, d2: u32, d3: u32, d4: u32, d5: u32, d6: u32, d7: u32, s0: u32, s1: u32, s2: u32, s3: u32, s4: u32, s5: u32, s6: u32, s7: u32) -> Tile<u32, {[128]}> {
+    let mut linear = if axis == unsigned(-1i32) { col } else { row };
+    let mut address = broadcast_scalar(fe_signed(offset), shape![128]);
+    if axis != 7u32 {
+        // A no-read reduction never calls this helper. Inactive dimensions are one.
+        let coordinate = linear % broadcast_scalar(d7, shape![128]);
+        let coordinate: Tile<i32, {[128]}> = bitcast(coordinate);
+        address = address + coordinate * broadcast_scalar(fe_signed(s7), shape![128]);
+        linear = linear / broadcast_scalar(d7, shape![128]);
+    }
+    if axis != 6u32 {
+        // A no-read reduction never calls this helper. Inactive dimensions are one.
+        let coordinate = linear % broadcast_scalar(d6, shape![128]);
+        let coordinate: Tile<i32, {[128]}> = bitcast(coordinate);
+        address = address + coordinate * broadcast_scalar(fe_signed(s6), shape![128]);
+        linear = linear / broadcast_scalar(d6, shape![128]);
+    }
+    if axis != 5u32 {
+        // A no-read reduction never calls this helper. Inactive dimensions are one.
+        let coordinate = linear % broadcast_scalar(d5, shape![128]);
+        let coordinate: Tile<i32, {[128]}> = bitcast(coordinate);
+        address = address + coordinate * broadcast_scalar(fe_signed(s5), shape![128]);
+        linear = linear / broadcast_scalar(d5, shape![128]);
+    }
+    if axis != 4u32 {
+        // A no-read reduction never calls this helper. Inactive dimensions are one.
+        let coordinate = linear % broadcast_scalar(d4, shape![128]);
+        let coordinate: Tile<i32, {[128]}> = bitcast(coordinate);
+        address = address + coordinate * broadcast_scalar(fe_signed(s4), shape![128]);
+        linear = linear / broadcast_scalar(d4, shape![128]);
+    }
+    if axis != 3u32 {
+        // A no-read reduction never calls this helper. Inactive dimensions are one.
+        let coordinate = linear % broadcast_scalar(d3, shape![128]);
+        let coordinate: Tile<i32, {[128]}> = bitcast(coordinate);
+        address = address + coordinate * broadcast_scalar(fe_signed(s3), shape![128]);
+        linear = linear / broadcast_scalar(d3, shape![128]);
+    }
+    if axis != 2u32 {
+        // A no-read reduction never calls this helper. Inactive dimensions are one.
+        let coordinate = linear % broadcast_scalar(d2, shape![128]);
+        let coordinate: Tile<i32, {[128]}> = bitcast(coordinate);
+        address = address + coordinate * broadcast_scalar(fe_signed(s2), shape![128]);
+        linear = linear / broadcast_scalar(d2, shape![128]);
+    }
+    if axis != 1u32 {
+        // A no-read reduction never calls this helper. Inactive dimensions are one.
+        let coordinate = linear % broadcast_scalar(d1, shape![128]);
+        let coordinate: Tile<i32, {[128]}> = bitcast(coordinate);
+        address = address + coordinate * broadcast_scalar(fe_signed(s1), shape![128]);
+        linear = linear / broadcast_scalar(d1, shape![128]);
+    }
+    if axis != 0u32 {
+        // A no-read reduction never calls this helper. Inactive dimensions are one.
+        let coordinate = linear % broadcast_scalar(d0, shape![128]);
+        let coordinate: Tile<i32, {[128]}> = bitcast(coordinate);
+        address = address + coordinate * broadcast_scalar(fe_signed(s0), shape![128]);
+    }
+    let step = if axis == 0u32 { s0 } else if axis == 1u32 { s1 } else if axis == 2u32 { s2 } else if axis == 3u32 { s3 } else if axis == 4u32 { s4 } else if axis == 5u32 { s5 } else if axis == 6u32 { s6 } else { s7 };
+    if axis != unsigned(-1i32) {
+        let coordinate: Tile<i32, {[128]}> = bitcast(col);
+        address = address + coordinate * broadcast_scalar(fe_signed(step), shape![128]);
+    }
+    bitcast(address)
+}
+unsafe fn fe_body(src: *const u32, dst: *mut u32, tree: bool, count: u32, _rank: u32, control: u32, axis: u32, offset: u32, extent: u32, length: u32, _policy: u32, d0: u32, d1: u32, d2: u32, d3: u32, d4: u32, d5: u32, d6: u32, d7: u32, s0: u32, s1: u32, s2: u32, s3: u32, s4: u32, s5: u32, s6: u32, s7: u32) {
+    let lane = lanes::<128>();
+    let owner = if tree { broadcast_scalar(block_id(), shape![128]) } else { indices() };
+    let input_format = (control >> 8u32) & 255u32;
+    let output_format = (control >> 16u32) & 255u32;
+    let op = control & 255u32;
+    let maximum = op == 4u32 || op == 6u32;
+    let width_in = fe_width(input_format);
+    let width_out = fe_width(output_format);
+    let per_word = if width_out == 3u32 { 1u32 } else { 4u32 >> width_out };
+    let owners = (count + per_word - 1u32) / per_word;
+    let owner_valid = lt_tile(owner, broadcast_scalar(owners, shape![128]));
+    // Padded owners become safe before row arithmetic and output pointers.
+    let owner = select(owner_valid, owner, broadcast_scalar(0u32, shape![128]));
+    let zero = broadcast_scalar(0u64, shape![128]);
+    let false_tile = broadcast_scalar(false, shape![128]);
+    let sentinel = broadcast_scalar(unsigned(-1i32), shape![128]);
+    let mut packed = broadcast_scalar(0u32, shape![128]);
+    for slot in 0u32..per_word {
+        let row = owner * broadcast_scalar(per_word, shape![128]) + broadcast_scalar(slot, shape![128]);
+        let row_valid = owner_valid & lt_tile(row, broadcast_scalar(count, shape![128]));
+        let row = select(row_valid, row, broadcast_scalar(0u32, shape![128]));
+        let mut seen = false_tile;
+        let mut best_nan = false_tile;
+        let mut best = zero;
+        let mut winner = sentinel;
+        let mut base = 0u32;
+        while base < length {
+            let col = if tree { lane + broadcast_scalar(base, shape![128]) } else { broadcast_scalar(base, shape![128]) };
+            let valid = row_valid & lt_tile(col, broadcast_scalar(length, shape![128]));
+            let col = select(valid, col, broadcast_scalar(0u32, shape![128]));
+            let address = fe_address(row, col, axis, offset, d0, d1, d2, d3, d4, d5, d6, d7, s0, s1, s2, s3, s4, s5, s6, s7);
+            let valid = valid & lt_tile(address, broadcast_scalar(extent, shape![128]));
+            let address = select(valid, address, broadcast_scalar(0u32, shape![128]));
+            // Two U32 loads preserve wide bits with four-byte binding alignment.
+            let raw = unsafe { packed_read_width(src, address, width_in, valid) };
+            let (key, nan) = fe_key(raw, input_format);
+            let better = select(broadcast_scalar(maximum, shape![128]), gt_tile(key, best), lt_tile(key, best));
+            let tie = lt_tile(col, winner);
+            let numeric = better | (eq_tile(key, best) & tie);
+            let take = valid & (eq_tile(seen, false_tile) | (nan & eq_tile(best_nan, false_tile)) | (eq_tile(nan, best_nan) & select(nan, tie, numeric)));
+            best = select(take, key, best);
+            best_nan = select(take, nan, best_nan);
+            winner = select(take, col, winner);
+            seen = seen | valid;
+            base = base + if tree { 128u32 } else { 1u32 };
+        }
+        if tree {
+            // Lexicographic high/low U32 selection retains every F64 key bit.
+            // Separate validity excludes absent lanes even at real infinities.
+            let numeric = seen & eq_tile(best_nan, false_tile);
+            let identity = if maximum { broadcast_scalar(0u32, shape![128]) } else { sentinel };
+            let high = packed_low(best >> broadcast_scalar(32u64, shape![128]));
+            let highs = select(numeric, high, identity);
+            let extreme: Tile<u32, {[]}> = if maximum { reduce_max(highs, 0i32) } else { reduce_min(highs, 0i32) };
+            let extreme: u32 = tile_to_scalar(extreme);
+            let high_match = numeric & eq_tile(high, broadcast_scalar(extreme, shape![128]));
+            let low = packed_low(best);
+            let lows = select(high_match, low, identity);
+            let extreme_low: Tile<u32, {[]}> = if maximum { reduce_max(lows, 0i32) } else { reduce_min(lows, 0i32) };
+            let extreme_low: u32 = tile_to_scalar(extreme_low);
+            let candidates = select(high_match & eq_tile(low, broadcast_scalar(extreme_low, shape![128])), winner, sentinel);
+            let nan_candidates = select(seen & best_nan, winner, sentinel);
+            let first: Tile<u32, {[]}> = reduce_min(candidates, 0i32);
+            let first_nan: Tile<u32, {[]}> = reduce_min(nan_candidates, 0i32);
+            let first: u32 = tile_to_scalar(first);
+            let first_nan: u32 = tile_to_scalar(first_nan);
+            winner = broadcast_scalar(if first_nan != unsigned(-1i32) { first_nan } else { first }, shape![128]);
+        }
+        let valid = row_valid & ne_tile(winner, sentinel);
+        // Reload using the original U32 coordinate before any index projection.
+        let coordinate = select(valid, winner, broadcast_scalar(0u32, shape![128]));
+        let address = fe_address(row, coordinate, axis, offset, d0, d1, d2, d3, d4, d5, d6, d7, s0, s1, s2, s3, s4, s5, s6, s7);
+        let address = select(valid, address, broadcast_scalar(0u32, shape![128]));
+        let raw = unsafe { packed_read_width(src, address, width_in, valid) };
+        // Narrow indices retain low bits. Wide indices zero-extend U32.
+        let result: Tile<u64, {[128]}> = if op == 5u32 || op == 6u32 { exti(winner) } else { raw };
+        let result = select(valid, result & fe_mask(width_out), zero);
+        let writer = valid & select(broadcast_scalar(tree, shape![128]), eq_tile(lane, broadcast_scalar(0u32, shape![128])), broadcast_scalar(true, shape![128]));
+        if width_out == 3u32 {
+            let word = owner * broadcast_scalar(2u32, shape![128]);
+            unsafe { write_tile(dst, word, packed_low(result), writer) };
+            unsafe { write_tile(dst, word + broadcast_scalar(1u32, shape![128]), packed_low(result >> broadcast_scalar(32u64, shape![128])), writer) };
+        } else {
+            packed = packed | (packed_low(result) << broadcast_scalar(slot * (8u32 << width_out), shape![128]));
+        }
+    }
+    if width_out != 3u32 {
+        let writer = owner_valid & select(broadcast_scalar(tree, shape![128]), eq_tile(lane, broadcast_scalar(0u32, shape![128])), broadcast_scalar(true, shape![128]));
+        // A sole writer owns every byte, including zero padding in the last word.
+        unsafe { write_tile(dst, owner, packed, writer) };
+    }
+}
+#[cutile::entry()]
+unsafe fn burn_float_extrema_tree(src: *const u32, dst: *mut u32, count: u32, rank: u32, control: u32, axis: u32, offset: u32, extent: u32, length: u32, policy: u32, d0: u32, d1: u32, d2: u32, d3: u32, d4: u32, d5: u32, d6: u32, d7: u32, s0: u32, s1: u32, s2: u32, s3: u32, s4: u32, s5: u32, s6: u32, s7: u32) {
+    unsafe { fe_body(src, dst, true, count, rank, control, axis, offset, extent, length, policy, d0, d1, d2, d3, d4, d5, d6, d7, s0, s1, s2, s3, s4, s5, s6, s7) };
+}
+#[cutile::entry()]
+unsafe fn burn_float_extrema_short(src: *const u32, dst: *mut u32, count: u32, rank: u32, control: u32, axis: u32, offset: u32, extent: u32, length: u32, policy: u32, d0: u32, d1: u32, d2: u32, d3: u32, d4: u32, d5: u32, d6: u32, d7: u32, s0: u32, s1: u32, s2: u32, s3: u32, s4: u32, s5: u32, s6: u32, s7: u32) {
+    unsafe { fe_body(src, dst, false, count, rank, control, axis, offset, extent, length, policy, d0, d1, d2, d3, d4, d5, d6, d7, s0, s1, s2, s3, s4, s5, s6, s7) };
+}

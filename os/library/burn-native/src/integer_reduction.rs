@@ -71,62 +71,12 @@ impl NativeTensor {
         })
     }
 
-    pub(crate) fn reduce_all(&self, operation: Reduction) -> Result<Self> {
-        if self.dtype.is_int() || self.dtype.is_uint() {
-            // Validate ALL metadata before either a legacy stage or a scalar
-            // reshape. Public globals never expose an arg reduction.
-            if self.dtype != DType::I32 {
-                return self.integer_reduce(None, operation);
-            }
-            plan(&self.layout, self.dtype, None, operation)?;
-        } else if self.dtype != DType::F32 || operation.is_integer() || operation.index() {
-            return Err(Error::InvalidParameter);
-        }
-        Nvidia.record_commands(|| {
-            let mut tensor = self.clone();
-            for axis in (0..tensor.layout.shape().num_dims()).rev() {
-                tensor = tensor.reduce(axis, operation)?;
-            }
-            tensor.reshape(Shape::new([1]))
-        })
-    }
-
     pub(crate) fn integer_mean(&self) -> Result<Self> {
         // Burn materializes Sum in the input dtype before scalar division.
         // Check the count before entering a command scope or touching storage.
         let count = mean_count(self.dtype, self.layout.len())?;
         plan(&self.layout, self.dtype, None, Reduction::Sum)?;
         Nvidia.record_commands(|| self.reduce_all(Reduction::Sum)?.integer_scalar(WordOp::Divide, count))
-    }
-
-    pub(crate) fn reduction_pair(&self, axis: usize, operation: Reduction, index_dtype: DType) -> Result<(Self, Self)> {
-        let index_operation = match operation {
-            Reduction::Min | Reduction::IntMin => Reduction::ArgMin,
-            Reduction::Max | Reduction::IntMax => Reduction::ArgMax,
-            _ => return Err(Error::InvalidParameter),
-        };
-        integer_scalar_bits(index_dtype, Scalar::Int(0))?;
-        // Validate the common geometry before either fresh-output reduction.
-        if self.dtype == DType::F32 && !operation.is_integer() {
-            let shape = self.layout.reduction_shape(axis)?;
-            if self.layout.shape()[axis] == 0 {
-                return Err(Error::InvalidParameter);
-            }
-            if !shape.contains(&0) {
-                self.layout.reduction_parameters(axis, operation)?;
-                self.layout.reduction_parameters(axis, index_operation)?;
-            }
-        } else {
-            plan(&self.layout, self.dtype, Some(axis), operation)?;
-            plan(&self.layout, self.dtype, Some(axis), index_operation)?;
-        }
-        Nvidia.record_commands(|| {
-            // Both folds select from the immutable original source. Exposed
-            // index narrowing cannot change the independently selected value.
-            let values = self.reduce(axis, operation)?;
-            let indices = self.reduce(axis, index_operation)?.cast(index_dtype)?;
-            Ok((values, indices))
-        })
     }
 }
 

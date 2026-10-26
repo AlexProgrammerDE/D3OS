@@ -19,12 +19,12 @@ from pathlib import Path
 
 ENTRY = "burn_float_arithmetic"
 TEXT = f".text.{ENTRY}"
-PROFILE = "sm89-typed-erf25-library-scratch-v2"
+PROFILE = "sm89-typed-erf25-library-scratch-v3"
 REVISION = "2f47ad0036a7c18ec11d460f70b297a5824f9788"
 # Crate-relative keys are also consumed by prepare-kernels.py before/after
 # compilation. Bind the effective entry helpers, affected generated-module
-# inputs, expansion/host code, SDK protocol 51 and the 25-operation registry.
-# IntegerReduction registration adds generated-module input but leaves the
+# inputs, expansion/host code, SDK protocol 52 and the 25-operation registry.
+# FloatExtrema registration adds generated-module input but leaves the
 # reviewed Erf25 schedule, resources, constants and local bounds unchanged.
 SOURCE_HASHES = {
     "src/burn-float-arithmetic.rs.in": "fef93c265a8fa8424116440d8969241f3220731049fc2f3ae15a489e9262bf0b",
@@ -36,15 +36,17 @@ SOURCE_HASHES = {
     "src/burn-inverse.rs": "9206dae76e30cd38b0e80a0be5ec1189711f8d6ed745bd617c36604d4f3659a6",
     "src/burn-elementwise.rs.in": "2829f03af42241a19e129d810fed906fc91f8ad1982741827b3fa8aaa3abc5c6",
     "src/burn-integer-reduction.rs.in": "4d7143cb0f37bf714373012a03c2ce296b20c40450d31be2ab89e87612edf336",
-    "src/main.rs": "2e12f8ac06318c1c211038a5606d1d408776784a9da22950e4cbea26a810e658",
+    "src/burn-float-extrema.rs.in": "880426e13f294e86d614a2d6507a3cf8c9e84b170e9409f0b0fcf3c3fd5f7beb",
+    "../../os/library/nvidia/src/compute/float_extrema.rs": "8c769d0e4bb2a8bee74382ba39d3d9552968fa37690e371c810d5a628a410a0f",
+    "src/main.rs": "8030e3232003d8bfb60f2071de9b64f39949d48f8c60ff04bb144b0ace22cdcf",
     "src/link.rs": "205ac4376fb5ddcb0905c94379d6ad0f6c6cfc77f763585e190d1e5bb0defdd4",
-    "build.rs": "0126e2681251f887d21d7c234d9ee40f76569e8bd06d2595579cf2dd26e72713",
+    "build.rs": "74e1beb69ec52582442a8b4945e1ede4951fdaa49edbcab0f3031b4dc5974b0d",
     "build/cast.rs": "caabf95f2b72d81bf1cfb8e18b19e595376e42a2e3fae3bfe1545664da2c2125",
     "Cargo.toml": "032d8136a5ccdf3330a8c4235af5ae405aebf03f138f9ea99c9f5af414fb9dc9",
     "Cargo.lock": "13923daab0897a3f175cae8c314ec58476e959b32c6d2b296e7e5b6bc5ea0f43",
     "rust-toolchain.toml": "85db324345b7937c49ea2ac8b962d741f710719f4f751cab809985cbe6afbe3c",
     "../../os/library/nvidia/Cargo.toml": "1ad5bf6f4f02f27238599265ef024f37ae08114cf48ad2c5db8ee8a32f8cad11",
-    "../../os/library/nvidia/src/compute.rs": "53be536fbaf7300e243f83dd7ad745d2c492bac3fae58ab5bd46df08a2033569",
+    "../../os/library/nvidia/src/compute.rs": "2666cd22c8f4eefe3ec7114ceffe251af5de05b13cf88a906117f56bbc688049",
     "../../os/library/nvidia/src/compute/float_arithmetic.rs": "6bc22945a93d9de619c1a4db4c2d2a4fd0eb05716d7dab3518e3eeb8db91a7fb",
     "../../os/library/nvidia/src/compute/integer_reduction.rs": "abfdc9904d771415257d0732e9e5502616778d1ba9002083bc219a510c0648d2",
 }

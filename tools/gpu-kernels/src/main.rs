@@ -162,6 +162,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "burn_adaptive_avg_pool",
             "burn_adaptive_avg_pool_backward",
             "burn_integer_reduce_tree",
+            "burn_float_extrema_tree",
         ]);
         compile(&output, "inference", &inference, toolkit.as_deref())?;
     } else {
