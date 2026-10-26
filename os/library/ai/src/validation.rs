@@ -27,6 +27,7 @@ pub mod spatial_convolution;
 pub mod storage;
 pub mod typed_exp_log;
 pub mod typed_trig;
+pub mod typed_unary;
 pub mod typed_remainder;
 use alloc::{format, string::String};
 use burn::{

@@ -38,6 +38,7 @@ mod typed_exp_log;
 mod typed_relu;
 mod typed_remainder;
 mod typed_trig;
+mod typed_unary;
 mod updates;
 mod words;
 use abi::elementwise::Elementwise;
@@ -218,6 +219,30 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     }
     integers::run(backend).map_err(|e| format!("Burn native integer reductions: {e}"))?;
     words::run(backend).map_err(|e| format!("Burn native words: {e}"))?;
+    typed_unary::run(backend)?;
+    let unary_options = d3os_ai::validation::typed_unary::Options::default();
+    let unary_report = d3os_ai::burn::tensor::try_read_sync(d3os_ai::validation::typed_unary::run(&device, &unary_options))
+        .ok_or_else(|| String::from("native typed unary math future did not complete"))??;
+    crate::report(format_args!(
+        "BURN_TYPED_UNARY_ACCURACY os=d3os backend=native corpus={} policy_sha256={} fixture_sha256={} qualification_passed={} totals={} accuracy={}",
+        d3os_ai::validation::typed_unary::CORPUS_VERSION,
+        d3os_ai::validation::typed_unary::POLICY_SHA256,
+        d3os_ai::validation::typed_unary::FIXTURE_SHA256,
+        unary_report.is_success(),
+        d3os_ai::validation::typed_unary::summary_json(&unary_report.summary),
+        d3os_ai::validation::typed_unary::accuracy_json(&unary_report.accuracy)
+    ));
+    if !unary_report.is_success() {
+        for example in &unary_report.failures.examples {
+            crate::report(format_args!("BURN_TYPED_UNARY_FAILURE {example}"));
+        }
+        return Err(format!("typed unary math qualification failed: {} failures", unary_report.failures.count));
+    }
+    crate::report(format_args!(
+        "BURN_TYPED_UNARY_OK os=d3os backend=native fusion=disabled corpus={} {}",
+        d3os_ai::validation::typed_unary::CORPUS_VERSION,
+        d3os_ai::validation::typed_unary::success_footer(&unary_options, &unary_report)
+    ));
     typed_trig::run(backend)?;
     let trig_options = d3os_ai::validation::typed_trig::Options::default();
     let trig_report = d3os_ai::burn::tensor::try_read_sync(d3os_ai::validation::typed_trig::run(&device, &trig_options))

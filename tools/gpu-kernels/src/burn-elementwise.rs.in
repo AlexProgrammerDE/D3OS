@@ -53,7 +53,7 @@ unsafe fn BURN_ENTRY(a: *const u32, b: *const u32, output: *mut u32, BURN_PARAME
     } else if BURN_OP == 16u32 {
         bitcast(log(x))
     } else if BURN_OP == 17u32 {
-        burn_log1p_bits(left)
+        float_math_log1p_f32(left)
     } else if BURN_OP == 18u32 {
         bitcast(unsafe { tanh_with_rounding(x, rounding::Full) })
     } else if BURN_OP == 19u32 {

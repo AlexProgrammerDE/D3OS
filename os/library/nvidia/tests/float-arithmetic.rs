@@ -39,18 +39,18 @@ fn scalar(mut p: [u32; 32], bits: u64) -> [u32; 32] {
 #[test]
 fn operation_registry_matches_supported_float_primitives() {
     for elementwise in Elementwise::ALL {
-        let selected = matches!(elementwise as u32, 1..=4 | 11..=16 | 18..=25 | 34);
+        let selected = matches!(elementwise as u32, 1..=4 | 11..=25 | 30..=32 | 34);
         let operation = Operation::from_elementwise(elementwise);
         assert_eq!(operation.is_ok(), selected);
         if let Ok(op) = operation {
             assert_eq!(op as u32, elementwise as u32);
-            assert_eq!(op.unary(), matches!(elementwise as u32, 11..=16 | 18..=25));
+            assert_eq!(op.unary(), matches!(elementwise as u32, 11..=25 | 30..=32));
             assert_eq!(op.binary(), !op.unary());
         }
     }
-    assert_eq!(Operation::ALL.len(), 19);
+    assert_eq!(Operation::ALL.len(), 23);
     for raw in 0..=256 {
-        let selected = matches!(raw, 1..=4 | 11..=16 | 18..=25 | 34);
+        let selected = matches!(raw, 1..=4 | 11..=25 | 30..=32 | 34);
         assert_eq!(Operation::from_raw(raw).is_ok(), selected);
     }
     for op in Operation::ALL {
@@ -103,9 +103,13 @@ fn signed_geometry_matches_enumerated_addresses_for_either_reader() {
             Operation::Remainder,
             Operation::Exp,
             Operation::Log,
+            Operation::Log1p,
             Operation::Tanh,
             Operation::Sin,
             Operation::Cos,
+            Operation::Sinh,
+            Operation::Cosh,
+            Operation::Tan,
         ] {
             for input in 0..if op.binary() { 2 } else { 1 } {
                 for offset in 0..9 {

@@ -73,37 +73,45 @@ class ScratchArtifactTests(unittest.TestCase):
     def test_reviewed_entry_classifies_every_local_site(self):
         result = self.qualify()
         arrays = result["classified_arrays"]
-        self.assertEqual(len(arrays), 19)
-        self.assertEqual(sum(len(array["sites"]) for array in arrays), 131)
+        self.assertEqual(len(arrays), 28)
+        self.assertEqual(sum(len(array["sites"]) for array in arrays), 194)
         self.assertEqual(
             {tuple(array["frame_range"]) for array in arrays},
             {(0, 28), (28, 56), (56, 96)},
         )
         self.assertEqual(result["unclassified_local_sites"], [])
-        self.assertEqual(len(result["call_sites"]), 42)
+        self.assertEqual(len(result["call_sites"]), 72)
+        self.assertEqual(result["registers"], 79)
+        self.assertEqual(result["code_bytes"], 152832)
+        self.assertEqual(result["frame_bytes"], 96)
+        self.assertEqual(result["minimum_stack_bytes"], 96)
+        self.assertEqual(result["local_load_sites"], 84)
+        self.assertEqual(result["local_store_sites"], 110)
+        self.assertEqual(sum(a["frame_range"] == [28, 56] for a in arrays), 18)
+        self.assertEqual(sum(a["frame_range"] == [0, 28] for a in arrays), 9)
 
     def test_unknown_local_forms_bases_offsets_and_slots_fail(self):
         changes = {
             "unknown local opcode": (
-                0x42D0,
+                0x5D90,
                 lambda row: row.replace("LDL ", "LDL.128 "),
             ),
-            "unknown store base": (0x4160, lambda row: row.replace("[R1+", "[R2+")),
-            "out-of-array store": (0x4160, lambda row: row.replace("+0x1c]", "+0x60]")),
-            "unknown load base": (0x42D0, lambda row: row.replace("[R27+", "[R28+")),
-            "out-of-array load": (0x42D0, lambda row: row.replace("+0x18]", "+0x1c]")),
+            "unknown store base": (0x5C10, lambda row: row.replace("[R1+", "[R2+")),
+            "out-of-array store": (0x5C10, lambda row: row.replace("+0x1c]", "+0x60]")),
+            "unknown load base": (0x5D90, lambda row: row.replace("[R35+", "[R36+")),
+            "out-of-array load": (0x5D90, lambda row: row.replace("+0x18]", "+0x1c]")),
             "new save slot": (
-                0x4300,
+                0x5DC0,
                 lambda row: re.sub(r"@P0 SHF.*;", "STL [R1+0x60], R0 ;", row),
             ),
-            "F32 bound": (0x4230, lambda row: row.replace("0x5,", "0x4,")),
-            "F32 pointer scale": (0x42A0, lambda row: row.replace("-0x4,", "-0x8,")),
-            "F64 pointer base": (0x19440, lambda row: row.replace("0x38,", "0x40,")),
-            "F64 loop bound": (0x19490, lambda row: row.replace("0x12,", "0x13,")),
-            "F64 pointer stride": (0x19680, lambda row: row.replace("0x8,", "0x10,")),
-            "F64 final offset": (0x197B0, lambda row: row.replace("-0x78]", "-0x70]")),
-            "missing predicate": (0x197C0, lambda row: row.replace("@P0", "   ")),
-            "return address": (0x3890, lambda row: row.replace("0x38c0", "0x38d0")),
+            "F32 bound": (0x5D40, lambda row: row.replace("0x5,", "0x4,")),
+            "F32 pointer scale": (0x5D60, lambda row: row.replace("-0x4,", "-0x8,")),
+            "F64 pointer base": (0x24AF0, lambda row: row.replace("0x38,", "0x40,")),
+            "F64 loop bound": (0x24B40, lambda row: row.replace("0x12,", "0x13,")),
+            "F64 pointer stride": (0x24D30, lambda row: row.replace("0x8,", "0x10,")),
+            "F64 final offset": (0x24E50, lambda row: row.replace("-0x78]", "-0x70]")),
+            "missing predicate": (0x24E60, lambda row: row.replace("@P0", "   ")),
+            "return address": (0x3650, lambda row: row.replace("0x3670", "0x3680")),
         }
         for name, (offset, transform) in changes.items():
             with self.subTest(name=name), self.assertRaises(ValueError):
@@ -113,19 +121,97 @@ class ScratchArtifactTests(unittest.TestCase):
         for target in (
             "missing_helper",
             "$__internal_0_$__cuda_sm20_dblrcp_rn_slowpath_v3",
-            ".L_x_430",
+            ".L_x_571",
         ):
             changed = self.change_instruction(
-                0x2D60,
+                0x2000,
                 lambda row, target=target: re.sub(r"`\([^)]+\)", f"`({target})", row),
             )
             with self.subTest(target=target), self.assertRaises(ValueError):
                 self.qualify(sass=changed)
         changed = self.change_instruction(
-            0x19410, lambda row: row.replace(".L_x_430", ".L_x_431")
+            0x24AC0, lambda row: row.replace(".L_x_571", ".L_x_572")
         )
         with self.assertRaises(ValueError):
             self.qualify(sass=changed)
+
+    def test_each_reduction_group_rejects_changed_addressing(self):
+        arrays = self.qualify()["classified_arrays"]
+        # Exercise all twenty-seven inlined reductions, including the new Tan
+        # copies and the BF16/F16 paths with different register allocation.
+        for array in arrays[:-1]:
+            offset = array["sites"][4]
+            changed = self.change_instruction(
+                offset, lambda row: row.replace("+0x18]", "+0x1c]")
+            )
+            with self.subTest(offset=offset), self.assertRaises(ValueError):
+                self.qualify(sass=changed)
+
+    def test_nonlocal_computation_and_guards_are_bound(self):
+        changes = {
+            "frame base": (0x14F0, lambda row: row.replace("0x1c,", "0x20,")),
+            "finite guard": (0x5B90, lambda row: row.replace("NEU", "EQU")),
+            "large guard": (0x5B00, lambda row: row.replace("105615", "65535")),
+            "reduction product": (
+                0x5BF0,
+                lambda row: row.replace("0x3c439041", "0x3c439040"),
+            ),
+            "F64 helper computation": (
+                0x24CD0,
+                lambda row: row.replace("R57,", "R56,"),
+            ),
+            "F64 table pointer scale": (
+                0x24B90,
+                lambda row: row.replace("0x8", "0x10"),
+            ),
+        }
+        for name, (offset, transform) in changes.items():
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                self.qualify(sass=self.change_instruction(offset, transform))
+
+    def test_malformed_decoded_inventory_fails(self):
+        offset = 0x5C10
+        pattern = rf"^\s*/\*{offset:04x}\*/[^\n]+$"
+        row = re.search(pattern, self.sass, re.MULTILINE)[0]
+        changes = (
+            self.sass.replace(row, ""),
+            self.sass.replace(row, row + "\n" + row),
+            self.change_instruction(offset, lambda row: row.replace(";", "")),
+            self.change_instruction(
+                offset,
+                lambda row: re.sub(r"\*/\s+\w+", "*/ UNKNOWN", row),
+            ),
+        )
+        for index, changed in enumerate(changes):
+            with self.subTest(mutation=index), self.assertRaises(ValueError):
+                self.qualify(sass=changed)
+
+    def test_malformed_helper_ranges_and_labels_fail(self):
+        q = scratch.load_qualifier()
+        for mutation in ("gap", "overlap", "unknown", "duplicate"):
+            elf = copy.deepcopy(self.elf)
+            helpers = sorted(
+                (
+                    symbol
+                    for symbol in elf.symbols
+                    if symbol["kind"] == 2 and symbol["name"] != scratch.ENTRY
+                ),
+                key=lambda symbol: symbol["value"],
+            )
+            helper = helpers[0]
+            if mutation == "gap":
+                helper["value"] += 16
+            elif mutation == "overlap":
+                helper["size"] += 16
+            elif mutation == "unknown":
+                helper["name"] = "unreviewed_helper"
+            else:
+                helper["name"] = helpers[1]["name"]
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                scratch.schedule(elf, self.sass, q)
+        label = re.search(r"^\.L_x_\d+:$", self.sass, re.MULTILINE)[0]
+        with self.assertRaises(ValueError):
+            self.qualify(sass=self.sass.replace(label, label + "\n" + label, 1))
 
     def test_label_and_compiler_helper_numbering_may_change(self):
         renamed = re.sub(
@@ -211,11 +297,11 @@ class ScratchArtifactTests(unittest.TestCase):
             "<I",
             data,
             table + self.elf.named[scratch.TEXT]["index"] * 64 + 44,
-            72 << 24,
+            80 << 24,
         )
         with self.assertRaises(ValueError):
             self.qualify(cubin=bytes(data))
-        for key, value in (("registers", 72), ("code_bytes", 106240), ("threads", 256)):
+        for key, value in (("registers", 80), ("code_bytes", 152960), ("threads", 256)):
             entries = copy.deepcopy(self.entries)
             entries[0][key] = value
             with self.subTest(key=key), self.assertRaises(ValueError):
@@ -257,10 +343,56 @@ class ScratchArtifactTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 self.qualify(provenance=provenance)
         changed = self.change_instruction(
-            0x19520, lambda row: row.replace("c[0x4][0x8]", "c[0x4][R1]")
+            0x24BC0, lambda row: row.replace("c[0x4][0x8]", "c[0x4][R1]")
         )
         with self.assertRaises(ValueError):
             self.qualify(sass=changed)
+
+    def test_unknown_cb4_forms_and_relocation_layout_fail(self):
+        forms = (
+            lambda row: row.replace("IMAD.WIDE", "IMAD.WIDE.F32"),
+            lambda row: row.replace("c[0x4][0x8]", "c[0x4][0x0]"),
+            lambda row: row.replace("c[0x4][0x8]", "c[0x4][0x14]"),
+        )
+        for index, transform in enumerate(forms):
+            with self.subTest(form=index), self.assertRaises(ValueError):
+                self.qualify(sass=self.change_instruction(0x24BC0, transform))
+        relocation = self.elf.named[".rel.nv.constant4"]
+        for mutation in ("duplicate slot", "unknown slot", "unknown kind"):
+            data = bytearray(self.cubin)
+            offset = relocation["start"] + 16
+            if mutation == "unknown kind":
+                value = struct.unpack_from("<Q", data, offset + 8)[0]
+                struct.pack_into("<Q", data, offset + 8, (value & ~0xFFFFFFFF) | 1)
+            else:
+                struct.pack_into(
+                    "<Q", data, offset, 0 if mutation == "duplicate slot" else 24
+                )
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                self.qualify(cubin=bytes(data))
+
+    def test_each_source_and_tool_pin_rejects_stale_provenance(self):
+        for group in ("source_sha256", "tool_sha256"):
+            for name in scratch.PROVENANCE[group]:
+                provenance = copy.deepcopy(scratch.PROVENANCE)
+                provenance[group][name] = "0" * 64
+                with (
+                    self.subTest(group=group, name=name),
+                    self.assertRaises(ValueError),
+                ):
+                    self.qualify(provenance=provenance)
+
+    def test_historical_scratch_artifact_requires_its_own_profile(self):
+        location = os.environ.get("TYPED_MATH_SCRATCH_HISTORICAL_ARTIFACTS")
+        if not location:
+            self.skipTest("requires the retained nineteen-operation checkpoint")
+        directory = Path(location)
+        with self.assertRaises(ValueError):
+            self.qualify(
+                cubin=(directory / "kernels.cubin").read_bytes(),
+                sass=(directory / "kernels.sass").read_text(),
+                entries=json.loads((directory / "kernels.json").read_text()),
+            )
 
     def test_complete_production_policy_preserves_zero_local_gates(self):
         location = os.environ.get("TYPED_MATH_SCRATCH_BASELINE_SASS")

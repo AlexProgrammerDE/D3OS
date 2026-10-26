@@ -36,12 +36,3 @@ unsafe fn burn_fill(output: *mut u32, count: u32, value: u32) {
         )
     };
 }
-
-fn burn_log1p_bits(bits: Tile<u32, { [128] }>) -> Tile<u32, { [128] }> {
-    let x: Tile<f32, { [128] }> = bitcast(bits);
-    let unit = broadcast_scalar(1f32, shape![128]);
-    let u = unit + x;
-    let corrected = log(u) * divf(x, u - unit, rounding::NearestEven, ftz::Disabled);
-    let unchanged = eq_tile(u, unit) | eq_tile(x, broadcast_scalar(bits_f32(0x7f800000u32), shape![128]));
-    select(unchanged, bits, bitcast(corrected))
-}

@@ -46,7 +46,7 @@ fn burn_acosh_bits(bits: Tile<u32, { [128] }>) -> Tile<u32, { [128] }> {
     let small = select(ge_tile(x, one) & lt_tile(x, two), x, one);
     let t = small - one;
     let z = t + sqrt(t * t + two * t, rounding::NearestEven, ftz::Disabled);
-    let low: Tile<f32, { [128] }> = bitcast(burn_log1p_bits(bitcast(z)));
+    let low: Tile<f32, { [128] }> = bitcast(float_math_log1p_f32(bitcast(z)));
     let medium = select(ge_tile(x, two) & lt_tile(x, broadcast_scalar(4096f32, shape![128])), x, two);
     let root = sqrt(medium * medium - one, rounding::NearestEven, ftz::Disabled);
     let mid = log(two * medium - divf(one, medium + root, rounding::NearestEven, ftz::Disabled));
@@ -69,7 +69,7 @@ fn burn_asinh_bits(bits: Tile<u32, { [128] }>) -> Tile<u32, { [128] }> {
             rounding::NearestEven,
             ftz::Disabled,
         );
-    let low: Tile<f32, { [128] }> = bitcast(burn_log1p_bits(bitcast(z)));
+    let low: Tile<f32, { [128] }> = bitcast(float_math_log1p_f32(bitcast(z)));
     let medium = select(ge_tile(x, two) & lt_tile(x, broadcast_scalar(4096f32, shape![128])), x, two);
     let mid = log(two * medium
         + divf(
@@ -93,10 +93,10 @@ fn burn_atanh_bits(bits: Tile<u32, { [128] }>) -> Tile<u32, { [128] }> {
     let half = broadcast_scalar(0.5f32, shape![128]);
     let small = select(lt_tile(x, half), x, zero);
     let z = two * small + divf(two * small * small, one - small, rounding::NearestEven, ftz::Disabled);
-    let low: Tile<f32, { [128] }> = bitcast(burn_log1p_bits(bitcast(z)));
+    let low: Tile<f32, { [128] }> = bitcast(float_math_log1p_f32(bitcast(z)));
     let big = select(ge_tile(x, half) & le_tile(x, one), x, half);
     let z = two * divf(big, one - big, rounding::NearestEven, ftz::Disabled);
-    let high: Tile<f32, { [128] }> = bitcast(burn_log1p_bits(bitcast(z)));
+    let high: Tile<f32, { [128] }> = bitcast(float_math_log1p_f32(bitcast(z)));
     let value = half * select(lt_tile(x, half), low, high);
     let encoded: Tile<u32, { [128] }> = bitcast(value);
     let signed = encoded | (bits & broadcast_scalar(unsigned(-1i32) << 31u32, shape![128]));

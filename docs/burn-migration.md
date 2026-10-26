@@ -352,6 +352,14 @@ The Linux CUDA comparison retains rank-zero and Flex32 failures, plus 14 F64 Exp
 These are forward correctness checks. Broader typed autodiff and performance parity remain incomplete.
 The [coverage reference](burn-backend-coverage.md#typed-exponential-and-logarithm) describes the numerical policy and preserved failure records.
 
+Log1p, Sinh, Cosh, and Tan now support all five ordinary floating formats through protocol 48.
+D3OS passes 3,443,996 guarded comparisons, 2,560 shared cases, and the complete earlier GPU regression suite.
+The shared cases check another 1,595,518 result values.
+A precise Log1p helper also replaces the older F32 implementation used by three inverse functions.
+The filtered Linux CUDA corpus retains 163,294 Log1p failures; its observed Sinh, Cosh, and Tan cells pass.
+The [coverage reference](burn-backend-coverage.md#typed-log1p-sinh-cosh-and-tan) describes the targets and retained archives.
+Full backend coverage and workload performance parity remain incomplete.
+
 I32 tensor and generic scalar powers now use resident wrapping integer arithmetic without a floating-point intermediate.
 The exponent bits follow the same unsigned interpretation as the pinned Linux backend.
 FP32 deformable convolution now provides input, offset, weight, modulation-mask, and bias gradients on the native GPU.

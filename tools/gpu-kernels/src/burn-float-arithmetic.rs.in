@@ -125,9 +125,13 @@ fn float_arithmetic_f64(a: Tile<u64, {[128]}>, b: Tile<u64, {[128]}>, op: u32) -
         select(underflow, zero, nonzero)
     }
     else if op == 16u32 { bitcast(log(x)) }
+    else if op == 17u32 { float_math_log1p_f64(a) }
     else if op == 18u32 { bitcast(unsafe { tanh_with_rounding(x, rounding::Full) }) }
     else if op == 19u32 { bitcast(sin(x)) }
     else if op == 20u32 { bitcast(cos(x)) }
+    else if op == 30u32 { bitcast(sinh(x)) }
+    else if op == 31u32 { bitcast(cosh(x)) }
+    else if op == 32u32 { bitcast(tan(x)) }
     else if op == 34u32 {
         let residue = remf(x, y);
         let bits: Tile<u64, {[128]}> = bitcast(residue);
@@ -167,9 +171,13 @@ fn float_arithmetic_f32(a: Tile<u32, {[128]}>, b: Tile<u32, {[128]}>, op: u32) -
     else if op == 14u32 { bitcast(sqrt(x, rounding::NearestEven, ftz::Disabled)) }
     else if op == 15u32 { bitcast(unsafe { exp_with_rounding(x, rounding::Full) }) }
     else if op == 16u32 { bitcast(log(x)) }
+    else if op == 17u32 { float_math_log1p_f32(a) }
     else if op == 18u32 { bitcast(unsafe { tanh_with_rounding(x, rounding::Full) }) }
     else if op == 19u32 { bitcast(sin(x)) }
     else if op == 20u32 { bitcast(cos(x)) }
+    else if op == 30u32 { bitcast(sinh(x)) }
+    else if op == 31u32 { bitcast(cosh(x)) }
+    else if op == 32u32 { bitcast(tan(x)) }
     else if op == 34u32 { bitcast(float_arithmetic_remainder_f32(x, y)) }
     else { bitcast(divf(one, x, rounding::NearestEven, ftz::Disabled)) }
 }
@@ -193,6 +201,14 @@ fn float_arithmetic_f16(a: Tile<u16, {[128]}>, b: Tile<u16, {[128]}>, op: u32) -
         let promoted: Tile<f32, {[128]}> = ftof(x, rounding::NearestEven);
         let result = if op == 18u32 { unsafe { tanh_with_rounding(promoted, rounding::Full) } }
             else if op == 19u32 { sin(promoted) } else { cos(promoted) };
+        let rounded: Tile<f16, {[128]}> = ftof(result, rounding::NearestEven);
+        bitcast(rounded)
+    }
+    else if op == 17u32 || (op >= 30u32 && op <= 32u32) {
+        let promoted: Tile<f32, {[128]}> = ftof(x, rounding::NearestEven);
+        let result = if op == 17u32 { bitcast(float_math_log1p_f32(bitcast(promoted))) }
+            else if op == 30u32 { sinh(promoted) }
+            else if op == 31u32 { cosh(promoted) } else { tan(promoted) };
         let rounded: Tile<f16, {[128]}> = ftof(result, rounding::NearestEven);
         bitcast(rounded)
     }
@@ -226,6 +242,14 @@ fn float_arithmetic_bf16(a: Tile<u16, {[128]}>, b: Tile<u16, {[128]}>, op: u32) 
         let promoted: Tile<f32, {[128]}> = ftof(x, rounding::NearestEven);
         let result = if op == 18u32 { unsafe { tanh_with_rounding(promoted, rounding::Full) } }
             else if op == 19u32 { sin(promoted) } else { cos(promoted) };
+        let rounded: Tile<bf16, {[128]}> = ftof(result, rounding::NearestEven);
+        bitcast(rounded)
+    }
+    else if op == 17u32 || (op >= 30u32 && op <= 32u32) {
+        let promoted: Tile<f32, {[128]}> = ftof(x, rounding::NearestEven);
+        let result = if op == 17u32 { bitcast(float_math_log1p_f32(bitcast(promoted))) }
+            else if op == 30u32 { sinh(promoted) }
+            else if op == 31u32 { cosh(promoted) } else { tan(promoted) };
         let rounded: Tile<bf16, {[128]}> = ftof(result, rounding::NearestEven);
         bitcast(rounded)
     }
@@ -294,7 +318,7 @@ unsafe fn burn_float_arithmetic(a: *const u32, b: *const u32, output: *mut u32, 
     let format = (operation >> 8u32) & 255u32;
     let op = operation & 255u32;
     let scalar_rhs = operation & 16777216u32 != 0u32;
-    let unary = (op >= 11u32 && op <= 20u32) || (op >= 21u32 && op <= 25u32);
+    let unary = (op >= 11u32 && op <= 20u32) || (op >= 21u32 && op <= 25u32) || (op >= 30u32 && op <= 32u32);
     let width = float_arithmetic_width(format);
     let per_word = if width == 3u32 { 1u32 } else { 4u32 >> width };
     let writers = (count + per_word - 1u32) / per_word;

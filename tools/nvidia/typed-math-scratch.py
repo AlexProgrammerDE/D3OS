@@ -1,4 +1,4 @@
-"""Recognize one reviewed SM89 typed-math library-scratch schedule.
+"""Recognize the reviewed SM89 registered 23-operation typed-math schedule.
 
 This certificate is deliberately narrower than a SASS dataflow proof. It binds
 every instruction, predicate, register, immediate and control-flow destination
@@ -19,17 +19,29 @@ from pathlib import Path
 
 ENTRY = "burn_float_arithmetic"
 TEXT = f".text.{ENTRY}"
-PROFILE = "sm89-typed-trig-library-scratch-v1"
+PROFILE = "sm89-typed-unary23-library-scratch-v1"
 REVISION = "2f47ad0036a7c18ec11d460f70b297a5824f9788"
+# Crate-relative keys are also consumed by prepare-kernels.py before/after
+# compilation. Bind the effective entry helpers, affected generated-module
+# inputs, expansion/host code and the local operation registry, not just Log1p.
 SOURCE_HASHES = {
-    "src/burn-float-arithmetic.rs.in": "c064901d1f484cc0fadad54f11a93406a24efd1dd23012ad70b20cbc8ad312fa",
+    "src/burn-float-arithmetic.rs.in": "3c24a4a548004aaf19d892f0f7556e931e4b58a73787670303a15e20e41ba2da",
     "src/common.rs": "8a005c8bbd8c3074b5cdee6b6fe57d9c4e42da485d59f9784ba278d9d12f487f",
     "src/burn-packed-common.rs": "e6fb080724e8b8d1c29b778b37ac34bbe01480325e71549c7e1874fbe6aec413",
+    "src/burn-log1p.rs": "bab09c1fdc36e13fdff5dbfcc60a1bedc9b6b778adf8ca442cae4aeddebed9b8",
+    "src/burn-math.rs": "b6145d25725d37dcf2db7c1ea607dbbf4971d90eaa804486b118925ce7d711cc",
+    "src/burn-inverse.rs": "9206dae76e30cd38b0e80a0be5ec1189711f8d6ed745bd617c36604d4f3659a6",
+    "src/burn-elementwise.rs.in": "f7e5c01c4bcd0ec8bebab02f3020209a3a4301473e403072dfc56beeb9ef8b88",
     "src/main.rs": "28a6ad898c46ae396d8caa2cc94b8b8e39a8a2b945dbbfbd2bd7d47fe547f541",
     "src/link.rs": "205ac4376fb5ddcb0905c94379d6ad0f6c6cfc77f763585e190d1e5bb0defdd4",
-    "build.rs": "0b1e68f6ccb6d60b3d6569c2957bae878c73bde32bb313fc69aa603fb77adf8c",
+    "build.rs": "e30f6103c27918ed6c7f2719a52f38c03d4b1b2eedbbc385d8976b4e95862774",
+    "build/cast.rs": "caabf95f2b72d81bf1cfb8e18b19e595376e42a2e3fae3bfe1545664da2c2125",
+    "Cargo.toml": "032d8136a5ccdf3330a8c4235af5ae405aebf03f138f9ea99c9f5af414fb9dc9",
     "Cargo.lock": "13923daab0897a3f175cae8c314ec58476e959b32c6d2b296e7e5b6bc5ea0f43",
     "rust-toolchain.toml": "85db324345b7937c49ea2ac8b962d741f710719f4f751cab809985cbe6afbe3c",
+    "../../os/library/nvidia/Cargo.toml": "1ad5bf6f4f02f27238599265ef024f37ae08114cf48ad2c5db8ee8a32f8cad11",
+    "../../os/library/nvidia/src/compute.rs": "3d37f6ae8353e19d87e9ab29a75fa0988ac99d8b28faa2ffcf0b254851297e36",
+    "../../os/library/nvidia/src/compute/float_arithmetic.rs": "d34d37b37cb3d92f7731f780368db735f9d794f1f388d2ba78c657953bc39a5e",
 }
 TOOL_HASHES = {
     "tileiras": "8733d2ef6ae234ba5b415d185c957b8cc37577507a2850313a8c0e5c7c3ac54d",
@@ -44,40 +56,40 @@ PROVENANCE = {
     "compile_options": "default;num_worker_warps_per_cta=4;sm_89;tile_ir=13.4;O3",
 }
 TRIG = f"${ENTRY}$__internal_trig_reduction_slowpathd"
-CB2_BYTES = 784
-CB2_SHA256 = "33c905a8f3e888c04b037b4305bb69a0bf27d98bdf3cf43301d5c96efecd612f"
+CB2_BYTES = 1120
+CB2_SHA256 = "7e6b93cec9d41f7dcafe6040ea84b5a45b459f58efe14753e2188b8864a1e9e2"
 # SHA256 of JSON instruction rows, using separators=(',', ':'). Destinations
 # resolve to [function identity, byte offset within that function]. Hashes bind
 # the entire schedule, including guards, address construction, calls, returns,
 # arithmetic and padding, rather than just the local instruction inventory.
 SCHEDULES = {
     "burn_float_arithmetic": (
-        98304,
-        "5082df769c85cbbdee3c84c2b98ff5bed8109c753736c282914f003afb149d4e",
+        145104,
+        "0827208f8c64f8e9c2a18006e9e6b114f517723581cadadcd67a2ced5cb007b6",
     ),
     "$__cuda_sm20_dblrcp_rn_slowpath_v3": (
-        720,
-        "e54da592196875833f2553fa7233a42d0e398fcfde450c9f97797e9565a64aa9",
+        704,
+        "1a57a03a8ba43e0caffe7e132bfe7cc790a765ee3d16651311c28f8aa2b94819",
     ),
     "$__cuda_sm20_div_rn_f64_full": (
-        1552,
-        "4b709772bb3676156a202de0de8f7b228a0fccfd62b401e76dfea08593316245",
+        1456,
+        "1e910b82e232e38d1f1a6acdf5cfe83937b65e629e58e9d6d0b62409f2287a50",
     ),
     "$__cuda_sm20_dsqrt_rn_f64_mediumpath_v1": (
         768,
-        "31e440d92afef53977930b833e1ed9159d404224c128b447d0dc8218840ee683",
+        "85a3a98de683c7dacd7e90c7c19689f55b7bebbaaecd8b8f4f1904ecf80a847f",
     ),
     "$__cuda_sm20_sqrt_rn_f32_slowpath": (
         368,
-        "8cb8007dcf69687506955ffe8cacb2da5cf80eccb3e19428ad86292a45912754",
+        "4f9028fef220bbbc805f264a5c60e6f4f1311578566eafd0f5fcffb8ddee17e0",
     ),
     "$__cuda_sm3x_div_rn_noftz_f32_slowpath": (
-        1664,
-        "0ba52ec2597a2058d1b661aa4aecffb0018953250eb2b4a3b5dabd6bfe949ade",
+        1712,
+        "a1f3b0bfdabe35eff4d4584197cd953b7cfc356cf84bba027aeea7854d712775",
     ),
     "$burn_float_arithmetic$__internal_trig_reduction_slowpathd": (
-        2736,
-        "2c0d09db955b574ba8db2b9ab003b4424f6b05855705b4d77ae81bad8783e937",
+        2720,
+        "f95141610b59a685a2d5f08ec28ec5aa85d4962a1825fd53783cf710a3f13cd4",
     ),
 }
 TABLES = {
@@ -347,10 +359,10 @@ def schedule(cubin, sass, qualifier):
 
 def resources(cubin, entries, functions):
     text = cubin.named[TEXT]
-    expected = {"entry": ENTRY, "code_bytes": 106112, "registers": 71, "threads": 128}
+    expected = {"entry": ENTRY, "code_bytes": 152832, "registers": 79, "threads": 128}
     if [entry for entry in entries if entry.get("entry") == ENTRY] != [expected]:
         raise ValueError("entry metadata exceeds or differs from reviewed resources")
-    if text["size"] != expected["code_bytes"] or text["info"] >> 24 != 71:
+    if text["size"] != expected["code_bytes"] or text["info"] >> 24 != 79:
         raise ValueError("ELF code/register resources differ from reviewed limits")
     shared = cubin.named.get(f".nv.shared.{ENTRY}")
     if shared and shared["size"]:
@@ -463,11 +475,46 @@ def tables(cubin):
 def classify(rows):
     """Inventory every local site, within the exact certified address schedule."""
     local = [row for row in rows if row[2].split(".")[0] in ("LDL", "STL")]
-    if len(local) != 131:
+    if len(local) != 194:
         raise ValueError("unclassified local instruction")
     arrays = []
-    for start in range(0, 126, 7):
-        group = local[start : start + 7]
+    # These are reduction-product arrays, not saves of live application
+    # registers across calls. Each store is fed by the inlined integer 2/pi
+    # product/carry chain; the three indexed reads feed the reduced argument.
+    # Tan adds nine copies to the previous eighteen Sin/Cos copies. Log1p's
+    # inlined polynomial/divisions introduce no local sites. Complete schedule
+    # hashes above bind those claims and every pointer/guard definition.
+    groups = (
+        (28, "R35", "@P0"),
+        (28, "R35", "@P1"),
+        (28, "R34", "@P1"),
+        (28, "R36", "@P0"),
+        (28, "R36", "@P1"),
+        (28, "R35", "@P0"),
+        (28, "R36", "@P0"),
+        (28, "R36", "@P1"),
+        (28, "R35", "@P0"),
+        (28, "R54", "@P0"),
+        (28, "R54", "@P0"),
+        (28, "R54", "@P1"),
+        (28, "R54", "@P0"),
+        (28, "R54", "@P0"),
+        (28, "R54", "@P1"),
+        (28, "R54", "@P0"),
+        (28, "R54", "@P1"),
+        (28, "R54", "@P1"),
+        (0, "R14", "@P0"),
+        (0, "R11", "@P1"),
+        (0, "R11", "@P1"),
+        (0, "R7", "@P0"),
+        (0, "R11", "@P1"),
+        (0, "R12", "@P0"),
+        (0, "R7", "@P0"),
+        (0, "R11", "@P1"),
+        (0, "R12", "@P0"),
+    )
+    for index, (frame_start, base, load_predicate) in enumerate(groups):
+        group = local[index * 7 : (index + 1) * 7]
         covered = []
         for _, predicate, opcode, operands in group[:4]:
             match = re.fullmatch(r"\[R1(?:\+(0x[0-9a-f]+))?\], R\d+", operands)
@@ -475,16 +522,16 @@ def classify(rows):
                 raise ValueError("unclassified F32 scratch store")
             offset = int(match[1], 16) if match[1] else 0
             covered.extend(range(offset, offset + (8 if opcode == "STL.64" else 4)))
-        if sorted(covered) not in (list(range(28)), list(range(28, 56))):
+        if sorted(covered) != list(range(frame_start, frame_start + 28)):
             raise ValueError("F32 scratch store escapes reviewed array")
         for (_, predicate, opcode, operands), read_offset in zip(
             group[4:], (24, 20, 16)
         ):
-            expected_predicate = f"@P{(start // 7) % 2}" if read_offset == 16 else ""
+            expected_predicate = load_predicate if read_offset == 16 else ""
             if (
                 predicate != expected_predicate
                 or opcode != "LDL"
-                or not re.fullmatch(rf"R\d+, \[R\d+\+{read_offset:#x}\]", operands)
+                or not re.fullmatch(rf"R\d+, \[{base}\+{read_offset:#x}\]", operands)
             ):
                 raise ValueError("unclassified F32 scratch load")
         arrays.append(
@@ -495,12 +542,12 @@ def classify(rows):
             }
         )
     # Address construction and the loop guards are bound by the helper hash.
-    if [(p, op, operands) for _, p, op, operands in local[126:]] != [
-        ("", "STL.64", "[R18], R66"),
-        ("", "STL.64", "[R61+-0x78], R66"),
-        ("@P0", "LDL.64", "R24, [R1+0x40]"),
-        ("", "LDL.64", "R16, [R1+0x48]"),
-        ("", "LDL.64", "R18, [R1+0x50]"),
+    if [(p, op, operands) for _, p, op, operands in local[189:]] != [
+        ("", "STL.64", "[R33], R4"),
+        ("", "STL.64", "[R71+-0x78], R32"),
+        ("@P0", "LDL.64", "R30, [R1+0x40]"),
+        ("", "LDL.64", "R2, [R1+0x48]"),
+        ("", "LDL.64", "R4, [R1+0x50]"),
     ]:
         raise ValueError("unclassified F64 scratch access")
     # Reviewed guards admit finite large F32 fields 143..254. The index is
@@ -523,7 +570,7 @@ def classify(rows):
         {
             "kind": "F64 reduction products",
             "frame_range": [56, 96],
-            "sites": [row[0] for row in local[126:]],
+            "sites": [row[0] for row in local[189:]],
         }
     )
     return arrays
@@ -550,11 +597,11 @@ def qualify(cubin, sass, entries, provenance):
         "entry": ENTRY,
         "frame_bytes": 96,
         "minimum_stack_bytes": 96,
-        "registers": 71,
-        "code_bytes": 106112,
+        "registers": 79,
+        "code_bytes": 152832,
         "threads": [128, 1, 1],
-        "local_load_sites": 57,
-        "local_store_sites": 74,
+        "local_load_sites": 84,
+        "local_store_sites": 110,
         "call_sites": calls,
         "classified_arrays": arrays,
         "unclassified_local_sites": [],

@@ -6,6 +6,7 @@ fn main() {
     for file in [
         "common.rs",
         "burn-packed-common.rs",
+        "burn-log1p.rs",
         "burn-math.rs",
         "burn-erf.rs",
         "burn-remainder.rs",

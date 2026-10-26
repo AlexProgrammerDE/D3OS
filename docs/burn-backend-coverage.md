@@ -570,6 +570,61 @@ Zero and the minimum subnormal differ by one representable step. The separate cl
 
 These checks cover forward Exp and Log. General typed autodiff, full backend coverage, and workload performance parity remain incomplete.
 
+## Typed Log1p, Sinh, Cosh, and Tan
+
+Protocol 48 adds Log1p, Sinh, Cosh, and Tan across F64, F32, Flex32, F16, and BF16.
+The floating entry contains 23 operations. The portable bundle retains 248 entries and 82 compute profiles.
+F64 keeps double operands and results. Half inputs widen to F32, then round once to destination storage.
+
+Log1p uses a precise F32/F64 polynomial implementation with explicit nearest-even arithmetic.
+It preserves tiny inputs, subnormals, and signed zero without first rounding `1 + x`.
+The existing F32 Log1p, Asinh, Acosh, and Atanh entries also use this helper.
+The other 243 instruction entries remain unchanged from the trigonometric checkpoint.
+
+The table gives project qualification targets in representable steps.
+
+| Operation | F64 target | F32/Flex32 target |
+|---|---:|---:|
+| Log1p | 1 | 1 |
+| Sinh | 2 | 3 |
+| Cosh | 1 | 2 |
+| Tan | 2 | 4 |
+
+Half results must belong to the destination rounding image of the permitted F32 neighbors.
+Special values, zero signs, nonzero preservation, result signs, and the Cosh range have separate gates.
+The independent MPFR corpus contains 700,819 rows, including every F16 and BF16 encoding for each operation.
+
+On the D3OS GPU, 7,640 guarded launches pass 3,443,996 comparisons with zero qualification failures.
+The shared Burn API suite passes 2,560 cases and 1,595,518 result values.
+All earlier GPU regression gates pass, including the inverse functions that use the new Log1p helper.
+The guest compiles all three Tile IR families inside D3OS. Their code bytes match the qualified host outputs.
+
+The renewed host certificate binds 79 registers, 152,832 code bytes, a 96-byte frame, and all 194 reduction-scratch instruction sites.
+It retains the zero-local-memory checks for other protected entries.
+Aggregate evidence binds reference-class populations to the selected workload and checks worst-case witnesses against immutable reference rows.
+Materialized chains retain bounded class populations because their actual stored intermediates can vary within the numerical allowance.
+
+The strict Linux CUDA attempt retains the pinned rank-zero rejection.
+The next attempt excludes rank zero and retains the Flex32 upload rejection.
+With both excluded, Linux checks 1,487,496 values and reports 163,294 Log1p failures.
+Its observed Sinh, Cosh, and Tan cells report zero failures.
+Both original and updated-metadata Linux records remain preserved.
+These correctness results do not establish full Burn coverage, general typed autodiff, or performance parity.
+
+The Native archive is `target/nvidia/burn-backend-validation/typed-unary-first/`.
+Linux archives use `target/nvidia/burn-backend-audit/linux-typed-unary-`.
+The comparison and section records use the `target/nvidia/burn-backend-audit/typed-unary-` prefix.
+
+Build the Linux runner from the repository root:
+
+```bash
+cargo +1.98.1 build --manifest-path tools/mnist-benchmark/Cargo.toml --release --locked --bin typed_unary
+```
+Run `python3 tools/nvidia/typed-unary-generate.py --check` to reproduce the numerical references.
+Run `python3 tools/nvidia/test-typed-unary.py` to check the evidence validator without a GPU.
+Use `--burn-typed-unary` with the Linux launcher and a fresh output directory for each attempt.
+Its dtype, operation, finite, rank-zero, and Flex32 filters declare the selected comparison domain.
+
 ## Typed trigonometric functions
 
 Protocol 47 adds Tanh, Sin, and Cos across F64, F32, Flex32, F16, and BF16.
