@@ -241,8 +241,8 @@ mod tests {
             let failure = tensor.value.unwrap_err();
             assert!(matches!(failure.cause, Error::InvalidParameter));
             failure.report();
+            assert!(failure.reported.load(Ordering::Acquire));
         }
-        assert!(CONTEXT.check().is_ok());
     }
 
     #[test]
