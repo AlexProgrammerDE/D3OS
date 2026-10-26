@@ -6,6 +6,7 @@ pub mod deform;
 pub mod erf;
 pub mod float_arithmetic;
 pub mod float_extrema;
+pub mod float_reduction;
 pub mod float_rounding;
 pub mod integer;
 pub mod integer_arithmetic;

@@ -8,6 +8,7 @@ mod deform;
 mod dispatch;
 mod float_arithmetic;
 mod float_extrema;
+mod float_reduction;
 mod float_rounding;
 mod indexed;
 mod indexing;
@@ -249,6 +250,7 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     ));
     integer_reduction::run(backend)?;
     float_extrema::run(backend)?;
+    float_reduction::run(backend)?;
     typed_erf::run(backend)?;
     let erf_options = d3os_ai::validation::typed_erf::Options::default();
     let erf_report = d3os_ai::burn::tensor::try_read_sync(d3os_ai::validation::typed_erf::run(&device, &erf_options))

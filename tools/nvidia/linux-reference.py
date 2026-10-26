@@ -449,7 +449,65 @@ def validate_float_extrema(text, expected, *, dtype=None, skip_rank_zero=False, 
         raise RuntimeError("Linux floating extrema retained failure evidence")
 
 
-def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_finite=False, sort_compile_log=False, compaction_aligned=False, quantized_empty_case=None, scatter_finite=False, select_updates=False, nd_unique=False, nd_nonempty=False, nd_scalar_grad=False, nd_no_scalar=False, storage_flex_direct=False, storage_no_flex32=False, conversions_no_flex32=False, remainder_finite=False, remainder_wide=False, inverse_finite=False, inverse_diagnostic=False, interpolate_case="normal", spatial_empty=False, spatial_case=None, spatial_exact=False, spatial_empty_backward=False, deform_empty=False, deform_exact=False, deform_case=None, deform_forward_only=False, predicate_no_flex32=False, predicate_finite=False, movement_no_flex32=False, movement_skip_empty_bool_scatter=False, movement_matching_bool_masks=False, indexed_no_flex32=False, indexed_skip_scalar_nd=False, integer_arithmetic_dtype=None, integer_arithmetic_op=None, integer_reduction_arguments=(), integer_reduction_error_case=None, float_extrema_arguments=(), float_extrema_error_case=None, float_arithmetic_arguments=(), float_rounding_arguments=(), relu_arguments=(), typed_remainder_arguments=(), typed_exp_log_arguments=(), typed_trig_arguments=(), typed_unary_arguments=(), typed_power_arguments=(), typed_erf_arguments=()):
+def validate_float_reduction(text, expected, *, dtype=None, skip_rank_zero=False, nonempty=False, error_case=None):
+    if error_case is not None:
+        raise RuntimeError(f"isolated Linux floating reduction diagnostic is failure evidence: {error_case}")
+    options = {
+        "dtype": "Flex32" if dtype == "flex32" else dtype.upper() if dtype else None,
+        "skip_rank_zero": skip_rank_zero, "include_empty": not nonempty,
+        "native_error_extensions": False,
+    }
+    if (expected.get("options") != options or expected.get("executionScope") != "LinuxDefault"
+            or expected.get("reference") != "exact_integer_ieee_rne_steps"
+            or expected.get("new_four_global_mean") != "stable_original_axis_length_axis_mean_stored_each_stage"):
+        raise RuntimeError("Linux floating reduction plan selects a different policy or scope")
+
+    def parse(value):
+        def unique(pairs):
+            record = {}
+            for key, item in pairs:
+                if key in record:
+                    raise ValueError(f"duplicate floating reduction field: {key}")
+                record[key] = item
+            return record
+
+        def nonfinite(constant):
+            raise ValueError(f"nonfinite floating reduction field: {constant}")
+
+        try:
+            return json.loads(value, object_pairs_hook=unique, parse_constant=nonfinite)
+        except (ValueError, TypeError) as error:
+            raise RuntimeError("malformed floating reduction JSON evidence") from error
+
+    def exact(actual, planned):
+        return json.dumps(actual, sort_keys=True, allow_nan=False) == json.dumps(planned, sort_keys=True, allow_nan=False)
+
+    device, models, diagnostics = expected["device_cases"], expected["model_cases"], expected["diagnostic_cases"]
+    report = {
+        "attempted": device, "passed": device, "failed": 0,
+        "model_passed": models, "skipped_diagnostics": diagnostics, "observed_errors": 0,
+        "checks": expected["checks"], "failures": [],
+    }
+    reports = re.findall(r"^BURN_FLOAT_REDUCTION_REPORT ([^\r\n]*)\r?$", text, re.MULTILINE)
+    if len(reports) != 1 or not exact(parse(reports[0]), report):
+        raise RuntimeError("Linux floating reduction observations differ from the staged plan")
+    policy = (
+        f" attempted={device} passed={device} model_passed={models} skipped_diagnostics={diagnostics} observed_errors=0"
+        " reference=exact_integer_ieee_rne_steps new_four=serial_axis_stable_original_length_global_stored_each_stage"
+        " F32=legacy_all_order_exact linux=selected_graph_observations_not_general_equivalence"
+        " physical_padding_alias_allocations_residency=separate_raw_contract scope=forward_sum_product_mean"
+        " os=linux backend=cuda fusion=enabled_materialized_chain_steps"
+    )
+    prefix = f"BURN_FLOAT_REDUCTION_OK corpus={expected['corpus']} totals="
+    footers = re.findall(r"^BURN_FLOAT_REDUCTION_OK [^\r\n]*\r?$", text, re.MULTILINE)
+    match = re.fullmatch(re.escape(prefix) + r"(\{[^\r\n]*\})" + re.escape(policy) + r"\r?", footers[0]) if len(footers) == 1 else None
+    if not match or not exact(parse(match[1]), expected):
+        raise RuntimeError("Linux floating reduction totals or policy differ from the staged plan")
+    if any(marker in text for marker in ("FLOAT_REDUCTION_FAILURE", "panicked at", "LINUX_NVIDIA_REFERENCE_FAILED")):
+        raise RuntimeError("Linux floating reduction retained failure evidence")
+
+
+def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_finite=False, sort_compile_log=False, compaction_aligned=False, quantized_empty_case=None, scatter_finite=False, select_updates=False, nd_unique=False, nd_nonempty=False, nd_scalar_grad=False, nd_no_scalar=False, storage_flex_direct=False, storage_no_flex32=False, conversions_no_flex32=False, remainder_finite=False, remainder_wide=False, inverse_finite=False, inverse_diagnostic=False, interpolate_case="normal", spatial_empty=False, spatial_case=None, spatial_exact=False, spatial_empty_backward=False, deform_empty=False, deform_exact=False, deform_case=None, deform_forward_only=False, predicate_no_flex32=False, predicate_finite=False, movement_no_flex32=False, movement_skip_empty_bool_scatter=False, movement_matching_bool_masks=False, indexed_no_flex32=False, indexed_skip_scalar_nd=False, integer_arithmetic_dtype=None, integer_arithmetic_op=None, integer_reduction_arguments=(), integer_reduction_error_case=None, float_extrema_arguments=(), float_extrema_error_case=None, float_reduction_arguments=(), float_reduction_error_case=None, float_arithmetic_arguments=(), float_rounding_arguments=(), relu_arguments=(), typed_remainder_arguments=(), typed_exp_log_arguments=(), typed_trig_arguments=(), typed_unary_arguments=(), typed_power_arguments=(), typed_erf_arguments=()):
     purposes = {
         "quantization": "shared API conformance; no performance measurement",
         "quantized_empty": "empty quantized API diagnostic and record round trip; execution errors retained; no performance measurement",
@@ -471,6 +529,7 @@ def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_fi
         "integer_arithmetic": "exact integer elementwise arithmetic across eight formats; independent U128/I128 reference; no performance measurement",
         "integer_reduction": "exact integer reductions against independent U128/I128 Native policy; Linux qualification pending; no performance measurement",
         "float_extrema": "exact floating extrema source bits against independent IEEE policy; Linux payload, zero and global traversal diagnostics; no performance measurement",
+        "float_reduction": "selected floating Sum/Product/Mean against exact IEEE step references; symbolic rows separate from GPU values; no performance measurement",
         "indexed": "ordinary ND reads, indexed assignment and requested index dtypes; exact byte records; no performance measurement",
         "integer_matrix": "public I32 matrix product conformance; no performance measurement",
         "scan": "public cumulative operations and gradients; no performance measurement",
@@ -490,9 +549,17 @@ def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_fi
     purpose = "erf error profile and GELU conformance; strict failures reported" if erf_profile else purposes[kind]
     program = f"/burn-{kind}"
     arguments = " --profile" if erf_profile else " --nonempty" if nonempty else ""
-    if kind in ("integer_reduction", "float_extrema"):
-        selected_arguments = list(integer_reduction_arguments if kind == "integer_reduction" else float_extrema_arguments)
-        error_case = integer_reduction_error_case if kind == "integer_reduction" else float_extrema_error_case
+    if kind in ("integer_reduction", "float_extrema", "float_reduction"):
+        selected_arguments = list({
+            "integer_reduction": integer_reduction_arguments,
+            "float_extrema": float_extrema_arguments,
+            "float_reduction": float_reduction_arguments,
+        }[kind])
+        error_case = {
+            "integer_reduction": integer_reduction_error_case,
+            "float_extrema": float_extrema_error_case,
+            "float_reduction": float_reduction_error_case,
+        }[kind]
         expected_summary = json.loads(subprocess.check_output(
             [str(binary), "--expected-summary", *selected_arguments], text=True, cwd=ROOT,
         ))
@@ -502,11 +569,17 @@ def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_fi
         ))
         rows = diagnostics["diagnostics"]
         ids = [row["id"] for row in rows]
-        if len(ids) != expected_summary["diagnostic_cases"] or len(set(ids)) != len(ids):
+        if kind == "float_reduction":
+            if diagnostics.get("device_initialized") is not False or len(ids) != expected_summary["cases"]:
+                raise RuntimeError("floating reduction description differs from its complete selected corpus")
+            error_ids = [row["id"] for row in rows if row.get("execution") == "isolated_linux_panic_diagnostic_not_executed"]
+        else:
+            error_ids = ids
+        if len(error_ids) != expected_summary["diagnostic_cases"] or len(set(ids)) != len(ids):
             raise RuntimeError("reduction diagnostic plan differs from the expected summary")
         (root.parent / f"burn-{kind}-diagnostics.json").write_text(json.dumps(diagnostics, indent=2) + "\n")
         if error_case is not None:
-            if error_case not in ids:
+            if error_case not in error_ids:
                 raise ValueError(f"reduction diagnostic ID is not in the selected corpus: {error_case}")
             selected_arguments.append(f"--linux-error-case={error_case}")
             purpose = "isolated invalid reduction API diagnostic; Linux panics retained as failure evidence; no conformance or performance measurement"
@@ -678,7 +751,7 @@ exec {program}{arguments}
         sources["expected_summary"] = root.parent / "burn-relu-expected.json"
     if kind == "integer_arithmetic":
         sources["expected_summary"] = root.parent / "burn-integer_arithmetic-expected.json"
-    if kind in ("integer_reduction", "float_extrema"):
+    if kind in ("integer_reduction", "float_extrema", "float_reduction"):
         sources["expected_summary"] = root.parent / f"burn-{kind}-expected.json"
         sources["diagnostics"] = root.parent / f"burn-{kind}-diagnostics.json"
     if kind == "indexed":
@@ -697,7 +770,7 @@ exec {program}{arguments}
     (root.parent / f"burn-{kind}-manifest.json").write_text(json.dumps({
         "execution_os": "linux", "backend": "CUDA storage; host sort/argsort fallback; GPU top-k and gradients" if kind == "sort" else "CUDA storage; host argwhere fallback; GPU gathers and gradients" if kind == "compaction" else "cuda GPU", "framework": "burn", "burn_version": "0.22.1",
         "purpose": purpose,
-        "arguments": shlex.split(arguments) if kind in ("integer_reduction", "float_extrema") else arguments.split(),
+        "arguments": shlex.split(arguments) if kind in ("integer_reduction", "float_extrema", "float_reduction") else arguments.split(),
         "inputs": {name: {"bytes": path.stat().st_size, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()} for name, path in sources.items()},
     }, indent=2) + "\n")
 
@@ -1825,6 +1898,11 @@ def main():
     parser.add_argument("--burn-predicate-no-flex32", action="store_true", help="exclude Flex32 uploads from the predicate corpus")
     parser.add_argument("--burn-predicate-finite", action="store_true", help="isolate finite predicate input values from IEEE edge diagnostics")
     parser.add_argument("--burn-integer-power", type=Path, help="run exact public I32 integer power conformance on Linux CUDA")
+    parser.add_argument("--burn-float-reduction", type=Path, help="run selected floating Sum/Product/Mean checks against exact IEEE step references")
+    parser.add_argument("--burn-float-reduction-dtype", choices=("f64", "f32", "flex32", "f16", "bf16"))
+    parser.add_argument("--burn-float-reduction-skip-rank-zero", action="store_true")
+    parser.add_argument("--burn-float-reduction-nonempty", action="store_true")
+    parser.add_argument("--burn-float-reduction-linux-error-case", metavar="STABLE_ID", help="retain one isolated invalid API diagnostic as failure evidence")
     parser.add_argument("--burn-float-extrema", type=Path, help="run exact source-bit floating extrema checks on Linux CUDA")
     parser.add_argument("--burn-float-extrema-dtype", choices=("f64", "f32", "flex32", "f16", "bf16"))
     parser.add_argument("--burn-float-extrema-skip-rank-zero", action="store_true")
@@ -1934,7 +2012,7 @@ def main():
     args = parser.parse_args()
     if args.nsight_directory and not args.quantized_profile:
         parser.error("--nsight-directory requires --quantized-profile")
-    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.burn_typed_exp_log, args.burn_typed_trig, args.burn_typed_unary, args.burn_typed_power, args.burn_typed_erf, args.burn_typed_remainder, args.burn_relu, args.burn_float_rounding, args.burn_float_arithmetic, args.burn_integer_arithmetic, args.burn_integer_reduction, args.burn_float_extrema, args.burn_indexed, args.burn_movement, args.burn_predicate, args.burn_integer_power, args.burn_integer, args.burn_integer_matmul, args.burn_scatter_updates, args.burn_nd_indexing, args.burn_storage, args.burn_conversions, args.burn_remainder, args.burn_inverse, args.burn_spatial_convolution, args.burn_deform, args.burn_interpolate, args.burn_quantized_empty, args.burn_compaction, args.burn_cross, args.burn_scan, args.burn_sort, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
+    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.burn_typed_exp_log, args.burn_typed_trig, args.burn_typed_unary, args.burn_typed_power, args.burn_typed_erf, args.burn_typed_remainder, args.burn_relu, args.burn_float_rounding, args.burn_float_arithmetic, args.burn_integer_arithmetic, args.burn_integer_reduction, args.burn_float_extrema, args.burn_float_reduction, args.burn_indexed, args.burn_movement, args.burn_predicate, args.burn_integer_power, args.burn_integer, args.burn_integer_matmul, args.burn_scatter_updates, args.burn_nd_indexing, args.burn_storage, args.burn_conversions, args.burn_remainder, args.burn_inverse, args.burn_spatial_convolution, args.burn_deform, args.burn_interpolate, args.burn_quantized_empty, args.burn_compaction, args.burn_cross, args.burn_scan, args.burn_sort, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
         parser.error("--quantized-profile requires a separate diagnostic guest")
     if args.pin_vcpus and len(os.sched_getaffinity(0)) != 4:
         parser.error("--pin-vcpus requires an inherited affinity of four host CPUs")
@@ -1971,6 +2049,7 @@ def main():
                 bool(args.burn_integer_arithmetic),
                 bool(args.burn_integer_reduction),
                 bool(args.burn_float_extrema),
+                bool(args.burn_float_reduction),
                 bool(args.burn_indexed),
                 bool(args.burn_movement),
                 bool(args.burn_predicate),
@@ -2110,6 +2189,16 @@ def main():
         parser.error("--burn-integer-arithmetic requires a built conformance executable")
     if (args.burn_integer_arithmetic_dtype or args.burn_integer_arithmetic_op) and not args.burn_integer_arithmetic:
         parser.error("integer arithmetic filters require --burn-integer-arithmetic")
+    float_reduction_arguments = []
+    if args.burn_float_reduction_dtype is not None:
+        float_reduction_arguments.append(f"--dtype={args.burn_float_reduction_dtype}")
+    for flag, enabled in (("skip-rank-zero", args.burn_float_reduction_skip_rank_zero), ("nonempty", args.burn_float_reduction_nonempty)):
+        if enabled:
+            float_reduction_arguments.append(f"--{flag}")
+    if args.burn_float_reduction and not args.burn_float_reduction.is_file():
+        parser.error("--burn-float-reduction requires a built conformance executable")
+    if (float_reduction_arguments or args.burn_float_reduction_linux_error_case is not None) and not args.burn_float_reduction:
+        parser.error("floating reduction filters and diagnostics require --burn-float-reduction")
     float_extrema_arguments = []
     if args.burn_float_extrema_dtype is not None:
         float_extrema_arguments.append(f"--dtype={args.burn_float_extrema_dtype}")
@@ -2274,6 +2363,8 @@ def main():
         burn_probe(args.directory / "root", args.burn_float_arithmetic.resolve(), "float_arithmetic", float_arithmetic_arguments=float_arithmetic_arguments)
     elif args.burn_integer_arithmetic:
         burn_probe(args.directory / "root", args.burn_integer_arithmetic.resolve(), "integer_arithmetic", integer_arithmetic_dtype=args.burn_integer_arithmetic_dtype, integer_arithmetic_op=args.burn_integer_arithmetic_op)
+    elif args.burn_float_reduction:
+        burn_probe(args.directory / "root", args.burn_float_reduction.resolve(), "float_reduction", float_reduction_arguments=float_reduction_arguments, float_reduction_error_case=args.burn_float_reduction_linux_error_case)
     elif args.burn_float_extrema:
         burn_probe(args.directory / "root", args.burn_float_extrema.resolve(), "float_extrema", float_extrema_arguments=float_extrema_arguments, float_extrema_error_case=args.burn_float_extrema_linux_error_case)
     elif args.burn_integer_reduction:
@@ -2543,6 +2634,14 @@ def main():
             raise RuntimeError("Linux CUDA integer arithmetic did not complete with the expected corpus")
         if "physical_padding=not_public extensions=false mixed_exponents=same_format_portable unsigned_neg=excluded_native_extension" not in text:
             raise RuntimeError("Linux CUDA integer arithmetic scope differs from the staged corpus")
+    if args.burn_float_reduction:
+        expected = json.loads((args.directory / "burn-float_reduction-expected.json").read_text())
+        validate_float_reduction(
+            text, expected, dtype=args.burn_float_reduction_dtype,
+            skip_rank_zero=args.burn_float_reduction_skip_rank_zero,
+            nonempty=args.burn_float_reduction_nonempty,
+            error_case=args.burn_float_reduction_linux_error_case,
+        )
     if args.burn_float_extrema:
         expected = json.loads((args.directory / "burn-float_extrema-expected.json").read_text())
         validate_float_extrema(

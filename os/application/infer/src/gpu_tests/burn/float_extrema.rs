@@ -1098,7 +1098,11 @@ fn audit_geometry(case: &Case) -> Result<()> {
     Ok(())
 }
 fn contract(cases: &[Case]) -> Result<()> {
-    if abi::VERSION != 52 || abi::KERNEL_COUNT != 84 || Kernel::FloatExtrema as usize != 83 || oracle::CORPUS_VERSION != 1 || raw::FORMATS != FORMATS {
+    if !matches!((abi::VERSION, abi::KERNEL_COUNT), (52, 84) | (53, 85))
+        || Kernel::FloatExtrema as usize != 83
+        || oracle::CORPUS_VERSION != 1
+        || raw::FORMATS != FORMATS
+    {
         return Err(String::from("float extrema protocol/registration mismatch"));
     }
     let shared = expected_shared();

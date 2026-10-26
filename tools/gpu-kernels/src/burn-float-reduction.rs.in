@@ -1,0 +1,279 @@
+// Serial RN/noFTZ floating reductions over SDK-validated axis-only Layout24 packets.
+// Each owner writes a complete packed word or both U32 words of an F64 value.
+fn fr_block_id() -> u32 {
+    let id: i32 = get_tile_block_id().0;
+    let source: Tile<i32, { [] }> = scalar_to_tile(id);
+    let bits: Tile<u32, { [] }> = bitcast(source);
+    tile_to_scalar(bits)
+}
+fn fr_lanes<const B: i32>() -> Tile<u32, { [B] }> {
+    iota(shape![B])
+}
+fn fr_indices() -> Tile<u32, { [128] }> {
+    fr_lanes::<128>() + broadcast_scalar(fr_block_id() * 128u32, shape![128])
+}
+unsafe fn fr_read_tile<E: ElementType, const B: i32>(p: *const E, index: Tile<u32, { [B] }>, mask: Tile<bool, { [B] }>, padding: E) -> Tile<E, { [B] }> {
+    let base: PointerTile<*const E, { [] }> = pointer_to_tile(p);
+    let base: PointerTile<*const E, { [1] }> = base.reshape(shape![1]);
+    let base: PointerTile<*const E, { [B] }> = base.broadcast(shape![B]);
+    // Tile offsets are signed. Zero-extend U32 word indices before pointer arithmetic.
+    let wide_index: Tile<u64, { [B] }> = exti(index);
+    let pointer = base.offset_tile(wide_index);
+    let (value, _): (Tile<E, { [B] }>, Token) =
+        unsafe { load_ptr_tko(pointer, ordering::Weak, None::<scope::TileBlock>, Some(mask), Some(padding), None, Latency::<0>) };
+    value
+}
+unsafe fn fr_write_tile<E: ElementType, const B: i32>(p: *mut E, index: Tile<u32, { [B] }>, value: Tile<E, { [B] }>, mask: Tile<bool, { [B] }>) {
+    let base: PointerTile<*mut E, { [] }> = pointer_to_tile(p);
+    let base: PointerTile<*mut E, { [1] }> = base.reshape(shape![1]);
+    let base: PointerTile<*mut E, { [B] }> = base.broadcast(shape![B]);
+    // Tile offsets are signed. Zero-extend U32 word indices before pointer arithmetic.
+    let wide_index: Tile<u64, { [B] }> = exti(index);
+    let pointer = base.offset_tile(wide_index);
+    unsafe { store_ptr_tko(pointer, value, ordering::Weak, None::<scope::TileBlock>, Some(mask), None, Latency::<0>) };
+}
+
+fn fr_signed(x: u32) -> i32 {
+    let t: Tile<u32, { [] }> = scalar_to_tile(x);
+    let t: Tile<i32, { [] }> = bitcast(t);
+    tile_to_scalar(t)
+}
+fn fr_low_mask() -> u64 {
+    let t: Tile<u64, { [] }> = (scalar_to_tile(1u64) << scalar_to_tile(32u64)) - scalar_to_tile(1u64);
+    tile_to_scalar(t)
+}
+fn fr_low32(x: Tile<u64, { [128] }>) -> Tile<u32, { [128] }> {
+    trunci(x & broadcast_scalar(fr_low_mask(), shape![128]), overflow::NoUnsignedWrap)
+}
+unsafe fn fr_raw_read(src: *const u32, index: Tile<u32, { [128] }>, valid: Tile<bool, { [128] }>, format: u32) -> Tile<u64, { [128] }> {
+    let safe = select(valid, index, broadcast_scalar(0u32, shape![128]));
+    if format == 0u32 {
+        let lo = unsafe { fr_read_tile(src, safe * broadcast_scalar(2u32, shape![128]), valid, 0u32) };
+        let hi = unsafe {
+            fr_read_tile(
+                src,
+                safe * broadcast_scalar(2u32, shape![128]) + broadcast_scalar(1u32, shape![128]),
+                valid,
+                0u32,
+            )
+        };
+        exti(lo) | (exti(hi) << broadcast_scalar(32u64, shape![128]))
+    } else if format == 2u32 {
+        exti(unsafe { fr_read_tile(src, safe, valid, 0u32) })
+    } else {
+        let word = unsafe { fr_read_tile(src, safe >> broadcast_scalar(1u32, shape![128]), valid, 0u32) };
+        let shift = (safe & broadcast_scalar(1u32, shape![128])) * broadcast_scalar(16u32, shape![128]);
+        exti((word >> shift) & broadcast_scalar(65535u32, shape![128]))
+    }
+}
+fn fr_address(
+    row: Tile<u32, { [128] }>, col: Tile<u32, { [128] }>, axis: u32, offset: u32, d0: u32, d1: u32, d2: u32, d3: u32, d4: u32, d5: u32, d6: u32, d7: u32,
+    s0: u32, s1: u32, s2: u32, s3: u32, s4: u32, s5: u32, s6: u32, s7: u32,
+) -> Tile<u32, { [128] }> {
+    let mut linear = row;
+    let mut address = broadcast_scalar(fr_signed(offset), shape![128]);
+    if axis != 7u32 {
+        let coordinate = linear % broadcast_scalar(d7, shape![128]);
+        let coordinate: Tile<i32, { [128] }> = bitcast(coordinate);
+        address = address + coordinate * broadcast_scalar(fr_signed(s7), shape![128]);
+        linear = linear / broadcast_scalar(d7, shape![128]);
+    }
+    if axis != 6u32 {
+        let coordinate = linear % broadcast_scalar(d6, shape![128]);
+        let coordinate: Tile<i32, { [128] }> = bitcast(coordinate);
+        address = address + coordinate * broadcast_scalar(fr_signed(s6), shape![128]);
+        linear = linear / broadcast_scalar(d6, shape![128]);
+    }
+    if axis != 5u32 {
+        let coordinate = linear % broadcast_scalar(d5, shape![128]);
+        let coordinate: Tile<i32, { [128] }> = bitcast(coordinate);
+        address = address + coordinate * broadcast_scalar(fr_signed(s5), shape![128]);
+        linear = linear / broadcast_scalar(d5, shape![128]);
+    }
+    if axis != 4u32 {
+        let coordinate = linear % broadcast_scalar(d4, shape![128]);
+        let coordinate: Tile<i32, { [128] }> = bitcast(coordinate);
+        address = address + coordinate * broadcast_scalar(fr_signed(s4), shape![128]);
+        linear = linear / broadcast_scalar(d4, shape![128]);
+    }
+    if axis != 3u32 {
+        let coordinate = linear % broadcast_scalar(d3, shape![128]);
+        let coordinate: Tile<i32, { [128] }> = bitcast(coordinate);
+        address = address + coordinate * broadcast_scalar(fr_signed(s3), shape![128]);
+        linear = linear / broadcast_scalar(d3, shape![128]);
+    }
+    if axis != 2u32 {
+        let coordinate = linear % broadcast_scalar(d2, shape![128]);
+        let coordinate: Tile<i32, { [128] }> = bitcast(coordinate);
+        address = address + coordinate * broadcast_scalar(fr_signed(s2), shape![128]);
+        linear = linear / broadcast_scalar(d2, shape![128]);
+    }
+    if axis != 1u32 {
+        let coordinate = linear % broadcast_scalar(d1, shape![128]);
+        let coordinate: Tile<i32, { [128] }> = bitcast(coordinate);
+        address = address + coordinate * broadcast_scalar(fr_signed(s1), shape![128]);
+        linear = linear / broadcast_scalar(d1, shape![128]);
+    }
+    if axis != 0u32 {
+        let coordinate = linear % broadcast_scalar(d0, shape![128]);
+        let coordinate: Tile<i32, { [128] }> = bitcast(coordinate);
+        address = address + coordinate * broadcast_scalar(fr_signed(s0), shape![128]);
+    }
+    let step = if axis == 0u32 {
+        s0
+    } else if axis == 1u32 {
+        s1
+    } else if axis == 2u32 {
+        s2
+    } else if axis == 3u32 {
+        s3
+    } else if axis == 4u32 {
+        s4
+    } else if axis == 5u32 {
+        s5
+    } else if axis == 6u32 {
+        s6
+    } else {
+        s7
+    };
+    let col: Tile<i32, { [128] }> = bitcast(col);
+    bitcast(address + col * broadcast_scalar(fr_signed(step), shape![128]))
+}
+unsafe fn fr_numeric_body(
+    src: *const u32, dst: *mut u32, count: u32, control: u32, axis: u32, offset: u32, extent: u32, length: u32, d0: u32, d1: u32, d2: u32, d3: u32, d4: u32,
+    d5: u32, d6: u32, d7: u32, s0: u32, s1: u32, s2: u32, s3: u32, s4: u32, s5: u32, s6: u32, s7: u32,
+) {
+    // Preconditions: canonical ABI24, N>0, axis-only, signed span and all buffer extents validated by host.
+    let format = (control >> 8u32) & 255u32;
+    let op = control & 255u32;
+    let per_word = if format == 3u32 || format == 4u32 { 2u32 } else { 1u32 };
+    let writers = (count + per_word - 1u32) / per_word;
+    let owner = fr_indices();
+    let owner_valid = lt_tile(owner, broadcast_scalar(writers, shape![128]));
+    let safe_owner = select(owner_valid, owner, broadcast_scalar(0u32, shape![128]));
+    let mut packed = broadcast_scalar(0u32, shape![128]);
+    let mut high = broadcast_scalar(0u32, shape![128]);
+    for slot in 0u32..per_word {
+        let row = safe_owner * broadcast_scalar(per_word, shape![128]) + broadcast_scalar(slot, shape![128]);
+        let valid = owner_valid & lt_tile(row, broadcast_scalar(count, shape![128]));
+        let safe_row = select(valid, row, broadcast_scalar(0u32, shape![128]));
+        let result: Tile<u64, { [128] }> = if format == 0u32 {
+            let mut acc = if op == 2u32 {
+                broadcast_scalar(1f64, shape![128])
+            } else {
+                broadcast_scalar(0f64, shape![128])
+            };
+            let mut col = 0u32;
+            while col < length {
+                let safe_col = select(valid, broadcast_scalar(col, shape![128]), broadcast_scalar(0u32, shape![128]));
+                let address = fr_address(safe_row, safe_col, axis, offset, d0, d1, d2, d3, d4, d5, d6, d7, s0, s1, s2, s3, s4, s5, s6, s7);
+                let load_valid = valid & lt_tile(address, broadcast_scalar(extent, shape![128]));
+                let raw = unsafe { fr_raw_read(src, address, load_valid, 0u32) };
+                let value: Tile<f64, { [128] }> = bitcast(raw);
+                acc = if op == 2u32 {
+                    mulf(acc, value, rounding::NearestEven, ftz::Disabled)
+                } else {
+                    addf(acc, value, rounding::NearestEven, ftz::Disabled)
+                };
+                col = col + 1u32;
+            }
+            // Integer axis length goes directly to EA, never through storage or F32.
+            let denominator: Tile<f64, { [128] }> = itof(broadcast_scalar(if length == 0u32 { 1u32 } else { length }, shape![128]), rounding::NearestEven);
+            let value = if op == 1u32 && length != 0u32 {
+                divf(acc, denominator, rounding::NearestEven, ftz::Disabled)
+            } else {
+                acc
+            };
+            let raw: Tile<u64, { [128] }> = bitcast(value);
+            let infinity = broadcast_scalar(0x7ff00000u64, shape![128]) << broadcast_scalar(32u64, shape![128]);
+            let magnitude = raw & ((broadcast_scalar(1u64, shape![128]) << broadcast_scalar(63u64, shape![128])) - broadcast_scalar(1u64, shape![128]));
+            let nan = gt_tile(magnitude, infinity) | broadcast_scalar(op == 1u32 && length == 0u32, shape![128]);
+            select(nan, broadcast_scalar(0x7ff80000u64, shape![128]) << broadcast_scalar(32u64, shape![128]), raw)
+        } else {
+            let mut acc = if op == 2u32 {
+                broadcast_scalar(1f32, shape![128])
+            } else {
+                broadcast_scalar(0f32, shape![128])
+            };
+            let mut col = 0u32;
+            while col < length {
+                let safe_col = select(valid, broadcast_scalar(col, shape![128]), broadcast_scalar(0u32, shape![128]));
+                let address = fr_address(safe_row, safe_col, axis, offset, d0, d1, d2, d3, d4, d5, d6, d7, s0, s1, s2, s3, s4, s5, s6, s7);
+                let load_valid = valid & lt_tile(address, broadcast_scalar(extent, shape![128]));
+                let raw = unsafe { fr_raw_read(src, address, load_valid, format) };
+                let value: Tile<f32, { [128] }> = if format == 2u32 {
+                    bitcast(fr_low32(raw))
+                } else {
+                    let bits: Tile<u16, { [128] }> = trunci(raw & broadcast_scalar(65535u64, shape![128]), overflow::NoUnsignedWrap);
+                    if format == 3u32 {
+                        let stored: Tile<f16, { [128] }> = bitcast(bits);
+                        ftof(stored, rounding::NearestEven)
+                    } else {
+                        let stored: Tile<bf16, { [128] }> = bitcast(bits);
+                        ftof(stored, rounding::NearestEven)
+                    }
+                };
+                acc = if op == 2u32 {
+                    mulf(acc, value, rounding::NearestEven, ftz::Disabled)
+                } else {
+                    addf(acc, value, rounding::NearestEven, ftz::Disabled)
+                };
+                col = col + 1u32;
+            }
+            let denominator: Tile<f32, { [128] }> = itof(broadcast_scalar(if length == 0u32 { 1u32 } else { length }, shape![128]), rounding::NearestEven);
+            let value = if op == 1u32 && length != 0u32 {
+                divf(acc, denominator, rounding::NearestEven, ftz::Disabled)
+            } else {
+                acc
+            };
+            let value_bits: Tile<u32, { [128] }> = bitcast(value);
+            let nan = gt_tile(
+                value_bits & broadcast_scalar(2147483647u32, shape![128]),
+                broadcast_scalar(0x7f800000u32, shape![128]),
+            ) | broadcast_scalar(op == 1u32 && length == 0u32, shape![128]);
+            let result: Tile<u32, { [128] }> = if format == 2u32 {
+                select(nan, broadcast_scalar(0x7fc00000u32, shape![128]), value_bits)
+            } else if format == 3u32 {
+                let stored: Tile<f16, { [128] }> = ftof(value, rounding::NearestEven);
+                let raw: Tile<u16, { [128] }> = bitcast(stored);
+                select(nan, broadcast_scalar(0x7e00u32, shape![128]), exti(raw))
+            } else {
+                let stored: Tile<bf16, { [128] }> = ftof(value, rounding::NearestEven);
+                let raw: Tile<u16, { [128] }> = bitcast(stored);
+                select(nan, broadcast_scalar(0x7fc0u32, shape![128]), exti(raw))
+            };
+            exti(result)
+        };
+        let result = select(valid, result, broadcast_scalar(0u64, shape![128]));
+        if format == 0u32 {
+            packed = fr_low32(result);
+            high = fr_low32(result >> broadcast_scalar(32u64, shape![128]));
+        } else {
+            packed = packed | (fr_low32(result) << broadcast_scalar(slot * 16u32, shape![128]));
+        }
+    }
+    if format == 0u32 {
+        unsafe { fr_write_tile(dst, safe_owner * broadcast_scalar(2u32, shape![128]), packed, owner_valid) };
+        unsafe {
+            fr_write_tile(
+                dst,
+                safe_owner * broadcast_scalar(2u32, shape![128]) + broadcast_scalar(1u32, shape![128]),
+                high,
+                owner_valid,
+            )
+        };
+    } else {
+        unsafe { fr_write_tile(dst, safe_owner, packed, owner_valid) };
+    }
+}
+#[cutile::entry()]
+unsafe fn burn_float_reduce(
+    src: *const u32, dst: *mut u32, count: u32, _rank: u32, control: u32, axis: u32, offset: u32, extent: u32, length: u32, _policy: u32, d0: u32, d1: u32,
+    d2: u32, d3: u32, d4: u32, d5: u32, d6: u32, d7: u32, s0: u32, s1: u32, s2: u32, s3: u32, s4: u32, s5: u32, s6: u32, s7: u32,
+) {
+    unsafe {
+        fr_numeric_body(
+            src, dst, count, control, axis, offset, extent, length, d0, d1, d2, d3, d4, d5, d6, d7, s0, s1, s2, s3, s4, s5, s6, s7,
+        )
+    };
+}

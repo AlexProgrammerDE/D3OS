@@ -3,6 +3,12 @@ use crate::float_arithmetic::{PowerShortcut, power_scalar_shortcut, validate_pow
 use burn_backend::ops::*;
 use burn_backend::tensor::{BoolTensor, Device, FloatTensor, IndexingUpdateOp, IntTensor};
 use burn_backend::{BoolDType, Distribution, ExecutionError, FloatDType, IntDType, Scalar, Shape, Slice, TensorData};
+
+fn default_mean_count(shape: &Shape) -> Scalar {
+    let num_elems = shape.num_elements() as f32;
+    num_elems.into()
+}
+
 impl FloatTensorOps<Self> for Native {
     fn float_from_data(data: TensorData, _device: &Device<Self>) -> FloatTensor<Self> {
         BackendTensor::build("float_from_data", data.shape().clone(), data.dtype(), || {
@@ -202,6 +208,15 @@ impl FloatTensorOps<Self> for Native {
     }
     fn float_sum_dim(tensor: FloatTensor<Self>, dim: usize) -> FloatTensor<Self> {
         reduce("float_sum_dim", &tensor, Some(dim), Reduction::Sum, tensor.dtype())
+    }
+    fn float_mean(tensor: FloatTensor<Self>) -> FloatTensor<Self> {
+        if matches!(tensor.dtype(), DType::F64 | DType::Flex32 | DType::F16 | DType::BF16) {
+            return reduce("float_mean", &tensor, None, Reduction::Mean, tensor.dtype());
+        }
+        // Preserve Burn's inherited F32 default, including count conversion
+        // before constructing the scalar and the materialized Sum boundary.
+        let count = default_mean_count(&tensor.shape());
+        Self::float_div_scalar(Self::float_sum(tensor), count)
     }
     fn float_mean_dim(tensor: FloatTensor<Self>, dim: usize) -> FloatTensor<Self> {
         reduce("float_mean_dim", &tensor, Some(dim), Reduction::Mean, tensor.dtype())
@@ -412,5 +427,53 @@ impl FloatTensorOps<Self> for Native {
         one("float_argsort", &tensor, out_dtype.into(), |t| {
             t.sort(dim, descending)?.1.cast(out_dtype.into())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::sync::Arc;
+
+    #[test]
+    fn inherited_mean_count_rounds_to_f32_before_scalar_conversion() {
+        for (count, bits) in [
+            (0, 0),
+            (1, 0x3f800000),
+            (16_777_217, 0x4b800000),
+            (16_777_219, 0x4b800002),
+            (i32::MAX as usize, 0x4f000000),
+        ] {
+            let scalar = default_mean_count(&Shape::new([count]));
+            assert_eq!(scalar.elem::<f64>().to_bits(), f64::from(f32::from_bits(bits)).to_bits());
+        }
+        assert_eq!(default_mean_count(&Shape::new([])).elem::<f64>(), 1.0);
+    }
+
+    #[test]
+    fn numeric_reductions_preserve_dtype_shape_and_deferred_error_identity() {
+        for dtype in [DType::F64, DType::F32, DType::Flex32, DType::F16, DType::BF16] {
+            let tensor = BackendTensor::build("input", Shape::new([2, 3]), dtype, || Err(Error::InvalidParameter));
+            let failure = tensor.failure().unwrap();
+            assert!(!failure.report().is_device_poisoned());
+            for reduced in [
+                Native::float_sum(tensor.clone()),
+                Native::float_mean(tensor.clone()),
+                Native::float_prod(tensor.clone()),
+            ] {
+                assert_eq!(reduced.shape(), Shape::new([1]));
+                assert_eq!(reduced.dtype(), dtype);
+                assert!(Arc::ptr_eq(&failure, &reduced.failure().unwrap()));
+            }
+            for reduced in [
+                Native::float_sum_dim(tensor.clone(), 1),
+                Native::float_mean_dim(tensor.clone(), 1),
+                Native::float_prod_dim(tensor.clone(), 1),
+            ] {
+                assert_eq!(reduced.shape(), Shape::new([2, 1]));
+                assert_eq!(reduced.dtype(), dtype);
+                assert!(Arc::ptr_eq(&failure, &reduced.failure().unwrap()));
+            }
+        }
     }
 }

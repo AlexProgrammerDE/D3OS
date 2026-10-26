@@ -9,6 +9,7 @@ pub mod deform;
 pub mod elementwise;
 pub mod float_arithmetic;
 pub mod float_extrema;
+pub mod float_reduction;
 pub mod indexing;
 pub mod integer_arithmetic;
 pub mod integer_reduction;
@@ -30,7 +31,7 @@ pub mod storage;
 pub mod updates;
 pub mod words;
 
-pub const VERSION: u32 = 52;
+pub const VERSION: u32 = 53;
 /// END_COMMANDS flag: an inner recording scope joins its parent's completion.
 /// The outermost scope always waits. Zero retains synchronous nested scopes.
 pub const DEFER_NESTED_COMPLETION: u64 = 1;
@@ -64,7 +65,7 @@ pub struct MemoryProfile {
     pub device_cached_bytes: u64,
     pub device_retired_bytes: u64,
 }
-pub const KERNEL_COUNT: usize = 84;
+pub const KERNEL_COUNT: usize = 85;
 
 /// CPU service costs by request operation, including queue work within it.
 #[derive(Clone, Copy, Debug, Default)]
@@ -206,9 +207,10 @@ pub enum Kernel {
     FloatArithmetic = 81,
     IntegerReduction = 82,
     FloatExtrema = 83,
+    FloatReduction = 84,
 }
 
-const _: () = assert!(Kernel::FloatExtrema as usize + 1 == KERNEL_COUNT);
+const _: () = assert!(Kernel::FloatReduction as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -278,6 +280,7 @@ impl Kernel {
                 | Self::FloatArithmetic
                 | Self::IntegerReduction
                 | Self::FloatExtrema
+                | Self::FloatReduction
                 | Self::PackedGather
                 | Self::PackedMaskWhere
                 | Self::TensorPredicate
@@ -402,6 +405,7 @@ impl Kernel {
             81 => Self::FloatArithmetic,
             82 => Self::IntegerReduction,
             83 => Self::FloatExtrema,
+            84 => Self::FloatReduction,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -492,6 +496,7 @@ impl Kernel {
             Self::FloatArithmetic => "burn_float_arithmetic",
             Self::IntegerReduction => "burn_integer_reduce_short",
             Self::FloatExtrema => "burn_float_extrema_short",
+            Self::FloatReduction => "burn_float_reduce",
         }
     }
 
@@ -741,6 +746,10 @@ impl Kernel {
             (Self::FloatExtrema, p) => {
                 extents[..2].copy_from_slice(&float_extrema::validate(p)?);
                 (float_extrema::work_items(p)?, 2, 1, false)
+            }
+            (Self::FloatReduction, p) => {
+                extents[..2].copy_from_slice(&float_reduction::validate(p)?);
+                (float_reduction::work_items(p)?, 2, 1, false)
             }
             (Self::IntegerArithmetic, p) => {
                 extents[..3].copy_from_slice(&integer_arithmetic::validate(p)?);

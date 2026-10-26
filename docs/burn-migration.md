@@ -388,7 +388,17 @@ D3OS passes 12,135 new value checks, 360 rejection checks, and every earlier GPU
 Source-bit selection preserves the first logical NaN and the first numeric tie, including signed zeros.
 Resident pairs avoid status readback, and empty-result checks verify source and output ownership directly.
 The [coverage reference](burn-backend-coverage.md#typed-floating-extrema) records the immutable capture and Linux diagnostics.
-Floating sums, products, means, typed scans, broader training support, and full backend and performance parity remain incomplete.
+Typed scans, broader training support, and full backend and performance parity remain incomplete.
+
+Protocol 53 adds floating sums, products, and means for F64, Flex32, F16, and BF16.
+D3OS passes 3,669 new device values and every earlier GPU regression gate.
+Seven separate symbolic cases verify metadata and arithmetic bounds without device execution.
+The four added formats use serial axis reductions and stored global stages in stable original-dimension order.
+F32 retains its existing reduction and global Mean schedules.
+Filtered Linux CUDA runs pass for F64, F16, and BF16 with rank zero excluded.
+Flex32 upload, rank-zero layout, and the existing F32 extrema source-bit difference remain explicit diagnostics.
+The [coverage reference](burn-backend-coverage.md#typed-floating-sums-products-and-means) records the numerical schedules and immutable capture.
+General mixed-precision matrix products, typed backward coverage, and full backend and performance parity remain incomplete.
 
 I32 tensor and generic scalar powers now use resident wrapping integer arithmetic without a floating-point intermediate.
 The exponent bits follow the same unsigned interpretation as the pinned Linux backend.

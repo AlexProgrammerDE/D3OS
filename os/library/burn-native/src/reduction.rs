@@ -11,6 +11,9 @@ impl NativeTensor {
     /// wraps in the declared accumulator; means divide before narrowing.
     pub fn reduce(&self, axis: usize, operation: Reduction) -> Result<Self> {
         if matches!(self.dtype, DType::F64 | DType::Flex32 | DType::F16 | DType::BF16) {
+            if matches!(operation, Reduction::Sum | Reduction::Mean | Reduction::Product) {
+                return self.float_reduce(axis, operation);
+            }
             let dtype = if operation.index() { DType::I32 } else { self.dtype };
             return self.float_extrema(Some(axis), operation, dtype);
         }
@@ -50,6 +53,9 @@ impl NativeTensor {
 
     pub(crate) fn reduce_all(&self, operation: Reduction) -> Result<Self> {
         if matches!(self.dtype, DType::F64 | DType::Flex32 | DType::F16 | DType::BF16) {
+            if matches!(operation, Reduction::Sum | Reduction::Mean | Reduction::Product) {
+                return self.float_reduce_all(operation);
+            }
             return self.float_extrema(None, operation, self.dtype);
         }
         if self.dtype.is_int() || self.dtype.is_uint() {

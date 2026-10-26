@@ -13,9 +13,9 @@ It also includes float, integer, boolean, quantized, module, activation, transac
 Each method records its signature, source location, conditional compilation attributes, and implementation or inherited default.
 Associated types and source SHA-256 hashes accompany the report.
 
-The current inventory contains 484 methods: 292 native overrides and 192 inherited defaults.
+The current inventory contains 484 methods: 293 native overrides and 191 inherited defaults.
 All required methods have declarations or implementations. This count does not establish runtime support.
-The report also records 150 native helper bodies for manual review of dtype and shape restrictions.
+The report also records 152 native helper bodies for manual review of dtype and shape restrictions.
 
 The tool follows syntactic associated backend calls and expands the pinned `dequant_op_quant!` and `dequant_op_flow!` macros.
 It identifies 8 methods with possible paths to explicit declines or panic declarations.
@@ -755,6 +755,77 @@ python3 tools/nvidia/linux-reference.py \
 The runner's `--expected-summary` and `--diagnostics` commands initialize no device.
 The launcher supports explicit dtype, rank-zero, nonempty, and isolated error-case diagnostics.
 Each filtered run requires a fresh directory and retains its selected scope.
+
+## Typed floating sums, products, and means
+
+Protocol 53 adds floating Sum, Product, and Mean with 253 portable entries and 85 compute profiles.
+All 252 preceding instruction sections remain byte-identical.
+F64, Flex32, F16, and BF16 use the new typed axis kernel.
+F32 retains its existing cooperative kernels and global reduction schedule.
+
+Each new axis reduction visits logical coordinates in increasing order.
+F64 uses F64 arithmetic. Flex32, F16, and BF16 use F32 accumulation.
+Arithmetic requests nearest-even rounding without flush-to-zero.
+Mean converts the integer axis length directly to the accumulator type before division.
+Half outputs round once to their destination format after each axis reduction.
+Arithmetic NaNs use a canonical positive quiet encoding.
+
+Global reductions process axes by increasing original dimension length, with original axis order as the tie-breaker.
+Each axis result returns to its storage dtype before the next stage.
+Global Mean repeats axis Mean at each stage.
+F32 instead retains its stored global Sum followed by division through the existing F32 scalar conversion.
+Rank-zero globals preserve their stored bits through a shared-buffer reshape.
+Empty globals produce the operation's exact identity or canonical NaN without a source read.
+
+Complete word writers initialize packed tails to zero.
+Checked signed views retain logical element offsets, while physical word addresses retain their full unsigned range.
+Resident command composition keeps source clones, intermediate results, and queued consumers alive without activation readback.
+The guarded checks cover original output words, neighboring guards, both poison patterns, deferred errors, and recovery.
+
+D3OS passes 3,313 raw and Native value checks plus 356 shared final values.
+The shared plan contains 71 valid device cases, two expected-error cases, and seven separate symbolic cases.
+All 73 device attempts pass their required checks, including the two recoverable errors.
+The seven symbolic cases prove bounded metadata and arithmetic properties without device execution.
+They do not increase the device attempt or value counts.
+All earlier operator regressions pass, and all three guest-compiled modules match their qualified host bytes.
+The VM and strict host harness both exit zero.
+
+The immutable capture is `~/.cache/d3os/burn-float-reduction-harness-work/first/`.
+Its external inventory binds 757 files, including 492 runtime source files.
+The archived reduction result retains a stale `vm_executed=false` preparation field.
+Actual execution is recorded separately by the launcher exit, `vm_launched=true`, and source-bound GPU telemetry.
+Acceptance uses those terminal records and preserves the original result unchanged.
+
+The full Linux comparison stops at direct Flex32 upload rejection.
+Separate F64, F16, and BF16 runs exclude rank zero explicitly and pass their selected device cases.
+
+| Linux CUDA selection | Passed device cases | Separate model cases | Result |
+| --- | --- | --- | --- |
+| F64, rank zero excluded | 18 | 2 | Pass |
+| F16, rank zero excluded | 15 | 4 | Pass |
+| BF16, rank zero excluded | 14 | 0 | Pass |
+| F32, rank zero excluded | 9 of 10 | 0 | Existing extrema NaN source-bit difference |
+
+The F32 difference belongs to the existing exact-selection chain, not the new arithmetic kernel.
+Separate full-rank F64 and invalid-axis captures retain the pinned CubeCL layout and error-path panics.
+All seven Linux histories remain under `~/.cache/d3os/burn-fr-linux-1/` through `burn-fr-linux-7/`.
+The Linux binary uses the source before a metadata-only lint correction.
+Independent review proves unchanged arithmetic, corpus counts, and metadata behavior after that correction.
+These selected observations establish neither general Linux reduction-order equivalence nor performance parity.
+
+Build and run the Linux reference from the repository root:
+
+```bash
+cargo +1.98.1 build --manifest-path tools/mnist-benchmark/Cargo.toml \
+  --release --locked --target x86_64-unknown-linux-gnu --bin float_reduction
+python3 tools/nvidia/linux-reference.py \
+  --directory /tmp/d3os-linux-fr \
+  --burn-float-reduction tools/mnist-benchmark/target/x86_64-unknown-linux-gnu/release/float_reduction
+```
+
+Pure `--expected-summary` and `--diagnostics` commands initialize no device.
+The launcher retains each selected dtype, rank-zero, nonempty, or isolated error scope in a fresh archive.
+This forward checkpoint does not establish typed backward reductions, mixed-precision matrix products, full backend support, or performance parity.
 
 ## Typed Erf
 
