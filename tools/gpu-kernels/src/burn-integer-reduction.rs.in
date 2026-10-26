@@ -73,7 +73,6 @@ fn ir_address(row: Tile<u32, {[128]}>, col: Tile<u32, {[128]}>, axis: u32, offse
         let coordinate = linear % broadcast_scalar(d0, shape![128]);
         let coordinate: Tile<i32, {[128]}> = bitcast(coordinate);
         address = address + coordinate * broadcast_scalar(ir_signed(s0), shape![128]);
-        linear = linear / broadcast_scalar(d0, shape![128]);
     }
     let step = if axis == 0u32 { s0 } else if axis == 1u32 { s1 } else if axis == 2u32 { s2 } else if axis == 3u32 { s3 } else if axis == 4u32 { s4 } else if axis == 5u32 { s5 } else if axis == 6u32 { s6 } else { s7 };
     if axis != unsigned(-1i32) {
@@ -82,7 +81,7 @@ fn ir_address(row: Tile<u32, {[128]}>, col: Tile<u32, {[128]}>, axis: u32, offse
     }
     bitcast(address)
 }
-unsafe fn ir_body(src: *const u32, dst: *mut u32, tree: bool, count: u32, rank: u32, control: u32, axis: u32, offset: u32, extent: u32, length: u32, policy: u32, d0: u32, d1: u32, d2: u32, d3: u32, d4: u32, d5: u32, d6: u32, d7: u32, s0: u32, s1: u32, s2: u32, s3: u32, s4: u32, s5: u32, s6: u32, s7: u32) {
+unsafe fn ir_body(src: *const u32, dst: *mut u32, tree: bool, count: u32, _rank: u32, control: u32, axis: u32, offset: u32, extent: u32, length: u32, _policy: u32, d0: u32, d1: u32, d2: u32, d3: u32, d4: u32, d5: u32, d6: u32, d7: u32, s0: u32, s1: u32, s2: u32, s3: u32, s4: u32, s5: u32, s6: u32, s7: u32) {
     let lane = lanes::<128>();
     let owner = if tree { broadcast_scalar(block_id(), shape![128]) } else { indices() };
     let input_format = (control >> 8u32) & 255u32;

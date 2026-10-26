@@ -35,7 +35,7 @@ SOURCE_HASHES = {
     "src/burn-math.rs": "b6145d25725d37dcf2db7c1ea607dbbf4971d90eaa804486b118925ce7d711cc",
     "src/burn-inverse.rs": "9206dae76e30cd38b0e80a0be5ec1189711f8d6ed745bd617c36604d4f3659a6",
     "src/burn-elementwise.rs.in": "2829f03af42241a19e129d810fed906fc91f8ad1982741827b3fa8aaa3abc5c6",
-    "src/burn-integer-reduction.rs.in": "a5fd330a3a488d150e16987f2ab5b5273629d1691033c9cb3bf019881e6a69e1",
+    "src/burn-integer-reduction.rs.in": "4d7143cb0f37bf714373012a03c2ce296b20c40450d31be2ab89e87612edf336",
     "src/main.rs": "2e12f8ac06318c1c211038a5606d1d408776784a9da22950e4cbea26a810e658",
     "src/link.rs": "205ac4376fb5ddcb0905c94379d6ad0f6c6cfc77f763585e190d1e5bb0defdd4",
     "build.rs": "0126e2681251f887d21d7c234d9ee40f76569e8bd06d2595579cf2dd26e72713",
