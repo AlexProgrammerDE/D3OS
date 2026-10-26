@@ -13,9 +13,9 @@ It also includes float, integer, boolean, quantized, module, activation, transac
 Each method records its signature, source location, conditional compilation attributes, and implementation or inherited default.
 Associated types and source SHA-256 hashes accompany the report.
 
-The current inventory contains 484 methods: 293 native overrides and 191 inherited defaults.
+The current inventory contains 484 methods: 296 native overrides and 188 inherited defaults.
 All required methods have declarations or implementations. This count does not establish runtime support.
-The report also records 152 native helper bodies for manual review of dtype and shape restrictions.
+The report also records 154 native helper bodies for manual review of dtype and shape restrictions.
 
 The tool follows syntactic associated backend calls and expands the pinned `dequant_op_quant!` and `dequant_op_flow!` macros.
 It identifies 8 methods with possible paths to explicit declines or panic declarations.
@@ -825,7 +825,108 @@ python3 tools/nvidia/linux-reference.py \
 
 Pure `--expected-summary` and `--diagnostics` commands initialize no device.
 The launcher retains each selected dtype, rank-zero, nonempty, or isolated error scope in a fresh archive.
-This forward checkpoint does not establish typed backward reductions, mixed-precision matrix products, full backend support, or performance parity.
+This protocol-53 checkpoint does not establish typed backward reductions, mixed-precision matrix products, full backend support, or performance parity.
+
+## Typed mixed-precision matrix products and linear
+
+Protocol 54 adds F16, BF16, and Flex32 matrix products, with 256 portable entries and 88 compute profiles.
+All 253 preceding inference instruction sections and the auxiliary instruction sections remain byte-identical.
+F32 and I32 retain their existing matrix paths.
+The completed D3OS capture passed read-only verification and independent terminal review.
+Protocol 54 is now the accepted default.
+The protocol-53 bundle remains intact under `target/nvidia/burn-mixed-matmul-default-reduction53/`.
+
+F16 and BF16 inputs retain their packed storage bits before F32 Tensor Core accumulation.
+Flex32 retains F32 storage but rounds each matrix operand to F16 before multiplication.
+For F16 and BF16, one cast writes the complete concatenated result into its destination format.
+This gives one owner to each packed output word, including odd rows and batch boundaries.
+Unused output half slots become zero.
+Flex32 returns the private F32 scratch allocation with Flex32 metadata, without an additional cast kernel.
+
+Checked matrix views support ranks two through eight, signed strides, offsets, and broadcast batches.
+Empty outputs share source storage without device work.
+Nonempty K=0 products produce exact positive zeros without reading inputs or running MMA.
+Invalid dimensions, address ranges, or overlapping writes fail before submission.
+
+Linear stores its matrix product in the destination dtype before adding typed bias.
+Input, weight, and bias gradients use the same stored boundaries.
+Broadcast gradient reductions process original axis indices in ascending order and store each intermediate result.
+Ordinary public Autodiff checks include both tracked operands, either single tracked operand, shared sources, and linear backward.
+Public tensor constructors need explicit dtype options because omitted options select the device default, even when TensorData contains half values.
+
+The numerical corpus retains 121 rows and three unused reserves.
+Shared qualification selects 93 rows: 39 geometry, 24 numerical, and 30 gradient rows.
+Exact rational references and independent gradient scatter checks cover the exact-normal domain.
+Four finite intervals are project empirical targets, not guarantees about vendor accumulation order.
+Cancellation observations and nonempty zero signs remain diagnostic.
+Required exception and subnormal policies remain separate from those observations.
+
+The completed D3OS run passes these source-bound gates:
+
+- Shared: 1,380 required routes and 143,013 required values, plus 14 diagnostic values.
+- Raw and Native: 72,414 required values, 71 diagnostics, and 45,116 source words.
+- Physical writers: 33 recipes, 66 guarded and 66 fresh scratch trials, and 44 guarded and 44 fresh packed casts.
+- Runtime contracts: 342 Native outputs, 83 rejections, 15 deferred cases, three queued cases, and 21 public Autodiff routes.
+
+The eight conditional-model values are a subset of the required values, not eight extra device comparisons.
+Physical checks read the original Native allocation, including packed tails.
+Both poison patterns require every live word or half slot to change, independently of the numerical policy.
+Counters cover all 88 kernels and 14 services, with downloads confined to explicit validation reads.
+All 57 inherited regression markers pass. The VM launcher and strict host harness both exit zero.
+
+The immutable successful capture is `~/.cache/d3os/burn-mixed-matmul-harness-work/second/`.
+Its inventory binds 784 files and 511 runtime sources.
+The first D3OS capture remains failed evidence after its public fixtures accidentally selected default F32 and retained an AD context during downcasts.
+The repair changes fixture construction and primitive extraction, with unchanged numerical policies, counts, and counter requirements.
+
+The full Linux CUDA selection reports 843 failures and 642 unobserved routes.
+Its complete report remains under `~/.cache/d3os/burn-mm-linux-1/`.
+CPU diagnostics, earlier direct CUDA probes, and separate external scopes do not replace that failure.
+
+A fresh BF16 broadcast-gradient selection passes 28 required routes and 32,198 required comparisons.
+Both operands are tracked, with two broadcast axes.
+All observed bits match the completed Native capture.
+Its 117-file capture is `~/.cache/d3os/burn-mm-linux-2/`.
+This result covers the selected graph. Full Linux parity remains open.
+
+NativeExtensions, Preservation, and F64Diagnostics remain separately labeled and unqualified in this corpus.
+The pinned high-level rank-one zero-input linear frontend also panics before reaching Native.
+
+Build and run the Linux reference from the repository root:
+
+```bash
+cargo +1.98.1 build --manifest-path tools/mnist-benchmark/Cargo.toml \
+  --release --locked --no-default-features --features cuda --bin mixed_matmul
+python3 tools/nvidia/linux-reference.py \
+  --directory /tmp/d3os-linux-mm \
+  --burn-mixed-matmul tools/mnist-benchmark/target/release/mixed_matmul
+```
+
+Run the isolated BF16 gradient selection in a separate archive:
+
+```bash
+python3 tools/nvidia/linux-reference.py \
+  --directory /tmp/d3os-linux-mm-bf16-grad \
+  --burn-mixed-matmul tools/mnist-benchmark/target/release/mixed_matmul \
+  --burn-mixed-matmul-dtype bf16 \
+  --burn-mixed-matmul-case bf16_both_multi_axis_batch_broadcast
+```
+
+Pure `--expected-summary` and `--diagnostics` commands initialize no device.
+Each filtered or isolated diagnostic run needs a fresh archive and retains its explicit selection.
+General F64 matmul, typed indexed accumulation, and half-precision convolution or pooling remain incomplete.
+Full Burn support and performance parity also remain open.
+
+Run the independent fixture, CPU reference, and evidence-parser checks separately:
+
+```bash
+python3 tools/nvidia/generate-mixed-matmul-fixtures.py --check --self-test
+cargo test -p d3os-ai --features training,cpu --test mixed-matmul-reference \
+  --target x86_64-unknown-linux-gnu --locked
+python3 tools/nvidia/test-mixed-matmul.py
+```
+
+These checks initialize no GPU. Device execution evidence remains a separate requirement.
 
 ## Typed Erf
 

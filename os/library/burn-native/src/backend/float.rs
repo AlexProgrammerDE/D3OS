@@ -69,7 +69,7 @@ impl FloatTensorOps<Self> for Native {
         BackendTensor::apply(
             "float_matmul",
             matmul_shape(&lhs.shape(), &rhs.shape()).unwrap_or_else(|_| lhs.shape()),
-            DType::F32,
+            lhs.dtype(),
             &[&lhs, &rhs],
             |v| v[0].matmul(v[1]),
         )
@@ -474,6 +474,29 @@ mod tests {
                 assert_eq!(reduced.dtype(), dtype);
                 assert!(Arc::ptr_eq(&failure, &reduced.failure().unwrap()));
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod mixed_matmul_tests {
+    use super::*;
+    use alloc::sync::Arc;
+
+    #[test]
+    fn matmul_failure_keeps_input_dtype_broadcast_shape_and_error_identity() {
+        for dtype in [DType::F16, DType::BF16, DType::Flex32, DType::F64] {
+            let left = BackendTensor::build("left", Shape::new([2, 1, 3, 5]), dtype, || Err(Error::InvalidParameter));
+            let right = BackendTensor::build("right", Shape::new([1, 7, 5, 4]), dtype, || Err(Error::ShapeMismatch));
+            let failure = left.failure().unwrap();
+            failure.report();
+            right.failure().unwrap().report();
+            let output = Native::float_matmul(left, right.clone());
+            assert_eq!(output.dtype(), dtype);
+            assert_eq!(output.shape(), Shape::new([2, 7, 3, 4]));
+            assert!(Arc::ptr_eq(&output.failure().unwrap(), &failure));
+            assert!(!output.read().unwrap_err().is_device_poisoned());
+            assert!(!right.read().unwrap_err().is_device_poisoned());
         }
     }
 }

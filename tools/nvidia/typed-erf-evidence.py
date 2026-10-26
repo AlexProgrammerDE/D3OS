@@ -859,7 +859,7 @@ def _raw_counts(expected):
 def validate_raw(serial, expected, manifest, bounds, *, execution_os="d3os", backend="nvidia", fusion="disabled", scope="forward_erf_only", protocol=50, profiles=82):
     """Validate raw inventory/route records using the independent raw plan."""
     require((execution_os, backend, fusion, scope) == ("d3os", "nvidia", "disabled", "forward_erf_only"), "Erf raw platform or scope differs")
-    require(type(protocol) is int and type(profiles) is int and (protocol, profiles) in ((50, 82), (51, 83), (52, 84), (53, 85)), "Erf raw unqualified protocol/profile pair")
+    require(type(protocol) is int and type(profiles) is int and (protocol, profiles) in ((50, 82), (51, 83), (52, 84), (53, 85), (54, 88)), "Erf raw unqualified protocol/profile pair")
     _manifest_identity(manifest)
     plan = raw_reference_plan(expected)
     records = _records(serial, "NVIDIA_BURN_TYPED_ERF_", execution_os)

@@ -14,6 +14,7 @@ pub mod integer_matrix;
 pub mod integer_reduction;
 pub mod interpolate;
 pub mod inverse;
+pub mod mixed_matmul;
 pub mod movement;
 pub mod nd_indexing;
 pub mod predicate;

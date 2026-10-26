@@ -172,7 +172,8 @@ The GPU operations include FP32 arithmetic and math, reductions, exact tensor fi
 Another 32 entries implement I32 arithmetic, signed comparisons, bitwise operations, boolean logic, masks, and conversions.
 These operations support strided views and broadcasting. Input tensors remain shared and immutable.
 Full writers avoid a separate output clear. Empty logical outputs require no element work.
-The matching SDK and driver use native compute protocol version 45 and the 247-entry portable inference bundle.
+The current SDK and driver use native compute protocol version 54 with the accepted 256-entry bundle.
+Its completed D3OS capture passed read-only verification and independent terminal review. The protocol-53 bundle remains intact as prior evidence.
 
 The D3OS GPU self-test passes reversed and transposed views, overlapping windows, broadcast batches, subviews, empty dimensions, and neighboring guards.
 Matrix references use independent FP64 accumulation. Math references use independent libm functions and include 2,816 FP32 edge values.
@@ -399,6 +400,18 @@ Filtered Linux CUDA runs pass for F64, F16, and BF16 with rank zero excluded.
 Flex32 upload, rank-zero layout, and the existing F32 extrema source-bit difference remain explicit diagnostics.
 The [coverage reference](burn-backend-coverage.md#typed-floating-sums-products-and-means) records the numerical schedules and immutable capture.
 General mixed-precision matrix products, typed backward coverage, and full backend and performance parity remain incomplete.
+
+Protocol 54 adds F16, BF16, and Flex32 matrix products, linear, and stored input, weight, and bias gradients.
+Packed half inputs accumulate in F32, then one cast writes the complete destination tensor.
+Flex32 rounds its matrix operands to F16. Linear stores the product before typed bias addition.
+Gradient reductions preserve each destination storage boundary and use ascending original axis indices.
+The completed D3OS run passes 215,427 required values, 21 public Autodiff routes, and all earlier regression gates.
+Read-only verification and independent terminal review pass. The protocol-54 bundle is the accepted default.
+The complete Linux CUDA selection fails and remains preserved separately.
+A fresh BF16 broadcast-gradient selection passes 28 routes and 32,198 required comparisons, with bit-exact Native agreement.
+That selection does not establish full Linux parity or performance.
+The [coverage reference](burn-backend-coverage.md#typed-mixed-precision-matrix-products-and-linear) records the numerical targets, physical checks, and qualification limits.
+Typed indexed accumulation, half-precision modules, remaining backend APIs, and matched workload performance remain incomplete.
 
 I32 tensor and generic scalar powers now use resident wrapping integer arithmetic without a floating-point intermediate.
 The exponent bits follow the same unsigned interpretation as the pinned Linux backend.

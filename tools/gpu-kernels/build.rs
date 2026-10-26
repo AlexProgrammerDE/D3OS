@@ -333,6 +333,8 @@ fn main() {
     source.push_str(&fs::read_to_string("src/burn-float-extrema.rs.in").expect("read typed floating extrema"));
     println!("cargo:rerun-if-changed=src/burn-float-reduction.rs.in");
     source.push_str(&fs::read_to_string("src/burn-float-reduction.rs.in").expect("read typed floating arithmetic reduction"));
+    println!("cargo:rerun-if-changed=src/burn-mixed-matmul.rs.in");
+    source.push_str(&fs::read_to_string("src/burn-mixed-matmul.rs.in").expect("read packed mixed-precision matrix products"));
     println!("cargo:rerun-if-changed=src/burn-words.rs.in");
     let words = fs::read_to_string("src/burn-words.rs.in").expect("read Burn word template");
     for op in d3os_nvidia::compute::words::WordOp::ALL {

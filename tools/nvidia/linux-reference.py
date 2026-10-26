@@ -91,6 +91,63 @@ def typed_erf_evidence():
     return module
 
 
+def mixed_matmul_evidence():
+    spec = importlib.util.spec_from_file_location(
+        "mixed_matmul_evidence", Path(__file__).with_name("mixed-matmul-evidence.py")
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def validate_mixed_matmul_selection(expected, population, descriptions, *, dtype=None, case_id=None, nonempty=False):
+    if descriptions.get("device_initialized") is not False or descriptions.get("full_public_qualification") is not False:
+        raise RuntimeError("mixed matmul inventory must precede device execution")
+    integer_fields = set(expected) - {"groups", "dtype_values", "conditional_model", "vendor_rounding_guarantee", "physical_proof"}
+    if any(type(expected[name]) is not int or expected[name] < 0 for name in integer_fields):
+        raise RuntimeError("mixed matmul summary counts must be nonnegative integers")
+    if any(type(value) is not int or value < 0 for field in ("groups", "dtype_values") for value in expected[field].values()):
+        raise RuntimeError("mixed matmul subgroup counts must be nonnegative integers")
+    if any(expected.get(name) != value for name, value in {"version": 1, "corpus_rows": 121, "reserves": 3, "numeric_cells": 65, "corpus_last_drop_consumers": 141}.items()):
+        raise RuntimeError("mixed matmul corpus identity differs")
+    rows = descriptions.get("rows", [])
+    row_map = {row["id"]: row for row in rows}
+    if len(rows) != 121 or len(row_map) != len(rows):
+        raise RuntimeError("mixed matmul corpus inventory differs")
+    if not isinstance(population, list) or population != descriptions.get("expected_population"):
+        raise RuntimeError("mixed matmul population differs from its pure inventory")
+    selected = {row["key"]["case_id"] for row in population}
+    if type(expected.get("selected_rows")) is not int or not selected or len(selected) != expected["selected_rows"]:
+        raise RuntimeError("mixed matmul selection is empty or incomplete")
+    if expected.get("external_gates") != 0 or any(expected["groups"][name] != 0 for name in ("native_extensions", "preservation", "f64_diagnostics")):
+        raise RuntimeError("mixed matmul acceptance requires the shared logical scope")
+    if case_id is not None and selected != {case_id}:
+        raise RuntimeError("mixed matmul selected a different case")
+    requested_dtype = {"f16": "F16", "bf16": "BF16", "flex32": "Flex32"}.get(dtype)
+    if dtype is not None and requested_dtype is None:
+        raise RuntimeError("mixed matmul dtype has no shared acceptance scope")
+    for identifier in selected:
+        if identifier not in row_map:
+            raise RuntimeError("mixed matmul selected an unknown case")
+        row = row_map[identifier]
+        if requested_dtype is not None and row.get("dtype") != requested_dtype:
+            raise RuntimeError("mixed matmul selected a different dtype")
+        if nonempty and any(0 in matrix["shape"] for matrix in row["matrices"]):
+            raise RuntimeError("mixed matmul nonempty selection retained an empty input")
+    if expected.get("conditional_model") != descriptions.get("conditional_model") or expected.get("vendor_rounding_guarantee") is not False or expected.get("physical_proof") is not False:
+        raise RuntimeError("mixed matmul selected a different qualification policy")
+
+
+def validate_mixed_matmul(text, expected, population, descriptions, *, dtype=None, case_id=None, nonempty=False, frontend_diagnostic=None):
+    if frontend_diagnostic is not None:
+        raise RuntimeError(f"isolated frontend diagnostic is failure evidence: {frontend_diagnostic}")
+    validate_mixed_matmul_selection(expected, population, descriptions, dtype=dtype, case_id=case_id, nonempty=nonempty)
+    return mixed_matmul_evidence().validate(
+        text, expected, population, descriptions,
+        execution_os="linux", backend="cuda", fusion="enabled_materialized_chain_steps", scope="Shared",
+    )
+
+
 def typed_unary_evidence():
     spec = importlib.util.spec_from_file_location(
         "typed_unary_evidence", Path(__file__).with_name("typed-unary-evidence.py")
@@ -507,7 +564,7 @@ def validate_float_reduction(text, expected, *, dtype=None, skip_rank_zero=False
         raise RuntimeError("Linux floating reduction retained failure evidence")
 
 
-def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_finite=False, sort_compile_log=False, compaction_aligned=False, quantized_empty_case=None, scatter_finite=False, select_updates=False, nd_unique=False, nd_nonempty=False, nd_scalar_grad=False, nd_no_scalar=False, storage_flex_direct=False, storage_no_flex32=False, conversions_no_flex32=False, remainder_finite=False, remainder_wide=False, inverse_finite=False, inverse_diagnostic=False, interpolate_case="normal", spatial_empty=False, spatial_case=None, spatial_exact=False, spatial_empty_backward=False, deform_empty=False, deform_exact=False, deform_case=None, deform_forward_only=False, predicate_no_flex32=False, predicate_finite=False, movement_no_flex32=False, movement_skip_empty_bool_scatter=False, movement_matching_bool_masks=False, indexed_no_flex32=False, indexed_skip_scalar_nd=False, integer_arithmetic_dtype=None, integer_arithmetic_op=None, integer_reduction_arguments=(), integer_reduction_error_case=None, float_extrema_arguments=(), float_extrema_error_case=None, float_reduction_arguments=(), float_reduction_error_case=None, float_arithmetic_arguments=(), float_rounding_arguments=(), relu_arguments=(), typed_remainder_arguments=(), typed_exp_log_arguments=(), typed_trig_arguments=(), typed_unary_arguments=(), typed_power_arguments=(), typed_erf_arguments=()):
+def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_finite=False, sort_compile_log=False, compaction_aligned=False, quantized_empty_case=None, scatter_finite=False, select_updates=False, nd_unique=False, nd_nonempty=False, nd_scalar_grad=False, nd_no_scalar=False, storage_flex_direct=False, storage_no_flex32=False, conversions_no_flex32=False, remainder_finite=False, remainder_wide=False, inverse_finite=False, inverse_diagnostic=False, interpolate_case="normal", spatial_empty=False, spatial_case=None, spatial_exact=False, spatial_empty_backward=False, deform_empty=False, deform_exact=False, deform_case=None, deform_forward_only=False, predicate_no_flex32=False, predicate_finite=False, movement_no_flex32=False, movement_skip_empty_bool_scatter=False, movement_matching_bool_masks=False, indexed_no_flex32=False, indexed_skip_scalar_nd=False, integer_arithmetic_dtype=None, integer_arithmetic_op=None, integer_reduction_arguments=(), integer_reduction_error_case=None, float_extrema_arguments=(), float_extrema_error_case=None, float_reduction_arguments=(), float_reduction_error_case=None, mixed_matmul_arguments=(), mixed_matmul_frontend_diagnostic=None, float_arithmetic_arguments=(), float_rounding_arguments=(), relu_arguments=(), typed_remainder_arguments=(), typed_exp_log_arguments=(), typed_trig_arguments=(), typed_unary_arguments=(), typed_power_arguments=(), typed_erf_arguments=()):
     purposes = {
         "quantization": "shared API conformance; no performance measurement",
         "quantized_empty": "empty quantized API diagnostic and record round trip; execution errors retained; no performance measurement",
@@ -530,6 +587,7 @@ def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_fi
         "integer_reduction": "exact integer reductions against independent U128/I128 Native policy; Linux qualification pending; no performance measurement",
         "float_extrema": "exact floating extrema source bits against independent IEEE policy; Linux payload, zero and global traversal diagnostics; no performance measurement",
         "float_reduction": "selected floating Sum/Product/Mean against exact IEEE step references; symbolic rows separate from GPU values; no performance measurement",
+        "mixed_matmul": "selected mixed matmul/linear/autodiff stored graphs; conditional empirical targets and diagnostics separate; no general rounding or performance guarantee",
         "indexed": "ordinary ND reads, indexed assignment and requested index dtypes; exact byte records; no performance measurement",
         "integer_matrix": "public I32 matrix product conformance; no performance measurement",
         "scan": "public cumulative operations and gradients; no performance measurement",
@@ -677,6 +735,28 @@ def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_fi
     if storage_no_flex32:
         arguments += " --no-flex32"
         purpose += "; Flex32 excluded due to retained direct-upload failure"
+    if kind == "mixed_matmul":
+        selected_arguments = list(mixed_matmul_arguments)
+        gate = mixed_matmul_evidence()
+        expected_summary = gate.strict_json(subprocess.check_output(
+            [str(binary), "--expected-summary", *selected_arguments], text=True, cwd=ROOT,
+        ))
+        descriptions = gate.strict_json(subprocess.check_output(
+            [str(binary), "--diagnostics", *selected_arguments], text=True, cwd=ROOT,
+        ))
+        population = descriptions["expected_population"]
+        selected_dtype = next((value.split("=", 1)[1] for value in selected_arguments if value.startswith("--dtype=")), None)
+        selected_case = next((value.split("=", 1)[1] for value in selected_arguments if value.startswith("--case=")), None)
+        validate_mixed_matmul_selection(expected_summary, population, descriptions,
+                                       dtype=selected_dtype, case_id=selected_case, nonempty="--nonempty" in selected_arguments)
+        for suffix, record in (("expected", expected_summary), ("diagnostics", descriptions), ("population", population)):
+            (root.parent / f"burn-{kind}-{suffix}.json").write_text(json.dumps(record, indent=2, allow_nan=False) + "\n")
+        if mixed_matmul_frontend_diagnostic is not None:
+            if mixed_matmul_frontend_diagnostic != descriptions["frontend_diagnostic"]["id"]:
+                raise ValueError("unknown mixed matmul frontend diagnostic")
+            selected_arguments.append(f"--frontend-diagnostic={mixed_matmul_frontend_diagnostic}")
+            purpose = "isolated rank-one zero-width frontend diagnostic; failure retained separately, no backend or performance acceptance"
+        arguments = " " + shlex.join(selected_arguments)
     if storage_flex_direct:
         arguments += " --flex32-direct"
         purpose = "directly tagged Flex32 upload diagnostic; pinned backend failure retained separately"
@@ -741,6 +821,17 @@ exec {program}{arguments}
             sources["expected_cells"] = root.parent / "burn-typed_exp_log-expected-cells.json"
         if kind == "typed_trig":
             sources["expected_cells"] = root.parent / "burn-typed_trig-expected-cells.json"
+    if kind == "mixed_matmul":
+        sources.update({
+            "expected_summary": root.parent / "burn-mixed_matmul-expected.json",
+            "expected_population": root.parent / "burn-mixed_matmul-population.json",
+            "diagnostics": root.parent / "burn-mixed_matmul-diagnostics.json",
+            "reference_fixture_index": ROOT / "os/library/ai/src/validation/mixed_matmul_index.rs",
+            "reference_fixture_bytes": ROOT / "os/library/ai/src/validation/mixed_matmul_fixtures.bin",
+            "reference_generator": ROOT / "tools/nvidia/generate-mixed-matmul-fixtures.py",
+            "reference_manifest": ROOT / "tools/nvidia/mixed-matmul-manifest.json",
+            "evidence_validator": ROOT / "tools/nvidia/mixed-matmul-evidence.py",
+        })
     if kind == "typed_power":
         sources["evidence_validator"] = ROOT / "tools/nvidia/typed-power-evidence.py"
     if kind == "typed_unary":
@@ -770,7 +861,7 @@ exec {program}{arguments}
     (root.parent / f"burn-{kind}-manifest.json").write_text(json.dumps({
         "execution_os": "linux", "backend": "CUDA storage; host sort/argsort fallback; GPU top-k and gradients" if kind == "sort" else "CUDA storage; host argwhere fallback; GPU gathers and gradients" if kind == "compaction" else "cuda GPU", "framework": "burn", "burn_version": "0.22.1",
         "purpose": purpose,
-        "arguments": shlex.split(arguments) if kind in ("integer_reduction", "float_extrema", "float_reduction") else arguments.split(),
+        "arguments": shlex.split(arguments) if kind in ("integer_reduction", "float_extrema", "float_reduction", "mixed_matmul") else arguments.split(),
         "inputs": {name: {"bytes": path.stat().st_size, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()} for name, path in sources.items()},
     }, indent=2) + "\n")
 
@@ -1898,6 +1989,11 @@ def main():
     parser.add_argument("--burn-predicate-no-flex32", action="store_true", help="exclude Flex32 uploads from the predicate corpus")
     parser.add_argument("--burn-predicate-finite", action="store_true", help="isolate finite predicate input values from IEEE edge diagnostics")
     parser.add_argument("--burn-integer-power", type=Path, help="run exact public I32 integer power conformance on Linux CUDA")
+    parser.add_argument("--burn-mixed-matmul", type=Path, help="run selected mixed-precision matmul, linear, and ordinary gradient qualification")
+    parser.add_argument("--burn-mixed-matmul-dtype", choices=("f16", "bf16", "flex32"))
+    parser.add_argument("--burn-mixed-matmul-case", metavar="STABLE_ID")
+    parser.add_argument("--burn-mixed-matmul-nonempty", action="store_true")
+    parser.add_argument("--burn-mixed-matmul-frontend-diagnostic", metavar="STABLE_ID", help="retain one isolated frontend failure without backend acceptance")
     parser.add_argument("--burn-float-reduction", type=Path, help="run selected floating Sum/Product/Mean checks against exact IEEE step references")
     parser.add_argument("--burn-float-reduction-dtype", choices=("f64", "f32", "flex32", "f16", "bf16"))
     parser.add_argument("--burn-float-reduction-skip-rank-zero", action="store_true")
@@ -2012,7 +2108,7 @@ def main():
     args = parser.parse_args()
     if args.nsight_directory and not args.quantized_profile:
         parser.error("--nsight-directory requires --quantized-profile")
-    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.burn_typed_exp_log, args.burn_typed_trig, args.burn_typed_unary, args.burn_typed_power, args.burn_typed_erf, args.burn_typed_remainder, args.burn_relu, args.burn_float_rounding, args.burn_float_arithmetic, args.burn_integer_arithmetic, args.burn_integer_reduction, args.burn_float_extrema, args.burn_float_reduction, args.burn_indexed, args.burn_movement, args.burn_predicate, args.burn_integer_power, args.burn_integer, args.burn_integer_matmul, args.burn_scatter_updates, args.burn_nd_indexing, args.burn_storage, args.burn_conversions, args.burn_remainder, args.burn_inverse, args.burn_spatial_convolution, args.burn_deform, args.burn_interpolate, args.burn_quantized_empty, args.burn_compaction, args.burn_cross, args.burn_scan, args.burn_sort, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
+    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.burn_typed_exp_log, args.burn_typed_trig, args.burn_typed_unary, args.burn_typed_power, args.burn_typed_erf, args.burn_typed_remainder, args.burn_relu, args.burn_float_rounding, args.burn_float_arithmetic, args.burn_integer_arithmetic, args.burn_integer_reduction, args.burn_float_extrema, args.burn_float_reduction, args.burn_mixed_matmul, args.burn_indexed, args.burn_movement, args.burn_predicate, args.burn_integer_power, args.burn_integer, args.burn_integer_matmul, args.burn_scatter_updates, args.burn_nd_indexing, args.burn_storage, args.burn_conversions, args.burn_remainder, args.burn_inverse, args.burn_spatial_convolution, args.burn_deform, args.burn_interpolate, args.burn_quantized_empty, args.burn_compaction, args.burn_cross, args.burn_scan, args.burn_sort, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
         parser.error("--quantized-profile requires a separate diagnostic guest")
     if args.pin_vcpus and len(os.sched_getaffinity(0)) != 4:
         parser.error("--pin-vcpus requires an inherited affinity of four host CPUs")
@@ -2050,6 +2146,7 @@ def main():
                 bool(args.burn_integer_reduction),
                 bool(args.burn_float_extrema),
                 bool(args.burn_float_reduction),
+                bool(args.burn_mixed_matmul),
                 bool(args.burn_indexed),
                 bool(args.burn_movement),
                 bool(args.burn_predicate),
@@ -2189,6 +2286,17 @@ def main():
         parser.error("--burn-integer-arithmetic requires a built conformance executable")
     if (args.burn_integer_arithmetic_dtype or args.burn_integer_arithmetic_op) and not args.burn_integer_arithmetic:
         parser.error("integer arithmetic filters require --burn-integer-arithmetic")
+    mixed_matmul_arguments = ["--scope=shared"]
+    if args.burn_mixed_matmul_dtype is not None:
+        mixed_matmul_arguments.append(f"--dtype={args.burn_mixed_matmul_dtype}")
+    if args.burn_mixed_matmul_case is not None:
+        mixed_matmul_arguments.append(f"--case={args.burn_mixed_matmul_case}")
+    if args.burn_mixed_matmul_nonempty:
+        mixed_matmul_arguments.append("--nonempty")
+    if args.burn_mixed_matmul and not args.burn_mixed_matmul.is_file():
+        parser.error("--burn-mixed-matmul requires a built conformance executable")
+    if (args.burn_mixed_matmul_dtype or args.burn_mixed_matmul_case or args.burn_mixed_matmul_nonempty or args.burn_mixed_matmul_frontend_diagnostic) and not args.burn_mixed_matmul:
+        parser.error("mixed matmul filters and diagnostics require --burn-mixed-matmul")
     float_reduction_arguments = []
     if args.burn_float_reduction_dtype is not None:
         float_reduction_arguments.append(f"--dtype={args.burn_float_reduction_dtype}")
@@ -2363,6 +2471,8 @@ def main():
         burn_probe(args.directory / "root", args.burn_float_arithmetic.resolve(), "float_arithmetic", float_arithmetic_arguments=float_arithmetic_arguments)
     elif args.burn_integer_arithmetic:
         burn_probe(args.directory / "root", args.burn_integer_arithmetic.resolve(), "integer_arithmetic", integer_arithmetic_dtype=args.burn_integer_arithmetic_dtype, integer_arithmetic_op=args.burn_integer_arithmetic_op)
+    elif args.burn_mixed_matmul:
+        burn_probe(args.directory / "root", args.burn_mixed_matmul.resolve(), "mixed_matmul", mixed_matmul_arguments=mixed_matmul_arguments, mixed_matmul_frontend_diagnostic=args.burn_mixed_matmul_frontend_diagnostic)
     elif args.burn_float_reduction:
         burn_probe(args.directory / "root", args.burn_float_reduction.resolve(), "float_reduction", float_reduction_arguments=float_reduction_arguments, float_reduction_error_case=args.burn_float_reduction_linux_error_case)
     elif args.burn_float_extrema:
@@ -2634,6 +2744,13 @@ def main():
             raise RuntimeError("Linux CUDA integer arithmetic did not complete with the expected corpus")
         if "physical_padding=not_public extensions=false mixed_exponents=same_format_portable unsigned_neg=excluded_native_extension" not in text:
             raise RuntimeError("Linux CUDA integer arithmetic scope differs from the staged corpus")
+    if args.burn_mixed_matmul:
+        expected = json.loads((args.directory / "burn-mixed_matmul-expected.json").read_text())
+        population = json.loads((args.directory / "burn-mixed_matmul-population.json").read_text())
+        descriptions = json.loads((args.directory / "burn-mixed_matmul-diagnostics.json").read_text())
+        validate_mixed_matmul(text, expected, population, descriptions,
+                             dtype=args.burn_mixed_matmul_dtype, case_id=args.burn_mixed_matmul_case,
+                             nonempty=args.burn_mixed_matmul_nonempty, frontend_diagnostic=args.burn_mixed_matmul_frontend_diagnostic)
     if args.burn_float_reduction:
         expected = json.loads((args.directory / "burn-float_reduction-expected.json").read_text())
         validate_float_reduction(

@@ -1,8 +1,8 @@
 //! Ordinary dtype storage retains packed bytes without a compute conversion.
 use crate::{NativeTensor, layout::Layout};
-use alloc::sync::Arc;
+use alloc::{sync::Arc, vec::Vec};
 use burn_backend::{BoolStore, DType, Scalar, Shape, bf16, f16};
-use d3os_compute::{Error, Result, nvidia::Nvidia};
+use d3os_compute::{Buffer, Error, Result, nvidia::Nvidia};
 use d3os_nvidia::compute::{
     Kernel,
     storage::{Mode, Width},
@@ -58,6 +58,18 @@ pub(crate) fn scalar_bits(dtype: DType, value: Scalar) -> Result<u64> {
 }
 
 impl NativeTensor {
+    /// Download the backing U32 buffer without applying the tensor layout.
+    /// Includes packed tails and storage outside a view, but excludes allocator
+    /// page padding. This explicit readback waits for pending GPU commands.
+    pub fn read_storage_words(&self) -> Result<Vec<u32>> {
+        let word_count = self.buffer.len();
+        let mut words = Vec::new();
+        words.try_reserve_exact(word_count).map_err(|_| Error::AllocationFailed)?;
+        words.resize(word_count, 0);
+        Nvidia.read_words_into(&self.buffer, 0, &mut words)?;
+        Ok(words)
+    }
+
     pub(crate) fn fill_bits(shape: Shape, dtype: DType, bits: u64) -> Result<Self> {
         let width = width(dtype)?;
         if dtype.is_bool() && bits > 1 {

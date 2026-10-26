@@ -11,7 +11,81 @@ impl ModuleOps<Self> for Native {
             refs.push(bias);
         }
         let shape = crate::linear::output_shape(&x.shape(), &weight.shape(), bias.as_ref().map(|b| b.shape()).as_ref()).unwrap_or_else(|_| x.shape());
-        BackendTensor::apply("linear", shape, DType::F32, &refs, |v| v[0].linear(v[1], v.get(2).copied()))
+        BackendTensor::apply("linear", shape, x.dtype(), &refs, |v| v[0].linear(v[1], v.get(2).copied()))
+    }
+    fn linear_x_backward(weight: FloatTensor<Self>, grad: FloatTensor<Self>) -> FloatTensor<Self> {
+        if crate::mixed_matmul::supported(grad.dtype()) {
+            let shape = crate::linear::output_shape(&grad.shape(), &Shape::from(weight.shape().iter().rev().copied().collect::<Vec<_>>()), None)
+                .unwrap_or_else(|_| grad.shape());
+            return BackendTensor::apply("linear_x_backward", shape, grad.dtype(), &[&weight, &grad], |v| {
+                let weight = v[0].with_layout(v[0].layout.swap_dims(0, 1)?)?;
+                v[1].linear(&weight, None)
+            });
+        }
+        default_linear_x_backward(weight, grad)
+    }
+    fn linear_weight_backward(x: FloatTensor<Self>, grad: FloatTensor<Self>) -> FloatTensor<Self> {
+        if crate::mixed_matmul::supported(x.dtype()) {
+            let shape = crate::linear::weight_gradient_shape(&x.shape(), &grad.shape())
+                .unwrap_or_else(|_| Shape::new([x.shape().last().copied().unwrap_or(0), grad.shape().last().copied().unwrap_or(0)]));
+            return BackendTensor::apply("linear_weight_backward", shape, x.dtype(), &[&x, &grad], |v| {
+                if v[0].dtype != v[1].dtype {
+                    return Err(Error::InvalidParameter);
+                }
+                let shape = crate::linear::weight_gradient_shape(v[0].layout.shape(), v[1].layout.shape())?;
+                let flatten = |tensor: &NativeTensor| {
+                    let shape = crate::linear::flattened_shape(tensor.layout.shape())?;
+                    let tensor = if tensor.layout.is_contiguous() { tensor.clone() } else { tensor.copy()? };
+                    tensor.reshape(shape)
+                };
+                crate::mixed_matmul::validate_tensor(v[0])?;
+                crate::mixed_matmul::validate_tensor(v[1])?;
+                let left_layout = crate::linear::flattened_layout(v[0])?.swap_dims(0, 1)?;
+                let right_layout = crate::linear::flattened_layout(v[1])?;
+                let width = crate::storage::width(v[0].dtype)?;
+                let words = |layout: &Layout| (width.words(layout.storage_elements() as u32) as usize).max(1);
+                crate::mixed_matmul::validate_product(&left_layout, v[0].dtype, words(&left_layout), &right_layout, v[1].dtype, words(&right_layout))?;
+                if shape.as_slice().contains(&0) {
+                    return Ok(NativeTensor {
+                        buffer: v[0].buffer.clone(),
+                        layout: Layout::contiguous(shape)?,
+                        dtype: v[0].dtype,
+                    });
+                }
+                Nvidia.record_commands(|| {
+                    let x = flatten(v[0])?;
+                    let x = x.with_layout(x.layout.swap_dims(0, 1)?)?;
+                    x.matmul(&flatten(v[1])?)
+                })
+            });
+        }
+        let x = Self::float_swap_dims(default_flatten_leading(x), 0, 1);
+        let grad = default_flatten_leading(grad);
+        Self::float_matmul(x, grad)
+    }
+    fn linear_bias_backward(grad: FloatTensor<Self>) -> FloatTensor<Self> {
+        if crate::mixed_matmul::supported(grad.dtype()) {
+            let shape = Shape::new([grad.shape().last().copied().unwrap_or(0)]);
+            return BackendTensor::apply("linear_bias_backward", shape.clone(), grad.dtype(), &[&grad], |v| {
+                let flat = crate::linear::flattened_shape(v[0].layout.shape())?;
+                crate::mixed_matmul::validate_tensor(v[0])?;
+                if shape[0] == 0 {
+                    return Ok(NativeTensor {
+                        buffer: v[0].buffer.clone(),
+                        layout: Layout::contiguous(shape)?,
+                        dtype: v[0].dtype,
+                    });
+                }
+                Nvidia.record_commands(|| {
+                    let grad = if v[0].layout.is_contiguous() { v[0].clone() } else { v[0].copy()? };
+                    grad.reshape(flat)?.reduce(0, Reduction::Sum)?.reshape(shape)
+                })
+            });
+        }
+        let shape = grad.shape();
+        let outputs = shape[shape.num_dims() - 1];
+        let grad = Self::float_sum_dim(default_flatten_leading(grad), 0);
+        Self::float_reshape(grad, Shape::new([outputs]))
     }
     fn conv2d(x: FloatTensor<Self>, weight: FloatTensor<Self>, bias: Option<FloatTensor<Self>>, options: ConvOptions<2>) -> FloatTensor<Self> {
         let mut refs = alloc::vec![&x, &weight];
@@ -309,5 +383,93 @@ impl ModuleOps<Self> for Native {
         BackendTensor::apply("conv2d_weight_backward", weight.shape(), DType::F32, &[&x, &weight, &output_grad], |v| {
             v[0].conv2d_weight_backward(v[1], v[2], &options)
         })
+    }
+}
+
+// Burn 0.22.1 keeps these default helpers crate-private. Preserve their F32
+// operation sequence here so only the new dtypes use checked zero-width rows.
+fn default_flatten_leading(tensor: BackendTensor) -> BackendTensor {
+    let shape = tensor.shape();
+    let rank = shape.num_dims();
+    if rank == 2 {
+        return tensor;
+    }
+    let width = shape[rank - 1];
+    Native::float_reshape(tensor, Shape::new([shape.num_elements() / width, width]))
+}
+
+fn default_linear_x_backward(weight: BackendTensor, grad: BackendTensor) -> BackendTensor {
+    let weight = Native::float_swap_dims(weight, 0, 1);
+    let shape = grad.shape();
+    let rank = shape.num_dims();
+    // The pinned BetterTiling policy uses shape-only analysis for linear.
+    // Weight is rank two and shared, so this is its exact merge predicate.
+    let batches: usize = shape[..rank - 2].iter().product();
+    let rows = shape[rank - 2];
+    let outputs = weight.shape()[1];
+    let merged = batches * rows;
+    let merge = batches != 1 && !rows.is_multiple_of(32) && merged.min(outputs) * rows.max(outputs) > rows.min(outputs) * merged.max(outputs);
+    if merge {
+        let grad = Native::float_reshape(grad, Shape::new([merged, shape[rank - 1]]));
+        let output = Native::float_matmul(grad, weight);
+        let mut dimensions = shape.to_vec();
+        dimensions[rank - 1] = outputs;
+        Native::float_reshape(output, Shape::from(dimensions))
+    } else {
+        let weight = if rank > 2 {
+            let mut dimensions = alloc::vec![1; rank - 2];
+            dimensions.extend_from_slice(weight.shape().as_slice());
+            Native::float_reshape(weight, Shape::from(dimensions))
+        } else {
+            weight
+        };
+        Native::float_matmul(grad, weight)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::sync::Arc;
+
+    #[test]
+    fn typed_linear_failures_keep_destination_metadata_and_original_error() {
+        for dtype in [DType::F16, DType::BF16, DType::Flex32] {
+            for (input_shape, grad_shape) in [
+                (Shape::new([0]), Shape::new([5])),
+                (Shape::new([0, 3]), Shape::new([0, 5])),
+                (Shape::new([2, 3, 0]), Shape::new([2, 3, 5])),
+                (Shape::new([2, 3, 4]), Shape::new([2, 3, 0])),
+            ] {
+                let input = BackendTensor::build("input", input_shape.clone(), dtype, || Err(Error::InvalidParameter));
+                let grad = BackendTensor::build("gradient", grad_shape.clone(), dtype, || Err(Error::ShapeMismatch));
+                let weight_shape = crate::linear::weight_gradient_shape(&input_shape, &grad_shape).unwrap();
+                let weight = BackendTensor::build("weight", weight_shape.clone(), dtype, || Err(Error::SizeOverflow));
+                let bias = BackendTensor::build("bias", Shape::new([grad_shape[grad_shape.num_dims() - 1]]), dtype, || {
+                    Err(Error::InvalidParameter)
+                });
+                for tensor in [&input, &grad, &weight, &bias] {
+                    tensor.failure().unwrap().report();
+                }
+                let output = Native::linear(input.clone(), weight.clone(), Some(bias));
+                let dx = Native::linear_x_backward(weight.clone(), grad.clone());
+                let dw = Native::linear_weight_backward(input.clone(), grad.clone());
+                let db = Native::linear_bias_backward(grad.clone());
+                assert_eq!(output.shape(), grad_shape);
+                assert_eq!(dx.shape(), input_shape);
+                assert_eq!(dw.shape(), weight_shape);
+                assert_eq!(db.shape(), Shape::new([grad_shape[grad_shape.num_dims() - 1]]));
+                for value in [&output, &dx, &dw, &db] {
+                    assert_eq!(value.dtype(), dtype);
+                }
+                assert!(Arc::ptr_eq(&output.failure().unwrap(), &input.failure().unwrap()));
+                assert!(Arc::ptr_eq(&dx.failure().unwrap(), &weight.failure().unwrap()));
+                assert!(Arc::ptr_eq(&dw.failure().unwrap(), &input.failure().unwrap()));
+                assert!(Arc::ptr_eq(&db.failure().unwrap(), &grad.failure().unwrap()));
+                assert!(!output.read().unwrap_err().is_device_poisoned());
+                assert!(!grad.read().unwrap_err().is_device_poisoned());
+                assert!(!weight.read().unwrap_err().is_device_poisoned());
+            }
+        }
     }
 }

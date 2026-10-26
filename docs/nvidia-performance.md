@@ -47,6 +47,14 @@ See [MNIST GPU performance](mnist-performance.md) for the work contract, numeric
 
 ## Measurement method
 
+The protocol-54 mixed-matmul correctness capture passes its D3OS VM and strict host harness.
+It checks 215,427 required values across shared, guarded, Native, and ordinary Autodiff routes.
+Read-only verification and independent terminal review pass.
+The full Linux CUDA selection fails, so this result establishes no Linux parity.
+A separate BF16 broadcast-gradient graph passes 32,198 required comparisons with bit-exact Native agreement.
+These correctness captures add no inference, training, rendering, compiler-latency, or transfer-bandwidth measurements.
+The [mixed-matmul coverage reference](burn-backend-coverage.md#typed-mixed-precision-matrix-products-and-linear) records its stored arithmetic boundaries and limitations.
+
 These measurements use the same physical GPU through VFIO, with four KVM virtual CPUs.
 Only one guest owns the GPU at a time.
 D3OS uses its Rust driver, signed 570.144 firmware, and native Rust kernels.

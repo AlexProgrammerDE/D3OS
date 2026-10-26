@@ -1,0 +1,152 @@
+// Static half/BF16 operands, F32 MMA accumulation and full F32 scratch stores.
+// Packed inputs are bit-read; Native casts the complete result once.
+fn mm_block_id() -> u32 {
+    let id: i32 = get_tile_block_id().0;
+    let source: Tile<i32, { [] }> = scalar_to_tile(id);
+    let bits: Tile<u32, { [] }> = bitcast(source);
+    tile_to_scalar(bits)
+}
+// Invalid coordinates become zero before U32 products; masks still gate memory.
+// Every pointer offset is zero-extended to U64 before signed address formation.
+fn mm_lanes<const B: i32>() -> Tile<u32, { [B] }> {
+    iota(shape![B])
+}
+unsafe fn mm_read_tile<E: ElementType, const B: i32>(p: *const E, index: Tile<u32, { [B] }>, mask: Tile<bool, { [B] }>, padding: E) -> Tile<E, { [B] }> {
+    let base: PointerTile<*const E, { [] }> = pointer_to_tile(p);
+    let base: PointerTile<*const E, { [1] }> = base.reshape(shape![1]);
+    let base: PointerTile<*const E, { [B] }> = base.broadcast(shape![B]);
+    let wide: Tile<u64, { [B] }> = exti(index);
+    let pointer = base.offset_tile(wide);
+    let (value, _): (Tile<E, { [B] }>, Token) =
+        unsafe { load_ptr_tko(pointer, ordering::Weak, None::<scope::TileBlock>, Some(mask), Some(padding), None, Latency::<0>) };
+    value
+}
+unsafe fn mm_write_tile<E: ElementType, const B: i32>(p: *mut E, index: Tile<u32, { [B] }>, value: Tile<E, { [B] }>, mask: Tile<bool, { [B] }>) {
+    let base: PointerTile<*mut E, { [] }> = pointer_to_tile(p);
+    let base: PointerTile<*mut E, { [1] }> = base.reshape(shape![1]);
+    let base: PointerTile<*mut E, { [B] }> = base.broadcast(shape![B]);
+    let wide: Tile<u64, { [B] }> = exti(index);
+    let pointer = base.offset_tile(wide);
+    unsafe { store_ptr_tko(pointer, value, ordering::Weak, None::<scope::TileBlock>, Some(mask), None, Latency::<0>) };
+}
+unsafe fn mm_read_matrix<E: ElementType, const R: i32, const C: i32, const F: i32>(
+    p: *const E, index: Tile<u32, { [R, C] }>, mask: Tile<bool, { [R, C] }>, padding: E, flat: Shape<{ [F] }>,
+) -> Tile<E, { [R, C] }> {
+    let index: Tile<u32, { [F] }> = index.reshape(flat);
+    let mask: Tile<bool, { [F] }> = mask.reshape(flat);
+    let value: Tile<E, { [F] }> = unsafe { mm_read_tile(p, index, mask, padding) };
+    value.reshape(shape![R, C])
+}
+unsafe fn mm_write_matrix<E: ElementType, const R: i32, const C: i32, const F: i32>(
+    p: *mut E, index: Tile<u32, { [R, C] }>, value: Tile<E, { [R, C] }>, mask: Tile<bool, { [R, C] }>, flat: Shape<{ [F] }>,
+) {
+    let index: Tile<u32, { [F] }> = index.reshape(flat);
+    let mask: Tile<bool, { [F] }> = mask.reshape(flat);
+    let value: Tile<E, { [F] }> = value.reshape(flat);
+    unsafe { mm_write_tile(p, index, value, mask) };
+}
+unsafe fn mm_rounded_matrix(a: *const f32, b: *const f32, out: *mut f32, rows: u32, inner: u32, cols: u32) {
+    let block = mm_block_id();
+    let tile_cols = (cols + 31u32) / 32u32;
+    let r: Tile<u32, { [16] }> = mm_lanes::<16>() + broadcast_scalar(block / tile_cols * 16u32, shape![16]);
+    let r: Tile<u32, { [16, 1] }> = r.reshape(shape![16, 1]);
+    let r: Tile<u32, { [16, 32] }> = r.broadcast(shape![16, 32]);
+    let c: Tile<u32, { [32] }> = mm_lanes::<32>() + broadcast_scalar(block % tile_cols * 32u32, shape![32]);
+    let c: Tile<u32, { [1, 32] }> = c.reshape(shape![1, 32]);
+    let c: Tile<u32, { [32, 32] }> = c.broadcast(shape![32, 32]);
+    let k: Tile<u32, { [32] }> = mm_lanes::<32>();
+    let ak: Tile<u32, { [1, 32] }> = k.reshape(shape![1, 32]);
+    let ak: Tile<u32, { [16, 32] }> = ak.broadcast(shape![16, 32]);
+    let bk: Tile<u32, { [32, 1] }> = k.reshape(shape![32, 1]);
+    let bk: Tile<u32, { [32, 32] }> = bk.broadcast(shape![32, 32]);
+    let mut sum: Tile<f32, { [16, 32] }> = broadcast_scalar(0f32, shape![16, 32]);
+    let mut start = 0u32;
+    while start < inner {
+        let ka = ak + broadcast_scalar(start, shape![16, 32]);
+        let kb = bk + broadcast_scalar(start, shape![32, 32]);
+        let am = lt_tile(r, broadcast_scalar(rows, shape![16, 32])) & lt_tile(ka, broadcast_scalar(inner, shape![16, 32]));
+        let bm = lt_tile(c, broadcast_scalar(cols, shape![32, 32])) & lt_tile(kb, broadcast_scalar(inner, shape![32, 32]));
+        let ar = select(am, r, broadcast_scalar(0u32, shape![16, 32]));
+        let ak = select(am, ka, broadcast_scalar(0u32, shape![16, 32]));
+        let bk = select(bm, kb, broadcast_scalar(0u32, shape![32, 32]));
+        let bc = select(bm, c, broadcast_scalar(0u32, shape![32, 32]));
+        let av = unsafe { mm_read_matrix(a, ar * broadcast_scalar(inner, shape![16, 32]) + ak, am, 0f32, shape![512]) };
+        let bv = unsafe { mm_read_matrix(b, bk * broadcast_scalar(cols, shape![32, 32]) + bc, bm, 0f32, shape![1024]) };
+        let av: Tile<f16, { [16, 32] }> = ftof(av, rounding::NearestEven);
+        let bv: Tile<f16, { [32, 32] }> = ftof(bv, rounding::NearestEven);
+        sum = mmaf(av, bv, sum);
+        start = start + 32u32;
+    }
+    let cc: Tile<u32, { [32] }> = mm_lanes::<32>() + broadcast_scalar(block % tile_cols * 32u32, shape![32]);
+    let cc: Tile<u32, { [1, 32] }> = cc.reshape(shape![1, 32]);
+    let cc: Tile<u32, { [16, 32] }> = cc.broadcast(shape![16, 32]);
+    let mask = lt_tile(r, broadcast_scalar(rows, shape![16, 32])) & lt_tile(cc, broadcast_scalar(cols, shape![16, 32]));
+    let row = select(mask, r, broadcast_scalar(0u32, shape![16, 32]));
+    let column = select(mask, cc, broadcast_scalar(0u32, shape![16, 32]));
+    unsafe { mm_write_matrix(out, row * broadcast_scalar(cols, shape![16, 32]) + column, sum, mask, shape![512]) };
+}
+unsafe fn mm_packed_matrix<const BF16: bool>(a: *const u32, b: *const u32, out: *mut f32, rows: u32, inner: u32, cols: u32, a_slot: u32, b_slot: u32) {
+    let block = mm_block_id();
+    let tile_cols = (cols + 31u32) / 32u32;
+    let r: Tile<u32, { [16] }> = mm_lanes::<16>() + broadcast_scalar(block / tile_cols * 16u32, shape![16]);
+    let r: Tile<u32, { [16, 1] }> = r.reshape(shape![16, 1]);
+    let r: Tile<u32, { [16, 32] }> = r.broadcast(shape![16, 32]);
+    let c: Tile<u32, { [32] }> = mm_lanes::<32>() + broadcast_scalar(block % tile_cols * 32u32, shape![32]);
+    let c: Tile<u32, { [1, 32] }> = c.reshape(shape![1, 32]);
+    let c: Tile<u32, { [32, 32] }> = c.broadcast(shape![32, 32]);
+    let k: Tile<u32, { [32] }> = mm_lanes::<32>();
+    let ak: Tile<u32, { [1, 32] }> = k.reshape(shape![1, 32]);
+    let ak: Tile<u32, { [16, 32] }> = ak.broadcast(shape![16, 32]);
+    let bk: Tile<u32, { [32, 1] }> = k.reshape(shape![32, 1]);
+    let bk: Tile<u32, { [32, 32] }> = bk.broadcast(shape![32, 32]);
+    let mut sum: Tile<f32, { [16, 32] }> = broadcast_scalar(0f32, shape![16, 32]);
+    let mut start = 0u32;
+    while start < inner {
+        let ka = ak + broadcast_scalar(start, shape![16, 32]);
+        let kb = bk + broadcast_scalar(start, shape![32, 32]);
+        let am = lt_tile(r, broadcast_scalar(rows, shape![16, 32])) & lt_tile(ka, broadcast_scalar(inner, shape![16, 32]));
+        let bm = lt_tile(c, broadcast_scalar(cols, shape![32, 32])) & lt_tile(kb, broadcast_scalar(inner, shape![32, 32]));
+        let ar = select(am, r, broadcast_scalar(0u32, shape![16, 32]));
+        let ak = select(am, ka, broadcast_scalar(0u32, shape![16, 32]));
+        let bk = select(bm, kb, broadcast_scalar(0u32, shape![32, 32]));
+        let bc = select(bm, c, broadcast_scalar(0u32, shape![32, 32]));
+        let ai = ar * broadcast_scalar(inner, shape![16, 32]) + ak + broadcast_scalar(a_slot, shape![16, 32]);
+        let bi = bk * broadcast_scalar(cols, shape![32, 32]) + bc + broadcast_scalar(b_slot, shape![32, 32]);
+        let aw = unsafe { mm_read_matrix(a, ai / broadcast_scalar(2u32, shape![16, 32]), am, 0u32, shape![512]) };
+        let bw = unsafe { mm_read_matrix(b, bi / broadcast_scalar(2u32, shape![32, 32]), bm, 0u32, shape![1024]) };
+        let ab = (aw >> (ai % broadcast_scalar(2u32, shape![16, 32]) * broadcast_scalar(16u32, shape![16, 32]))) & broadcast_scalar(65535u32, shape![16, 32]);
+        let bb = (bw >> (bi % broadcast_scalar(2u32, shape![32, 32]) * broadcast_scalar(16u32, shape![32, 32]))) & broadcast_scalar(65535u32, shape![32, 32]);
+        let ar: Tile<u16, { [16, 32] }> = trunci(ab, overflow::NoUnsignedWrap);
+        let br: Tile<u16, { [32, 32] }> = trunci(bb, overflow::NoUnsignedWrap);
+        if BF16 {
+            let av: Tile<bf16, { [16, 32] }> = bitcast(ar);
+            let bv: Tile<bf16, { [32, 32] }> = bitcast(br);
+            sum = mmaf(av, bv, sum);
+        } else {
+            let av: Tile<f16, { [16, 32] }> = bitcast(ar);
+            let bv: Tile<f16, { [32, 32] }> = bitcast(br);
+            sum = mmaf(av, bv, sum);
+        }
+        start = start + 32u32;
+    }
+    let cc: Tile<u32, { [32] }> = mm_lanes::<32>() + broadcast_scalar(block % tile_cols * 32u32, shape![32]);
+    let cc: Tile<u32, { [1, 32] }> = cc.reshape(shape![1, 32]);
+    let cc: Tile<u32, { [16, 32] }> = cc.broadcast(shape![16, 32]);
+    let mask = lt_tile(r, broadcast_scalar(rows, shape![16, 32])) & lt_tile(cc, broadcast_scalar(cols, shape![16, 32]));
+    let row = select(mask, r, broadcast_scalar(0u32, shape![16, 32]));
+    let column = select(mask, cc, broadcast_scalar(0u32, shape![16, 32]));
+    unsafe { mm_write_matrix(out, row * broadcast_scalar(cols, shape![16, 32]) + column, sum, mask, shape![512]) };
+}
+
+#[cutile::entry()]
+unsafe fn burn_matmul_f16(a: *const u32, b: *const u32, out: *mut f32, rows: u32, inner: u32, cols: u32, lhs_slot: u32, rhs_slot: u32) {
+    unsafe { mm_packed_matrix::<false>(a, b, out, rows, inner, cols, lhs_slot, rhs_slot) }
+}
+#[cutile::entry()]
+unsafe fn burn_matmul_bf16(a: *const u32, b: *const u32, out: *mut f32, rows: u32, inner: u32, cols: u32, lhs_slot: u32, rhs_slot: u32) {
+    unsafe { mm_packed_matrix::<true>(a, b, out, rows, inner, cols, lhs_slot, rhs_slot) }
+}
+#[cutile::entry()]
+unsafe fn burn_matmul_flex32(a: *const f32, b: *const f32, out: *mut f32, rows: u32, inner: u32, cols: u32, _lhs_slot: u32, _rhs_slot: u32) {
+    unsafe { mm_rounded_matrix(a, b, out, rows, inner, cols) }
+}

@@ -21,6 +21,7 @@ mod linear;
 mod math;
 mod matrix;
 mod memory;
+mod mixed_matmul;
 mod movement;
 mod nd_indexing;
 mod optimizer;
@@ -251,6 +252,7 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     integer_reduction::run(backend)?;
     float_extrema::run(backend)?;
     float_reduction::run(backend)?;
+    mixed_matmul::run(backend)?;
     typed_erf::run(backend)?;
     let erf_options = d3os_ai::validation::typed_erf::Options::default();
     let erf_report = d3os_ai::burn::tensor::try_read_sync(d3os_ai::validation::typed_erf::run(&device, &erf_options))

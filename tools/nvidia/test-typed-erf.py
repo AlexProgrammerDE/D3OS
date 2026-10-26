@@ -542,10 +542,12 @@ class ErfEvidence(unittest.TestCase):
         current = old.replace("protocol=50 profiles=82", "protocol=51 profiles=83")
         extrema = old.replace("protocol=50 profiles=82", "protocol=52 profiles=84")
         numeric = old.replace("protocol=50 profiles=82", "protocol=53 profiles=85")
+        mixed = old.replace("protocol=50 profiles=82", "protocol=54 profiles=88")
         self.assertEqual(e.validate_raw(current, expected, self.manifest, self.bounds, protocol=51, profiles=83), accuracy)
         self.assertEqual(e.validate_raw(extrema, expected, self.manifest, self.bounds, protocol=52, profiles=84), accuracy)
         self.assertEqual(e.validate_raw(numeric, expected, self.manifest, self.bounds, protocol=53, profiles=85), accuracy)
-        for text, protocol, profiles in ((old, 51, 83), (current, 50, 82), (current, 51, 82), (current, 50, 83), (current, 52, 84), (extrema, 52, 83), (extrema, 51, 84), (extrema, 53, 85), (current, True, 83)):
+        self.assertEqual(e.validate_raw(mixed, expected, self.manifest, self.bounds, protocol=54, profiles=88), accuracy)
+        for text, protocol, profiles in ((old, 51, 83), (current, 50, 82), (current, 51, 82), (current, 50, 83), (current, 52, 84), (extrema, 52, 83), (extrema, 51, 84), (extrema, 53, 85), (numeric, 54, 88), (mixed, 53, 85), (mixed, 54, 85), (mixed, 53, 88), (mixed, 54, 87), (current, True, 83)):
             with self.subTest(protocol=protocol, profiles=profiles), self.assertRaises(RuntimeError):
                 e.validate_raw(text, expected, self.manifest, self.bounds, protocol=protocol, profiles=profiles)
 

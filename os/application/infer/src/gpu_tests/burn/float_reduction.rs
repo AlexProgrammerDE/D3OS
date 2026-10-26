@@ -979,8 +979,7 @@ fn audit_geometry(case: &Case) -> Result<()> {
     Ok(())
 }
 fn contract(cases: &[Case]) -> Result<()> {
-    if abi::VERSION != 53
-        || abi::KERNEL_COUNT != 85
+    if !matches!((abi::VERSION, abi::KERNEL_COUNT), (53, 85) | (54, 88))
         || abi::SERVICE_OPERATIONS != 14
         || Kernel::FloatReduction as usize != 84
         || raw::FORMATS != FORMATS

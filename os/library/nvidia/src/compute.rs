@@ -14,6 +14,7 @@ pub mod indexing;
 pub mod integer_arithmetic;
 pub mod integer_reduction;
 pub mod interpolate;
+pub mod mixed_matmul;
 pub mod optimizer;
 pub mod packed_gather;
 pub mod packed_scatter;
@@ -31,7 +32,7 @@ pub mod storage;
 pub mod updates;
 pub mod words;
 
-pub const VERSION: u32 = 53;
+pub const VERSION: u32 = 54;
 /// END_COMMANDS flag: an inner recording scope joins its parent's completion.
 /// The outermost scope always waits. Zero retains synchronous nested scopes.
 pub const DEFER_NESTED_COMPLETION: u64 = 1;
@@ -65,7 +66,7 @@ pub struct MemoryProfile {
     pub device_cached_bytes: u64,
     pub device_retired_bytes: u64,
 }
-pub const KERNEL_COUNT: usize = 85;
+pub const KERNEL_COUNT: usize = 88;
 
 /// CPU service costs by request operation, including queue work within it.
 #[derive(Clone, Copy, Debug, Default)]
@@ -208,9 +209,12 @@ pub enum Kernel {
     IntegerReduction = 82,
     FloatExtrema = 83,
     FloatReduction = 84,
+    MatmulF16 = 85,
+    MatmulBf16 = 86,
+    MatmulFlex32 = 87,
 }
 
-const _: () = assert!(Kernel::FloatReduction as usize + 1 == KERNEL_COUNT);
+const _: () = assert!(Kernel::MatmulFlex32 as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -281,6 +285,9 @@ impl Kernel {
                 | Self::IntegerReduction
                 | Self::FloatExtrema
                 | Self::FloatReduction
+                | Self::MatmulF16
+                | Self::MatmulBf16
+                | Self::MatmulFlex32
                 | Self::PackedGather
                 | Self::PackedMaskWhere
                 | Self::TensorPredicate
@@ -406,6 +413,9 @@ impl Kernel {
             82 => Self::IntegerReduction,
             83 => Self::FloatExtrema,
             84 => Self::FloatReduction,
+            85 => Self::MatmulF16,
+            86 => Self::MatmulBf16,
+            87 => Self::MatmulFlex32,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -497,6 +507,9 @@ impl Kernel {
             Self::IntegerReduction => "burn_integer_reduce_short",
             Self::FloatExtrema => "burn_float_extrema_short",
             Self::FloatReduction => "burn_float_reduce",
+            Self::MatmulF16 => "burn_matmul_f16",
+            Self::MatmulBf16 => "burn_matmul_bf16",
+            Self::MatmulFlex32 => "burn_matmul_flex32",
         }
     }
 
@@ -750,6 +763,18 @@ impl Kernel {
             (Self::FloatReduction, p) => {
                 extents[..2].copy_from_slice(&float_reduction::validate(p)?);
                 (float_reduction::work_items(p)?, 2, 1, false)
+            }
+            (Self::MatmulF16, p) => {
+                extents[..3].copy_from_slice(&mixed_matmul::validate(mixed_matmul::Kind::F16, p)?);
+                (mixed_matmul::work_items(mixed_matmul::Kind::F16, p)?, 3, 2, false)
+            }
+            (Self::MatmulBf16, p) => {
+                extents[..3].copy_from_slice(&mixed_matmul::validate(mixed_matmul::Kind::BF16, p)?);
+                (mixed_matmul::work_items(mixed_matmul::Kind::BF16, p)?, 3, 2, false)
+            }
+            (Self::MatmulFlex32, p) => {
+                extents[..3].copy_from_slice(&mixed_matmul::validate(mixed_matmul::Kind::Flex32, p)?);
+                (mixed_matmul::work_items(mixed_matmul::Kind::Flex32, p)?, 3, 2, false)
             }
             (Self::IntegerArithmetic, p) => {
                 extents[..3].copy_from_slice(&integer_arithmetic::validate(p)?);

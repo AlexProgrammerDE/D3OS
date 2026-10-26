@@ -18,6 +18,8 @@ mod integer_reduction;
 pub mod interpolate;
 pub mod layout;
 mod linear;
+mod matmul;
+mod mixed_matmul;
 mod packed_gather;
 mod packed_scatter;
 mod packed_updates;
