@@ -34,6 +34,7 @@ mod selection;
 mod sort;
 mod spatial_convolution;
 mod storage;
+mod typed_erf;
 mod typed_exp_log;
 mod typed_power;
 mod typed_relu;
@@ -243,6 +244,30 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
         "BURN_TYPED_POWER_OK os=d3os backend=native fusion=disabled corpus={} {}",
         d3os_ai::validation::typed_power::CORPUS_VERSION,
         d3os_ai::validation::typed_power::success_footer(&power_options, &power_report)
+    ));
+    typed_erf::run(backend)?;
+    let erf_options = d3os_ai::validation::typed_erf::Options::default();
+    let erf_report = d3os_ai::burn::tensor::try_read_sync(d3os_ai::validation::typed_erf::run(&device, &erf_options))
+        .ok_or_else(|| String::from("native typed Erf future did not complete"))??;
+    crate::report(format_args!(
+        "BURN_TYPED_ERF_ACCURACY os=d3os backend=native fusion=disabled corpus={} policy_sha256={} fixture_sha256={} qualification_passed={} totals={} accuracy={}",
+        d3os_ai::validation::typed_erf::CORPUS_VERSION,
+        d3os_ai::validation::typed_erf::POLICY_SHA256,
+        d3os_ai::validation::typed_erf::FIXTURE_SHA256,
+        erf_report.is_success(),
+        d3os_ai::validation::typed_erf::summary_json(&erf_report.summary),
+        d3os_ai::validation::typed_erf::accuracy_json(&erf_report.accuracy)
+    ));
+    if !erf_report.is_success() {
+        for example in &erf_report.failures.examples {
+            crate::report(format_args!("BURN_TYPED_ERF_FAILURE {example}"));
+        }
+        return Err(format!("typed Erf qualification failed: {} failures", erf_report.failures.count));
+    }
+    crate::report(format_args!(
+        "BURN_TYPED_ERF_OK os=d3os backend=native fusion=disabled corpus={} {}",
+        d3os_ai::validation::typed_erf::CORPUS_VERSION,
+        d3os_ai::validation::typed_erf::success_footer(&erf_options, &erf_report)
     ));
     typed_unary::run(backend)?;
     let unary_options = d3os_ai::validation::typed_unary::Options::default();

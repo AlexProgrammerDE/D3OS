@@ -141,6 +141,26 @@ class QualificationTests(unittest.TestCase):
             ).hexdigest(),
         )
 
+    def test_carry_table_pointer_add_reads_one_bounded_word(self):
+        instruction = "IADD3.X R3, RZ, c[0x4][0x14], RZ, P0, !PT"
+        result = qualify_instructions(instruction)
+        self.assertEqual(
+            [(a["constant_offset"], a["bytes"]) for a in result["cb4_accesses"]],
+            [(20, 4)],
+        )
+        for bad in (
+            instruction.replace("0x14", "0x4"),
+            instruction.replace("0x14", "0x18"),
+            instruction.replace("0x14", "0x15"),
+            instruction.replace("0x14", "R0"),
+            instruction.replace("P0, !PT", "R0, !PT"),
+            instruction.replace("P0, !PT", "P0, PT"),
+            instruction.replace("RZ, c", "R4, c"),
+            instruction.replace("IADD3.X", "IADD3.X.SAT"),
+        ):
+            with self.subTest(instruction=bad), self.assertRaises(ValueError):
+                qualify_instructions(bad)
+
     def test_fixed_safe_banks_and_supported_indexing(self):
         for bank in (0, 2):
             for opcode, register in (

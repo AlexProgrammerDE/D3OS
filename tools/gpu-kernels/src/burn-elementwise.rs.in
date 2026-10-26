@@ -88,7 +88,7 @@ unsafe fn BURN_ENTRY(a: *const u32, b: *const u32, output: *mut u32, BURN_PARAME
     } else if BURN_OP == 32u32 {
         bitcast(tan(x))
     } else if BURN_OP == 33u32 {
-        burn_erf_bits(left)
+        erf_f32bits(left)
     } else if BURN_OP == 34u32 {
         burn_remainder_bits(left, right)
     } else if BURN_OP == 35u32 {

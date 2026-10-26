@@ -369,6 +369,14 @@ Its separate filtered F32 run passes 41,152 values.
 The [coverage reference](burn-backend-coverage.md#typed-floating-power) describes the routes, numerical targets, and retained failure archives.
 General typed autodiff, remaining backend APIs, and workload performance parity remain incomplete.
 
+Erf now supports all five ordinary floating formats through protocol 50.
+D3OS passes 1,085,172 guarded comparisons, 510,046 shared API values, and every earlier GPU regression gate.
+The tests separately check exact oddness, signed zeros, source bytes, and output guards.
+The filtered four-format Linux CUDA run retains 225,308 value failures under the project qualification targets.
+Its rank-zero and Flex32 upload rejections remain separate diagnostics.
+The [coverage reference](burn-backend-coverage.md#typed-erf) describes the numerical policy and immutable capture.
+This forward checkpoint does not establish general typed autodiff, full backend coverage, or performance parity.
+
 I32 tensor and generic scalar powers now use resident wrapping integer arithmetic without a floating-point intermediate.
 The exponent bits follow the same unsigned interpretation as the pinned Linux backend.
 FP32 deformable convolution now provides input, offset, weight, modulation-mask, and bias gradients on the native GPU.

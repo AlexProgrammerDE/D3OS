@@ -25,6 +25,7 @@ pub mod scatter_updates;
 pub mod sort;
 pub mod spatial_convolution;
 pub mod storage;
+pub mod typed_erf;
 pub mod typed_exp_log;
 pub mod typed_power;
 pub mod typed_trig;

@@ -2,8 +2,10 @@
 
 Optionally set TYPED_MATH_SCRATCH_BASELINE_SASS to the old inference-family
 disassembly to exercise the complete production audit with both entry versions.
-Set TYPED_MATH_SCRATCH_PREVIOUS_ARTIFACTS to the superseded Power24 export
+Set TYPED_MATH_SCRATCH_PREVIOUS_ARTIFACTS to the corrected Power24 v2 export
 to check that it cannot enter under the corrected profile.
+Set TYPED_MATH_SCRATCH_REJECTED_ARTIFACTS to the first Erf25 export with the
+incomplete unary predicate to check that it cannot enter the final profile.
 """
 
 import copy
@@ -13,6 +15,7 @@ import os
 import re
 import struct
 import unittest
+from collections import Counter
 from pathlib import Path
 
 
@@ -52,12 +55,18 @@ class ScratchArtifactTests(unittest.TestCase):
         )
 
     def change_instruction(self, offset, transform):
-        pattern = rf"(^\s*/\*{offset:04x}\*/[^\n]+)$"
-        mutated, count = re.subn(
-            pattern, lambda match: transform(match[0]), self.sass, flags=re.MULTILINE
+        pattern = (
+            rf"(^[ \t]*/\*{offset:04x}\*/[ \t]*"
+            r"(?:@!?U?P(?:\d+|T)[ \t]+)?[A-Z][^\n]+)$"
         )
+
+        def replace(match):
+            changed = transform(match[0])
+            self.assertNotEqual(changed, match[0])
+            return changed
+
+        mutated, count = re.subn(pattern, replace, self.sass, flags=re.MULTILINE)
         self.assertEqual(count, 1)
-        self.assertNotEqual(mutated, self.sass)
         return mutated
 
     def mutate_record(self, section_name, kind, transform):
@@ -82,9 +91,9 @@ class ScratchArtifactTests(unittest.TestCase):
             {(0, 28), (28, 56), (56, 96)},
         )
         self.assertEqual(result["unclassified_local_sites"], [])
-        self.assertEqual(len(result["call_sites"]), 75)
-        self.assertEqual(result["registers"], 80)
-        self.assertEqual(result["code_bytes"], 182272)
+        self.assertEqual(len(result["call_sites"]), 135)
+        self.assertEqual(result["registers"], 88)
+        self.assertEqual(result["code_bytes"], 224512)
         self.assertEqual(result["frame_bytes"], 96)
         self.assertEqual(result["minimum_stack_bytes"], 96)
         self.assertEqual(len(result["helper_frame_bytes"]), 7)
@@ -94,28 +103,109 @@ class ScratchArtifactTests(unittest.TestCase):
         self.assertEqual(sum(a["frame_range"] == [28, 56] for a in arrays), 18)
         self.assertEqual(sum(a["frame_range"] == [0, 28] for a in arrays), 9)
 
+    def test_registered_erf_dispatch_and_arithmetic_are_bound(self):
+        _, rows, calls, _ = scratch.schedule(
+            self.elf, self.sass, scratch.load_qualifier()
+        )
+        self.assertEqual(
+            Counter(call["target"] for call in calls),
+            {
+                "$__cuda_sm20_dblrcp_rn_slowpath_v3": 6,
+                "$__cuda_sm20_div_rn_f64_full": 24,
+                "$__cuda_sm20_dsqrt_rn_f64_mediumpath_v1": 3,
+                "$__cuda_sm20_sqrt_rn_f32_slowpath": 9,
+                "$__cuda_sm3x_div_rn_noftz_f32_slowpath": 81,
+                f"${scratch.ENTRY}$__internal_accurate_pow": 3,
+                scratch.TRIG: 9,
+            },
+        )
+        dispatches = [
+            row
+            for row in rows
+            if row[2] == "ISETP.NE.U32.AND" and ", 0x21, PT" in row[3]
+        ]
+        self.assertEqual(len(dispatches), 8)
+        # Exercise each emitted Erf region. These mutations check schedule
+        # binding only; instruction counts do not establish numerical accuracy.
+        for dispatch in dispatches:
+            arithmetic = next(
+                row
+                for row in rows
+                if row[0] > dispatch[0] and row[2] in ("DFMA", "FFMA")
+            )
+            changes = (
+                (dispatch[0], lambda row: row.replace("0x21,", "0x20,")),
+                (
+                    arithmetic[0],
+                    lambda row: row.replace("DFMA", "DADD").replace("FFMA", "FADD"),
+                ),
+            )
+            for offset, transform in changes:
+                with self.subTest(offset=offset), self.assertRaises(ValueError):
+                    self.qualify(sass=self.change_instruction(offset, transform))
+
+    def test_sdk_generated_unary_erf_predicate_is_bound(self):
+        changes = (
+            (0x3C0, lambda row: row.replace("0x21,", "0x22,")),
+            (0x3C0, lambda row: row.replace("ISETP.EQ.U32.OR", "ISETP.EQ.U32.AND")),
+            (0x410, lambda row: row.replace("P4 ;", "!P4 ;")),
+        )
+        for offset, transform in changes:
+            with self.subTest(offset=offset), self.assertRaises(ValueError):
+                self.qualify(sass=self.change_instruction(offset, transform))
+
+    def test_observed_table_carry_has_no_broader_cb4_admission(self):
+        q = scratch.load_qualifier()
+        _, rows, _, _ = scratch.schedule(self.elf, self.sass, q)
+        carries = [row for row in rows if row[2] == "IADD3.X" and "c[0x4]" in row[3]]
+        self.assertEqual(len(carries), 2)
+        changes = (
+            lambda row: row.replace("0x14]", "0x18]"),
+            lambda row: row.replace("0x14]", "0x4]"),
+            lambda row: row.replace("0x14]", "R1]"),
+            lambda row: row.replace("R45, RZ,", "R45, R2,"),
+            lambda row: row.replace("], RZ,", "], R2,"),
+            lambda row: row.replace("!PT", "PT"),
+            lambda row: row.replace("IADD3.X", "IADD3.X.U32"),
+            lambda row: row.replace("IADD3.X", "FADD"),
+        )
+        for carry in carries:
+            for index, transform in enumerate(changes):
+                changed = self.change_instruction(carry[0], transform)
+                # Reject independently of the scratch schedule fingerprint.
+                with (
+                    self.subTest(offset=carry[0], form=index),
+                    self.assertRaises(ValueError),
+                ):
+                    q.qualify(self.cubin, changed)
+                with (
+                    self.subTest(offset=carry[0], scratch_form=index),
+                    self.assertRaises(ValueError),
+                ):
+                    self.qualify(sass=changed)
+
     def test_unknown_local_forms_bases_offsets_and_slots_fail(self):
         changes = {
             "unknown local opcode": (
-                0x6EF0,
+                0x82B0,
                 lambda row: row.replace("LDL ", "LDL.128 "),
             ),
-            "unknown store base": (0x6D80, lambda row: row.replace("[R1+", "[R2+")),
-            "out-of-array store": (0x6D80, lambda row: row.replace("+0x1c]", "+0x60]")),
-            "unknown load base": (0x6EF0, lambda row: row.replace("[R15+", "[R17+")),
-            "out-of-array load": (0x6EF0, lambda row: row.replace("+0x18]", "+0x1c]")),
+            "unknown store base": (0x8140, lambda row: row.replace("[R1+", "[R2+")),
+            "out-of-array store": (0x8140, lambda row: row.replace("+0x1c]", "+0x60]")),
+            "unknown load base": (0x82B0, lambda row: row.replace("[R13+", "[R17+")),
+            "out-of-array load": (0x82B0, lambda row: row.replace("+0x18]", "+0x1c]")),
             "new save slot": (
-                0x6F20,
+                0x82E0,
                 lambda row: re.sub(r"@P0 SHF.*;", "STL [R1+0x60], R0 ;", row),
             ),
-            "F32 bound": (0x6E50, lambda row: row.replace("0x5,", "0x4,")),
-            "F32 pointer scale": (0x6EC0, lambda row: row.replace("-0x4,", "-0x8,")),
-            "F64 pointer base": (0x2BDE0, lambda row: row.replace("0x38,", "0x40,")),
-            "F64 loop bound": (0x2BE30, lambda row: row.replace("0x12,", "0x13,")),
-            "F64 pointer stride": (0x2C020, lambda row: row.replace("0x8,", "0x10,")),
-            "F64 final offset": (0x2C140, lambda row: row.replace("-0x78]", "-0x70]")),
-            "missing predicate": (0x2C150, lambda row: row.replace("@P0", "   ")),
-            "return address": (0x3660, lambda row: row.replace("0x3680", "0x3690")),
+            "F32 bound": (0x8210, lambda row: row.replace("0x5,", "0x4,")),
+            "F32 pointer scale": (0x8280, lambda row: row.replace("-0x4,", "-0x8,")),
+            "F64 pointer base": (0x362A0, lambda row: row.replace("0x38,", "0x40,")),
+            "F64 loop bound": (0x362F0, lambda row: row.replace("0x12,", "0x13,")),
+            "F64 pointer stride": (0x364E0, lambda row: row.replace("0x8,", "0x10,")),
+            "F64 final offset": (0x36600, lambda row: row.replace("-0x78]", "-0x70]")),
+            "missing predicate": (0x36610, lambda row: row.replace("@P0", "   ")),
+            "return address": (0x3700, lambda row: row.replace("0x3730", "0x3740")),
         }
         for name, (offset, transform) in changes.items():
             with self.subTest(name=name), self.assertRaises(ValueError):
@@ -125,16 +215,16 @@ class ScratchArtifactTests(unittest.TestCase):
         for target in (
             "missing_helper",
             "$__internal_0_$__cuda_sm20_dblrcp_rn_slowpath_v3",
-            ".L_x_627",
+            ".L_x_765",
         ):
             changed = self.change_instruction(
-                0x2020,
+                0x20E0,
                 lambda row, target=target: re.sub(r"`\([^)]+\)", f"`({target})", row),
             )
             with self.subTest(target=target), self.assertRaises(ValueError):
                 self.qualify(sass=changed)
         changed = self.change_instruction(
-            0x2BDB0, lambda row: row.replace(".L_x_627", ".L_x_628")
+            0x36270, lambda row: row.replace(".L_x_765", ".L_x_766")
         )
         with self.assertRaises(ValueError):
             self.qualify(sass=changed)
@@ -198,7 +288,7 @@ class ScratchArtifactTests(unittest.TestCase):
                 for row in reversed(rows)
                 if row[0] < read[0]
                 and row[2] == "IMAD"
-                and re.fullmatch(rf"{base}, R\d+, -0x4, R(?:1|52)", row[3])
+                and re.fullmatch(rf"{base}, R\d+, -0x4, R(?:1|50)", row[3])
             )
             changed = self.change_instruction(
                 pointer[0], lambda row: row.replace("-0x4,", "-0x8,")
@@ -225,12 +315,12 @@ class ScratchArtifactTests(unittest.TestCase):
         # Power has no local accesses. Bind its arithmetic and the trig helper's
         # changed input-register setup as strictly as the reduction arrays.
         changes = {
-            0x2B570: lambda row: row.replace("DMUL", "DADD"),
-            0x2BD60: lambda row: row.replace("0x14,", "0x15,"),
-            0x2BD70: lambda row: row.replace("R3 ;", "R4 ;"),
-            0x2BD80: lambda row: row.replace("RZ ;", "0x1 ;"),
-            0x2BD90: lambda row: row.replace("0x7ff,", "0x7fe,"),
-            0x2BDF0: lambda row: row.replace("SRZ", "SR_CLOCKLO"),
+            0x35A00: lambda row: row.replace("DMUL", "DADD"),
+            0x36210: lambda row: row.replace("0x14,", "0x15,"),
+            0x36220: lambda row: row.replace("R2 ;", "R3 ;"),
+            0x36250: lambda row: row.replace("RZ ;", "0x1 ;"),
+            0x36240: lambda row: row.replace("0x7ff,", "0x7fe,"),
+            0x362B0: lambda row: row.replace("SRZ", "SR_CLOCKLO"),
         }
         for offset, transform in changes.items():
             with self.subTest(offset=offset), self.assertRaises(ValueError):
@@ -256,34 +346,34 @@ class ScratchArtifactTests(unittest.TestCase):
 
     def test_f64_power_integer_cutoff_and_identities_are_bound(self):
         changes = {
-            "parity limit": (0x42F0, lambda row: row.replace("0x433,", "0x434,")),
-            "cutoff shift clamp": (0x45C0, lambda row: row.replace("0x409,", "0x40a,")),
+            "parity limit": (0x43C0, lambda row: row.replace("0x433,", "0x434,")),
+            "cutoff shift clamp": (0x4690, lambda row: row.replace("0x409,", "0x40a,")),
             "integer product": (
-                0x4700,
+                0x47D0,
                 lambda row: row.replace("IMAD.WIDE.U32", "IMAD.HI.U32"),
             ),
             "product low comparison": (
-                0x4740,
+                0x4810,
                 lambda row: row.replace("GE.U32", "GT.U32"),
             ),
             "product high comparison": (
-                0x4750,
+                0x4820,
                 lambda row: row.replace("GE.U32", "GT.U32"),
             ),
             "large exponent cutoff": (
-                0x4790,
+                0x4860,
                 lambda row: row.replace("0x4090cbff", "0x4090cbfe"),
             ),
-            "nonzero repair": (0x46F0, lambda row: row.replace("0x1,", "0x2,")),
-            "exponent one identity": (0x4A20, lambda row: row.replace("R2,", "R3,")),
+            "nonzero repair": (0x47E0, lambda row: row.replace("0x1,", "0x2,")),
+            "exponent one identity": (0x4B00, lambda row: row.replace("R8,", "R9,")),
             "negative one infinite identity": (
-                0x4CA0,
-                lambda row: row.replace("P2 ;", "!P2 ;"),
+                0x4D50,
+                lambda row: row.replace("P3 ;", "!P3 ;"),
             ),
-            "base one identity": (0x4CC0, lambda row: row.replace("P5 ;", "!P5 ;")),
+            "base one identity": (0x4D80, lambda row: row.replace("P1 ;", "!P1 ;")),
             "exponent zero identity": (
-                0x4CE0,
-                lambda row: row.replace("P1 ;", "!P1 ;"),
+                0x4DA0,
+                lambda row: row.replace("P0 ;", "!P0 ;"),
             ),
         }
         for name, (offset, transform) in changes.items():
@@ -292,19 +382,19 @@ class ScratchArtifactTests(unittest.TestCase):
 
     def test_nonlocal_computation_and_guards_are_bound(self):
         changes = {
-            "frame base": (0x1510, lambda row: row.replace("0x1c,", "0x20,")),
-            "finite guard": (0x6CF0, lambda row: row.replace("NEU", "EQU")),
-            "large guard": (0x6C60, lambda row: row.replace("105615", "65535")),
+            "frame base": (0x15C0, lambda row: row.replace("0x1c,", "0x20,")),
+            "finite guard": (0x80B0, lambda row: row.replace("NEU", "EQU")),
+            "large guard": (0x8020, lambda row: row.replace("105615", "65535")),
             "reduction product": (
-                0x6D60,
+                0x8120,
                 lambda row: row.replace("0x3c439041", "0x3c439040"),
             ),
             "F64 helper computation": (
-                0x2BF90,
-                lambda row: row.replace("R19,", "R18,"),
+                0x36450,
+                lambda row: row.replace("R65,", "R66,"),
             ),
             "F64 table pointer scale": (
-                0x2BE80,
+                0x36340,
                 lambda row: row.replace("0x8", "0x10"),
             ),
         }
@@ -313,7 +403,7 @@ class ScratchArtifactTests(unittest.TestCase):
                 self.qualify(sass=self.change_instruction(offset, transform))
 
     def test_malformed_decoded_inventory_fails(self):
-        offset = 0x6D80
+        offset = 0x8140
         pattern = rf"^\s*/\*{offset:04x}\*/[^\n]+$"
         row = re.search(pattern, self.sass, re.MULTILINE)[0]
         changes = (
@@ -440,11 +530,11 @@ class ScratchArtifactTests(unittest.TestCase):
             "<I",
             data,
             table + self.elf.named[scratch.TEXT]["index"] * 64 + 44,
-            81 << 24,
+            89 << 24,
         )
         with self.assertRaises(ValueError):
             self.qualify(cubin=bytes(data))
-        for key, value in (("registers", 81), ("code_bytes", 182400), ("threads", 256)):
+        for key, value in (("registers", 89), ("code_bytes", 224640), ("threads", 256)):
             entries = copy.deepcopy(self.entries)
             entries[0][key] = value
             with self.subTest(key=key), self.assertRaises(ValueError):
@@ -486,7 +576,7 @@ class ScratchArtifactTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 self.qualify(provenance=provenance)
         changed = self.change_instruction(
-            0x2BEC0, lambda row: row.replace("c[0x4][0x8]", "c[0x4][R1]")
+            0x36370, lambda row: row.replace("c[0x4][0x8]", "c[0x4][R1]")
         )
         with self.assertRaises(ValueError):
             self.qualify(sass=changed)
@@ -499,7 +589,7 @@ class ScratchArtifactTests(unittest.TestCase):
         )
         for index, transform in enumerate(forms):
             with self.subTest(form=index), self.assertRaises(ValueError):
-                self.qualify(sass=self.change_instruction(0x2BEC0, transform))
+                self.qualify(sass=self.change_instruction(0x36370, transform))
         relocation = self.elf.named[".rel.nv.constant4"]
         for mutation in ("duplicate slot", "unknown slot", "unknown kind"):
             data = bytearray(self.cubin)
@@ -528,7 +618,7 @@ class ScratchArtifactTests(unittest.TestCase):
     def test_historical_scratch_artifact_requires_its_own_profile(self):
         location = os.environ.get("TYPED_MATH_SCRATCH_HISTORICAL_ARTIFACTS")
         if not location:
-            self.skipTest("requires the retained nineteen-operation checkpoint")
+            self.skipTest("requires the retained historical typed-math checkpoint")
         directory = Path(location)
         with self.assertRaises(ValueError):
             self.qualify(
@@ -540,8 +630,21 @@ class ScratchArtifactTests(unittest.TestCase):
     def test_previous_power_artifact_requires_its_own_profile(self):
         location = os.environ.get("TYPED_MATH_SCRATCH_PREVIOUS_ARTIFACTS")
         if not location:
-            self.skipTest("requires the superseded Power24 export")
+            self.skipTest("requires the corrected Power24 v2 export")
         directory = Path(location)
+        with self.assertRaises(ValueError):
+            self.qualify(
+                cubin=(directory / "kernels.cubin").read_bytes(),
+                sass=(directory / "kernels.sass").read_text(),
+                entries=json.loads((directory / "kernels.json").read_text()),
+            )
+
+    def test_incomplete_unary_erf_artifact_cannot_enter_final_profile(self):
+        location = os.environ.get("TYPED_MATH_SCRATCH_REJECTED_ARTIFACTS")
+        if not location:
+            self.skipTest("requires the first Erf25 export before the unary fix")
+        directory = Path(location)
+        # Even claiming the current source provenance cannot admit old code.
         with self.assertRaises(ValueError):
             self.qualify(
                 cubin=(directory / "kernels.cubin").read_bytes(),

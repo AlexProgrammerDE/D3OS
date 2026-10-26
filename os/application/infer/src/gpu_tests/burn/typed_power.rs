@@ -1435,10 +1435,10 @@ fn contract() -> Result<()> {
             "typed power UNFROZEN: parent numerical policy and fixture freeze required before GPU work",
         ));
     }
-    if abi::VERSION != 49
-        || abi::KERNEL_COUNT != 82
+    if abi::VERSION < 49
+        || abi::KERNEL_COUNT < 82
         || Kernel::FloatArithmetic as u32 != 81
-        || float::Operation::ALL.len() != 24
+        || float::Operation::ALL.len() < 24
         || float::Operation::Power as u32 != 29
         || float::PARAMETERS != 32
         || oracle::DTYPES != FORMATS.map(|(dtype, _)| dtype)
@@ -1493,7 +1493,10 @@ pub(super) fn run(backend: &Nvidia) -> Result<()> {
         return Err(format!("typed power numerical qualification failures={}", observed.accuracy.failures));
     }
     crate::report(format_args!(
-        "NVIDIA_BURN_TYPED_POWER_OK formats=5 power=29 sdk_operations=24 protocol=49 profiles=82 kernel=81 chunk=4096 raw_poison_variants=2 comparisons={compared} counts={counts:?} policy_sha256={POLICY} fixture_sha256={FIXTURE} qualification=project_targets linux_parity=not_claimed autodiff=outside_scope backend=nvidia",
+        "NVIDIA_BURN_TYPED_POWER_OK formats=5 power=29 sdk_operations={} protocol={} profiles={} kernel=81 chunk=4096 raw_poison_variants=2 comparisons={compared} counts={counts:?} policy_sha256={POLICY} fixture_sha256={FIXTURE} qualification=project_targets linux_parity=not_claimed autodiff=outside_scope backend=nvidia",
+        float::Operation::ALL.len(),
+        abi::VERSION,
+        abi::KERNEL_COUNT,
     ));
     Ok(())
 }

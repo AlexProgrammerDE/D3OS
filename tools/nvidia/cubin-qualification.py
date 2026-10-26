@@ -30,6 +30,8 @@ CB4 = r"c\[0x4\]\[0x[0-9a-f]+\]"
 # width. IMAD.WIDE reads eight bytes only in its final accumulator operand.
 CB4_FORMS = {
     "IADD3": (4, rf"R\d+,\s*(?:(?:P\d+|PT),\s*)?{REGISTER},\s*{CB4},\s*{REGISTER}"),
+    # Observed high-word table-pointer addition with an incoming carry.
+    "IADD3.X": (4, rf"R\d+,\s*RZ,\s*{CB4},\s*RZ,\s*P\d+,\s*!PT"),
     "IMAD.X": (4, rf"R\d+,\s*{REGISTER},\s*{REGISTER},\s*{CB4},\s*(?:P\d+|PT)"),
     "IMAD.WIDE": (8, rf"R\d+,\s*{REGISTER},\s*{REGISTER},\s*{CB4}"),
     "IMAD.WIDE.U32": (8, rf"R\d+,\s*{REGISTER},\s*{REGISTER},\s*{CB4}"),

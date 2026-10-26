@@ -39,18 +39,18 @@ fn scalar(mut p: [u32; 32], bits: u64) -> [u32; 32] {
 #[test]
 fn operation_registry_matches_supported_float_primitives() {
     for elementwise in Elementwise::ALL {
-        let selected = matches!(elementwise as u32, 1..=4 | 11..=25 | 29..=32 | 34);
+        let selected = matches!(elementwise as u32, 1..=4 | 11..=25 | 29..=34);
         let operation = Operation::from_elementwise(elementwise);
         assert_eq!(operation.is_ok(), selected);
         if let Ok(op) = operation {
             assert_eq!(op as u32, elementwise as u32);
-            assert_eq!(op.unary(), matches!(elementwise as u32, 11..=25 | 30..=32));
+            assert_eq!(op.unary(), matches!(elementwise as u32, 11..=25 | 30..=33));
             assert_eq!(op.binary(), !op.unary());
         }
     }
-    assert_eq!(Operation::ALL.len(), 24);
+    assert_eq!(Operation::ALL.len(), 25);
     for raw in 0..=256 {
-        let selected = matches!(raw, 1..=4 | 11..=25 | 29..=32 | 34);
+        let selected = matches!(raw, 1..=4 | 11..=25 | 29..=34);
         assert_eq!(Operation::from_raw(raw).is_ok(), selected);
     }
     for op in Operation::ALL {

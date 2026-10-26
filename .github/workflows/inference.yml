@@ -110,6 +110,8 @@ jobs:
         run: python3 tools/nvidia/test-compiler-profile.py
       - name: Verify typed power qualification gates
         run: python3 tools/nvidia/test-typed-power.py
+      - name: Verify typed Erf qualification gates
+        run: python3 tools/nvidia/test-typed-erf.py
       - name: Verify typed unary qualification gates
         run: python3 tools/nvidia/test-typed-unary.py
       - name: Verify typed trigonometric qualification gates

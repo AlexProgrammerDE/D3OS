@@ -39,11 +39,12 @@ pub enum Operation {
     Sinh = 30,
     Cosh = 31,
     Tan = 32,
+    Erf = 33,
     Remainder = 34,
 }
 
 impl Operation {
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 25] = [
         Self::Add,
         Self::Subtract,
         Self::Multiply,
@@ -67,6 +68,7 @@ impl Operation {
         Self::Sinh,
         Self::Cosh,
         Self::Tan,
+        Self::Erf,
         Self::Remainder,
     ];
 
@@ -99,6 +101,7 @@ impl Operation {
                 | Self::Sinh
                 | Self::Cosh
                 | Self::Tan
+                | Self::Erf
         )
     }
 

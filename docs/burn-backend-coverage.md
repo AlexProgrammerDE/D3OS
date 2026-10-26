@@ -623,6 +623,58 @@ Run `python3 tools/nvidia/test-typed-power.py` to check the evidence validator w
 Use `--burn-typed-power` with the Linux launcher and a fresh output directory for each attempt.
 The `--common-linux`, dtype, finite, rank-zero, and Flex32 filters declare the selected comparison domain.
 
+## Typed Erf
+
+Protocol 50 adds Erf across F64, F32, Flex32, F16, and BF16.
+The floating entry contains 25 operations. The portable bundle retains 248 entries and 82 compute profiles.
+F64 uses double arithmetic. Half operands widen to F32, then round once to destination storage.
+The precise F32 helper also replaces the previous helper used by the existing Erf and GELU checks.
+
+Project qualification permits two representable steps for F64, F32, and Flex32.
+Half outputs must belong to the destination rounding image of two F32 neighbors on each side of the reference.
+Special classes, signed zeros, nonzero results, the output range, and exact oddness have separate gates.
+These are bounded qualification targets, not an error guarantee for every possible wide input.
+
+The independent MPFR registry contains 230,618 rows, including every F16 and BF16 encoding.
+On the D3OS GPU, the guarded suite passes 1,085,172 comparisons.
+The shared Burn API suite passes 680 cases and 510,046 values.
+All five formats pass their exact oddness counts. These checks do not increase the reported output counts.
+Observed wide error is at most one representable step. Both half formats exactly match their staged references.
+F16 retains the expected one-step differences from direct rounding of the mathematical result.
+
+All earlier GPU regression gates pass, including the original F32 Erf and GELU campaign with its unchanged eight-step target.
+All three portable families compile inside D3OS and match their qualified host code bytes.
+Only the Erf and typed floating arithmetic instruction entries change from the accepted Power bundle.
+The other 246 instruction entries remain byte-identical.
+The scratch certificate binds 88 registers, 224,512 code bytes, a 96-byte frame, and all 194 library-scratch sites.
+
+The original Native capture stays immutable at `~/.cache/d3os/burn-typed-erf-harness-first/`.
+A separate host-validation replay binds the corrected evidence parser and the original 292-file inventory.
+It changes neither the captured GPU results nor their runtime source inventory.
+The parser checks per-image error capacities, both distance histograms, class transitions, reference witnesses, and separate oddness failures.
+
+The strict Linux CUDA attempt stops at the pinned rank-zero layout rejection.
+Excluding rank zero exposes the separate Flex32 upload rejection.
+Excluding both permits all 449,092 selected outputs, with 225,308 value qualification failures and eight oddness failures.
+The pinned CubeCL Erf polyfill uses F32 coefficients and an absolute-error approximation.
+It does not meet this project's stricter targets near zero, including the exact signed-zero requirement.
+These results describe the Erf approximation in the pinned Burn CUDA backend.
+All three attempts remain under `target/nvidia/burn-backend-audit/linux-typed-erf-`.
+Comparison records use the `target/nvidia/burn-backend-audit/typed-erf-` prefix.
+
+These runs measure correctness only. General typed autodiff, full Burn coverage, and performance parity remain incomplete.
+
+Build the Linux runner from the repository root:
+
+```bash
+cargo +1.98.1 build --manifest-path tools/mnist-benchmark/Cargo.toml --release --locked --bin typed_erf
+```
+
+Run `python3 tools/nvidia/typed-erf-generate.py --check` to reproduce the numerical registry.
+Run `python3 tools/nvidia/test-typed-erf.py` to check the evidence validator without a GPU.
+Use `--burn-typed-erf` with the Linux launcher and a fresh output directory for each attempt.
+The dtype, finite, rank-zero, and Flex32 filters declare the selected comparison domain.
+
 ## Typed Log1p, Sinh, Cosh, and Tan
 
 Protocol 48 adds Log1p, Sinh, Cosh, and Tan across F64, F32, Flex32, F16, and BF16.

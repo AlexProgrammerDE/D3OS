@@ -7,8 +7,8 @@ fn main() {
         "common.rs",
         "burn-packed-common.rs",
         "burn-log1p.rs",
+        "burn-typed-erf.rs",
         "burn-math.rs",
-        "burn-erf.rs",
         "burn-remainder.rs",
         "burn-inverse.rs",
         "burn-integer-matrix.rs",
@@ -307,11 +307,18 @@ fn main() {
         );
     }
     println!("cargo:rerun-if-changed=src/burn-float-arithmetic.rs.in");
+    let float_unary = d3os_nvidia::compute::float_arithmetic::Operation::ALL
+        .into_iter()
+        .filter(|operation| operation.unary())
+        .map(|operation| format!("op == {}u32", operation as u32))
+        .collect::<Vec<_>>()
+        .join(" || ");
     source.push_str(
         &fs::read_to_string("src/burn-float-arithmetic.rs.in")
             .expect("read typed floating arithmetic")
             .replace("FLOAT_PARAMETERS", &parameters)
-            .replace("FLOAT_ADDRESSES", &addresses),
+            .replace("FLOAT_ADDRESSES", &addresses)
+            .replace("FLOAT_UNARY", &float_unary),
     );
     println!("cargo:rerun-if-changed=src/burn-integer-arithmetic.rs.in");
     source.push_str(
