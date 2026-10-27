@@ -1,10 +1,11 @@
 // Each lane reads two aligned Q8 bytes and keeps both products in FP32.
-// Thirty-two logical lanes reduce each of four output rows.
-unsafe fn vector_q8_pairs<const GROUP: i32>(
-    a: *const f32, b: *const f32, col: Tile<u32, { [128] }>, lane: Tile<u32, { [128] }>, block: u32, blocks: u32, cols: u32,
-    even: Tile<f32, { [128] }>, odd: Tile<f32, { [128] }>,
+// Narrow projections use 128 logical lanes for one row; wider ones use 32 per row.
+unsafe fn vector_q8_pairs<const GROUP: i32, const NARROW: bool>(
+    a: *const f32, b: *const f32, col: Tile<u32, { [128] }>, lane: Tile<u32, { [128] }>, block: u32, blocks: u32, cols: u32, even: Tile<f32, { [128] }>,
+    odd: Tile<f32, { [128] }>,
 ) -> (Tile<f32, { [128] }>, Tile<f32, { [128] }>) {
-    let qblock = lane / broadcast_scalar(16u32, shape![128]) + broadcast_scalar(block + unsigned(GROUP) * 2u32, shape![128]);
+    let group_blocks = if NARROW { 8u32 } else { 2u32 };
+    let qblock = lane / broadcast_scalar(16u32, shape![128]) + broadcast_scalar(block + unsigned(GROUP) * group_blocks, shape![128]);
     let pair = lane % broadcast_scalar(16u32, shape![128]);
     let mask = lt_tile(col, broadcast_scalar(cols, shape![128])) & lt_tile(qblock, broadcast_scalar(blocks, shape![128]));
     let base = (col * broadcast_scalar(blocks, shape![128]) + qblock) * broadcast_scalar(17u32, shape![128]);
@@ -18,13 +19,24 @@ unsafe fn vector_q8_pairs<const GROUP: i32>(
     let index = qblock * broadcast_scalar(32u32, shape![128]) + pair * broadcast_scalar(2u32, shape![128]);
     let x0 = unsafe { read_tile(a, index, mask, 0f32) };
     let x1 = unsafe { read_tile(a, index + broadcast_scalar(1u32, shape![128]), mask, 0f32) };
-    (fma(x0, low, even, rounding::NearestEven, ftz::Disabled), fma(x1, high, odd, rounding::NearestEven, ftz::Disabled))
+    (
+        fma(x0, low, even, rounding::NearestEven, ftz::Disabled),
+        fma(x1, high, odd, rounding::NearestEven, ftz::Disabled),
+    )
 }
 
-unsafe fn vector_project_q8(a: *const f32, b: *const f32, output: *mut f32, inner: u32, cols: u32) {
-    let first = block_id() * 4u32;
-    let lane = lanes::<128>() % broadcast_scalar(32u32, shape![128]);
-    let col = lanes::<128>() / broadcast_scalar(32u32, shape![128]) + broadcast_scalar(first, shape![128]);
+unsafe fn vector_project_q8<const NARROW: bool>(a: *const f32, b: *const f32, output: *mut f32, inner: u32, cols: u32) {
+    let first = block_id() * if NARROW { 1u32 } else { 4u32 };
+    let lane = if NARROW {
+        lanes::<128>()
+    } else {
+        lanes::<128>() % broadcast_scalar(32u32, shape![128])
+    };
+    let col = if NARROW {
+        broadcast_scalar(first, shape![128])
+    } else {
+        lanes::<128>() / broadcast_scalar(32u32, shape![128]) + broadcast_scalar(first, shape![128])
+    };
     let blocks = inner / 32u32;
     let mut e0 = broadcast_scalar(0f32, shape![128]);
     let mut o0 = e0;
@@ -36,25 +48,33 @@ unsafe fn vector_project_q8(a: *const f32, b: *const f32, output: *mut f32, inne
     let mut o3 = e0;
     let mut block = 0u32;
     while block < blocks {
-        let (even, odd) = unsafe { vector_q8_pairs::<0>(a, b, col, lane, block, blocks, cols, e0, o0) };
+        let (even, odd) = unsafe { vector_q8_pairs::<0, NARROW>(a, b, col, lane, block, blocks, cols, e0, o0) };
         e0 = even;
         o0 = odd;
-        let (even, odd) = unsafe { vector_q8_pairs::<1>(a, b, col, lane, block, blocks, cols, e1, o1) };
+        let (even, odd) = unsafe { vector_q8_pairs::<1, NARROW>(a, b, col, lane, block, blocks, cols, e1, o1) };
         e1 = even;
         o1 = odd;
-        let (even, odd) = unsafe { vector_q8_pairs::<2>(a, b, col, lane, block, blocks, cols, e2, o2) };
+        let (even, odd) = unsafe { vector_q8_pairs::<2, NARROW>(a, b, col, lane, block, blocks, cols, e2, o2) };
         e2 = even;
         o2 = odd;
-        let (even, odd) = unsafe { vector_q8_pairs::<3>(a, b, col, lane, block, blocks, cols, e3, o3) };
+        let (even, odd) = unsafe { vector_q8_pairs::<3, NARROW>(a, b, col, lane, block, blocks, cols, e3, o3) };
         e3 = even;
         o3 = odd;
-        block = block + 8u32;
+        block = block + if NARROW { 32u32 } else { 8u32 };
     }
     let sum = ((e0 + o0) + (e1 + o1)) + ((e2 + o2) + (e3 + o3));
-    let sum: Tile<f32, { [4, 32] }> = sum.reshape(shape![4, 32]);
-    let value: Tile<f32, { [4] }> = reduce_sum(sum, 1i32);
-    let col = lanes::<4>() + broadcast_scalar(first, shape![4]);
-    unsafe { write_tile(output, col, value, lt_tile(col, broadcast_scalar(cols, shape![4]))) };
+    if NARROW {
+        // A single output uses all four warps, avoiding a second merge launch.
+        let sum: Tile<f32, { [1, 128] }> = sum.reshape(shape![1, 128]);
+        let value: Tile<f32, { [1] }> = reduce_sum(sum, 1i32);
+        let col = broadcast_scalar(first, shape![1]);
+        unsafe { write_tile(output, col, value, lt_tile(col, broadcast_scalar(cols, shape![1]))) };
+    } else {
+        let sum: Tile<f32, { [4, 32] }> = sum.reshape(shape![4, 32]);
+        let value: Tile<f32, { [4] }> = reduce_sum(sum, 1i32);
+        let col = lanes::<4>() + broadcast_scalar(first, shape![4]);
+        unsafe { write_tile(output, col, value, lt_tile(col, broadcast_scalar(cols, shape![4]))) };
+    }
 }
 
 // Decode each 256-weight block with 32 logical lanes per output row. A CTA
@@ -135,7 +155,11 @@ unsafe fn vector_project_k<const FORMAT: u32>(a: *const f32, b: *const f32, outp
     let col = lanes::<128>() / broadcast_scalar(32u32, shape![128]) + broadcast_scalar(first, shape![128]);
     // Inactive output lanes read a valid weight row; their stores stay masked.
     // Unconditional packed loads avoid padding work throughout the reduction.
-    let col = select(lt_tile(col, broadcast_scalar(cols, shape![128])), col, broadcast_scalar(cols - 1u32, shape![128]));
+    let col = select(
+        lt_tile(col, broadcast_scalar(cols, shape![128])),
+        col,
+        broadcast_scalar(cols - 1u32, shape![128]),
+    );
     let mask = broadcast_scalar(true, shape![128]);
     let half = lane / broadcast_scalar(16u32, shape![128]);
     let blocks = inner / 256u32;

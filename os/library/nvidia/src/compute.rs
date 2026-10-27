@@ -240,6 +240,12 @@ fn product(values: &[u32]) -> Result<u32> {
     values.iter().try_fold(1u32, |v, &n| v.checked_mul(n).ok_or(Error::InvalidField))
 }
 
+// Narrow Q8 decode uses all four warps for one output. This changes only the
+// selected auxiliary entry and grid, retaining the existing wire packet.
+fn q8_vector_columns(inner: u32, outputs: u32) -> u32 {
+    if inner >= 1024 && (1..=128).contains(&outputs) { 1 } else { 4 }
+}
+
 fn quantized_words(elements: u32, format: u32) -> Result<u64> {
     let (block, bytes) = match format {
         8 => (32, 34),
@@ -548,6 +554,7 @@ impl Kernel {
             (Self::ProjectQuantized, [m, _, _, 12]) if *m > 16 => "project_m32_q4k",
             (Self::ProjectQuantized, [m, _, _, 13]) if *m > 16 => "project_m32_q5k",
             (Self::ProjectQuantized, [m, _, _, 14]) if *m > 16 => "project_m32_q6k",
+            (Self::ProjectQuantized, [1, k, n, 8]) if q8_vector_columns(*k, *n) == 1 => "vector_project_q8_0_narrow",
             (Self::ProjectQuantized, [1, _, _, 8]) => "vector_project_q8_0",
             (Self::ProjectQuantized, [1, _, _, 11]) => "vector_project_q3k",
             (Self::ProjectQuantized, [_, _, _, 11]) => "project_q3k",
@@ -826,7 +833,14 @@ impl Kernel {
             (Self::ProjectQuantized, &[m, k, n, format]) => {
                 quantized_words(k, format)?;
                 extents[..3].copy_from_slice(&[product(&[m, k])? as u64, quantized_words(product(&[k, n])?, format)?, product(&[m, n])? as u64]);
-                (product(&[m.div_ceil(32), n.div_ceil(if m == 1 { 4 } else { 32 }), 128])?, 3, 2, false)
+                let columns = if m != 1 {
+                    32
+                } else if format == 8 {
+                    q8_vector_columns(k, n)
+                } else {
+                    4
+                };
+                (product(&[m.div_ceil(32), n.div_ceil(columns), 128])?, 3, 2, false)
             }
             (Self::Dequantize, &[n, format]) => {
                 extents[..2].copy_from_slice(&[quantized_words(n, format)?, product(&[n])? as u64]);

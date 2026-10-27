@@ -695,6 +695,9 @@ class ScratchArtifactTests(unittest.TestCase):
         for field in ("profile", "provenance", "cubin_sha256", "sass_sha256"):
             previous.pop(field)
             renewed.pop(field)
+        # Parser renewal changed its label; all math-certificate fields stay exact.
+        self.assertEqual(previous.pop("production_profile"), "sm89-direct-constant-v1")
+        self.assertEqual(renewed.pop("production_profile"), "sm89-direct-constant-v2")
         self.assertEqual(renewed, previous)
 
     def test_historical_scratch_artifact_requires_its_own_profile(self):
