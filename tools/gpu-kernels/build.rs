@@ -23,6 +23,7 @@ fn main() {
         "quantized-vector.rs",
         "quad.rs",
         "elementwise.rs",
+        "rms-wide.rs",
         "optimizer.rs",
         "matrix.rs",
         "tensor.rs",

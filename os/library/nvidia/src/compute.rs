@@ -527,6 +527,7 @@ impl Kernel {
     /// Select the cuTile specialization without changing the public request ABI.
     pub fn entry(self, parameters: &[u32]) -> &'static str {
         match (self, parameters) {
+            (Self::RmsNorm, [_, 4096, _, _]) => "rms_norm_4096",
             (Self::IntegerReduction, p) => integer_reduction::symbol(p).unwrap_or(self.symbol()),
             (Self::FloatExtrema, p) => float_extrema::symbol(p).unwrap_or(self.symbol()),
             (Self::Interpolate, p) if p.len() == interpolate::PARAMETERS => {
