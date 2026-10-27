@@ -638,18 +638,21 @@ fn residual_projection_allows_only_exact_residual_aliasing() {
 
 #[test]
 fn residual_norm_checks_both_writers_and_all_read_ranges() {
-    let work = Kernel::ResidualNorm.work(&[3, 129, 1e-6f32.to_bits()]).unwrap();
-    assert_eq!(work.extents[..4], [387, 387, 129, 387]);
-    assert_eq!((work.blocks, work.threads, work.mutated), (3, 128, 1));
     assert!(Kernel::ResidualNorm.allocates_output());
-    let pointers = [0x10000, 0x20000, 0x30000, 0x40000];
-    assert!(work.validate_aliases(&pointers).is_ok());
-    for writer in [0, 3] {
-        for other in 0..4 {
-            if writer != other {
-                let mut aliased = pointers;
-                aliased[writer] = aliased[other] + 4;
-                assert!(work.validate_aliases(&aliased).is_err());
+    for (rows, width) in [(3u32, 129u32), (2, 4096)] {
+        let work = Kernel::ResidualNorm.work(&[rows, width, 1e-6f32.to_bits()]).unwrap();
+        let count = u64::from(rows * width);
+        assert_eq!(work.extents[..4], [count, count, u64::from(width), count]);
+        assert_eq!((work.blocks, work.threads, work.mutated), (rows, if width == 4096 { 256 } else { 128 }, 1));
+        let pointers = [0x10000, 0x20000, 0x30000, 0x40000];
+        assert!(work.validate_aliases(&pointers).is_ok());
+        for writer in [0, 3] {
+            for other in 0..4 {
+                if writer != other {
+                    let mut aliased = pointers;
+                    aliased[writer] = aliased[other] + 4;
+                    assert!(work.validate_aliases(&aliased).is_err());
+                }
             }
         }
     }
@@ -657,9 +660,12 @@ fn residual_norm_checks_both_writers_and_all_read_ranges() {
         [0, 129, 1],
         [1, 0, 1],
         [1, 1025, 1],
+        [1, 4095, 1],
+        [1, 4097, 1],
         [1, 129, 0],
         [1, 129, f32::NAN.to_bits()],
         [u32::MAX, 1024, 1],
+        [u32::MAX, 4096, 1],
     ] {
         assert!(Kernel::ResidualNorm.work(&p).is_err());
     }

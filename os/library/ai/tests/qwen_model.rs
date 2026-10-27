@@ -360,6 +360,72 @@ fn caller_owned_tensor_loading_matches_archives_and_validates_before_reading() {
     ));
 }
 
+#[test]
+fn quantized_down_projection_preserves_observed_residuals_and_later_decode() {
+    use d3os_ai::qwen::{Config, Quantization};
+    let original = Qwen::load(&Device::flex(), &archive(&model_records())).unwrap();
+    let config = Config {
+        hidden: 32,
+        intermediate: 32,
+        ..original.config()
+    };
+    let load = |quantized| {
+        Qwen::load_weights(config, &Device::flex(), |name, shape| {
+            let count = shape.iter().product();
+            if name.ends_with("mlp.down_proj.weight") {
+                let values: Vec<i8> = (0..count).map(|i| ((i * 7 % 31) as i8) - 15).collect();
+                let (format, bytes) = if quantized {
+                    let bytes = values
+                        .chunks_exact(32)
+                        .flat_map(|block| [0x00, 0x20].into_iter().chain(block.iter().map(|&x| x as u8)))
+                        .collect();
+                    (MatrixFormat::Quantized(Quantization::Q8_0), bytes)
+                } else {
+                    (MatrixFormat::F32, values.iter().flat_map(|&x| (f32::from(x) / 128.).to_le_bytes()).collect())
+                };
+                Ok(WeightData {
+                    shape: shape.to_vec(),
+                    format,
+                    bytes: Cow::Owned(bytes),
+                })
+            } else {
+                let bytes = (0..count)
+                    .flat_map(|i| (((i * 13 + name.len() * 7) % 23) as f32 / 31. - 0.35).to_le_bytes())
+                    .collect();
+                Ok(WeightData {
+                    shape: shape.to_vec(),
+                    format: MatrixFormat::F32,
+                    bytes: Cow::Owned(bytes),
+                })
+            }
+        })
+        .unwrap()
+    };
+    let packed = load(true);
+    let dense = load(false);
+    let mut actual = packed.session(8).unwrap();
+    let mut expected = dense.session(8).unwrap();
+    for token in [1, 7, 12, 3] {
+        let mut reference = Vec::new();
+        let output = expected
+            .step_observed(token, |_, hidden| {
+                reference.push(read(hidden)?);
+                Ok(())
+            })
+            .unwrap();
+        let mut observed = 0;
+        let result = actual
+            .step_observed(token, |layer, hidden| {
+                verify(&read(hidden)?, &reference[layer], 3e-5, 3e-5)?;
+                observed += 1;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(observed, config.layers);
+        assert_close(read(&result).unwrap(), read(&output).unwrap());
+    }
+}
+
 fn assert_close(actual: Vec<f32>, expected: Vec<f32>) {
     verify(&actual, &expected, 3e-5, 3e-5).unwrap();
 }

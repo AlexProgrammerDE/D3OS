@@ -225,7 +225,7 @@ impl Native {
                 }
                 let residual = dense(v[1], DType::F32)?;
                 let weight = dense(v[2], DType::F32)?;
-                if width <= 1024 {
+                if width <= 1024 || width == 4096 {
                     let sum = if unique { dense(v[0], DType::F32)? } else { v[0].copy()? };
                     let normalized = output(
                         [rows, width],

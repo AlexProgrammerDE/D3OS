@@ -454,8 +454,12 @@ impl<'a> Session<'a> {
         let device = self.model.device();
         let hidden = scope(&device, || {
             let mut hidden = self.model.embedding.embedding(tokens)?;
+            let mut next_normalized = None;
             for (index, (layer, slot)) in self.model.layers.iter().zip(&mut self.caches).enumerate() {
-                let normalized = rms_norm(hidden.clone(), layer.input_norm.val(), config.epsilon)?;
+                let normalized = match next_normalized.take() {
+                    Some(normalized) => normalized,
+                    None => rms_norm(hidden.clone(), layer.input_norm.val(), config.epsilon)?,
+                };
                 let cache = slot.take().ok_or(Error::SessionFailed)?;
                 let mixed = match (&layer.mixer, cache) {
                     (Mixer::Full(weights), Cache::Full(state)) => {
@@ -512,7 +516,20 @@ impl<'a> Session<'a> {
                 };
                 let (updated, normalized) = residual_norm(hidden, mixed, layer.post_norm.val(), config.epsilon)?;
                 let activation = layer.gate.gated_project(&layer.up, normalized)?;
-                hidden = layer.down.project_add(activation, updated)?;
+                if let Some(next_layer) = self
+                    .model
+                    .layers
+                    .get(index + 1)
+                    .filter(|_| matches!(layer.down.format(), MatrixFormat::Quantized(_)))
+                {
+                    // Carry the next layer's normalization while preserving the raw
+                    // residual stream observed below. BF16 keeps its fused projection.
+                    let (sum, normalized) = residual_norm(layer.down.project(activation)?, updated, next_layer.input_norm.val(), config.epsilon)?;
+                    hidden = sum;
+                    next_normalized = Some(normalized);
+                } else {
+                    hidden = layer.down.project_add(activation, updated)?;
+                }
                 observe(index, &hidden)?;
             }
             Ok(hidden)

@@ -528,6 +528,7 @@ impl Kernel {
     pub fn entry(self, parameters: &[u32]) -> &'static str {
         match (self, parameters) {
             (Self::RmsNorm, [_, 4096, _, _]) => "rms_norm_4096",
+            (Self::ResidualNorm, [_, 4096, _]) => "residual_norm_4096",
             (Self::IntegerReduction, p) => integer_reduction::symbol(p).unwrap_or(self.symbol()),
             (Self::FloatExtrema, p) => float_extrema::symbol(p).unwrap_or(self.symbol()),
             (Self::Interpolate, p) if p.len() == interpolate::PARAMETERS => {
@@ -1114,13 +1115,16 @@ impl Kernel {
             }
             (Self::ResidualNorm, &[rows, width, epsilon]) => {
                 positive_float(epsilon)?;
-                if !(1..=1024).contains(&width) {
+                if !(1..=1024).contains(&width) && width != 4096 {
                     return Err(Error::InvalidField);
                 }
                 let n = product(&[rows, width])?;
                 extents[..4].copy_from_slice(&[u64::from(n), u64::from(n), u64::from(width), u64::from(n)]);
                 mutated = 1;
-                (product(&[rows, 128])?, 4, 3, false)
+                if width == 4096 {
+                    threads = 256;
+                }
+                (product(&[rows, threads])?, 4, 3, false)
             }
             (Self::RmsNorm, &[rows, width, epsilon, offset]) => {
                 positive_float(epsilon)?;

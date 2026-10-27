@@ -11,6 +11,7 @@ mod link;
 
 fn threads(name: &str) -> u32 {
     match name {
+        "residual_norm_4096" => 256,
         "delta_fused" | "delta_fused_batch" | "delta_fused_four_taps" => 256,
         "raster_fuzz" | "raster_fuzz_bytes" => 32,
         _ => 128,
@@ -119,6 +120,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "vector_project_q8_0_narrow",
             "vector_project_q8_0_signed",
             "rms_norm_4096",
+            "residual_norm_4096",
             "project_m32_q8_0",
             "project_m32_q3k",
             "project_m32_q4k",
