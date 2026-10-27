@@ -16,6 +16,11 @@ def main():
     bootstrap = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(bootstrap)
     toolkit = bootstrap.prepare(ROOT / "target/nvidia/cutile-toolkit")
+    spec = importlib.util.spec_from_file_location(
+        "prepare_kernels", ROOT / "tools/nvidia/prepare-kernels.py"
+    )
+    preparation = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(preparation)
     env = os.environ.copy()
     env["CUDA_TOOLKIT_PATH"] = str(toolkit)
     env["CARGO_TARGET_DIR"] = str(ROOT / "target/cutile-build")
@@ -53,7 +58,7 @@ def main():
         ],
         cwd=ROOT,
         check=True,
-        timeout=900,
+        timeout=preparation.COMPILATION_TIMEOUT + 5 * 60,
     )
     print("CUTILE_VALIDATION_OK hardware_validated=false")
 

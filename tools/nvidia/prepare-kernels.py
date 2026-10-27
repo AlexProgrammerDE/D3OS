@@ -18,6 +18,8 @@ import tomllib
 
 ROOT = Path(__file__).resolve().parents[2]
 FAMILIES = ("vector-add", "tensor-matmul", "inference")
+# Cold builds and whole-family assembly can exceed fifteen minutes on CI CPUs.
+COMPILATION_TIMEOUT = 30 * 60
 TENSOR_INSTRUCTIONS = {
     "tensor-matmul": {
         "tensor_matmul_f16": r"\bHMMA\.16816\.F32\s",
@@ -256,7 +258,7 @@ def main():
             cwd=ROOT,
             env=env,
             check=True,
-            timeout=900,
+            timeout=COMPILATION_TIMEOUT,
         )
         if scratch and scratch.collect_provenance(crate, toolkit, disassembler) != provenance:
             raise RuntimeError("typed-math source/compiler provenance changed during compilation")
