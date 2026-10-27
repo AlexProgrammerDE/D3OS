@@ -32,3 +32,24 @@ fn narrow_dispatch_rejects_incomplete_or_overflowing_projection_packets() {
         assert!(Kernel::ProjectQuantized.work(&parameters).is_err());
     }
 }
+
+#[test]
+fn signed_decode_preserves_packed_extents_and_small_projection_routes() {
+    let ordinary = Kernel::ProjectQuantized.entry(&[1, 992, 256, 8]);
+    let signed = Kernel::ProjectQuantized.entry(&[1, 4096, 4096, 8]);
+    assert_ne!(signed, ordinary);
+    for (inner, outputs) in [(1024u32, 256u32), (1056, 257), (4096, 4096), (5120, 5120), (12288, 4096)] {
+        let parameters = [1, inner, outputs, 8];
+        let work = Kernel::ProjectQuantized.work(&parameters).unwrap();
+        let weight_words = (u64::from(inner / 32) * u64::from(outputs) * 34).div_ceil(4);
+        assert_eq!(Kernel::ProjectQuantized.entry(&parameters), signed);
+        assert_eq!(work.blocks, outputs.div_ceil(4));
+        assert_eq!(&work.extents[..3], &[u64::from(inner), weight_words, u64::from(outputs)]);
+        assert_eq!((work.threads, work.pointers, work.output, work.in_place), (128, 3, 2, false));
+        work.validate_aliases(&[0x100000, 0x10000000, 0x40000000]).unwrap();
+    }
+    assert_eq!(Kernel::ProjectQuantized.entry(&[1, 4096, 255, 8]), ordinary);
+    for parameters in [[2, 4096, 4096, 8], [17, 4096, 4096, 8], [1, 4096, 4096, 11], [1, 4096, 128, 8]] {
+        assert_ne!(Kernel::ProjectQuantized.entry(&parameters), signed);
+    }
+}

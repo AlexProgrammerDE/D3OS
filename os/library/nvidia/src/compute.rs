@@ -556,6 +556,7 @@ impl Kernel {
             (Self::ProjectQuantized, [m, _, _, 13]) if *m > 16 => "project_m32_q5k",
             (Self::ProjectQuantized, [m, _, _, 14]) if *m > 16 => "project_m32_q6k",
             (Self::ProjectQuantized, [1, k, n, 8]) if q8_vector_columns(*k, *n) == 1 => "vector_project_q8_0_narrow",
+            (Self::ProjectQuantized, [1, k, n, 8]) if *k >= 1024 && *n >= 256 => "vector_project_q8_0_signed",
             (Self::ProjectQuantized, [1, _, _, 8]) => "vector_project_q8_0",
             (Self::ProjectQuantized, [1, _, _, 11]) => "vector_project_q3k",
             (Self::ProjectQuantized, [_, _, _, 11]) => "project_q3k",

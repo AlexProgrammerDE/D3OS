@@ -1,6 +1,16 @@
 // Each lane reads two aligned Q8 bytes and keeps both products in FP32.
 // Narrow projections use 128 logical lanes for one row; wider ones use 32 per row.
-unsafe fn vector_q8_pairs<const GROUP: i32, const NARROW: bool>(
+fn vector_q8_byte<const SIGNED: bool>(value: Tile<u32, { [128] }>) -> Tile<f32, { [128] }> {
+    if SIGNED {
+        let small: Tile<u8, { [128] }> = trunci(value, overflow::NoUnsignedWrap);
+        let signed: Tile<i8, { [128] }> = bitcast(small);
+        itof(signed, rounding::NearestEven)
+    } else {
+        quant_signed_byte_128(value)
+    }
+}
+
+unsafe fn vector_q8_pairs<const GROUP: i32, const NARROW: bool, const SIGNED: bool>(
     a: *const f32, b: *const f32, col: Tile<u32, { [128] }>, lane: Tile<u32, { [128] }>, block: u32, blocks: u32, cols: u32, even: Tile<f32, { [128] }>,
     odd: Tile<f32, { [128] }>,
 ) -> (Tile<f32, { [128] }>, Tile<f32, { [128] }>) {
@@ -14,8 +24,8 @@ unsafe fn vector_q8_pairs<const GROUP: i32, const NARROW: bool>(
     let packed: Tile<u32, { [128] }> = exti(packed);
     let low = packed & broadcast_scalar(255u32, shape![128]);
     let high = packed >> broadcast_scalar(8u32, shape![128]);
-    let low = scale * quant_signed_byte_128(low);
-    let high = scale * quant_signed_byte_128(high);
+    let low = scale * vector_q8_byte::<SIGNED>(low);
+    let high = scale * vector_q8_byte::<SIGNED>(high);
     let index = qblock * broadcast_scalar(32u32, shape![128]) + pair * broadcast_scalar(2u32, shape![128]);
     let x0 = unsafe { read_tile(a, index, mask, 0f32) };
     let x1 = unsafe { read_tile(a, index + broadcast_scalar(1u32, shape![128]), mask, 0f32) };
@@ -25,7 +35,7 @@ unsafe fn vector_q8_pairs<const GROUP: i32, const NARROW: bool>(
     )
 }
 
-unsafe fn vector_project_q8<const NARROW: bool>(a: *const f32, b: *const f32, output: *mut f32, inner: u32, cols: u32) {
+unsafe fn vector_project_q8<const NARROW: bool, const SIGNED: bool>(a: *const f32, b: *const f32, output: *mut f32, inner: u32, cols: u32) {
     let first = block_id() * if NARROW { 1u32 } else { 4u32 };
     let lane = if NARROW {
         lanes::<128>()
@@ -48,16 +58,16 @@ unsafe fn vector_project_q8<const NARROW: bool>(a: *const f32, b: *const f32, ou
     let mut o3 = e0;
     let mut block = 0u32;
     while block < blocks {
-        let (even, odd) = unsafe { vector_q8_pairs::<0, NARROW>(a, b, col, lane, block, blocks, cols, e0, o0) };
+        let (even, odd) = unsafe { vector_q8_pairs::<0, NARROW, SIGNED>(a, b, col, lane, block, blocks, cols, e0, o0) };
         e0 = even;
         o0 = odd;
-        let (even, odd) = unsafe { vector_q8_pairs::<1, NARROW>(a, b, col, lane, block, blocks, cols, e1, o1) };
+        let (even, odd) = unsafe { vector_q8_pairs::<1, NARROW, SIGNED>(a, b, col, lane, block, blocks, cols, e1, o1) };
         e1 = even;
         o1 = odd;
-        let (even, odd) = unsafe { vector_q8_pairs::<2, NARROW>(a, b, col, lane, block, blocks, cols, e2, o2) };
+        let (even, odd) = unsafe { vector_q8_pairs::<2, NARROW, SIGNED>(a, b, col, lane, block, blocks, cols, e2, o2) };
         e2 = even;
         o2 = odd;
-        let (even, odd) = unsafe { vector_q8_pairs::<3, NARROW>(a, b, col, lane, block, blocks, cols, e3, o3) };
+        let (even, odd) = unsafe { vector_q8_pairs::<3, NARROW, SIGNED>(a, b, col, lane, block, blocks, cols, e3, o3) };
         e3 = even;
         o3 = odd;
         block = block + if NARROW { 32u32 } else { 8u32 };

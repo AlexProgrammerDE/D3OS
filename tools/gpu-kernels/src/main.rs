@@ -117,6 +117,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "tensor_matmul_tf32x3_split",
             "vector_project_q8_0",
             "vector_project_q8_0_narrow",
+            "vector_project_q8_0_signed",
             "rms_norm_4096",
             "project_m32_q8_0",
             "project_m32_q3k",
