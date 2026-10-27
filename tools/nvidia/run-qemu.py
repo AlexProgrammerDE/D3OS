@@ -59,6 +59,10 @@ def main():
     parser.add_argument("--gpu", default="0000:01:00.0")
     parser.add_argument("--image", type=Path, default=None)
     parser.add_argument(
+        "--directory", type=Path, default=ROOT / "target/nvidia/vm",
+        help="keep the staged image, compiler receipts, and capture in this directory",
+    )
+    parser.add_argument(
         "--firmware", type=Path, help="stage pinned NVIDIA firmware from this directory"
     )
     parser.add_argument(
@@ -143,6 +147,11 @@ def main():
         help="use an alternate D3OS kernel ELF with --firmware",
     )
     parser.add_argument(
+        "--application-binaries",
+        type=Path,
+        help="read infer, shell, and terminal_emulator from this directory with --firmware",
+    )
+    parser.add_argument(
         "--gdb-port", type=int, help="pause at reset for a local GDB connection"
     )
     parser.add_argument(
@@ -157,6 +166,16 @@ def main():
         not args.firmware or not args.kernel_image.is_file()
     ):
         parser.error("--kernel-image requires --firmware and a D3OS kernel ELF file")
+    if args.application_binaries is not None and (
+        not args.firmware
+        or not all(
+            (args.application_binaries / name).is_file()
+            for name in ("infer", "shell", "terminal_emulator")
+        )
+    ):
+        parser.error(
+            "--application-binaries requires --firmware and infer, shell, terminal_emulator"
+        )
     firmware_files = {}
     if args.qwen_gguf_parts:
         if not args.inference.startswith("gpu-qwen-gguf"):
@@ -267,7 +286,7 @@ def main():
     )
     harness = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(harness)
-    directory = ROOT / "target/nvidia/vm"
+    directory = args.directory.resolve()
     directory.mkdir(parents=True, exist_ok=True)
     if args.firmware:
         names = ("gsp-570.144.bin", "bootloader-570.144.bin", "booter_load-570.144.bin")
@@ -320,6 +339,7 @@ def main():
                 ROOT / "target/qwen",
                 assets,
                 kernel_image=args.kernel_image,
+                application_binaries=args.application_binaries,
             )
     firmware = next(
         (

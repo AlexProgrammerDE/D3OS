@@ -3,6 +3,7 @@
 
 import argparse
 import csv
+import errno
 import fcntl
 import hashlib
 import importlib.util
@@ -31,7 +32,23 @@ def copy_file(root, source, destination=None):
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists():
         target.unlink()
-    shutil.copy2(source, target)
+    with source.open("rb") as input_file, target.open("wb") as output_file:
+        try:
+            # FICLONE shares file extents without coupling later file writes.
+            fcntl.ioctl(output_file.fileno(), 0x40049409, input_file.fileno())
+        except OSError as error:
+            if error.errno not in (
+                errno.EOPNOTSUPP,
+                errno.EXDEV,
+                errno.EINVAL,
+                errno.ENOTTY,
+            ):
+                raise
+            output_file.seek(0)
+            output_file.truncate()
+            input_file.seek(0)
+            shutil.copyfileobj(input_file, output_file, 8 << 20)
+    shutil.copystat(source, target)
     target.chmod(source.stat().st_mode & 0o777)
 
 
