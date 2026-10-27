@@ -4,8 +4,9 @@ This is a conservative inventory check for trusted nvdisasm output, not a
 general SASS decoder or dataflow proof. Every allocated executable ELF section,
 including embedded helper functions, must have a complete 16-byte instruction
 inventory. Literal CB0/CB2 banks may use the observed LDC register addressing:
-their bank selection cannot reach CB4. CB4 supports only the qualified integer
-table-pointer forms below, entirely within bytes [8, 24).
+their bank selection cannot reach CB4. One observed half-widening form reads
+only a literal CB0 word. CB4 supports only the qualified integer table-pointer
+forms below, entirely within bytes [8, 24).
 """
 
 import hashlib
@@ -13,7 +14,8 @@ import json
 import re
 import struct
 
-PROFILE = "sm89-direct-constant-v1"
+PROFILE = "sm89-direct-constant-v2"
+INT8_MMA_PROFILE = "sm89-direct-constant-v3"
 VERSION = "13.4.92"
 ELF_HEADER = struct.Struct("<16sHHIQQQIHHHHHH")
 SECTION_HEADER = struct.Struct("<IIQQQQIIQQ")
@@ -25,7 +27,18 @@ INSTRUCTION = re.compile(
 CONSTANT = re.compile(r"\bc\[(0x[0-9a-f]+)\]\[([^\[\]]+)\]")
 INDEXED = re.compile(r"(?:R\d+|UR\d+)(?:[+-]0x[0-9a-f]+)?")
 REGISTER = r"(?:R\d+|RZ)"
+# Only the observed signed dot32 form, with a literal zero accumulator.
+# Its zero-accumulator i8 dot is bounded by 32*128*128, so SAT is inert.
+INT8_MMA_OPCODE = "IMMA.16832.S8.S8.SAT"
+INT8_MMA_REGISTER = r"R(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])"
+INT8_MMA_OPERANDS = re.compile(
+    rf"{INT8_MMA_REGISTER}\s*,\s*{INT8_MMA_REGISTER}\.ROW\s*,\s*"
+    rf"{INT8_MMA_REGISTER}\.COL\s*,\s*RZ"
+)
 CB4 = r"c\[0x4\]\[0x[0-9a-f]+\]"
+# nvdisasm prints a space between the brackets for this packed-half operand.
+# Match the complete observed widening form, without extending CB4 syntax.
+CB0_HALF_WIDEN = re.compile(r"R\d+,\s*-RZ,\s*c\[0x0\]\s*\[(0x[0-9a-f]+)\]\.H0_H0")
 # No floating-point, vector, or unknown CB4 instruction inherits a guessed
 # width. IMAD.WIDE reads eight bytes only in its final accumulator operand.
 CB4_FORMS = {
@@ -212,6 +225,10 @@ def executable_sections(cubin):
 
 def constant_accesses(opcode, operands):
     """Return qualified CB4 ranges; reject all unrecognized constant syntax."""
+    if opcode == "HADD2.F32":
+        widening = CB0_HALF_WIDEN.fullmatch(operands)
+        if widening and int(widening[1], 16) % 4 == 0:
+            return []
     accesses = list(CONSTANT.finditer(operands))
     remainder = CONSTANT.sub("", operands)
     if re.search(r"\bcx?\s*[\[(]", remainder, re.IGNORECASE):
@@ -278,6 +295,7 @@ def qualify(cubin: bytes, sass: str) -> dict:
     counts = {name: 0 for name in sections}
     active = None
     cb4_accesses = []
+    has_int8_mma = False
     for line_number, line in enumerate(sass.splitlines(), 1):
         boundary = SECTION.fullmatch(line)
         if boundary:
@@ -308,7 +326,15 @@ def qualify(cubin: bytes, sass: str) -> dict:
                     f"{active}:{offset:#x}: incomplete or duplicate instruction inventory"
                 )
             half_compare = HALF_COMPARE_FORMS.get(opcode)
-            if half_compare is not None:
+            if opcode.split(".")[0] == "IMMA":
+                if opcode != INT8_MMA_OPCODE or not INT8_MMA_OPERANDS.fullmatch(
+                    operands
+                ):
+                    raise ValueError(
+                        f"{active}:{offset:#x}: unsupported signed INT8 MMA form"
+                    )
+                has_int8_mma = True
+            elif half_compare is not None:
                 if not re.fullmatch(half_compare, operands):
                     raise ValueError(
                         f"{active}:{offset:#x}: unsupported packed-half comparison form"
@@ -348,7 +374,7 @@ def qualify(cubin: bytes, sass: str) -> dict:
     sass_bytes = sass.encode("utf-8")
     record = {
         "schema_version": 1,
-        "metadata_unused_profile": PROFILE,
+        "metadata_unused_profile": INT8_MMA_PROFILE if has_int8_mma else PROFILE,
         "target_sm": 89,
         "optimization_level": 3,
         "compiler_version": VERSION,

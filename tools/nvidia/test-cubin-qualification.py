@@ -1,4 +1,4 @@
-"""Host-only regression tests for cubin qualification and guest receipts."""
+"""Host-only qualification/receipt tests with synthetic ELF and SASS fixtures."""
 
 import copy
 import hashlib
@@ -92,6 +92,34 @@ def qualify_instructions(*instructions):
 
 
 class QualificationTests(unittest.TestCase):
+    def test_packed_half_widening_reads_only_a_literal_cb0_word(self):
+        for spacing in ("", " ", "\t"):
+            instruction = f"HADD2.F32 R9, -RZ, c[0x0]{spacing}[0x198].H0_H0"
+            result = qualify_instructions(instruction)
+            self.assertEqual(result["instruction_count"], 1)
+            self.assertEqual(result["cb4_accesses"], [])
+        observed = "HADD2.F32 R9, -RZ, c[0x0] [0x198].H0_H0"
+        for bad in (
+            observed.replace("0x0]", "0x4]"),
+            observed.replace("0x0]", "0x2]"),
+            observed.replace("0x0]", "R0]"),
+            observed.replace("c[0x0]", "cx[UR0]"),
+            observed.replace("0x198", "UR1"),
+            observed.replace("0x198", "R2+0x198"),
+            observed.replace("0x198", "0x199"),
+            observed.replace("0x198", "0x19a"),
+            observed.replace("H0_H0", "H1_H1"),
+            observed.replace("H0_H0", "H0_H1"),
+            observed.replace("H0_H0", "H0_H0.F32"),
+            observed.replace("-RZ", "RZ"),
+            observed.replace("-RZ", "R4"),
+            observed.replace("HADD2.F32", "HADD2.F32.FTZ"),
+            observed.replace("HADD2.F32", "HFMA2"),
+            observed + ", c[0x4][0x8]",
+        ):
+            with self.subTest(instruction=bad), self.assertRaises(ValueError):
+                qualify_instructions(bad)
+
     def test_power_half_comparisons_retain_register_only_admission(self):
         observed = (
             "HSETP2.NEU.AND P0, PT, R35.H0_H0, RZ.H0_H0, PT",
@@ -274,10 +302,120 @@ class QualificationTests(unittest.TestCase):
             struct.pack_into("<" + fmt, data, position, value)
             mutations.append(bytes(data))
         for mutation in mutations:
-            with self.subTest(
-                sha=hashlib.sha256(mutation).hexdigest()
-            ), self.assertRaises(ValueError):
+            with (
+                self.subTest(sha=hashlib.sha256(mutation).hexdigest()),
+                self.assertRaises(ValueError),
+            ):
                 qualification.executable_sections(mutation)
+
+
+class Int8MmaQualificationTests(unittest.TestCase):
+    """Synthetic inventories with the register form observed in retained SASS."""
+
+    observed = "IMMA.16832.S8.S8.SAT R8, R8.ROW, R22.COL, RZ"
+
+    def test_observed_signed_zero_accumulator_form(self):
+        for instruction in (
+            self.observed,
+            "@P0 " + self.observed,
+            "@!P6 " + self.observed,
+            "@!UP0\tIMMA.16832.S8.S8.SAT\tR0,\tR16.ROW, R24.COL,RZ",
+            "IMMA.16832.S8.S8.SAT R252 , R248.ROW , R250.COL , RZ",
+        ):
+            with self.subTest(instruction=instruction):
+                result = qualify_instructions(instruction)
+                self.assertEqual(
+                    result["metadata_unused_profile"], "sm89-direct-constant-v3"
+                )
+                self.assertEqual(result["instruction_count"], 1)
+                self.assertEqual(result["cb4_accesses"], [])
+
+    def test_other_shapes_types_or_modifiers_reject(self):
+        for opcode in (
+            "IMMA", "IMMA.16832.S8.S8", "IMMA.16816.S8.S8.SAT",
+            "IMMA.16864.S8.S8.SAT", "IMMA.16832.U8.S8.SAT",
+            "IMMA.16832.S8.U8.SAT", "IMMA.16832.S4.S4.SAT",
+            "IMMA.16832.S8.S8.SATFINITE", "IMMA.16832.S8.S8.SAT.REUSE",
+        ):
+            with self.subTest(opcode=opcode), self.assertRaises(ValueError):
+                qualify_instructions(
+                    self.observed.replace("IMMA.16832.S8.S8.SAT", opcode)
+                )
+
+    def test_non_register_operands_layouts_and_accumulators_reject(self):
+        operands = ["R8", "R8.ROW", "R22.COL", "RZ"]
+        mutations = (
+            (0, "RZ"), (0, "UR8"), (0, "R255"), (0, "R999"), (0, "R08"),
+            (0, "R8.reuse"), (0, "R8.ROW"), (0, "-R8"),
+            (1, "R8"), (1, "R8.COL"), (1, "RZ.ROW"), (1, "UR8.ROW"),
+            (1, "R8.ROW.reuse"), (1, "R8.reuse.ROW"), (1, "|R8|.ROW"),
+            (2, "R22"), (2, "R22.ROW"), (2, "R22.COL.H0"), (2, "R255.COL"),
+            (3, "R0"), (3, "R8"), (3, "URZ"), (3, "-RZ"), (3, "RZ.reuse"),
+        )
+        # Constants, immediates and indirect addresses cannot occupy any slot.
+        for slot, replacement in (
+            *mutations,
+            *((slot, value) for slot in range(4) for value in (
+                "0", "0x0", "c[0x0][0x160]", "c[0x2][0x8]", "c[0x4][0x8]",
+                "c[R0][0x8]", "cx[UR0]", "[R8]", "R8+0x4",
+            )),
+        ):
+            changed = operands.copy()
+            changed[slot] = replacement
+            with (
+                self.subTest(slot=slot, operand=replacement),
+                self.assertRaises(ValueError),
+            ):
+                qualify_instructions("IMMA.16832.S8.S8.SAT " + ", ".join(changed))
+        for suffix in (", RZ", ", c[0x4][0x8]", " garbage"):
+            with self.subTest(suffix=suffix), self.assertRaises(ValueError):
+                qualify_instructions(self.observed + suffix)
+
+    def test_mma_does_not_relax_inventory_or_producer_checks(self):
+        cubin = elf([(".text.entry", 32)])
+        original = sass([(".text.entry", [self.observed, "EXIT"])])
+        for mutation in (
+            original.replace("/*0010*/ EXIT;", ""),
+            original.replace("/*0010*/", "/*0000*/"),
+            original.replace("/*0000*/", "/*0010*/", 1),
+            original + "/*0020*/ NOP;\n",
+            original.replace("sm_89", "sm_90", 1),
+            original.replace("V13.4.92", "V13.4.93"),
+        ):
+            with self.subTest(sass=mutation), self.assertRaises(ValueError):
+                qualification.qualify(cubin, mutation)
+
+    def test_profile_depends_only_on_validated_executable_mma(self):
+        baseline = qualify_instructions("EXIT")
+        synthetic_cubin = elf([(".text.entry", 16)])
+        annotated = sass([(".text.entry", ["EXIT"])]) + "// " + self.observed + "\n"
+        annotated += '.section .nv.info,"",@progbits\n' + self.observed + ";\n"
+        self.assertEqual(
+            qualification.qualify(synthetic_cubin, annotated)[
+                "metadata_unused_profile"
+            ],
+            "sm89-direct-constant-v2",
+        )
+        for sections in (
+            [(".text.entry", [self.observed]), (".text.helper", ["EXIT"])],
+            [(".text.entry", ["EXIT"]), (".text.helper", [self.observed])],
+        ):
+            with self.subTest(sections=sections):
+                result = qualification.qualify(
+                    elf([
+                        (name, len(instructions) * 16)
+                        for name, instructions in sections
+                    ]),
+                    sass(sections),
+                )
+                self.assertEqual(
+                    result["metadata_unused_profile"], "sm89-direct-constant-v3"
+                )
+                evidence = result.pop("evidence_sha256")
+                self.assertEqual(evidence, hashlib.sha256(
+                    json.dumps(result, sort_keys=True, separators=(",", ":")).encode()
+                ).hexdigest())
+        self.assertEqual(qualify_instructions("EXIT"), baseline)
 
 
 class StagingTests(unittest.TestCase):
@@ -411,8 +549,9 @@ class StagingTests(unittest.TestCase):
             target = record if section is None else record[section]
             target[field] = value
             self.write_manifest()
-            with self.subTest(section=section, field=field), self.assertRaises(
-                RuntimeError
+            with (
+                self.subTest(section=section, field=field),
+                self.assertRaises(RuntimeError),
             ):
                 self.prepare()
             self.assertFalse(self.directory.exists())
@@ -450,9 +589,12 @@ class StagingTests(unittest.TestCase):
             self.prepare()
 
     def test_compiler_version_rejects_before_receipt(self):
-        with patch.object(
-            guest.subprocess, "check_output", return_value="Cuda V13.4.93\n"
-        ), self.assertRaises(RuntimeError):
+        with (
+            patch.object(
+                guest.subprocess, "check_output", return_value="Cuda V13.4.93\n"
+            ),
+            self.assertRaises(RuntimeError),
+        ):
             self.prepare()
 
     def test_inventory_is_sorted_bounded_and_unambiguous(self):
@@ -506,8 +648,9 @@ class StagingTests(unittest.TestCase):
             with self.subTest(field=field), self.assertRaises(ValueError):
                 guest.module_receipt(record | {field: "00" * 32}, 1, checksum, checksum)
         for compiler, runtime in (("00" * 32, checksum), (checksum, "00" * 32)):
-            with self.subTest(compiler=compiler, runtime=runtime), self.assertRaises(
-                ValueError
+            with (
+                self.subTest(compiler=compiler, runtime=runtime),
+                self.assertRaises(ValueError),
             ):
                 guest.module_receipt(record, 1, compiler, runtime)
 
