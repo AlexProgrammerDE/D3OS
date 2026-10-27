@@ -309,6 +309,79 @@ class QualificationTests(unittest.TestCase):
                 qualification.executable_sections(mutation)
 
 
+class Int8DotQualificationTests(unittest.TestCase):
+    def test_signed_register_dot_with_zero_or_register_accumulation(self):
+        for instruction in (
+            "IDP.4A.S8.S8 R10, R10, R13, RZ",
+            "@P0 IDP.4A.S8.S8 R10, R21, R20, R10",
+            "@!P6 IDP.4A.S8.S8 R0, R254, R1, R253",
+        ):
+            result = qualify_instructions(instruction)
+            self.assertEqual(
+                result["metadata_unused_profile"], qualification.INT8_DOT_PROFILE
+            )
+            self.assertEqual(result["cb4_accesses"], [])
+            self.assertEqual(result["instruction_count"], 1)
+        mixed = qualify_instructions(
+            "IMMA.16832.S8.S8.SAT R8, R8.ROW, R22.COL, RZ",
+            "IDP.4A.S8.S8 R10, R21, R20, R10",
+        )
+        self.assertEqual(
+            mixed["metadata_unused_profile"], qualification.INT8_DOT_PROFILE
+        )
+
+    def test_other_dot_shapes_types_and_modifiers_reject(self):
+        for opcode in (
+            "IDP",
+            "IDP.4A",
+            "IDP.2A.S8.S8",
+            "IDP.4A.U8.S8",
+            "IDP.4A.S8.U8",
+            "IDP.4A.S16.S16",
+            "IDP.4A.S8.S8.SAT",
+            "IDP.4A.S8.S8.REUSE",
+            "IDP.4A.S8.S8.UNKNOWN",
+        ):
+            with self.subTest(opcode=opcode), self.assertRaises(ValueError):
+                qualify_instructions(f"{opcode} R10, R21, R20, R10")
+
+    def test_non_register_operands_and_unobserved_register_modifiers_reject(self):
+        operands = ["R10", "R21", "R20", "R10"]
+        for slot in range(4):
+            for value in (
+                "R255",
+                "R999",
+                "R01",
+                "UR0",
+                "URZ",
+                "0",
+                "0x0",
+                "-R0",
+                "R0.reuse",
+                "R0.ROW",
+                "R0.H0",
+                "|R0|",
+                "[R0]",
+                "R0+0x4",
+                "c[0x0][0x160]",
+                "c[0x2][0x8]",
+                "c[0x4][0x8]",
+                "cx[UR0]",
+            ):
+                changed = operands.copy()
+                changed[slot] = value
+                with (
+                    self.subTest(slot=slot, value=value),
+                    self.assertRaises(ValueError),
+                ):
+                    qualify_instructions("IDP.4A.S8.S8 " + ", ".join(changed))
+        for slot in range(3):
+            changed = operands.copy()
+            changed[slot] = "RZ"
+            with self.subTest(slot=slot), self.assertRaises(ValueError):
+                qualify_instructions("IDP.4A.S8.S8 " + ", ".join(changed))
+
+
 class Int8MmaQualificationTests(unittest.TestCase):
     """Synthetic inventories with the register form observed in retained SASS."""
 

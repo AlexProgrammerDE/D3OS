@@ -16,6 +16,7 @@ import struct
 
 PROFILE = "sm89-direct-constant-v2"
 INT8_MMA_PROFILE = "sm89-direct-constant-v3"
+INT8_DOT_PROFILE = "sm89-direct-constant-v4"
 VERSION = "13.4.92"
 ELF_HEADER = struct.Struct("<16sHHIQQQIHHHHHH")
 SECTION_HEADER = struct.Struct("<IIQQQQIIQQ")
@@ -35,6 +36,13 @@ INT8_MMA_REGISTER = r"R(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])"
 INT8_MMA_OPERANDS = re.compile(
     rf"{INT8_MMA_REGISTER}\s*,\s*{INT8_MMA_REGISTER}(?:\.reuse)?\.ROW\s*,\s*"
     rf"{INT8_MMA_REGISTER}\.COL\s*,\s*RZ"
+)
+# Rust NVPTX emits this signed packed dot4 with register-only operands.
+# A register accumulator covers the second dot4 in each eight-value group.
+INT8_DOT_OPCODE = "IDP.4A.S8.S8"
+INT8_DOT_OPERANDS = re.compile(
+    rf"{INT8_MMA_REGISTER}\s*,\s*{INT8_MMA_REGISTER}\s*,\s*"
+    rf"{INT8_MMA_REGISTER}\s*,\s*(?:{INT8_MMA_REGISTER}|RZ)"
 )
 CB4 = r"c\[0x4\]\[0x[0-9a-f]+\]"
 # nvdisasm prints a space between the brackets for this packed-half operand.
@@ -297,6 +305,7 @@ def qualify(cubin: bytes, sass: str) -> dict:
     active = None
     cb4_accesses = []
     has_int8_mma = False
+    has_int8_dot = False
     for line_number, line in enumerate(sass.splitlines(), 1):
         boundary = SECTION.fullmatch(line)
         if boundary:
@@ -327,7 +336,15 @@ def qualify(cubin: bytes, sass: str) -> dict:
                     f"{active}:{offset:#x}: incomplete or duplicate instruction inventory"
                 )
             half_compare = HALF_COMPARE_FORMS.get(opcode)
-            if opcode.split(".")[0] == "IMMA":
+            if opcode.split(".")[0] == "IDP":
+                if opcode != INT8_DOT_OPCODE or not INT8_DOT_OPERANDS.fullmatch(
+                    operands
+                ):
+                    raise ValueError(
+                        f"{active}:{offset:#x}: unsupported signed INT8 dot4 form"
+                    )
+                has_int8_dot = True
+            elif opcode.split(".")[0] == "IMMA":
                 if opcode != INT8_MMA_OPCODE or not INT8_MMA_OPERANDS.fullmatch(
                     operands
                 ):
@@ -375,7 +392,13 @@ def qualify(cubin: bytes, sass: str) -> dict:
     sass_bytes = sass.encode("utf-8")
     record = {
         "schema_version": 1,
-        "metadata_unused_profile": INT8_MMA_PROFILE if has_int8_mma else PROFILE,
+        "metadata_unused_profile": (
+            INT8_DOT_PROFILE
+            if has_int8_dot
+            else INT8_MMA_PROFILE
+            if has_int8_mma
+            else PROFILE
+        ),
         "target_sm": 89,
         "optimization_level": 3,
         "compiler_version": VERSION,
