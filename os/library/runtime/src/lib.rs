@@ -46,6 +46,9 @@ extern "sysv64" fn entry() {
 
     thread::init_thread_environment();
 
+    #[cfg(all(feature = "burn", target_os = "none"))]
+    d3os_burn_platform::initialize().expect("cannot install the D3OS Burn thread identity provider");
+
     unsafe {
         main(*env::ARGC_PTR as isize, env::ARGV_PTR);
     }

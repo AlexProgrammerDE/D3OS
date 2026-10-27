@@ -51,8 +51,6 @@ use crate::process::core_local_storage::{cls, current_core_id, preempt_is_disabl
 use crate::sync::irqsave_spinlock::IrqSaveSpinlock;
 use crate::process::inbox::SchedulerInbox;
 
-// thread IDs
-pub static THREAD_ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
 static ACTIVE_CPUS: AtomicU32 = AtomicU32::new(1);  //BP automatically
 
 /// Live thread ownership across running, ready, sleeping, and blocked states.
@@ -84,11 +82,6 @@ pub fn process_thread_ids(pid: Uuid) -> Vec<usize> {
     active_threads().lock().iter()
         .filter_map(|(tid, owner)| (*owner == pid).then_some(*tid))
         .collect()
-}
-
-#[inline]
-pub fn next_thread_id() -> usize {
-    THREAD_ID_COUNTER.fetch_add(1, Relaxed)
 }
 
 #[inline]

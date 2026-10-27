@@ -23,6 +23,7 @@ d3os-burn-native = { path = "../burn-native", optional = true }
 
 [target.'cfg(target_os = "none")'.dependencies]
 concurrent = { path = "../concurrent" }
+syscall = { path = "../syscall" }
 time = { path = "../time" }
 embassy-time-driver = { version = "=0.2.2", features = ["tick-hz-1_000_000"] }
 spin = "0.10"

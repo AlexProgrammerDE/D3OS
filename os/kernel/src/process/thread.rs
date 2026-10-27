@@ -45,6 +45,7 @@ use crate::memory::stack::StackAllocator;
 use crate::memory::vma::VmaType;
 use crate::process::process::Process;
 use crate::process::scheduler;
+use crate::process::thread_id::ReservedThreadId;
 use crate::syscall::syscall_dispatcher::CORE_LOCAL_STORAGE_TSS_RSP0_PTR_INDEX;
 use crate::{process_manager, tss};
 use alloc::sync::Arc;
@@ -59,6 +60,7 @@ use log::error;
 use log::info;
 use log::warn;
 use spin::Mutex;
+use syscall::return_vals::Errno;
 use x86_64::PrivilegeLevel::Ring3;
 use x86_64::VirtAddr;
 use x86_64::structures::gdt::SegmentSelector;
@@ -125,7 +127,9 @@ impl Thread {
     pub fn new_kernel_thread(entry: extern "sysv64" fn(), tag_str: &str) -> Arc<Thread> {
         let process = process_manager().read().current_process();
         let pid = process.id();
-        let tid = scheduler::next_thread_id();
+        let tid = ReservedThreadId::allocate()
+            .expect("Kernel thread ID space exhausted (isize::MAX IDs issued)")
+            .into_usize();
 
         // Allocate the kernel stack for the kernel thread
         let kernel_stack = stack::alloc_kernel_stack(&process, pid, tid, tag_str);
@@ -170,6 +174,10 @@ impl Thread {
         let current_process = process_manager().read().current_process();
         let new_process = process_manager().write().create_process(name.into());
         let pid = new_process.id();
+        let Some(thread_id) = ReservedThreadId::allocate() else {
+            process_manager().write().kill(pid);
+            return Err(ProcessLoadError::Linux(-11));
+        };
 
         info!("load_application: pid = {pid}, name = {name}");
 
@@ -183,7 +191,7 @@ impl Thread {
         // this first thread is special in that there is not really a kickoff;
         // we just jump to the ELF's entry point
         let entry_fn: extern "sysv64" fn() = unsafe { core::mem::transmute(entry as usize) };
-        Ok(Self::new_user_thread(new_process, VirtAddr::new(entry), entry_fn))
+        Ok(Self::new_user_thread_with_reserved_id(new_process, VirtAddr::new(entry), entry_fn, None, thread_id))
     }
 
     /// Create user thread. Not started yet, nor registered in the scheduler. \
@@ -191,13 +199,18 @@ impl Thread {
     /// `kickoff_addr` address of the first function to be called,
     /// with the `entry` function is the parameter. \
     /// This indirection ensures that the thread calls exit when it is done, see `library::concurrent::thread`.
-    pub fn new_user_thread(parent: Arc<Process>, kickoff_addr: VirtAddr, entry: extern "sysv64" fn()) -> Arc<Thread> {
+    pub fn new_user_thread(parent: Arc<Process>, kickoff_addr: VirtAddr, entry: extern "sysv64" fn()) -> Result<Arc<Thread>, Errno> {
         Self::new_user_thread_with_stack(parent, kickoff_addr, entry, None)
     }
 
-    pub(crate) fn new_user_thread_with_stack(parent: Arc<Process>, kickoff_addr: VirtAddr, entry: extern "sysv64" fn(), initial_stack_pointer: Option<VirtAddr>) -> Arc<Thread> {
+    pub(crate) fn new_user_thread_with_stack(parent: Arc<Process>, kickoff_addr: VirtAddr, entry: extern "sysv64" fn(), initial_stack_pointer: Option<VirtAddr>) -> Result<Arc<Thread>, Errno> {
+        let thread_id = ReservedThreadId::allocate().ok_or(Errno::EAGAIN)?;
+        Ok(Self::new_user_thread_with_reserved_id(parent, kickoff_addr, entry, initial_stack_pointer, thread_id))
+    }
+
+    fn new_user_thread_with_reserved_id(parent: Arc<Process>, kickoff_addr: VirtAddr, entry: extern "sysv64" fn(), initial_stack_pointer: Option<VirtAddr>, thread_id: ReservedThreadId) -> Arc<Thread> {
         let pid = parent.id();
-        let tid = scheduler::next_thread_id(); // get id for new thread
+        let tid = thread_id.into_usize();
 
         // Allocate kernel stack for the main thread
         let kernel_stack = stack::alloc_kernel_stack(&parent, pid, tid, "userthread");
@@ -229,11 +242,11 @@ impl Thread {
         Arc::new(thread)
     }
 
-    pub(crate) fn new_linux_thread(parent: Arc<Process>, mut frame: linux_compat::SyscallFrame, stack: u64, tls: u64) -> Arc<Thread> {
+    pub(crate) fn new_linux_thread(parent: Arc<Process>, mut frame: linux_compat::SyscallFrame, stack: u64, tls: u64, thread_id: ReservedThreadId) -> Arc<Thread> {
         frame.number = 0;
         frame.rsp = stack;
         let entry: extern "sysv64" fn() = unsafe { core::mem::transmute(frame.rcx as usize) };
-        let mut thread = Self::new_user_thread_with_stack(parent, VirtAddr::new(frame.rcx), entry, Some(VirtAddr::new(stack)));
+        let mut thread = Self::new_user_thread_with_reserved_id(parent, VirtAddr::new(frame.rcx), entry, Some(VirtAddr::new(stack)), thread_id);
         Arc::get_mut(&mut thread).expect("new thread is private").linux_frame = Some((frame, tls));
         thread
     }

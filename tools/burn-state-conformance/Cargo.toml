@@ -1,0 +1,40 @@
+[package]
+name = "d3os-burn-state-conformance"
+version = "0.1.0"
+edition = "2024"
+autotests = false
+
+[workspace]
+
+[features]
+default = []
+std = ["burn-core/std"]
+environment-std = ["cubecl-environment/std"]
+
+[dependencies]
+burn-core = { version = "=0.22.1", default-features = false, features = ["flex", "autodiff", "extension"] }
+burn-std = { version = "=0.22.1", default-features = false }
+cubecl-environment = { version = "=0.11.3", default-features = false }
+
+[[test]]
+name = "thread_identity_no_std"
+path = "../../third_party/cubecl-environment/tests/thread_identity_no_std.rs"
+harness = false
+
+[[test]]
+name = "running_state_thread_identity"
+path = "../../third_party/burn-core/tests/running_state_thread_identity.rs"
+harness = false
+
+[[test]]
+name = "running_state_record_concurrency"
+path = "../../third_party/burn-core/tests/running_state_record_concurrency.rs"
+harness = false
+
+[patch.crates-io]
+burn-core = { path = "../../third_party/burn-core" }
+cubecl-environment = { path = "../../third_party/cubecl-environment" }
+burn-optim = { path = "../../third_party/burn-optim" }
+burn-dispatch = { path = "../../third_party/burn-dispatch" }
+burn-backend-extension = { path = "../../third_party/burn-backend-extension" }
+gemm-common = { path = "../../third_party/gemm-common" }

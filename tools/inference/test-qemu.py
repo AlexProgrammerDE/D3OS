@@ -188,15 +188,24 @@ def large_image(stage, image):
     subprocess.run(["mcopy", "-i", volume, *map(str, files), "::/"], check=True)
 
 
-def prepare(directory, mode, qwen_assets, extra_assets=(), *, kernel_image=None):
+def prepare(
+    directory,
+    mode,
+    qwen_assets,
+    extra_assets=(),
+    *,
+    kernel_image=None,
+    application_binaries=None,
+):
     stage = directory / "boot"
     initrd = stage / "initrd"
     # Each image contains only the assets requested for this invocation.
     shutil.rmtree(initrd, ignore_errors=True)
     (initrd / "bin").mkdir(parents=True, exist_ok=True)
+    binaries = application_binaries or ROOT / "loader/initrd/bin"
     for name in ("infer", "shell", "terminal_emulator"):
-        shutil.copyfile(ROOT / "loader/initrd/bin" / name, initrd / "bin" / name)
-    if mode not in ("self-test", "burn-self-test"):
+        shutil.copyfile(binaries / name, initrd / "bin" / name)
+    if mode not in ("self-test", "burn-self-test", "burn-state-self-test"):
         assets = initrd / "usr/share/inference"
         assets.mkdir(parents=True, exist_ok=True)
         source = qwen_assets if mode.startswith("qwen") else ROOT / "target/inference"
@@ -279,6 +288,11 @@ def main():
         action="store_true",
         help="verify native Burn timers, gradients, aliasing, and optimizer resume",
     )
+    models.add_argument(
+        "--burn-state-self-test",
+        action="store_true",
+        help="verify RunningState thread identities, pending updates, and records",
+    )
     parser.add_argument("--qwen-assets", type=Path, default=ROOT / "target/qwen")
     parser.add_argument(
         "--directory", type=Path, help="isolate this guest's image, logs, and monitor"
@@ -286,6 +300,11 @@ def main():
     parser.add_argument("--bios", type=Path, help="OVMF firmware image")
     parser.add_argument(
         "--kernel-image", type=Path, help="use an alternate D3OS kernel ELF"
+    )
+    parser.add_argument(
+        "--application-binaries",
+        type=Path,
+        help="read infer, shell, and terminal_emulator from an alternate directory",
     )
     parser.add_argument(
         "--large-pci-bar",
@@ -317,10 +336,21 @@ def main():
         if args.alexnet
         else "burn-self-test"
         if args.burn_self_test
+        else "burn-state-self-test"
+        if args.burn_state_self_test
         else "self-test"
     )
     if args.kernel_image is not None and not args.kernel_image.is_file():
         parser.error("--kernel-image must name a D3OS kernel ELF file")
+    if args.application_binaries is not None:
+        args.application_binaries = args.application_binaries.resolve()
+        if not all(
+            (args.application_binaries / name).is_file()
+            for name in ("infer", "shell", "terminal_emulator")
+        ):
+            parser.error(
+                "--application-binaries must contain infer, shell, and terminal_emulator"
+            )
     if args.timeout <= 0:
         parser.error("--timeout must be positive")
     if not 1 <= args.repeat <= 100:
@@ -362,7 +392,11 @@ def main():
     )
     directory.mkdir(parents=True, exist_ok=True)
     image = prepare(
-        directory, mode, args.qwen_assets.resolve(), kernel_image=args.kernel_image
+        directory,
+        mode,
+        args.qwen_assets.resolve(),
+        kernel_image=args.kernel_image,
+        application_binaries=args.application_binaries,
     )
     serial = directory / (
         f"serial-{mode}-{args.accel}.log" if mode.startswith("qwen") else "serial.log"

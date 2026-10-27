@@ -40,6 +40,10 @@ jobs:
           mkdir -p target
           rustc --edition=2024 --test tools/kernel/test-scheduler-inbox.rs -o target/test-scheduler-inbox
           target/test-scheduler-inbox
+      - name: Verify checked thread identities and exhaustion
+        run: |
+          rustc --edition=2024 --test os/kernel/tests/thread-id.rs -o target/test-thread-id
+          target/test-thread-id
       - name: Build D3OS
         run: cargo make --no-workspace --profile production image
       - name: Inject an interrupt during a multicore context switch
@@ -52,6 +56,8 @@ jobs:
         run: python3 tools/kernel/test-linux-threads.py --accel tcg --cpus 4 --memory-mib 512
       - name: Verify Burn timer tasks run on idle cores
         run: python3 tools/inference/test-qemu.py --burn-self-test --accel tcg --cpus 4 --repeat 10
+      - name: Verify RunningState on application threads
+        run: python3 tools/inference/test-qemu.py --burn-state-self-test --accel tcg --cpus 4 --repeat 10
       - name: Verify terminal input and process cleanup after a panic
         run: python3 tools/kernel/test-terminal-input.py --accel tcg --cpus 4 --repeat 30 --timeout 240
       - name: Verify PCI BAR enumeration with a virtual 16 GiB device
@@ -74,6 +80,34 @@ jobs:
             target/inference-qemu-self-test/serial.log
             target/inference-qemu-self-test/qemu.log
             target/inference-qemu-self-test/failure.gdb.log
+
+  portable-state:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      CARGO_BUILD_JOBS: "2"
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tools/burn-state-conformance -> target
+      - name: Verify state with both crates without std
+        run: cargo test --locked --manifest-path tools/burn-state-conformance/Cargo.toml
+      - name: Verify independent environment std unification
+        run: cargo test --locked --manifest-path tools/burn-state-conformance/Cargo.toml --features environment-std
+      - name: Verify the inherited standard thread identity path
+        run: cargo test --locked --manifest-path tools/burn-state-conformance/Cargo.toml --features std
+      - name: Check portable state tests
+        run: |
+          cargo clippy --locked --manifest-path tools/burn-state-conformance/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --locked --manifest-path tools/burn-state-conformance/Cargo.toml --all-targets --all-features -- -D warnings
 
   cpu-and-inference:
     runs-on: ubuntu-24.04

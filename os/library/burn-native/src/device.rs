@@ -30,6 +30,8 @@ impl NativeDevice {
     }
 
     pub fn open() -> Result<Self> {
+        #[cfg(target_os = "none")]
+        d3os_burn_platform::initialize().map_err(|_| d3os_compute::Error::DeviceUnavailable)?;
         Nvidia::new()?;
         Ok(Self)
     }

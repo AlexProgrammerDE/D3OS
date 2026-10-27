@@ -9,6 +9,9 @@ test = false
 doctest = false
 bench = false
 
+[features]
+burn = ["dep:d3os-burn-platform"]
+
 [dependencies]
 # Local dependencies
 terminal = { path = "../terminal" }
@@ -17,3 +20,6 @@ concurrent = { path = "../concurrent" }
 
 # External dependencies
 linked_list_allocator = { version = "0.10.6", features = ["alloc_ref"] }
+
+[target.'cfg(target_os = "none")'.dependencies]
+d3os-burn-platform = { path = "../burn-platform", optional = true }

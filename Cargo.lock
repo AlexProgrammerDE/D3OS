@@ -399,8 +399,6 @@ dependencies = [
 [[package]]
 name = "burn-core"
 version = "0.22.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b67f89f5a5d0c234f1a5f30f02f408c554ed3b1a5190a04d564d592158a87fb9"
 dependencies = [
  "burn-backend",
  "burn-backend-extension",
@@ -884,8 +882,6 @@ dependencies = [
 [[package]]
 name = "cubecl-environment"
 version = "0.11.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47ce80124d1638f8c1207e5067b8ce1e33fd908a243276924f53f03ca306de37"
 dependencies = [
  "async-channel",
  "bytemuck",
@@ -936,6 +932,7 @@ dependencies = [
  "embassy-time-driver",
  "libm",
  "spin 0.10.0",
+ "syscall",
  "time",
  "unicode-general-category",
  "unicode-normalization",
@@ -946,9 +943,19 @@ name = "d3os-burn-native"
 version = "0.1.0"
 dependencies = [
  "burn-backend",
+ "d3os-burn-platform",
  "d3os-compute",
  "d3os-nvidia",
  "d3os-tensor-file",
+ "spin 0.10.0",
+]
+
+[[package]]
+name = "d3os-burn-platform"
+version = "0.1.0"
+dependencies = [
+ "concurrent",
+ "cubecl-environment",
  "spin 0.10.0",
 ]
 
@@ -3334,6 +3341,7 @@ name = "runtime"
 version = "0.1.0"
 dependencies = [
  "concurrent",
+ "d3os-burn-platform",
  "linked_list_allocator",
  "syscall",
  "terminal",

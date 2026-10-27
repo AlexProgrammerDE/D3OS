@@ -14,7 +14,7 @@ use x86_64::VirtAddr;
 
 use crate::{
     naming::api,
-    process::{process::Process, thread::Thread},
+    process::{process::Process, thread::Thread, thread_id::ReservedThreadId},
 };
 pub use host::KernelHost;
 pub struct ExecutionState {
@@ -145,7 +145,7 @@ fn prepare(process: &Arc<Process>, launch: Launch<'_>, inherited: Option<&Execut
         state.inherit_descriptors(inherited, true)?;
     }
     let entry: extern "sysv64" fn() = unsafe { core::mem::transmute(start.instruction as usize) };
-    let thread = Thread::new_user_thread_with_stack(Arc::clone(process), VirtAddr::new(start.instruction), entry, Some(VirtAddr::new(start.stack)));
+    let thread = Thread::new_user_thread_with_stack(Arc::clone(process), VirtAddr::new(start.instruction), entry, Some(VirtAddr::new(start.stack))).map_err(errno)?;
     *process.linux_state.lock() = Some(ExecutionState {
         program: state,
         suspended: None,
@@ -235,6 +235,9 @@ pub extern "sysv64" fn dispatch(frame: &mut SyscallFrame) -> isize {
                 if state.suspended.is_some() {
                     return -38;
                 }
+                let Some(thread_id) = ReservedThreadId::allocate() else {
+                    return -11;
+                };
                 let id = NEXT_PID.fetch_add(1, Ordering::Relaxed);
                 for address in [request.parent_tid, request.child_tid].into_iter().flatten() {
                     if let Err(error) = unsafe { state.write_memory(address, &id.to_le_bytes()) } {
@@ -249,7 +252,7 @@ pub extern "sysv64" fn dispatch(frame: &mut SyscallFrame) -> isize {
                     frame.rdx,
                     frame.r8
                 );
-                let thread = Thread::new_linux_thread(Arc::clone(&process), *frame, request.stack, tls);
+                let thread = Thread::new_linux_thread(Arc::clone(&process), *frame, request.stack, tls, thread_id);
                 state.threads.insert(
                     thread.id(),
                     LinuxThread {

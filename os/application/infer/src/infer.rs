@@ -79,6 +79,12 @@ fn read_file(path: &str) -> Result<Vec<u8>, String> {
 fn run() -> Result<(), String> {
     let args: Vec<_> = env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        Some("burn-state-self-test") if args.len() == 1 => {
+            d3os_ai::validation::running_state::run(&Device::flex().autodiff())?;
+            report(format_args!(
+                "INFERENCE_OK burn-state-self-test backend=cpu threads=3 identity_checks=192 record=ok"
+            ));
+        }
         Some("burn-self-test") if args.len() == 1 => {
             let device = d3os_ai::burn::tensor::Device::flex().autodiff();
             device.seed(42);

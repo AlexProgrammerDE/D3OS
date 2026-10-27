@@ -1,0 +1,11 @@
+[package]
+name = "d3os-burn-platform"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+cubecl-environment = { version = "=0.11.3", default-features = false }
+spin = { version = "0.10", default-features = false, features = ["once"] }
+
+[target.'cfg(target_os = "none")'.dependencies]
+concurrent = { path = "../concurrent" }

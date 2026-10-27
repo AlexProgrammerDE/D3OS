@@ -626,8 +626,6 @@ dependencies = [
 [[package]]
 name = "burn-core"
 version = "0.22.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b67f89f5a5d0c234f1a5f30f02f408c554ed3b1a5190a04d564d592158a87fb9"
 dependencies = [
  "burn-backend",
  "burn-backend-extension",
@@ -1581,8 +1579,6 @@ dependencies = [
 [[package]]
 name = "cubecl-environment"
 version = "0.11.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47ce80124d1638f8c1207e5067b8ce1e33fd908a243276924f53f03ca306de37"
 dependencies = [
  "async-channel",
  "backtrace",
@@ -2129,6 +2125,7 @@ dependencies = [
  "embassy-time-driver",
  "libm",
  "spin 0.10.1",
+ "syscall",
  "time 0.1.0",
  "unicode-general-category",
  "unicode-normalization",

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-exclude = ["tools/gpu-kernels", "third_party/burn-optim", "third_party/burn-dispatch", "third_party/burn-backend-extension", "third_party/gemm-common"]
+exclude = ["tools/gpu-kernels", "third_party/burn-optim", "third_party/burn-dispatch", "third_party/burn-backend-extension", "third_party/gemm-common", "third_party/burn-core", "third_party/cubecl-environment"]
 
 members = [
     "os/application/doom",
@@ -35,6 +35,8 @@ members = [
 ]
 
 [patch.crates-io]
+burn-core = { path = "third_party/burn-core" }
+cubecl-environment = { path = "third_party/cubecl-environment" }
 burn-optim = { path = "third_party/burn-optim" }
 burn-dispatch = { path = "third_party/burn-dispatch" }
 burn-backend-extension = { path = "third_party/burn-backend-extension" }

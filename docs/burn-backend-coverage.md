@@ -1010,6 +1010,34 @@ The portable reference generator, host tests, pure CLI inventories, and MODEL ev
 The Linux runner retains the exact selected scope and a fresh archive for each attempt.
 Common half-precision modules, typed RNG and ranges, broader dtype support, and matched workload performance remain open.
 
+## Portable RunningState
+
+BurnCore's non-`std` RunningState now uses a process-wide thread identity provider.
+The D3OS runtime installs this provider before application code when its `burn` feature is enabled.
+`NativeDevice::open()` uses the same one-time initialization.
+The standard BurnCore branch retains `std::thread::ThreadId`.
+The provider API remains available when another dependency independently enables the environment's `std` feature.
+
+The kernel reserves each positive thread ID once, including after thread exit.
+It rejects user-thread creation when the ID space is exhausted, instead of wrapping or reusing an ID.
+Host tests cover the final ID, permanent exhaustion, concurrent reservations, and reservation ownership.
+
+The host state suite passes 51 isolated cases across three feature combinations.
+The cases cover registration, retained updates, shared clones, and records through actual Flex and Autodiff APIs.
+On D3OS, the CPU state command passes ten runs with four guest CPUs.
+These runs check 30 workers and 1,920 identity comparisons across yields, plus pending updates and record restoration.
+The destination training flag remains independent of the serialized state.
+
+The existing timer, gradient, aliasing, and optimizer-resume command also passes ten runs.
+Process-exit checks pass 30 busy-worker runs and 30 sleeping-worker runs with the new kernel.
+Independent source reviews find no introduced P1/P2 defects in the provider integration or checked ID allocation.
+Three test files received formatting only after review. Their output matches the formatter applied to the reviewed sources exactly.
+
+These checks close the tested platform dependency for RunningState.
+They do not qualify half-precision BatchNorm, normalization, attention numerics, or GPU performance.
+The GPU protocol and numerical policies remain unchanged.
+The [state test guide](../tools/burn-state-conformance/README.md) lists the feature matrix and guest commands.
+
 ## Typed Erf
 
 Protocol 50 adds Erf across F64, F32, Flex32, F16, and BF16.

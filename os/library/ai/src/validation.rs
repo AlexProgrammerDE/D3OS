@@ -25,6 +25,8 @@ pub mod qwen;
 pub mod qwen_state;
 pub mod relu;
 pub mod remainder;
+#[cfg(target_os = "none")]
+pub mod running_state;
 pub mod scan;
 pub mod scatter_updates;
 pub mod sort;

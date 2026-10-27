@@ -48,7 +48,11 @@ pub extern "sysv64" fn sys_process_status(buffer: *mut u8, buffer_length: usize)
 }
 
 pub extern "sysv64" fn sys_thread_create(kickoff_addr: u64, entry: extern "sysv64" fn()) -> isize {
-    let thread = Thread::new_user_thread(process_manager().read().current_process(), VirtAddr::new(kickoff_addr), entry);
+    let process = process_manager().read().current_process();
+    let thread = match Thread::new_user_thread(process, VirtAddr::new(kickoff_addr), entry) {
+        Ok(thread) => thread,
+        Err(error) => return error.into(),
+    };
     let id = thread.id();
 
     scheduler().ready(thread);
@@ -98,6 +102,7 @@ pub unsafe extern "sysv64" fn sys_process_execute_binary(name_buffer: *const u8,
         Err(ProcessLoadError::ElfInvalid) => Errno::EBADF.into(),
         Err(ProcessLoadError::Linux(code)) => match code {
             -2 => Errno::ENOENT.into(),
+            -11 => Errno::EAGAIN.into(),
             -12 => Errno::ENOMEM.into(),
             -8 => Errno::EBADF.into(),
             _ => Errno::EINVAL.into(),
