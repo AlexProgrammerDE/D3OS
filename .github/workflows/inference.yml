@@ -99,15 +99,15 @@ jobs:
         with:
           workspaces: tools/burn-state-conformance -> target
       - name: Verify state with both crates without std
-        run: cargo test --locked --manifest-path tools/burn-state-conformance/Cargo.toml
+        run: cargo +1.98.1 test --locked --manifest-path tools/burn-state-conformance/Cargo.toml
       - name: Verify independent environment std unification
-        run: cargo test --locked --manifest-path tools/burn-state-conformance/Cargo.toml --features environment-std
+        run: cargo +1.98.1 test --locked --manifest-path tools/burn-state-conformance/Cargo.toml --features environment-std
       - name: Verify the inherited standard thread identity path
-        run: cargo test --locked --manifest-path tools/burn-state-conformance/Cargo.toml --features std
+        run: cargo +1.98.1 test --locked --manifest-path tools/burn-state-conformance/Cargo.toml --features std
       - name: Check portable state tests
         run: |
-          cargo clippy --locked --manifest-path tools/burn-state-conformance/Cargo.toml --all-targets -- -D warnings
-          cargo clippy --locked --manifest-path tools/burn-state-conformance/Cargo.toml --all-targets --all-features -- -D warnings
+          cargo +1.98.1 clippy --locked --manifest-path tools/burn-state-conformance/Cargo.toml --all-targets -- -D warnings
+          cargo +1.98.1 clippy --locked --manifest-path tools/burn-state-conformance/Cargo.toml --all-targets --all-features -- -D warnings
 
   cpu-and-inference:
     runs-on: ubuntu-24.04
