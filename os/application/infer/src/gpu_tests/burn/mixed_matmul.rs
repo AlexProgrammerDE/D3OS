@@ -1820,7 +1820,10 @@ fn plan_json(plan: &[RawCase]) -> Result<String> {
         ));
     }
     Ok(format!(
-        "{{\"protocol\":54,\"kernel_count\":88,\"service_count\":14,\"scratch_trial_order\":[\"fresh\",\"guarded\"],\"scratch_poison_masks\":{:?},\"scratch_physical_overwrite_all_words\":true,\"fresh_cross_trial_coherence\":true,\"cast_trial_order\":[\"fresh\",\"guarded\"],\"cast_poison_masks\":{:?},\"cast_physical_overwrite_all_live_elements\":true,\"cast_fresh_cross_trial_coherence\":true,\"cast_unused_tail_zero\":true,\"raw_recipes\":[{}],\"native_forward_recipes\":[{}],\"public_backward_recipes\":[{}],\"shared\":{}}}",
+        "{{\"protocol\":{},\"kernel_count\":{},\"service_count\":{},\"scratch_trial_order\":[\"fresh\",\"guarded\"],\"scratch_poison_masks\":{:?},\"scratch_physical_overwrite_all_words\":true,\"fresh_cross_trial_coherence\":true,\"cast_trial_order\":[\"fresh\",\"guarded\"],\"cast_poison_masks\":{:?},\"cast_physical_overwrite_all_live_elements\":true,\"cast_fresh_cross_trial_coherence\":true,\"cast_unused_tail_zero\":true,\"raw_recipes\":[{}],\"native_forward_recipes\":[{}],\"public_backward_recipes\":[{}],\"shared\":{}}}",
+        abi::VERSION,
+        abi::KERNEL_COUNT,
+        abi::SERVICE_OPERATIONS,
         SCRATCH_POISON_MASKS,
         SCRATCH_POISON_MASKS,
         rows.join(","),
@@ -1836,7 +1839,7 @@ fn options() -> oracle::Options {
     }
 }
 fn contract(plan: &[RawCase]) -> Result<()> {
-    if (abi::VERSION, abi::KERNEL_COUNT, abi::SERVICE_OPERATIONS) != (54, 88, 14)
+    if !matches!((abi::VERSION, abi::KERNEL_COUNT, abi::SERVICE_OPERATIONS), (54, 88, 14) | (55, 89, 14))
         || raw::PARAMETERS != 5
         || raw::THREADS != 128
         || [Kernel::MatmulF16 as usize, Kernel::MatmulBf16 as usize, Kernel::MatmulFlex32 as usize] != [85, 86, 87]

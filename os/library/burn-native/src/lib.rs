@@ -11,6 +11,7 @@ mod device;
 mod float_arithmetic;
 mod float_extrema;
 mod float_reduction;
+mod indexed_accumulation;
 mod indexing;
 mod indices;
 mod integer_arithmetic;

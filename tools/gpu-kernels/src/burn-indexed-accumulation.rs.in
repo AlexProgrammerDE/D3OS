@@ -1,0 +1,462 @@
+// One physical-word owner preserves every packed neighbor and stored fold bit.
+// This template has a literal four-pointer, 32-U32 entry signature.
+fn ia_u(x: u32) -> Tile<u32, { [128] }> {
+    broadcast_scalar(x, shape![128])
+}
+fn ia_c64(x: u64) -> Tile<u64, { [128] }> {
+    broadcast_scalar(x, shape![128])
+}
+fn ia_word_offset(index: Tile<u32, { [128] }>) -> Tile<i64, { [128] }> {
+    let wide: Tile<u64, { [128] }> = exti(index);
+    bitcast(wide)
+}
+fn ia_stride(raw: u32) -> Tile<i64, { [128] }> {
+    let signed: Tile<i32, { [128] }> = bitcast(ia_u(raw));
+    exti(signed)
+}
+fn ia_width(format: u32) -> u32 {
+    if format == 0u32 || format == 5u32 || format == 9u32 {
+        3u32
+    } else if format == 1u32 || format == 2u32 || format == 6u32 || format == 10u32 {
+        2u32
+    } else if format == 3u32 || format == 4u32 || format == 7u32 || format == 11u32 {
+        1u32
+    } else {
+        0u32
+    }
+}
+unsafe fn ia_read_initial(input: *const u32, index: Tile<u32, { [128] }>, valid: Tile<bool, { [128] }>) -> (Tile<u32, { [128] }>, Token) {
+    let safe = select(valid, index, ia_u(0u32));
+    let base: PointerTile<*const u32, { [] }> = pointer_to_tile(input);
+    let base: PointerTile<*const u32, { [1] }> = base.reshape(shape![1]);
+    let base: PointerTile<*const u32, { [128] }> = base.broadcast(shape![128]);
+    let pointer = base.offset_tile(ia_word_offset(safe));
+    unsafe { load_ptr_tko(pointer, ordering::Weak, None::<scope::TileBlock>, Some(valid), Some(0u32), None, Latency::<0>) }
+}
+unsafe fn ia_read(input: *const u32, index: Tile<u32, { [128] }>, valid: Tile<bool, { [128] }>, token: Token) -> (Tile<u32, { [128] }>, Token) {
+    let safe = select(valid, index, ia_u(0u32));
+    let base: PointerTile<*const u32, { [] }> = pointer_to_tile(input);
+    let base: PointerTile<*const u32, { [1] }> = base.reshape(shape![1]);
+    let base: PointerTile<*const u32, { [128] }> = base.broadcast(shape![128]);
+    let pointer = base.offset_tile(ia_word_offset(safe));
+    unsafe {
+        load_ptr_tko(
+            pointer,
+            ordering::Weak,
+            None::<scope::TileBlock>,
+            Some(valid),
+            Some(0u32),
+            Some(token),
+            Latency::<0>,
+        )
+    }
+}
+unsafe fn ia_write(output: *mut u32, index: Tile<u32, { [128] }>, value: Tile<u32, { [128] }>, valid: Tile<bool, { [128] }>, token: Token) -> Token {
+    let safe = select(valid, index, ia_u(0u32));
+    let base: PointerTile<*mut u32, { [] }> = pointer_to_tile(output);
+    let base: PointerTile<*mut u32, { [1] }> = base.reshape(shape![1]);
+    let base: PointerTile<*mut u32, { [128] }> = base.broadcast(shape![128]);
+    let pointer = base.offset_tile(ia_word_offset(safe));
+    unsafe { store_ptr_tko(pointer, value, ordering::Weak, None::<scope::TileBlock>, Some(valid), Some(token), Latency::<0>) }
+}
+fn ia_low(bits: Tile<u64, { [128] }>) -> Tile<u32, { [128] }> {
+    let mask = ia_c64(65535u64) * ia_c64(65537u64);
+    trunci(bits & mask, overflow::NoUnsignedWrap)
+}
+unsafe fn ia_value(input: *const u32, logical: Tile<u32, { [128] }>, width: u32, valid: Tile<bool, { [128] }>, token: Token) -> (Tile<u64, { [128] }>, Token) {
+    // Sanitize the logical index before pair scaling, field extraction, or pointers.
+    let safe = select(valid, logical, ia_u(0u32));
+    let mut value = ia_c64(0u64);
+    let mut carried_token = token;
+    if width == 3u32 {
+        let low = safe * ia_u(2u32);
+        let high = low + ia_u(1u32);
+        let (a, next_token) = unsafe { ia_read(input, low, valid, carried_token) };
+        carried_token = next_token;
+        let (b, next_token) = unsafe { ia_read(input, high, valid, carried_token) };
+        carried_token = next_token;
+        let a: Tile<u64, { [128] }> = exti(a);
+        let b: Tile<u64, { [128] }> = exti(b);
+        value = a | (b << ia_c64(32u64));
+    } else {
+        let per_word = 4u32 >> width;
+        let word = safe / ia_u(per_word);
+        let shift = (safe % ia_u(per_word)) * ia_u(8u32 << width);
+        let (raw, next_token) = unsafe { ia_read(input, word, valid, carried_token) };
+        carried_token = next_token;
+        let mask: Tile<u32, { [128] }> = if width == 0u32 {
+            ia_u(255u32)
+        } else if width == 1u32 {
+            ia_u(65535u32)
+        } else {
+            bitcast(broadcast_scalar(-1i32, shape![128]))
+        };
+        value = exti((raw >> shift) & mask);
+    }
+    (value, carried_token)
+}
+fn ia_half_step(base: Tile<u32, { [128] }>, update: Tile<u32, { [128] }>, format: u32, op: u32) -> Tile<u32, { [128] }> {
+    let raw = base & ia_u(65535u32);
+    let bits = update & ia_u(65535u32);
+    let inf = ia_u(if format == 3u32 { 31744u32 } else { 32640u32 });
+    let quiet = ia_u(if format == 3u32 { 512u32 } else { 64u32 });
+    let canonical = inf | quiet;
+    let sign = ia_u(32768u32);
+    let mut result: Tile<u32, { [128] }> = raw;
+    if op >= 2u32 {
+        let mm_amag = raw & (sign - ia_u(1u32));
+        let mm_bmag = bits & (sign - ia_u(1u32));
+        let mm_an = gt_tile(mm_amag, inf);
+        let mm_bn = gt_tile(mm_bmag, inf);
+        let mm_aneg = ne_tile(raw & sign, ia_u(0u32));
+        let mm_bneg = ne_tile(bits & sign, ia_u(0u32));
+        let mm_ak = raw ^ select(mm_aneg, ia_u(65535u32), sign);
+        let mm_bk = bits ^ select(mm_bneg, ia_u(65535u32), sign);
+        let mm_take = if op == 2u32 { lt_tile(mm_bk, mm_ak) } else { gt_tile(mm_bk, mm_ak) };
+        let mm_numeric: Tile<u32, { [128] }> = select(mm_take, bits, raw);
+        let mm_bothnan: Tile<u32, { [128] }> = raw | quiet;
+        result = select(mm_an, select(mm_bn, mm_bothnan, bits), select(mm_bn, raw, mm_numeric));
+    } else {
+        let ar: Tile<u16, { [128] }> = trunci(raw, overflow::NoUnsignedWrap);
+        let br: Tile<u16, { [128] }> = trunci(bits, overflow::NoUnsignedWrap);
+        if format == 3u32 {
+            let av: Tile<f16, { [128] }> = bitcast(ar);
+            let bv: Tile<f16, { [128] }> = bitcast(br);
+            let af: Tile<f32, { [128] }> = ftof(av, rounding::NearestEven);
+            let bf: Tile<f32, { [128] }> = ftof(bv, rounding::NearestEven);
+            let rf: Tile<f32, { [128] }> = if op == 0u32 {
+                addf(af, bf, rounding::NearestEven, ftz::Disabled)
+            } else {
+                mulf(af, bf, rounding::NearestEven, ftz::Disabled)
+            };
+            let stored: Tile<f16, { [128] }> = ftof(rf, rounding::NearestEven);
+            let stored_bits: Tile<u16, { [128] }> = bitcast(stored);
+            let stored_raw: Tile<u32, { [128] }> = exti(stored_bits);
+            result = stored_raw;
+        }
+        if format == 4u32 {
+            let av: Tile<bf16, { [128] }> = bitcast(ar);
+            let bv: Tile<bf16, { [128] }> = bitcast(br);
+            let af: Tile<f32, { [128] }> = ftof(av, rounding::NearestEven);
+            let bf: Tile<f32, { [128] }> = ftof(bv, rounding::NearestEven);
+            let rf: Tile<f32, { [128] }> = if op == 0u32 {
+                addf(af, bf, rounding::NearestEven, ftz::Disabled)
+            } else {
+                mulf(af, bf, rounding::NearestEven, ftz::Disabled)
+            };
+            let stored: Tile<bf16, { [128] }> = ftof(rf, rounding::NearestEven);
+            let stored_bits: Tile<u16, { [128] }> = bitcast(stored);
+            let stored_raw: Tile<u32, { [128] }> = exti(stored_bits);
+            result = stored_raw;
+        }
+        let amag = raw & ia_u(32767u32);
+        let bmag = bits & ia_u(32767u32);
+        let an = gt_tile(amag, inf);
+        let bn = gt_tile(bmag, inf);
+        let ai = eq_tile(amag, inf);
+        let bi = eq_tile(bmag, inf);
+        let az = eq_tile(amag, ia_u(0u32));
+        let bz = eq_tile(bmag, ia_u(0u32));
+        let opposite = ne_tile((raw ^ bits) & sign, ia_u(0u32));
+        let invalid = if op == 0u32 { ai & bi & opposite } else { (ai & bz) | (az & bi) };
+        let isnan = an | bn | invalid | gt_tile(result & ia_u(32767u32), inf);
+        // Explicit zero bits retain same-sign zeros and enforce RNE exact cancellation/Mul sign XOR.
+        let zero_result = if op == 0u32 { (raw & bits) & sign } else { (raw ^ bits) & sign };
+        let exactzero = if op == 0u32 { (az & bz) | (eq_tile(amag, bmag) & opposite) } else { az | bz };
+        result = select(isnan, canonical, select(exactzero, zero_result, result));
+    }
+    result
+}
+
+fn ia_step32(raw: Tile<u32, { [128] }>, bits: Tile<u32, { [128] }>, op: u32) -> Tile<u32, { [128] }> {
+    let sign = ia_u(1u32) << ia_u(31u32);
+    let inf = ia_u(2139095040u32);
+    let quiet = ia_u(4194304u32);
+    let allbits: Tile<u32, { [128] }> = bitcast(broadcast_scalar(-1i32, shape![128]));
+    let mut result: Tile<u32, { [128] }> = raw;
+    if op >= 2u32 {
+        let m32_amag = raw & (sign - ia_u(1u32));
+        let m32_bmag = bits & (sign - ia_u(1u32));
+        let m32_an = gt_tile(m32_amag, inf);
+        let m32_bn = gt_tile(m32_bmag, inf);
+        let m32_aneg = ne_tile(raw & sign, ia_u(0u32));
+        let m32_bneg = ne_tile(bits & sign, ia_u(0u32));
+        let m32_ak = raw ^ select(m32_aneg, allbits, sign);
+        let m32_bk = bits ^ select(m32_bneg, allbits, sign);
+        let m32_take = if op == 2u32 { lt_tile(m32_bk, m32_ak) } else { gt_tile(m32_bk, m32_ak) };
+        let m32_numeric: Tile<u32, { [128] }> = select(m32_take, bits, raw);
+        let m32_bothnan: Tile<u32, { [128] }> = raw | quiet;
+        result = select(m32_an, select(m32_bn, m32_bothnan, bits), select(m32_bn, raw, m32_numeric));
+    } else {
+        let av: Tile<f32, { [128] }> = bitcast(raw);
+        let bv: Tile<f32, { [128] }> = bitcast(bits);
+        let rv: Tile<f32, { [128] }> = if op == 0u32 {
+            addf(av, bv, rounding::NearestEven, ftz::Disabled)
+        } else {
+            mulf(av, bv, rounding::NearestEven, ftz::Disabled)
+        };
+        let rb: Tile<u32, { [128] }> = bitcast(rv);
+        let amag = raw & (sign - ia_u(1u32));
+        let bmag = bits & (sign - ia_u(1u32));
+        let an = gt_tile(amag, inf);
+        let bn = gt_tile(bmag, inf);
+        let ai = eq_tile(amag, inf);
+        let bi = eq_tile(bmag, inf);
+        let az = eq_tile(amag, ia_u(0u32));
+        let bz = eq_tile(bmag, ia_u(0u32));
+        let opposite = ne_tile((raw ^ bits) & sign, ia_u(0u32));
+        let invalid = if op == 0u32 { ai & bi & opposite } else { (ai & bz) | (az & bi) };
+        let isnan = an | bn | invalid | gt_tile(rb & (sign - ia_u(1u32)), inf);
+        let exactzero = if op == 0u32 { (az & bz) | (eq_tile(amag, bmag) & opposite) } else { az | bz };
+        let zero_result = if op == 0u32 { (raw & bits) & sign } else { (raw ^ bits) & sign };
+        result = select(isnan, inf | quiet, select(exactzero, zero_result, rb));
+    }
+    result
+}
+fn ia_step64(raw: Tile<u64, { [128] }>, bits: Tile<u64, { [128] }>, op: u32) -> Tile<u64, { [128] }> {
+    let sign = ia_c64(1u64) << ia_c64(63u64);
+    let inf = ia_c64(2047u64) << ia_c64(52u64);
+    let quiet = ia_c64(1u64) << ia_c64(51u64);
+    let allbits: Tile<u64, { [128] }> = bitcast(broadcast_scalar(-1i64, shape![128]));
+    let mut result: Tile<u64, { [128] }> = raw;
+    if op >= 2u32 {
+        let m64_amag = raw & (sign - ia_c64(1u64));
+        let m64_bmag = bits & (sign - ia_c64(1u64));
+        let m64_an = gt_tile(m64_amag, inf);
+        let m64_bn = gt_tile(m64_bmag, inf);
+        let m64_aneg = ne_tile(raw & sign, ia_c64(0u64));
+        let m64_bneg = ne_tile(bits & sign, ia_c64(0u64));
+        let m64_ak = raw ^ select(m64_aneg, allbits, sign);
+        let m64_bk = bits ^ select(m64_bneg, allbits, sign);
+        let m64_take = if op == 2u32 { lt_tile(m64_bk, m64_ak) } else { gt_tile(m64_bk, m64_ak) };
+        let m64_numeric: Tile<u64, { [128] }> = select(m64_take, bits, raw);
+        let m64_bothnan: Tile<u64, { [128] }> = raw | quiet;
+        result = select(m64_an, select(m64_bn, m64_bothnan, bits), select(m64_bn, raw, m64_numeric));
+    } else {
+        let av: Tile<f64, { [128] }> = bitcast(raw);
+        let bv: Tile<f64, { [128] }> = bitcast(bits);
+        let rv: Tile<f64, { [128] }> = if op == 0u32 {
+            addf(av, bv, rounding::NearestEven, ftz::Disabled)
+        } else {
+            mulf(av, bv, rounding::NearestEven, ftz::Disabled)
+        };
+        let rb: Tile<u64, { [128] }> = bitcast(rv);
+        let amag = raw & (sign - ia_c64(1u64));
+        let bmag = bits & (sign - ia_c64(1u64));
+        let an = gt_tile(amag, inf);
+        let bn = gt_tile(bmag, inf);
+        let ai = eq_tile(amag, inf);
+        let bi = eq_tile(bmag, inf);
+        let az = eq_tile(amag, ia_c64(0u64));
+        let bz = eq_tile(bmag, ia_c64(0u64));
+        let opposite = ne_tile((raw ^ bits) & sign, ia_c64(0u64));
+        let invalid = if op == 0u32 { ai & bi & opposite } else { (ai & bz) | (az & bi) };
+        let isnan = an | bn | invalid | gt_tile(rb & (sign - ia_c64(1u64)), inf);
+        let exactzero = if op == 0u32 { (az & bz) | (eq_tile(amag, bmag) & opposite) } else { az | bz };
+        let zero_result = if op == 0u32 { (raw & bits) & sign } else { (raw ^ bits) & sign };
+        result = select(isnan, inf | quiet, select(exactzero, zero_result, rb));
+    }
+    result
+}
+
+fn ia_integer(a: Tile<u64, { [128] }>, b: Tile<u64, { [128] }>, format: u32, op: u32) -> Tile<u64, { [128] }> {
+    let all: Tile<u64, { [128] }> = bitcast(broadcast_scalar(-1i64, shape![128]));
+    let shift: Tile<u64, { [128] }> = exti(ia_u(64u32 - (8u32 << ia_width(format))));
+    let mask = all >> shift;
+    let a = a & mask;
+    let b = b & mask;
+    if op == 0u32 {
+        (a + b) & mask
+    } else if op == 1u32 {
+        (a * b) & mask
+    } else {
+        let sign = mask ^ (mask >> ia_c64(1u64));
+        let key = if format <= 8u32 { sign } else { ia_c64(0u64) };
+        let take = if op == 2u32 { lt_tile(b ^ key, a ^ key) } else { gt_tile(b ^ key, a ^ key) };
+        select(take, b, a)
+    }
+}
+fn ia_step(a: Tile<u64, { [128] }>, b: Tile<u64, { [128] }>, format: u32, op: u32) -> Tile<u64, { [128] }> {
+    if format == 0u32 {
+        ia_step64(a, b, op)
+    } else if format <= 2u32 {
+        exti(ia_step32(ia_low(a), ia_low(b), op))
+    } else if format <= 4u32 {
+        exti(ia_half_step(ia_low(a), ia_low(b), format, op))
+    } else {
+        ia_integer(a, b, format, op)
+    }
+}
+
+#[cutile::entry()]
+unsafe fn burn_indexed_accumulation(
+    values: *const u32, index_words: *const u32, status: *mut u32, output: *mut u32, control: u32, axis: u32, count: u32, extent_a: u32, offset_a: u32,
+    extent_b: u32, offset_b: u32, axis_length: u32, dim0: u32, dim1: u32, dim2: u32, dim3: u32, dim4: u32, dim5: u32, dim6: u32, dim7: u32, stride_a0: u32,
+    stride_a1: u32, stride_a2: u32, stride_a3: u32, stride_a4: u32, stride_a5: u32, stride_a6: u32, stride_a7: u32, stride_b0: u32, stride_b1: u32,
+    stride_b2: u32, stride_b3: u32, stride_b4: u32, stride_b5: u32, stride_b6: u32, stride_b7: u32,
+) {
+    let format = (control >> 8u32) & 255u32;
+    let op = (control >> 16u32) & 255u32;
+    let width = ia_width(format);
+    let per_word = if width == 3u32 { 1u32 } else { 4u32 >> width };
+    let owners = if width == 3u32 { extent_a } else { (extent_a + per_word - 1u32) / per_word };
+    let block: Tile<i32, { [] }> = scalar_to_tile(get_tile_block_id().0);
+    let block: Tile<u32, { [] }> = bitcast(block);
+    let block_id: u32 = tile_to_scalar(block);
+    let owner = iota(shape![128]) + ia_u(block_id * 128u32);
+    let active = lt_tile(owner, ia_u(owners));
+    let safe_owner = select(active, owner, ia_u(0u32));
+    let status_owner = active & eq_tile(owner, ia_u(0u32));
+    let low_word = if width == 3u32 { safe_owner * ia_u(2u32) } else { safe_owner };
+    let (initial, initial_token) = unsafe { ia_read_initial(output, low_word, active) };
+    let mut token = initial_token;
+    let mut initial_high = ia_u(0u32);
+    if width == 3u32 {
+        let (high, next_token) = unsafe { ia_read(output, low_word + ia_u(1u32), active, token) };
+        initial_high = high;
+        token = next_token;
+    }
+    let initial_low64: Tile<u64, { [128] }> = exti(initial);
+    let initial_high64: Tile<u64, { [128] }> = exti(initial_high);
+    let mut wide_bits = initial_low64 | (initial_high64 << ia_c64(32u64));
+    let mut word_bits = initial;
+    let mut invalid = ia_u(0u32);
+    let field_mask: Tile<u32, { [128] }> = if width == 0u32 {
+        ia_u(255u32)
+    } else if width == 1u32 {
+        ia_u(65535u32)
+    } else {
+        bitcast(broadcast_scalar(-1i32, shape![128]))
+    };
+    let axis_stride = if axis == 0u32 {
+        stride_a0
+    } else if axis == 1u32 {
+        stride_a1
+    } else if axis == 2u32 {
+        stride_a2
+    } else if axis == 3u32 {
+        stride_a3
+    } else if axis == 4u32 {
+        stride_a4
+    } else if axis == 5u32 {
+        stride_a5
+    } else if axis == 6u32 {
+        stride_a6
+    } else {
+        stride_a7
+    };
+    for slot in 0u32..per_word {
+        let logical = safe_owner * ia_u(per_word) + ia_u(slot);
+        let live = active & lt_tile(logical, ia_u(extent_a));
+        let safe_logical = select(live, logical, ia_u(0u32));
+        let shift = ia_u(slot * (8u32 << width));
+        let mut stored: Tile<u64, { [128] }> = if width == 3u32 { wide_bits } else { exti((word_bits >> shift) & field_mask) };
+        for position in 0u32..count {
+            let mut linear = select(live, ia_u(position), ia_u(0u32));
+            let mut index_address = ia_word_offset(ia_u(offset_b));
+            let mut destination_base = ia_word_offset(ia_u(offset_a));
+            let coordinate = linear % ia_u(dim7);
+            linear = linear / ia_u(dim7);
+            let coordinate = ia_word_offset(coordinate);
+            index_address = index_address + coordinate * ia_stride(stride_b7);
+            if axis != 7u32 {
+                destination_base = destination_base + coordinate * ia_word_offset(ia_u(stride_a7));
+            }
+            let coordinate = linear % ia_u(dim6);
+            linear = linear / ia_u(dim6);
+            let coordinate = ia_word_offset(coordinate);
+            index_address = index_address + coordinate * ia_stride(stride_b6);
+            if axis != 6u32 {
+                destination_base = destination_base + coordinate * ia_word_offset(ia_u(stride_a6));
+            }
+            let coordinate = linear % ia_u(dim5);
+            linear = linear / ia_u(dim5);
+            let coordinate = ia_word_offset(coordinate);
+            index_address = index_address + coordinate * ia_stride(stride_b5);
+            if axis != 5u32 {
+                destination_base = destination_base + coordinate * ia_word_offset(ia_u(stride_a5));
+            }
+            let coordinate = linear % ia_u(dim4);
+            linear = linear / ia_u(dim4);
+            let coordinate = ia_word_offset(coordinate);
+            index_address = index_address + coordinate * ia_stride(stride_b4);
+            if axis != 4u32 {
+                destination_base = destination_base + coordinate * ia_word_offset(ia_u(stride_a4));
+            }
+            let coordinate = linear % ia_u(dim3);
+            linear = linear / ia_u(dim3);
+            let coordinate = ia_word_offset(coordinate);
+            index_address = index_address + coordinate * ia_stride(stride_b3);
+            if axis != 3u32 {
+                destination_base = destination_base + coordinate * ia_word_offset(ia_u(stride_a3));
+            }
+            let coordinate = linear % ia_u(dim2);
+            linear = linear / ia_u(dim2);
+            let coordinate = ia_word_offset(coordinate);
+            index_address = index_address + coordinate * ia_stride(stride_b2);
+            if axis != 2u32 {
+                destination_base = destination_base + coordinate * ia_word_offset(ia_u(stride_a2));
+            }
+            let coordinate = linear % ia_u(dim1);
+            linear = linear / ia_u(dim1);
+            let coordinate = ia_word_offset(coordinate);
+            index_address = index_address + coordinate * ia_stride(stride_b1);
+            if axis != 1u32 {
+                destination_base = destination_base + coordinate * ia_word_offset(ia_u(stride_a1));
+            }
+            let coordinate = linear % ia_u(dim0);
+            linear = linear / ia_u(dim0);
+            let coordinate = ia_word_offset(coordinate);
+            index_address = index_address + coordinate * ia_stride(stride_b0);
+            if axis != 0u32 {
+                destination_base = destination_base + coordinate * ia_word_offset(ia_u(stride_a0));
+            }
+            let zero_i64 = ia_word_offset(ia_u(0u32));
+            let index_valid = live & ge_tile(index_address, zero_i64) & lt_tile(index_address, ia_word_offset(ia_u(extent_b)));
+            let safe_index = select(index_valid, index_address, zero_i64);
+            let safe_index: Tile<u64, { [128] }> = bitcast(safe_index);
+            let safe_index: Tile<u32, { [128] }> = trunci(safe_index, overflow::NoUnsignedWrap);
+            let (selected, next_token) = unsafe { ia_read(index_words, safe_index, index_valid, token) };
+            token = next_token;
+            let selected: Tile<i32, { [128] }> = bitcast(selected);
+            let length: Tile<i32, { [128] }> = bitcast(ia_u(axis_length));
+            let in_range = ge_tile(selected, broadcast_scalar(0i32, shape![128])) & lt_tile(selected, length);
+            let update_valid = index_valid & in_range;
+            // Status does not depend on a match with destination element zero.
+            if slot == 0u32 {
+                invalid = invalid
+                    | select(
+                        status_owner & eq_tile(update_valid, broadcast_scalar(false, shape![128])),
+                        ia_u(1u32),
+                        ia_u(0u32),
+                    );
+            }
+            let safe_selected = select(update_valid, selected, broadcast_scalar(0i32, shape![128]));
+            let safe_selected: Tile<i64, { [128] }> = exti(safe_selected);
+            let destination = destination_base + safe_selected * ia_word_offset(ia_u(axis_stride));
+            let matching = live & update_valid & eq_tile(destination, ia_word_offset(safe_logical));
+            let safe_position = select(matching, ia_u(position), ia_u(0u32));
+            let (update, next_token) = unsafe { ia_value(values, safe_position, width, matching, token) };
+            token = next_token;
+            let next = ia_step(stored, update, format, op);
+            stored = select(matching, next, stored);
+        }
+        if width == 3u32 {
+            wide_bits = stored;
+        } else {
+            let all: Tile<u32, { [128] }> = bitcast(broadcast_scalar(-1i32, shape![128]));
+            let field = field_mask << shift;
+            let merged = (word_bits & (field ^ all)) | ((ia_low(stored) & field_mask) << shift);
+            word_bits = select(live, merged, word_bits);
+        }
+    }
+    if width == 3u32 {
+        token = unsafe { ia_write(output, low_word, ia_low(wide_bits), active, token) };
+        token = unsafe { ia_write(output, low_word + ia_u(1u32), ia_low(wide_bits >> ia_c64(32u64)), active, token) };
+    } else {
+        token = unsafe { ia_write(output, low_word, word_bits, active, token) };
+    }
+    // Only global owner zero writes status. This flag is not a grid barrier.
+    // Native's one synchronous four-byte read waits for the complete launch.
+    let _token = unsafe { ia_write(status, ia_u(0u32), invalid, status_owner, token) };
+}

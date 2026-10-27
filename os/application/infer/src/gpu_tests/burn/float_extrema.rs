@@ -1098,7 +1098,7 @@ fn audit_geometry(case: &Case) -> Result<()> {
     Ok(())
 }
 fn contract(cases: &[Case]) -> Result<()> {
-    if !matches!((abi::VERSION, abi::KERNEL_COUNT), (52, 84) | (53, 85) | (54, 88))
+    if !matches!((abi::VERSION, abi::KERNEL_COUNT), (52, 84) | (53, 85) | (54, 88) | (55, 89))
         || Kernel::FloatExtrema as usize != 83
         || oracle::CORPUS_VERSION != 1
         || raw::FORMATS != FORMATS

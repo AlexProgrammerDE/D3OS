@@ -1,0 +1,27 @@
+{
+  "FROZEN": false,
+  "baseline_sha256": {
+    "boundaries.py": "28929a6446e724e0484642f5eabae544c2c3a4fbad6a0a253d14154206b5b573",
+    "core.py": "cbc9ec46e374788e9598692224be006f4cacc58c4ce5569a4a5e7a777b40a1de",
+    "fixtures.json": "bb5d4a2bbc47f5b014424557dd2a5a15cb4371f9fd2ae52cf0230e76ccf7c588",
+    "generate.py": "972f0f4e304499466468ce161cf6600446c14b866e78e4bb8acc7bd3fa13f9dc",
+    "ieee.py": "4bfc73465bed27477f03acdd0d122370a254e039ee74a58882eba41b84862b12",
+    "main_cases.py": "96d3b37ab5c90157aaf7e4fb810487635654c496ef3366d42b418292164ed82e",
+    "policy.json": "d02e3c5b7f86251e5c60361be4be87e2ac9e31b37353a4b306a3cb6818ac4a9d",
+    "specs.json": "481ce345ce47aef2cf830385ad466a5980cad8679352109c61949cd33b894c9d",
+    "validation.json": "890213bde9054330b1dd642e56424abc78e2cc940e72b0cb2d84745715b9cf62"
+  },
+  "counts": {
+    "C3_MODEL_patterns": 132,
+    "error": 8,
+    "main": 192,
+    "model_attachments": 283,
+    "public_gradient": 20,
+    "symbolic_templates": 24,
+    "value": 164
+  },
+  "numerical_freeze_sha256": "e159c1b3bd1f6f78bf7b64913e30765d6d167e4fb335fbcf499ec94d648521c8",
+  "policy": "Historical baseline status fields remain byte-exact. External numerical freeze binds numerical identities only. Production source binding requires separate Root approval.",
+  "schema_version": 1,
+  "source_binding_approved": false
+}

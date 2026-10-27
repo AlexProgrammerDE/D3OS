@@ -8,6 +8,8 @@ Set TYPED_MATH_SCRATCH_REJECTED_ARTIFACTS to the first Erf25 export with the
 incomplete unary predicate to check that it cannot enter the final profile.
 Set TYPED_MATH_SCRATCH_PRIOR_ERF_REPORT to a prior accepted Erf25 report to
 check that renewal preserves its certificate and rejects stale provenance.
+Set TYPED_MATH_SCRATCH_FAMILY_FIXTURE to a synthetic 257-entry inventory's
+SASS path to exercise combined-family structure without a production export.
 """
 
 import copy
@@ -19,6 +21,7 @@ import struct
 import unittest
 from collections import Counter
 from pathlib import Path
+from unittest.mock import patch
 
 
 def load(name, filename):
@@ -32,6 +35,56 @@ def load(name, filename):
 
 scratch = load("scratch_test_subject", "typed-math-scratch.py")
 prepare = load("prepare_test_subject", "prepare-kernels.py")
+
+
+class ProvenanceTests(unittest.TestCase):
+    def test_protocol54_and_protocol55_provenance_do_not_cross_accept(self):
+        previous = copy.deepcopy(scratch.PROVENANCE)
+        previous["source_sha256"].update(
+            {
+                "build.rs": "4089cef240568b070724e675f3886c6af56dcacdbe206d9df4a4fc014173f740",
+                "../../os/library/nvidia/src/compute.rs": "df6368b48f4c36c03d9c58e95780a74f7c2f7e1650c8e0cc56b8827e2418f385",
+            }
+        )
+        for name in (
+            "../../os/library/nvidia/src/compute/indexed_accumulation.rs",
+            "src/burn-indexed-accumulation.rs.in",
+        ):
+            del previous["source_sha256"][name]
+        current = scratch.PROVENANCE
+        # Both directions must fail at the provenance gate before inspecting
+        # artifacts. The retained prior report checks the unchanged schedule.
+        for expected, supplied in ((current, previous), (previous, current)):
+            with (
+                self.subTest(expected=expected),
+                patch.object(scratch, "PROVENANCE", expected),
+                patch.object(scratch, "load_qualifier", side_effect=AssertionError),
+                self.assertRaisesRegex(ValueError, "compiler/source provenance"),
+            ):
+                scratch.qualify(b"", "", [], supplied)
+
+    def test_source_and_tool_inventory_changes_fail_before_artifact_inspection(self):
+        for group in ("source_sha256", "tool_sha256"):
+            for name in scratch.PROVENANCE[group]:
+                for mutation in ("changed", "missing", "extra"):
+                    provenance = copy.deepcopy(scratch.PROVENANCE)
+                    pins = provenance[group]
+                    if mutation == "changed":
+                        pins[name] = "0" * 64
+                    elif mutation == "missing":
+                        del pins[name]
+                    else:
+                        pins[name + ".unreviewed"] = pins[name]
+                    with (
+                        self.subTest(group=group, name=name, mutation=mutation),
+                        patch.object(
+                            scratch, "load_qualifier", side_effect=AssertionError
+                        ),
+                        self.assertRaisesRegex(
+                            ValueError, "compiler/source provenance"
+                        ),
+                    ):
+                        scratch.qualify(b"", "", [], provenance)
 
 
 class ScratchArtifactTests(unittest.TestCase):
@@ -713,7 +766,8 @@ class ScratchArtifactTests(unittest.TestCase):
             )
 
     def test_combined_family_inventory_preserves_entry_and_peer_checks(self):
-        location = os.environ.get("TYPED_MATH_SCRATCH_BASELINE_SASS")
+        fixture = os.environ.get("TYPED_MATH_SCRATCH_FAMILY_FIXTURE")
+        location = fixture or os.environ.get("TYPED_MATH_SCRATCH_BASELINE_SASS")
         if not location:
             self.skipTest("requires the retained complete inference-family export")
         baseline = Path(location)
@@ -725,8 +779,8 @@ class ScratchArtifactTests(unittest.TestCase):
             and section["size"]
             and section["name"] != scratch.TEXT
         ]
-        # This is a structural fixture made from actual executable bytes. It
-        # exercises complete-family admission without producing a linked export.
+        # Only the selected entry is qualified here. Peer bytes may be synthetic
+        # when FAMILY_FIXTURE is supplied; neither case is a linked family export.
         data = bytearray(self.cubin)
         header = list(struct.unpack_from("<16sHHIQQQIHHHHHH", data))
         sections = [
@@ -773,8 +827,9 @@ class ScratchArtifactTests(unittest.TestCase):
         entries = json.loads((baseline.parent.parent / "inference.json").read_text())
         entries = [entry for entry in entries if entry["entry"] != scratch.ENTRY]
         entries.extend(self.entries)
-        self.assertEqual(len(peers) + 1, 248)
-        self.assertEqual(len(entries), 248)
+        expected_count = 257 if fixture else 248
+        self.assertEqual(len(peers) + 1, expected_count)
+        self.assertEqual(len(entries), expected_count)
         combined_cubin = bytes(data)
         result = self.qualify(cubin=combined_cubin, sass=combined_sass, entries=entries)
         self.assertEqual(result["schedule_sha256"], self.qualify()["schedule_sha256"])

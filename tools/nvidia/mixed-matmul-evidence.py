@@ -63,6 +63,10 @@ SOURCE_PINS = {
     "reference_policy": "e17e389ded361ae999a5747bd6aed4acbaa53d338316c6c2293eebe810874efe",
 }
 RAW_PLAN_SHA256 = "23ad56fa3b426352d4d2eb13e74074269386b26c5bbdf5cbf4cc7146ae349113"
+RAW_PLAN_CANONICAL_SHA256 = {
+    (54, 88): "9c4aa55385a50de6cd7ca29d9f0460f102f78b0001bec25d09b9f6291a52fd6c",
+    (55, 89): "4d51d5ce554b1c19b44627cd8d390b7e6164f1c8a5a27a6ae5f0e2f3cc48972b",
+}
 RAW_COUNTS = dict(
     zip(
         (
@@ -1190,8 +1194,12 @@ def validate_raw(
     counters cannot establish physical guards, queued residency or GPU behavior.
     """
     _same(expected_counts, RAW_COUNTS, "independent frozen Raw counts")
-    _same(protocol, 54, "Raw protocol")
-    _same(profiles, 88, "Raw kernel profiles")
+    _require(
+        type(protocol) is int
+        and type(profiles) is int
+        and (protocol, profiles) in RAW_PLAN_CANONICAL_SHA256,
+        "Raw unqualified protocol/profile pair",
+    )
     pins = SOURCE_PINS if source_pins is None else source_pins
     _same(pins, SOURCE_PINS, "independent frozen source pins")
     lines = _serial_lines(serial, execution_os="d3os")
@@ -1210,7 +1218,7 @@ def validate_raw(
     indices = [record[0] for record in records]
     _require(indices == sorted(set(indices)), "out-of-order Raw markers")
     plan = re.fullmatch(
-        r"frozen=true protocol=54 kernels=88 source_pins=(\[.*?\]) raw=(Counts \{[^{}]*\}) "
+        rf"frozen=true protocol={protocol} kernels={profiles} source_pins=(\[.*?\]) raw=(Counts \{{[^{{}}]*\}}) "
         r"shared=(\{.*\}) population=(\{.*\}) conditional_model="
         + MODEL
         + r" full_public_qualification=false",
@@ -1236,7 +1244,8 @@ def validate_raw(
     _same(dict(pairs), pins, "Raw runtime source pins")
     _debug_counts(plan[2])
     shared_summary, raw_population = strict_json(plan[3]), strict_json(plan[4])
-    # This canonical digest is derived from the approved plan.json SHA256 above.
+    # Protocol 54 binds the approved plan.json SHA256 above. Protocol 55 adds
+    # only one zero counter per kernel array for the appended indexed entry.
     # It binds every recipe, shape, counter and Shared summary without trusting
     # telemetry as its own expected plan. JSON field order is immaterial.
     canonical = json.dumps(
@@ -1244,7 +1253,7 @@ def validate_raw(
     )
     _require(
         hashlib.sha256(canonical.encode()).hexdigest()
-        == "9c4aa55385a50de6cd7ca29d9f0460f102f78b0001bec25d09b9f6291a52fd6c",
+        == RAW_PLAN_CANONICAL_SHA256[protocol, profiles],
         "Raw population differs from frozen plan",
     )
     _same(shared_summary, raw_population["shared"], "Raw Shared summary")
@@ -1293,7 +1302,7 @@ def validate_raw(
         "Raw runtime footer",
     )
     strict = re.fullmatch(
-        r"scope=shared93_plus_raw protocol=54 kernels=88 observed=(Counts \{[^{}]*\}) "
+        rf"scope=shared93_plus_raw protocol={protocol} kernels={profiles} observed=(Counts \{{[^{{}}]*\}}) "
         r"original_allocation_tail=checked full_public_qualification=false",
         records[4][1],
     )

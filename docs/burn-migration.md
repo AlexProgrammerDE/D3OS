@@ -406,12 +406,23 @@ Packed half inputs accumulate in F32, then one cast writes the complete destinat
 Flex32 rounds its matrix operands to F16. Linear stores the product before typed bias addition.
 Gradient reductions preserve each destination storage boundary and use ascending original axis indices.
 The completed D3OS run passes 215,427 required values, 21 public Autodiff routes, and all earlier regression gates.
-Read-only verification and independent terminal review pass. The protocol-54 bundle is the accepted default.
+Read-only verification and independent terminal review pass. Protocol 55 now replaces the accepted default and preserves the protocol-54 bundle.
 The complete Linux CUDA selection fails and remains preserved separately.
 A fresh BF16 broadcast-gradient selection passes 28 routes and 32,198 required comparisons, with bit-exact Native agreement.
 That selection does not establish full Linux parity or performance.
 The [coverage reference](burn-backend-coverage.md#typed-mixed-precision-matrix-products-and-linear) records the numerical targets, physical checks, and qualification limits.
-Typed indexed accumulation, half-precision modules, remaining backend APIs, and matched workload performance remain incomplete.
+Half-precision modules, remaining backend APIs, and matched workload performance remain incomplete.
+
+Protocol 55 extends indexed Add, Mul, Min, and Max to the remaining eleven ordinary Native formats.
+It preserves the existing F32, I32, and assignment routes.
+Destination owners fold updates in logical order and preserve every required storage conversion.
+Native checks resident indices and reads one four-byte control status, without downloading tensor payloads.
+The completed Native run passes 184 value and gradient cases, eight semantic-error cases, and 228 raw launches.
+Separate physical checks cover original allocations, packed tails, ownership, queued lifetimes, and exact kernel/service counters.
+The MODEL evaluator passes 283 attachments with zero device attempts.
+The complete Linux selection fails during Flex32 construction. A separate F16 selection retains two duplicate-index update and gradient failures.
+The [coverage reference](burn-backend-coverage.md#typed-indexed-accumulation-and-embedding-gradients) records these limits and the immutable execution evidence.
+Half-precision modules, remaining backend APIs, and matched workload performance remain incomplete.
 
 I32 tensor and generic scalar powers now use resident wrapping integer arithmetic without a floating-point intermediate.
 The exponent bits follow the same unsigned interpretation as the pinned Linux backend.

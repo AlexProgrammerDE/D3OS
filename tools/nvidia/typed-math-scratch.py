@@ -19,13 +19,13 @@ from pathlib import Path
 
 ENTRY = "burn_float_arithmetic"
 TEXT = f".text.{ENTRY}"
-PROFILE = "sm89-typed-erf25-library-scratch-v5"
+PROFILE = "sm89-typed-erf25-library-scratch-v6"
 REVISION = "2f47ad0036a7c18ec11d460f70b297a5824f9788"
 # Crate-relative keys are also consumed by prepare-kernels.py before/after
 # compilation. Bind the effective entry helpers, affected generated-module
-# inputs, expansion/host code, SDK protocol 54 and the 25-operation registry.
-# Mixed matrix registration adds generated-module input but leaves the
-# reviewed Erf25 schedule, resources, constants and local bounds unchanged.
+# inputs, expansion/host code, SDK protocol 55 and the 25-operation registry.
+# Indexed accumulation adds a generated-module input and registry entry 88.
+# The reviewed Erf25 schedule, resources, constants and local bounds stay exact.
 SOURCE_HASHES = {
     "../../os/library/nvidia/src/compute/float_reduction.rs": "b38aac53bc55d5e1c0bb336bc5ccb643534abae451e3fb7e84d0a0ffc17aa94f",
     "src/burn-float-reduction.rs.in": "03ab53cbf39e7585ee82ad4a86084ba97a49de72435c449e0597c81183e77603",
@@ -42,17 +42,19 @@ SOURCE_HASHES = {
     "../../os/library/nvidia/src/compute/float_extrema.rs": "8c769d0e4bb2a8bee74382ba39d3d9552968fa37690e371c810d5a628a410a0f",
     "src/main.rs": "8030e3232003d8bfb60f2071de9b64f39949d48f8c60ff04bb144b0ace22cdcf",
     "src/link.rs": "205ac4376fb5ddcb0905c94379d6ad0f6c6cfc77f763585e190d1e5bb0defdd4",
-    "build.rs": "4089cef240568b070724e675f3886c6af56dcacdbe206d9df4a4fc014173f740",
+    "build.rs": "18767e50d1ef6b251a3585e19685c5e385ec2b1ab010c3d6e0c9fdb242692bab",
     "build/cast.rs": "caabf95f2b72d81bf1cfb8e18b19e595376e42a2e3fae3bfe1545664da2c2125",
     "Cargo.toml": "032d8136a5ccdf3330a8c4235af5ae405aebf03f138f9ea99c9f5af414fb9dc9",
     "Cargo.lock": "13923daab0897a3f175cae8c314ec58476e959b32c6d2b296e7e5b6bc5ea0f43",
     "rust-toolchain.toml": "85db324345b7937c49ea2ac8b962d741f710719f4f751cab809985cbe6afbe3c",
     "../../os/library/nvidia/Cargo.toml": "1ad5bf6f4f02f27238599265ef024f37ae08114cf48ad2c5db8ee8a32f8cad11",
-    "../../os/library/nvidia/src/compute.rs": "df6368b48f4c36c03d9c58e95780a74f7c2f7e1650c8e0cc56b8827e2418f385",
+    "../../os/library/nvidia/src/compute.rs": "391219368013603206356210f22b5c949fbd181b7150192d6b4416f5a2106e1c",
     "../../os/library/nvidia/src/compute/float_arithmetic.rs": "6bc22945a93d9de619c1a4db4c2d2a4fd0eb05716d7dab3518e3eeb8db91a7fb",
     "../../os/library/nvidia/src/compute/integer_reduction.rs": "abfdc9904d771415257d0732e9e5502616778d1ba9002083bc219a510c0648d2",
     "../../os/library/nvidia/src/compute/mixed_matmul.rs": "4456f761cb62543d11852b6d82d3b49afa9a93f558f00bd88e9a80b7da346f17",
-    "src/burn-mixed-matmul.rs.in": "9c5a328d5063828dfa644272e93e8e051cede5f62abb39eb6d5cda67a9be05bb"
+    "src/burn-mixed-matmul.rs.in": "9c5a328d5063828dfa644272e93e8e051cede5f62abb39eb6d5cda67a9be05bb",
+    "../../os/library/nvidia/src/compute/indexed_accumulation.rs": "39f67fa33a61e2b75ecc2f8ec32b20ea2a35d3e60b0bcd124a01096f86d8f3c6",
+    "src/burn-indexed-accumulation.rs.in": "52cecb8064fa6ba4de83c2fdbce2876236a4ce5cb121bbda8869a3935bb55db4",
 }
 TOOL_HASHES = {
     "tileiras": "8733d2ef6ae234ba5b415d185c957b8cc37577507a2850313a8c0e5c7c3ac54d",

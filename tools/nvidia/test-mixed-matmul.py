@@ -1511,6 +1511,72 @@ class RawMarkerExportTests(unittest.TestCase):
             fusion="disabled",
         )
 
+    def test_append_only_indexed_protocol_binds_every_kernel_slot(self):
+        plan = copy.deepcopy(self.plan)
+        plan["protocol"], plan["kernel_count"] = 55, 89
+        arrays = []
+        for group, fields in (
+            ("raw_recipes", ("guarded_scratch_kernels", "guarded_cast_kernels")),
+            ("native_forward_recipes", ("kernels",)),
+            ("public_backward_recipes", ("kernels",)),
+        ):
+            for recipe in plan[group]:
+                for field in fields:
+                    self.assertEqual(len(recipe[field]), 88)
+                    recipe[field].append(0)
+                    arrays.append(recipe[field])
+        self.assertEqual(len(arrays), 177)
+
+        def serial_for(population):
+            before = " population=" + json.dumps(self.plan) + " conditional_model="
+            after = " population=" + json.dumps(population) + " conditional_model="
+            return self.serial.replace(before, after).replace(
+                "protocol=54 kernels=88", "protocol=55 kernels=89"
+            )
+
+        serial = serial_for(plan)
+        self.assertTrue(
+            evidence.validate_raw(serial, self.counts, protocol=55, profiles=89)[
+                "raw_marker_consistency"
+            ]
+        )
+        for protocol, profiles in (
+            (54, 88),
+            (55, 88),
+            (54, 89),
+            (True, 89),
+            (55, 89.0),
+        ):
+            with (
+                self.subTest(protocol=protocol, profiles=profiles),
+                self.assertRaises(ValueError),
+            ):
+                evidence.validate_raw(
+                    serial, self.counts, protocol=protocol, profiles=profiles
+                )
+        with self.assertRaises(ValueError):
+            evidence.validate_raw(self.serial, self.counts, protocol=55, profiles=89)
+        for index, counters in enumerate(arrays):
+            for slot in (0, 88):
+                counters[slot] += 1
+                with (
+                    self.subTest(recipe=index, slot=slot),
+                    self.assertRaises(ValueError),
+                ):
+                    evidence.validate_raw(
+                        serial_for(plan), self.counts, protocol=55, profiles=89
+                    )
+                counters[slot] -= 1
+            counters.pop()
+            with (
+                self.subTest(recipe=index, missing_slot=True),
+                self.assertRaises(ValueError),
+            ):
+                evidence.validate_raw(
+                    serial_for(plan), self.counts, protocol=55, profiles=89
+                )
+            counters.append(0)
+
     def test_raw_population_binds_every_current_packed_writer_field(self):
         def with_population(plan):
             before = " population=" + json.dumps(self.plan) + " conditional_model="

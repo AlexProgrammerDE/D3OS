@@ -350,6 +350,9 @@ impl NativeTensor {
     /// Accumulate repeated indices without modifying shared inputs. Floating
     /// additions preserve subnormals; their ordering is unspecified for collisions.
     pub fn scatter_add(&self, axis: usize, indices: &Self, values: &Self) -> Result<Self> {
+        if crate::indexed_accumulation::uses_typed_accumulation(self.dtype, IndexingUpdateOp::Add) {
+            return self.indexed_accumulation(axis, indices, values, IndexingUpdateOp::Add);
+        }
         let operation = match self.dtype {
             DType::F32 => Scatter::FloatAdd,
             DType::I32 => Scatter::IntAdd,
@@ -359,6 +362,9 @@ impl NativeTensor {
     }
 
     pub fn scatter_update(&self, axis: usize, indices: &Self, values: &Self, update: IndexingUpdateOp) -> Result<Self> {
+        if crate::indexed_accumulation::uses_typed_accumulation(self.dtype, update) {
+            return self.indexed_accumulation(axis, indices, values, update);
+        }
         use IndexingUpdateOp::*;
         let indices = indices.checked_indices()?;
         if update == Assign && !matches!(self.dtype, DType::F32 | DType::I32) {
@@ -393,6 +399,14 @@ impl NativeTensor {
     }
 
     pub fn select_update(&self, axis: usize, indices: &Self, values: &Self, update: IndexingUpdateOp) -> Result<Self> {
+        if crate::indexed_accumulation::uses_typed_accumulation(self.dtype, update) {
+            crate::indexed_accumulation::validate_axis_update(self, axis, indices, values, update, crate::indexed_accumulation::AxisRoute::Select)?;
+            if values.layout.is_empty() {
+                return Ok(self.clone());
+            }
+            let indices = indices.checked_indices()?;
+            return self.indexed_accumulation(axis, &self.selection_indices(axis, &indices)?, values, update);
+        }
         let indices = indices.checked_indices()?;
         self.scatter_update(axis, &self.selection_indices(axis, &indices)?, values, update)
     }

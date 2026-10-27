@@ -78,6 +78,9 @@ impl NativeTensor {
     /// Update ND slices through a private dense destination and the checked
     /// scatter operation. Non-additive duplicates have no Burn API guarantee.
     pub fn scatter_nd(&self, indices: &Self, values: &Self, update: IndexingUpdateOp) -> Result<Self> {
+        if crate::indexed_accumulation::uses_typed_accumulation(self.dtype, update) {
+            return self.typed_scatter_nd(indices, values, update);
+        }
         let numeric = self.dtype.is_float() || self.dtype.is_int() || self.dtype.is_uint();
         if !numeric
             || (!indices.dtype.is_int() && !indices.dtype.is_uint())
@@ -95,6 +98,23 @@ impl NativeTensor {
         }
         if self.layout.is_empty() {
             return Err(Error::InvalidParameter);
+        }
+        let width = *indices.layout.shape().last().ok_or(Error::InvalidShape)?;
+        let rows = self.layout.shape()[..width].iter().product();
+        let slices = self.layout.shape()[width..].iter().product();
+        let tuples = indices.layout.len() / width;
+        Nvidia.with_commands(|| {
+            let data = dense_reshape(self, Shape::new([rows, slices]))?;
+            let values = dense_reshape(values, Shape::new([tuples, slices]))?;
+            let linear = self.nd_linear_indices(indices, width)?;
+            data.select_update(0, &linear, &values, update)?.reshape(self.layout.shape().clone())
+        })
+    }
+
+    fn typed_scatter_nd(&self, indices: &Self, values: &Self, update: IndexingUpdateOp) -> Result<Self> {
+        crate::indexed_accumulation::validate_nd_update(self, indices, values, update)?;
+        if values.layout.is_empty() {
+            return Ok(self.clone());
         }
         let width = *indices.layout.shape().last().ok_or(Error::InvalidShape)?;
         let rows = self.layout.shape()[..width].iter().product();

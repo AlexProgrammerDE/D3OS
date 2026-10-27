@@ -91,6 +91,59 @@ def typed_erf_evidence():
     return module
 
 
+def indexed_accumulation_evidence():
+    spec = importlib.util.spec_from_file_location(
+        "indexed_accumulation_evidence",
+        Path(__file__).with_name("indexed-accumulation-evidence.py"),
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def indexed_accumulation_inventory(directory, binary, arguments):
+    gate = indexed_accumulation_evidence()
+    gate.validate_sources()
+    selected = list(arguments)
+    if selected[:1] != ["--scope=linux-common"] or len(selected) > 2:
+        raise ValueError("indexed accumulation requires the LinuxCommon scope")
+    dtype = None
+    if len(selected) == 2:
+        if not selected[1].startswith("--dtype="):
+            raise ValueError("unexpected indexed accumulation argument")
+        dtype = selected[1].split("=", 1)[1]
+        if dtype not in tuple(value.lower() for value in gate.DTYPES):
+            raise ValueError("unknown indexed accumulation dtype")
+    exports = {}
+    for mode, suffix in (("--expected-summary", "expected"), ("--population", "population")):
+        # Keep actual inventory bytes before staging or starting Device execution.
+        try:
+            serial = subprocess.check_output(
+                [str(binary), mode, *selected], cwd=ROOT, timeout=90,
+                stderr=subprocess.PIPE,
+            )
+        except subprocess.CalledProcessError as error:
+            (directory / f"burn-indexed_accumulation-{suffix}.json").write_bytes(error.output)
+            (directory / f"burn-indexed_accumulation-{suffix}.stderr").write_bytes(error.stderr or b"")
+            raise
+        (directory / f"burn-indexed_accumulation-{suffix}.json").write_bytes(serial)
+        exports[suffix] = gate.strict_json(serial.decode("utf-8"))
+    gate.validate_selection(exports["expected"], exports["population"])
+    expected_dtype = next((value for value in gate.DTYPES if value.lower() == dtype), None)
+    if exports["population"]["scope"] != "LinuxCommon" or exports["population"]["dtype_filter"] != expected_dtype:
+        raise ValueError("indexed accumulation inventory selected a different scope/dtype")
+    return exports
+
+
+def validate_indexed_accumulation(text, expected, population):
+    gate = indexed_accumulation_evidence()
+    if population.get("scope") != "LinuxCommon":
+        raise ValueError("Linux indexed accumulation cannot accept Native or MODEL evidence")
+    return gate.validate(
+        text, expected, population, execution_os="linux", backend=gate.LINUX_BACKEND,
+    )
+
+
 def mixed_matmul_evidence():
     spec = importlib.util.spec_from_file_location(
         "mixed_matmul_evidence", Path(__file__).with_name("mixed-matmul-evidence.py")
@@ -564,7 +617,7 @@ def validate_float_reduction(text, expected, *, dtype=None, skip_rank_zero=False
         raise RuntimeError("Linux floating reduction retained failure evidence")
 
 
-def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_finite=False, sort_compile_log=False, compaction_aligned=False, quantized_empty_case=None, scatter_finite=False, select_updates=False, nd_unique=False, nd_nonempty=False, nd_scalar_grad=False, nd_no_scalar=False, storage_flex_direct=False, storage_no_flex32=False, conversions_no_flex32=False, remainder_finite=False, remainder_wide=False, inverse_finite=False, inverse_diagnostic=False, interpolate_case="normal", spatial_empty=False, spatial_case=None, spatial_exact=False, spatial_empty_backward=False, deform_empty=False, deform_exact=False, deform_case=None, deform_forward_only=False, predicate_no_flex32=False, predicate_finite=False, movement_no_flex32=False, movement_skip_empty_bool_scatter=False, movement_matching_bool_masks=False, indexed_no_flex32=False, indexed_skip_scalar_nd=False, integer_arithmetic_dtype=None, integer_arithmetic_op=None, integer_reduction_arguments=(), integer_reduction_error_case=None, float_extrema_arguments=(), float_extrema_error_case=None, float_reduction_arguments=(), float_reduction_error_case=None, mixed_matmul_arguments=(), mixed_matmul_frontend_diagnostic=None, float_arithmetic_arguments=(), float_rounding_arguments=(), relu_arguments=(), typed_remainder_arguments=(), typed_exp_log_arguments=(), typed_trig_arguments=(), typed_unary_arguments=(), typed_power_arguments=(), typed_erf_arguments=()):
+def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_finite=False, sort_compile_log=False, compaction_aligned=False, quantized_empty_case=None, scatter_finite=False, select_updates=False, nd_unique=False, nd_nonempty=False, nd_scalar_grad=False, nd_no_scalar=False, storage_flex_direct=False, storage_no_flex32=False, conversions_no_flex32=False, remainder_finite=False, remainder_wide=False, inverse_finite=False, inverse_diagnostic=False, interpolate_case="normal", spatial_empty=False, spatial_case=None, spatial_exact=False, spatial_empty_backward=False, deform_empty=False, deform_exact=False, deform_case=None, deform_forward_only=False, predicate_no_flex32=False, predicate_finite=False, movement_no_flex32=False, movement_skip_empty_bool_scatter=False, movement_matching_bool_masks=False, indexed_no_flex32=False, indexed_skip_scalar_nd=False, integer_arithmetic_dtype=None, integer_arithmetic_op=None, integer_reduction_arguments=(), integer_reduction_error_case=None, float_extrema_arguments=(), float_extrema_error_case=None, float_reduction_arguments=(), float_reduction_error_case=None, mixed_matmul_arguments=(), mixed_matmul_frontend_diagnostic=None, indexed_accumulation_arguments=(), float_arithmetic_arguments=(), float_rounding_arguments=(), relu_arguments=(), typed_remainder_arguments=(), typed_exp_log_arguments=(), typed_trig_arguments=(), typed_unary_arguments=(), typed_power_arguments=(), typed_erf_arguments=()):
     purposes = {
         "quantization": "shared API conformance; no performance measurement",
         "quantized_empty": "empty quantized API diagnostic and record round trip; execution errors retained; no performance measurement",
@@ -587,6 +640,7 @@ def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_fi
         "integer_reduction": "exact integer reductions against independent U128/I128 Native policy; Linux qualification pending; no performance measurement",
         "float_extrema": "exact floating extrema source bits against independent IEEE policy; Linux payload, zero and global traversal diagnostics; no performance measurement",
         "float_reduction": "selected floating Sum/Product/Mean against exact IEEE step references; symbolic rows separate from GPU values; no performance measurement",
+        "indexed_accumulation": "selected typed indexed accumulation logical snapshots; retained storage assertions require source provenance and separate Raw proof; no parity or performance claim",
         "mixed_matmul": "selected mixed matmul/linear/autodiff stored graphs; conditional empirical targets and diagnostics separate; no general rounding or performance guarantee",
         "indexed": "ordinary ND reads, indexed assignment and requested index dtypes; exact byte records; no performance measurement",
         "integer_matrix": "public I32 matrix product conformance; no performance measurement",
@@ -735,6 +789,10 @@ def burn_probe(root, binary, kind, *, erf_profile=False, nonempty=False, sort_fi
     if storage_no_flex32:
         arguments += " --no-flex32"
         purpose += "; Flex32 excluded due to retained direct-upload failure"
+    if kind == "indexed_accumulation":
+        selected_arguments = list(indexed_accumulation_arguments)
+        indexed_accumulation_inventory(root.parent, binary, selected_arguments)
+        arguments = " " + shlex.join(selected_arguments)
     if kind == "mixed_matmul":
         selected_arguments = list(mixed_matmul_arguments)
         gate = mixed_matmul_evidence()
@@ -821,6 +879,14 @@ exec {program}{arguments}
             sources["expected_cells"] = root.parent / "burn-typed_exp_log-expected-cells.json"
         if kind == "typed_trig":
             sources["expected_cells"] = root.parent / "burn-typed_trig-expected-cells.json"
+    if kind == "indexed_accumulation":
+        gate = indexed_accumulation_evidence()
+        sources.update({f"reviewed_source/{name}": path for name, path in gate.validate_sources().items()})
+        sources.update({
+            "expected_summary": root.parent / "burn-indexed_accumulation-expected.json",
+            "expected_population": root.parent / "burn-indexed_accumulation-population.json",
+            "evidence_validator": ROOT / "tools/nvidia/indexed-accumulation-evidence.py",
+        })
     if kind == "mixed_matmul":
         sources.update({
             "expected_summary": root.parent / "burn-mixed_matmul-expected.json",
@@ -859,9 +925,9 @@ exec {program}{arguments}
         sources["cubecl_config"] = config
         purpose += "; basic compilation diagnostics; not performance timing"
     (root.parent / f"burn-{kind}-manifest.json").write_text(json.dumps({
-        "execution_os": "linux", "backend": "CUDA storage; host sort/argsort fallback; GPU top-k and gradients" if kind == "sort" else "CUDA storage; host argwhere fallback; GPU gathers and gradients" if kind == "compaction" else "cuda GPU", "framework": "burn", "burn_version": "0.22.1",
+        "execution_os": "linux", "backend": "CUDA storage; host sort/argsort fallback; GPU top-k and gradients" if kind == "sort" else "CUDA storage; host argwhere fallback; GPU gathers and gradients" if kind == "compaction" else indexed_accumulation_evidence().LINUX_BACKEND if kind == "indexed_accumulation" else "cuda GPU", "framework": "burn", "burn_version": "0.22.1",
         "purpose": purpose,
-        "arguments": shlex.split(arguments) if kind in ("integer_reduction", "float_extrema", "float_reduction", "mixed_matmul") else arguments.split(),
+        "arguments": shlex.split(arguments) if kind in ("integer_reduction", "float_extrema", "float_reduction", "mixed_matmul", "indexed_accumulation") else arguments.split(),
         "inputs": {name: {"bytes": path.stat().st_size, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()} for name, path in sources.items()},
     }, indent=2) + "\n")
 
@@ -1978,6 +2044,8 @@ def main():
     parser.add_argument("--burn-integer-arithmetic", type=Path, help="run portable exact integer arithmetic conformance")
     parser.add_argument("--burn-integer-arithmetic-dtype", choices=("i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64"), help="select one integer format")
     parser.add_argument("--burn-integer-arithmetic-op", choices=("add", "sub", "mul", "div", "floor-rem", "powi", "neg", "abs", "sign", "and", "or", "xor", "not", "shl", "shr"), help="select one arithmetic operation")
+    parser.add_argument("--burn-indexed-accumulation", type=Path, help="run LinuxCommon typed indexed accumulation logical evidence")
+    parser.add_argument("--burn-indexed-accumulation-dtype", choices=("f64", "f32", "flex32", "f16", "bf16", "i64", "i32", "i16", "i8", "u64", "u32", "u16", "u8"))
     parser.add_argument("--burn-indexed", type=Path, help="run exact indexed payload and integer index dtype conformance")
     parser.add_argument("--burn-indexed-no-flex32", action="store_true", help="exclude directly tagged Flex32 uploads")
     parser.add_argument("--burn-indexed-skip-scalar-nd", action="store_true", help="isolate the retained upstream scalar ND result error")
@@ -2108,7 +2176,7 @@ def main():
     args = parser.parse_args()
     if args.nsight_directory and not args.quantized_profile:
         parser.error("--nsight-directory requires --quantized-profile")
-    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.burn_typed_exp_log, args.burn_typed_trig, args.burn_typed_unary, args.burn_typed_power, args.burn_typed_erf, args.burn_typed_remainder, args.burn_relu, args.burn_float_rounding, args.burn_float_arithmetic, args.burn_integer_arithmetic, args.burn_integer_reduction, args.burn_float_extrema, args.burn_float_reduction, args.burn_mixed_matmul, args.burn_indexed, args.burn_movement, args.burn_predicate, args.burn_integer_power, args.burn_integer, args.burn_integer_matmul, args.burn_scatter_updates, args.burn_nd_indexing, args.burn_storage, args.burn_conversions, args.burn_remainder, args.burn_inverse, args.burn_spatial_convolution, args.burn_deform, args.burn_interpolate, args.burn_quantized_empty, args.burn_compaction, args.burn_cross, args.burn_scan, args.burn_sort, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
+    if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.burn_typed_exp_log, args.burn_typed_trig, args.burn_typed_unary, args.burn_typed_power, args.burn_typed_erf, args.burn_typed_remainder, args.burn_relu, args.burn_float_rounding, args.burn_float_arithmetic, args.burn_integer_arithmetic, args.burn_integer_reduction, args.burn_float_extrema, args.burn_float_reduction, args.burn_mixed_matmul, args.burn_indexed_accumulation, args.burn_indexed, args.burn_movement, args.burn_predicate, args.burn_integer_power, args.burn_integer, args.burn_integer_matmul, args.burn_scatter_updates, args.burn_nd_indexing, args.burn_storage, args.burn_conversions, args.burn_remainder, args.burn_inverse, args.burn_spatial_convolution, args.burn_deform, args.burn_interpolate, args.burn_quantized_empty, args.burn_compaction, args.burn_cross, args.burn_scan, args.burn_sort, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
         parser.error("--quantized-profile requires a separate diagnostic guest")
     if args.pin_vcpus and len(os.sched_getaffinity(0)) != 4:
         parser.error("--pin-vcpus requires an inherited affinity of four host CPUs")
@@ -2147,6 +2215,7 @@ def main():
                 bool(args.burn_float_extrema),
                 bool(args.burn_float_reduction),
                 bool(args.burn_mixed_matmul),
+                bool(args.burn_indexed_accumulation),
                 bool(args.burn_indexed),
                 bool(args.burn_movement),
                 bool(args.burn_predicate),
@@ -2327,6 +2396,13 @@ def main():
         parser.error("--burn-integer-reduction requires a built conformance executable")
     if (integer_reduction_arguments or args.burn_integer_reduction_linux_error_case is not None) and not args.burn_integer_reduction:
         parser.error("integer reduction filters and diagnostics require --burn-integer-reduction")
+    indexed_accumulation_arguments = ["--scope=linux-common"]
+    if args.burn_indexed_accumulation_dtype is not None:
+        indexed_accumulation_arguments.append(f"--dtype={args.burn_indexed_accumulation_dtype}")
+    if args.burn_indexed_accumulation and not args.burn_indexed_accumulation.is_file():
+        parser.error("--burn-indexed-accumulation requires a built conformance executable")
+    if args.burn_indexed_accumulation_dtype and not args.burn_indexed_accumulation:
+        parser.error("indexed accumulation dtype requires --burn-indexed-accumulation")
     if args.burn_indexed and not args.burn_indexed.is_file():
         parser.error("--burn-indexed requires a built conformance executable")
     if (args.burn_indexed_no_flex32 or args.burn_indexed_skip_scalar_nd) and not args.burn_indexed:
@@ -2479,6 +2555,8 @@ def main():
         burn_probe(args.directory / "root", args.burn_float_extrema.resolve(), "float_extrema", float_extrema_arguments=float_extrema_arguments, float_extrema_error_case=args.burn_float_extrema_linux_error_case)
     elif args.burn_integer_reduction:
         burn_probe(args.directory / "root", args.burn_integer_reduction.resolve(), "integer_reduction", integer_reduction_arguments=integer_reduction_arguments, integer_reduction_error_case=args.burn_integer_reduction_linux_error_case)
+    elif args.burn_indexed_accumulation:
+        burn_probe(args.directory / "root", args.burn_indexed_accumulation.resolve(), "indexed_accumulation", indexed_accumulation_arguments=indexed_accumulation_arguments)
     elif args.burn_indexed:
         burn_probe(args.directory / "root", args.burn_indexed.resolve(), "indexed", indexed_no_flex32=args.burn_indexed_no_flex32, indexed_skip_scalar_nd=args.burn_indexed_skip_scalar_nd)
     elif args.burn_movement:
@@ -2706,7 +2784,7 @@ def main():
         prefix = f"BURN_TYPED_REMAINDER_OK os=linux backend=cuda fusion=enabled_materialized_chain_steps corpus={fixtures['version']} fixture_sha256={fixtures['fixture_sha256']} totals="
         scope = f"no_flex32={str(args.burn_typed_remainder_no_flex32).lower()} skip_rank_zero={str(args.burn_typed_remainder_skip_rank_zero).lower()} finite={str(args.burn_typed_remainder_finite).lower()} dtype={args.burn_typed_remainder_dtype or 'all'} group={args.burn_typed_remainder_group or 'all'}"
         policy = " reference=python_fraction_truncated_quotient_integer_rne schedule=f64_f64_f32_f32_half_stored_f32_remf_correction_one_destination_rne scalar=canonical_f64_f32_storage finite_inf_signed_zero=exact_bits zero_sign=dividend arithmetic_nan=classification preserved_inputs=exact_bytes public_scalar=burn_float_conversion dispatch_scalar=original_variants chain=materialized_each_primitive poison=retained_allocation physical_padding=not_public scope=strict_native " + scope
-        matches = re.findall(re.escape(prefix) + r"(\{[^\r\n]*?\})" + re.escape(policy) + r"\r?$", text, re.M)
+        matches = re.findall(re.escape(prefix) + r"(\{[^\r\n]*?\})" + re.escape(policy) + r"\r?$", text, re.MULTILINE)
         if len(matches) != 1 or json.loads(matches[0]) != expected:
             raise RuntimeError("Linux CUDA typed remainder did not complete with the expected corpus and exact policy")
     if args.burn_relu:
@@ -2714,7 +2792,7 @@ def main():
         prefix = "BURN_TYPED_RELU_OK os=linux backend=cuda fusion=enabled_materialized_chain_steps totals="
         scope = f"no_flex32={str(args.burn_relu_no_flex32).lower()} skip_rank_zero={str(args.burn_relu_skip_rank_zero).lower()}"
         policy = " corpus=1 exact_bits=true reference=integer_ieee_fields backward=stored_output mask_stores=u8,u32 materialized=true physical_padding=not_public " + scope + " scope=bounded_public_tensor_dispatch_forward_dispatch_activation_backward_and_maskfill"
-        matches = re.findall(re.escape(prefix) + r"(\{[^\r\n]*?\})" + re.escape(policy) + r"\r?$", text, re.M)
+        matches = re.findall(re.escape(prefix) + r"(\{[^\r\n]*?\})" + re.escape(policy) + r"\r?$", text, re.MULTILINE)
         if len(matches) != 1 or json.loads(matches[0]) != expected:
             raise RuntimeError("Linux CUDA typed ReLU did not complete with the expected corpus and exact-bit policy")
     if args.burn_float_rounding:
@@ -2775,6 +2853,11 @@ def main():
             nonempty=args.burn_integer_reduction_nonempty,
             error_case=args.burn_integer_reduction_linux_error_case,
         )
+    if args.burn_indexed_accumulation:
+        gate = indexed_accumulation_evidence()
+        expected = gate.strict_json((args.directory / "burn-indexed_accumulation-expected.json").read_text())
+        population = gate.strict_json((args.directory / "burn-indexed_accumulation-population.json").read_text())
+        validate_indexed_accumulation(text, expected, population)
     if args.burn_indexed:
         expected = json.loads((args.directory / "burn-indexed-expected.json").read_text())
         matches = re.findall(r"BURN_INDEXED_CONFORMANCE_OK os=linux backend=cuda totals=(\{[^\r\n]*?\}) exact_bytes=true", text)

@@ -778,6 +778,8 @@ fn main() {
             source.push_str(&format!("#[cutile::entry()] unsafe fn {entry}({arguments}){{unsafe{{{body}}}}}\n"));
         }
     }
+    println!("cargo:rerun-if-changed=src/burn-indexed-accumulation.rs.in");
+    source.push_str(&fs::read_to_string("src/burn-indexed-accumulation.rs.in").expect("read typed indexed accumulation"));
     source.push('}');
     fs::write(PathBuf::from(env::var_os("OUT_DIR").expect("build directory")).join("programs.rs"), source).expect("write tile module");
 }

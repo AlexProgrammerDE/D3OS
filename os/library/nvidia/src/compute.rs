@@ -10,6 +10,7 @@ pub mod elementwise;
 pub mod float_arithmetic;
 pub mod float_extrema;
 pub mod float_reduction;
+pub mod indexed_accumulation;
 pub mod indexing;
 pub mod integer_arithmetic;
 pub mod integer_reduction;
@@ -32,7 +33,7 @@ pub mod storage;
 pub mod updates;
 pub mod words;
 
-pub const VERSION: u32 = 54;
+pub const VERSION: u32 = 55;
 /// END_COMMANDS flag: an inner recording scope joins its parent's completion.
 /// The outermost scope always waits. Zero retains synchronous nested scopes.
 pub const DEFER_NESTED_COMPLETION: u64 = 1;
@@ -66,7 +67,7 @@ pub struct MemoryProfile {
     pub device_cached_bytes: u64,
     pub device_retired_bytes: u64,
 }
-pub const KERNEL_COUNT: usize = 88;
+pub const KERNEL_COUNT: usize = 89;
 
 /// CPU service costs by request operation, including queue work within it.
 #[derive(Clone, Copy, Debug, Default)]
@@ -212,9 +213,11 @@ pub enum Kernel {
     MatmulF16 = 85,
     MatmulBf16 = 86,
     MatmulFlex32 = 87,
+    /// Ordered numeric updates read an initialized private destination.
+    IndexedAccumulation = 88,
 }
 
-const _: () = assert!(Kernel::MatmulFlex32 as usize + 1 == KERNEL_COUNT);
+const _: () = assert!(Kernel::IndexedAccumulation as usize + 1 == KERNEL_COUNT);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Work {
@@ -416,6 +419,7 @@ impl Kernel {
             85 => Self::MatmulF16,
             86 => Self::MatmulBf16,
             87 => Self::MatmulFlex32,
+            88 => Self::IndexedAccumulation,
             _ => return Err(Error::Unsupported),
         })
     }
@@ -510,6 +514,7 @@ impl Kernel {
             Self::MatmulF16 => "burn_matmul_f16",
             Self::MatmulBf16 => "burn_matmul_bf16",
             Self::MatmulFlex32 => "burn_matmul_flex32",
+            Self::IndexedAccumulation => indexed_accumulation::SYMBOL,
         }
     }
 
@@ -779,6 +784,11 @@ impl Kernel {
             (Self::IntegerArithmetic, p) => {
                 extents[..3].copy_from_slice(&integer_arithmetic::validate(p)?);
                 (integer_arithmetic::work_items(p)?, 3, 2, false)
+            }
+            (Self::IndexedAccumulation, p) => {
+                extents[..4].copy_from_slice(&indexed_accumulation::validate(p)?);
+                mutated = 1 << 2;
+                (indexed_accumulation::work_items(p)?, 4, 3, false)
             }
             (Self::PackedScatterAssign, p) => {
                 extents[..4].copy_from_slice(&packed_scatter::validate(p)?);

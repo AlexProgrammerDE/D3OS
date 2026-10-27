@@ -11,6 +11,7 @@ mod float_extrema;
 mod float_reduction;
 mod float_rounding;
 mod indexed;
+mod indexed_accumulation;
 mod indexing;
 mod integer_arithmetic;
 mod integer_reduction;
@@ -253,6 +254,24 @@ pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     float_extrema::run(backend)?;
     float_reduction::run(backend)?;
     mixed_matmul::run(backend)?;
+    let indexed_plan = indexed_accumulation::host_plan()?;
+    crate::report(format_args!(
+        "NVIDIA_BURN_INDEXED_ACCUMULATION_PLAN protocol={} profiles={} services={} population={indexed_plan}",
+        abi::VERSION,
+        abi::KERNEL_COUNT,
+        abi::SERVICE_OPERATIONS
+    ));
+    indexed_accumulation::run(backend)?;
+    let indexed_footers = d3os_ai::burn::tensor::try_read_sync(indexed_accumulation::run_shared(&device))
+        .ok_or_else(|| String::from("native indexed accumulation future did not complete"))??;
+    for footer in indexed_footers.lines() {
+        crate::report(format_args!("{footer}"));
+    }
+    crate::report(format_args!(
+        "NVIDIA_BURN_INDEXED_ACCUMULATION_STRICT_OK protocol={} profiles={} raw_launches=228 shared_values=184 shared_errors=8 MODEL_device_passes=0 os=d3os backend=native qualification=project_contract full_parity=false",
+        abi::VERSION,
+        abi::KERNEL_COUNT
+    ));
     typed_erf::run(backend)?;
     let erf_options = d3os_ai::validation::typed_erf::Options::default();
     let erf_report = d3os_ai::burn::tensor::try_read_sync(d3os_ai::validation::typed_erf::run(&device, &erf_options))

@@ -255,7 +255,8 @@ Numeric where/fill still checks both mask stores. Mask selection retains mixed-w
 The three failed diagnostics and passing subset use the same frozen reference source and Linux executable.
 Every diagnostic remains separate from the complete D3OS corpus and its expected totals.
 
-The protocol-41 section below extends ND reads, indexed assignment, and integer index formats. Wider arithmetic updates remain separate work.
+The protocol-41 section extends ND reads, indexed assignment, and integer index formats.
+[Protocol 55](#typed-indexed-accumulation-and-embedding-gradients) adds wider arithmetic updates.
 General dtype arithmetic, full quantized contracts, graph capture, and other execution capabilities also remain incomplete.
 These correctness checks do not establish execution-performance or compile-time parity.
 
@@ -268,7 +269,9 @@ Burn's public boolean bridge rejects ND operations on both backends.
 The public corpus therefore excludes boolean ND operations, while native checks cover boolean ND gather separately.
 
 Indexed assignment, vector assignment, and ND assignment accept all 13 ordinary numeric payload formats.
-Other update modes still require F32 or I32 values. Boolean OR retains its separate contract.
+At protocol 41, other update modes require F32 or I32 values.
+[Protocol 55](#typed-indexed-accumulation-and-embedding-gradients) extends these modes to the remaining ordinary numeric formats.
+Boolean OR retains its separate contract.
 The existing F32/I32 assignment routes remain unchanged.
 The new kernel assigns one lane to each destination row outside the indexed axis.
 A loop-carried token orders repeated destinations within each row.
@@ -286,7 +289,8 @@ Only the existing isolated bounds result crosses to the host.
 ND indexing retains independent coordinate checks before linearization.
 
 Float argmin/argmax, argsort, sort/top-k index pairs, argtopk, and boolean argwhere honor their requested integer output dtype.
-The native ordering and reduction value domains still require F32/I32.
+At protocol 41, native ordering and reductions require F32/I32 values.
+The later typed reduction checkpoints extend the reduction formats.
 Output casts preserve the existing integer narrowing rule: low bits remain, including when an index exceeds the requested format.
 Pooling index outputs and their backward sentinel rules remain I32-only.
 General typed arithmetic, quantized contracts, and execution capabilities remain separate work.
@@ -833,7 +837,7 @@ Protocol 54 adds F16, BF16, and Flex32 matrix products, with 256 portable entrie
 All 253 preceding inference instruction sections and the auxiliary instruction sections remain byte-identical.
 F32 and I32 retain their existing matrix paths.
 The completed D3OS capture passed read-only verification and independent terminal review.
-Protocol 54 is now the accepted default.
+Protocol 55 now supplies the accepted default and preserves the protocol-54 bundle separately.
 The protocol-53 bundle remains intact under `target/nvidia/burn-mixed-matmul-default-reduction53/`.
 
 F16 and BF16 inputs retain their packed storage bits before F32 Tensor Core accumulation.
@@ -914,7 +918,7 @@ python3 tools/nvidia/linux-reference.py \
 
 Pure `--expected-summary` and `--diagnostics` commands initialize no device.
 Each filtered or isolated diagnostic run needs a fresh archive and retains its explicit selection.
-General F64 matmul, typed indexed accumulation, and half-precision convolution or pooling remain incomplete.
+General F64 matmul and half-precision convolution or pooling remain incomplete.
 Full Burn support and performance parity also remain open.
 
 Run the independent fixture, CPU reference, and evidence-parser checks separately:
@@ -927,6 +931,78 @@ python3 tools/nvidia/test-mixed-matmul.py
 ```
 
 These checks initialize no GPU. Device execution evidence remains a separate requirement.
+
+## Typed indexed accumulation and embedding gradients
+
+Protocol 55 adds one typed indexed-fold entry, with 257 portable entries and 89 compute profiles.
+Read-only replay and independent terminal review pass. Protocol 55 is the accepted default.
+The complete protocol-54 bundle remains under `target/nvidia/burn-indexed-accumulation-default-matmul54/`.
+All 256 earlier inference instruction sections remain byte-identical. The vector and tensor instruction sections also remain unchanged.
+F32, I32, and assignment retain their existing Native routes.
+The added Native routes cover F64, Flex32, F16, BF16, I64, I16, I8, U64, U32, U16, and U8.
+Scatter, select updates, and ND slice updates support Add, Mul, Min, and Max through resident checked indices.
+
+Each destination owner processes matching updates in logical order, starting from the actual initialized destination.
+Packed elements share one physical-word owner. A 64-bit element has one owner for both words.
+Integer Add and Mul wrap to the destination width. Signed comparisons and full-width U64 comparisons retain their integer interpretation.
+F64 uses binary64 arithmetic. Flex32 uses F32 arithmetic without Tensor Core narrowing.
+F16 and BF16 widen each stored operand to F32, perform one update, then round back to storage after every update.
+Touched Add and Mul results use the selected canonical NaN policy. Untouched source bits remain exact.
+Min and Max select the numeric operand against one NaN and retain a quieted running-base payload against two NaNs.
+Min selects negative zero and Max selects positive zero for mixed zero signs.
+These are explicit project contracts. They do not establish a universal CUDA numerical policy.
+
+Native validates metadata before resident index conversion or work submission.
+All eight integer index formats use device-side conversion and coordinate checks.
+ND coordinates are checked before flattening, so an invalid coordinate cannot alias a valid row.
+Nonempty updates use a private dense destination and exactly one synchronous four-byte status read.
+That control read is part of the contract. Tensor payloads and index arrays stay on the device during the primitive.
+Valid empty updates share source storage without device work.
+
+The completed Native capture passes these source-bound checks:
+
+- Shared NativeValues: 184 cases, including 20 ordinary public gradient graphs, with 2,556 required observations.
+- Shared NativeErrors: eight semantic-error cases, with 122 required observations and same-index-dtype recovery.
+- Raw: 138 recipes and 228 launches, including two initialized-base trials and same-context recovery.
+- Special values: 264 records bind two trials for each of the 132 original C3 keys.
+- Native physical checks: 99 cases, 33 empty aliases, 21 errors and recoveries, 26 metadata rejections, and 11 queued cases.
+- Five supplemental public Autodiff lifetime graphs retain separate logical and counter evidence.
+
+The physical checks read original Native allocations, including packed tails, guards, source words, and private output ownership.
+Public gradient reads establish logical original-leaf results. They do not independently expose every physical word of a public leaf.
+All intervals retain exact arrays for 89 kernels and 14 services, including observer requests.
+All 131 inherited parser gates and 57 regression markers remain enforced.
+The original launcher and host harness exit zero.
+The separate MODEL evaluator passes 283 attachments with zero device attempts. Those results are not GPU passes.
+
+The sealed successful capture is `/dev/shm/burn55-second/`, with 1,279 files and 918 source paths.
+The original producer records 32 writes. Read-only replay reproduces those writes and all 31 final output files byte for byte.
+Independent terminal review rejects all 786 altered-evidence controls.
+The capture contains one boot archive-parser diagnostic. The original strict gates pass without an invented zero-error-log requirement.
+The complete capture uses volatile shared memory. A disk audit subset preserves 1,246 file identities and omits 33 large binary files.
+That subset does not replace the complete capture. The complete inventory and terminal results remain separately hash-bound.
+
+| Evidence | SHA-256 |
+| --- | --- |
+| Complete capture inventory | `38546d0a1f5095a0844eb84efb3248338e0b92aac3f020963035e12a9fa5a4d1` |
+| Runtime results | `ac2c430d63fad4939f80d695e35a46ca4e3d79bf0b49c698b85966a82dbc2a02` |
+| Original write trace | `ec2e5b0bb636c97fc49a5f3ceb3e223e6b9b31ab61c3d56536d15da8acff8143` |
+| Independent terminal review | `238d8e6c691317a45f6507460792d589e4d0f090f30f4564a46b22a8fadd9b79` |
+
+The first Native preparation attempt remains failed evidence: a per-user tmpfs quota stopped archival before VM creation.
+The second attempt uses a separate tmpfs mount, without deleting the failed evidence.
+
+The full 167-case Linux CUDA selection remains failed.
+Pinned CubeCL rejects direct Flex32 construction and interrupts the executor, so complete device attempt counts remain unknown.
+A separate F16 selection reports 15 passes and two failures across 17 cases.
+R087 loses a duplicate ND Add contribution. R154 loses a duplicate contribution to the original-leaf gradient.
+Both expected results are exact under every update order in the selected finite domain.
+The Native capture passes those reference cases. The Linux failures remain preserved without tolerance changes.
+These results do not establish full Linux parity, full Burn support, or performance parity.
+
+The portable reference generator, host tests, pure CLI inventories, and MODEL evaluation need no GPU.
+The Linux runner retains the exact selected scope and a fresh archive for each attempt.
+Common half-precision modules, typed RNG and ranges, broader dtype support, and matched workload performance remain open.
 
 ## Typed Erf
 
