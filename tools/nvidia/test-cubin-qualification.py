@@ -321,6 +321,7 @@ class Int8MmaQualificationTests(unittest.TestCase):
             "@!P6 " + self.observed,
             "@!UP0\tIMMA.16832.S8.S8.SAT\tR0,\tR16.ROW, R24.COL,RZ",
             "IMMA.16832.S8.S8.SAT R252 , R248.ROW , R250.COL , RZ",
+            "IMMA.16832.S8.S8.SAT R44, R36.reuse.ROW, R44.COL, RZ",
         ):
             with self.subTest(instruction=instruction):
                 result = qualify_instructions(instruction)
@@ -348,7 +349,8 @@ class Int8MmaQualificationTests(unittest.TestCase):
             (0, "RZ"), (0, "UR8"), (0, "R255"), (0, "R999"), (0, "R08"),
             (0, "R8.reuse"), (0, "R8.ROW"), (0, "-R8"),
             (1, "R8"), (1, "R8.COL"), (1, "RZ.ROW"), (1, "UR8.ROW"),
-            (1, "R8.ROW.reuse"), (1, "R8.reuse.ROW"), (1, "|R8|.ROW"),
+            (1, "R8.ROW.reuse"), (1, "R8.reuse.reuse.ROW"),
+            (1, "R8.REUSE.ROW"), (1, "|R8|.ROW"),
             (2, "R22"), (2, "R22.ROW"), (2, "R22.COL.H0"), (2, "R255.COL"),
             (3, "R0"), (3, "R8"), (3, "URZ"), (3, "-RZ"), (3, "RZ.reuse"),
         )
