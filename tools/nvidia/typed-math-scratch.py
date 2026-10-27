@@ -19,13 +19,14 @@ from pathlib import Path
 
 ENTRY = "burn_float_arithmetic"
 TEXT = f".text.{ENTRY}"
-PROFILE = "sm89-typed-erf25-library-scratch-v6"
+PROFILE = "sm89-typed-erf25-library-scratch-v7"
 REVISION = "2f47ad0036a7c18ec11d460f70b297a5824f9788"
 # Crate-relative keys are also consumed by prepare-kernels.py before/after
 # compilation. Bind the effective entry helpers, affected generated-module
 # inputs, expansion/host code, SDK protocol 55 and the 25-operation registry.
 # Indexed accumulation adds a generated-module input and registry entry 88.
 # The reviewed Erf25 schedule, resources, constants and local bounds stay exact.
+# This template-only pin renewal does not establish fresh compiler qualification.
 SOURCE_HASHES = {
     "../../os/library/nvidia/src/compute/float_reduction.rs": "b38aac53bc55d5e1c0bb336bc5ccb643534abae451e3fb7e84d0a0ffc17aa94f",
     "src/burn-float-reduction.rs.in": "03ab53cbf39e7585ee82ad4a86084ba97a49de72435c449e0597c81183e77603",
@@ -54,7 +55,7 @@ SOURCE_HASHES = {
     "../../os/library/nvidia/src/compute/mixed_matmul.rs": "4456f761cb62543d11852b6d82d3b49afa9a93f558f00bd88e9a80b7da346f17",
     "src/burn-mixed-matmul.rs.in": "9c5a328d5063828dfa644272e93e8e051cede5f62abb39eb6d5cda67a9be05bb",
     "../../os/library/nvidia/src/compute/indexed_accumulation.rs": "39f67fa33a61e2b75ecc2f8ec32b20ea2a35d3e60b0bcd124a01096f86d8f3c6",
-    "src/burn-indexed-accumulation.rs.in": "52cecb8064fa6ba4de83c2fdbce2876236a4ce5cb121bbda8869a3935bb55db4",
+    "src/burn-indexed-accumulation.rs.in": "6d01ad5122fc28551df86e7cad76f5e633e62d6db0427e4ddb243d7ddf6f4193",
 }
 TOOL_HASHES = {
     "tileiras": "8733d2ef6ae234ba5b415d185c957b8cc37577507a2850313a8c0e5c7c3ac54d",

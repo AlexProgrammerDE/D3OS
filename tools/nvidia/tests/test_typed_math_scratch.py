@@ -670,6 +670,16 @@ class ScratchArtifactTests(unittest.TestCase):
                 ):
                     self.qualify(provenance=provenance)
 
+    def test_template_renewal_rejects_stale_protocol55_provenance(self):
+        previous = copy.deepcopy(scratch.PROVENANCE)
+        previous["source_sha256"]["src/burn-indexed-accumulation.rs.in"] = (
+            "52cecb8064fa6ba4de83c2fdbce2876236a4ce5cb121bbda8869a3935bb55db4"
+        )
+        # The retained selected entry is unchanged, but its accepted v6 source
+        # provenance cannot certify a different indexed template under v7.
+        with self.assertRaisesRegex(ValueError, "compiler/source provenance"):
+            self.qualify(provenance=previous)
+
     def test_protocol_renewal_preserves_erf_certificate_and_rejects_old_provenance(
         self,
     ):
@@ -679,7 +689,7 @@ class ScratchArtifactTests(unittest.TestCase):
         previous = json.loads(Path(location).read_text())["qualification"]
         with self.assertRaises(ValueError):
             self.qualify(provenance=previous["provenance"])
-        # Protocol registration may change provenance and artifact spelling,
+        # Source renewal may change provenance and artifact spelling,
         # while every schedule, resource, constant and local bound stays exact.
         renewed = json.loads(json.dumps(self.qualify()))
         for field in ("profile", "provenance", "cubin_sha256", "sass_sha256"):

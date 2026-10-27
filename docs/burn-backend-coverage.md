@@ -937,6 +937,12 @@ These checks initialize no GPU. Device execution evidence remains a separate req
 Protocol 55 adds one typed indexed-fold entry, with 257 portable entries and 89 compute profiles.
 Read-only replay and independent terminal review pass. Protocol 55 is the accepted default.
 The complete protocol-54 bundle remains under `target/nvidia/burn-indexed-accumulation-default-matmul54/`.
+A later source-only renewal removes three overwritten initial assignments and pins the math certificate as `sm89-typed-erf25-library-scratch-v7`.
+Strict all-targets Clippy and all 48 host checks pass.
+All three complete cubins and fresh disassemblies remain byte-identical to the GPU-validated protocol-55 bundle.
+The first full exporter attempt stops at its CPU guard. Retained TileIR assembly and exact original metadata checks complete the qualification separately.
+That stopped attempt remains failed evidence. The renewal adds no GPU run or performance claim.
+The prior v6-source bundle remains under `target/nvidia/burn-indexed-accumulation-default-v6-source/`.
 All 256 earlier inference instruction sections remain byte-identical. The vector and tensor instruction sections also remain unchanged.
 F32, I32, and assignment retain their existing Native routes.
 The added Native routes cover F64, Flex32, F16, BF16, I64, I16, I8, U64, U32, U16, and U8.

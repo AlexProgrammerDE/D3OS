@@ -66,9 +66,8 @@ fn ia_low(bits: Tile<u64, { [128] }>) -> Tile<u32, { [128] }> {
 unsafe fn ia_value(input: *const u32, logical: Tile<u32, { [128] }>, width: u32, valid: Tile<bool, { [128] }>, token: Token) -> (Tile<u64, { [128] }>, Token) {
     // Sanitize the logical index before pair scaling, field extraction, or pointers.
     let safe = select(valid, logical, ia_u(0u32));
-    let mut value = ia_c64(0u64);
     let mut carried_token = token;
-    if width == 3u32 {
+    let value = if width == 3u32 {
         let low = safe * ia_u(2u32);
         let high = low + ia_u(1u32);
         let (a, next_token) = unsafe { ia_read(input, low, valid, carried_token) };
@@ -77,7 +76,7 @@ unsafe fn ia_value(input: *const u32, logical: Tile<u32, { [128] }>, width: u32,
         carried_token = next_token;
         let a: Tile<u64, { [128] }> = exti(a);
         let b: Tile<u64, { [128] }> = exti(b);
-        value = a | (b << ia_c64(32u64));
+        a | (b << ia_c64(32u64))
     } else {
         let per_word = 4u32 >> width;
         let word = safe / ia_u(per_word);
@@ -91,8 +90,8 @@ unsafe fn ia_value(input: *const u32, logical: Tile<u32, { [128] }>, width: u32,
         } else {
             bitcast(broadcast_scalar(-1i32, shape![128]))
         };
-        value = exti((raw >> shift) & mask);
-    }
+        exti((raw >> shift) & mask)
+    };
     (value, carried_token)
 }
 fn ia_half_step(base: Tile<u32, { [128] }>, update: Tile<u32, { [128] }>, format: u32, op: u32) -> Tile<u32, { [128] }> {
@@ -173,7 +172,6 @@ fn ia_step32(raw: Tile<u32, { [128] }>, bits: Tile<u32, { [128] }>, op: u32) -> 
     let inf = ia_u(2139095040u32);
     let quiet = ia_u(4194304u32);
     let allbits: Tile<u32, { [128] }> = bitcast(broadcast_scalar(-1i32, shape![128]));
-    let mut result: Tile<u32, { [128] }> = raw;
     if op >= 2u32 {
         let m32_amag = raw & (sign - ia_u(1u32));
         let m32_bmag = bits & (sign - ia_u(1u32));
@@ -186,7 +184,7 @@ fn ia_step32(raw: Tile<u32, { [128] }>, bits: Tile<u32, { [128] }>, op: u32) -> 
         let m32_take = if op == 2u32 { lt_tile(m32_bk, m32_ak) } else { gt_tile(m32_bk, m32_ak) };
         let m32_numeric: Tile<u32, { [128] }> = select(m32_take, bits, raw);
         let m32_bothnan: Tile<u32, { [128] }> = raw | quiet;
-        result = select(m32_an, select(m32_bn, m32_bothnan, bits), select(m32_bn, raw, m32_numeric));
+        select(m32_an, select(m32_bn, m32_bothnan, bits), select(m32_bn, raw, m32_numeric))
     } else {
         let av: Tile<f32, { [128] }> = bitcast(raw);
         let bv: Tile<f32, { [128] }> = bitcast(bits);
@@ -209,16 +207,14 @@ fn ia_step32(raw: Tile<u32, { [128] }>, bits: Tile<u32, { [128] }>, op: u32) -> 
         let isnan = an | bn | invalid | gt_tile(rb & (sign - ia_u(1u32)), inf);
         let exactzero = if op == 0u32 { (az & bz) | (eq_tile(amag, bmag) & opposite) } else { az | bz };
         let zero_result = if op == 0u32 { (raw & bits) & sign } else { (raw ^ bits) & sign };
-        result = select(isnan, inf | quiet, select(exactzero, zero_result, rb));
+        select(isnan, inf | quiet, select(exactzero, zero_result, rb))
     }
-    result
 }
 fn ia_step64(raw: Tile<u64, { [128] }>, bits: Tile<u64, { [128] }>, op: u32) -> Tile<u64, { [128] }> {
     let sign = ia_c64(1u64) << ia_c64(63u64);
     let inf = ia_c64(2047u64) << ia_c64(52u64);
     let quiet = ia_c64(1u64) << ia_c64(51u64);
     let allbits: Tile<u64, { [128] }> = bitcast(broadcast_scalar(-1i64, shape![128]));
-    let mut result: Tile<u64, { [128] }> = raw;
     if op >= 2u32 {
         let m64_amag = raw & (sign - ia_c64(1u64));
         let m64_bmag = bits & (sign - ia_c64(1u64));
@@ -231,7 +227,7 @@ fn ia_step64(raw: Tile<u64, { [128] }>, bits: Tile<u64, { [128] }>, op: u32) -> 
         let m64_take = if op == 2u32 { lt_tile(m64_bk, m64_ak) } else { gt_tile(m64_bk, m64_ak) };
         let m64_numeric: Tile<u64, { [128] }> = select(m64_take, bits, raw);
         let m64_bothnan: Tile<u64, { [128] }> = raw | quiet;
-        result = select(m64_an, select(m64_bn, m64_bothnan, bits), select(m64_bn, raw, m64_numeric));
+        select(m64_an, select(m64_bn, m64_bothnan, bits), select(m64_bn, raw, m64_numeric))
     } else {
         let av: Tile<f64, { [128] }> = bitcast(raw);
         let bv: Tile<f64, { [128] }> = bitcast(bits);
@@ -254,9 +250,8 @@ fn ia_step64(raw: Tile<u64, { [128] }>, bits: Tile<u64, { [128] }>, op: u32) -> 
         let isnan = an | bn | invalid | gt_tile(rb & (sign - ia_c64(1u64)), inf);
         let exactzero = if op == 0u32 { (az & bz) | (eq_tile(amag, bmag) & opposite) } else { az | bz };
         let zero_result = if op == 0u32 { (raw & bits) & sign } else { (raw ^ bits) & sign };
-        result = select(isnan, inf | quiet, select(exactzero, zero_result, rb));
+        select(isnan, inf | quiet, select(exactzero, zero_result, rb))
     }
-    result
 }
 
 fn ia_integer(a: Tile<u64, { [128] }>, b: Tile<u64, { [128] }>, format: u32, op: u32) -> Tile<u64, { [128] }> {
