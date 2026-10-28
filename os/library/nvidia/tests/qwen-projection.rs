@@ -358,6 +358,24 @@ fn d4_activations_use_transposed_blocks_and_disjoint_buffers() {
 }
 
 #[test]
+fn d4_small_tiles_preserve_dispatch_geometry_and_row_boundaries() {
+    let small = Kernel::ProjectQuantized.entry(&[5, 4096, 12288, 8, 2, 1]);
+    let regular = Kernel::ProjectQuantized.entry(&[32, 4096, 12288, 8, 2, 1]);
+    assert_ne!(small, regular);
+    for rows in 1u32..=65 {
+        for [inner, columns] in [[512, 32], [4096, 12288], [12288, 4096]] {
+            let packet = [rows, inner, columns, 8, 2, 1];
+            assert_eq!(Kernel::ProjectQuantized.entry(&packet), if (2..=8).contains(&rows) { small } else { regular });
+            let work = Kernel::ProjectQuantized.work(&packet).unwrap();
+            assert_eq!(work.blocks, rows.div_ceil(32) * columns.div_ceil(32));
+            assert_eq!((work.threads, work.pointers, work.output), (128, 3, 2));
+            let row_major = Kernel::ProjectQuantized.work(&[rows, inner, columns, 8, 1, 1]).unwrap();
+            assert_eq!(work.extents, row_major.extents);
+        }
+    }
+}
+
+#[test]
 fn d4_rejects_wrong_block_geometry_phase_and_address_overflow() {
     for packet in [
         [0, 4096, 12288, 8, 0, 1],

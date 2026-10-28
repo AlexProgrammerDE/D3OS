@@ -2671,3 +2671,58 @@ They do not establish a full-model gain and are not part of this change.
 All 271 prior inference machine-text sections and both smaller cubins remain byte-exact.
 The Math certificate changes only its source context, with unchanged verification rules and executable Math sections.
 No default bundle promotion, whole-Burn, DOOM, general quality, or performance-parity acceptance follows.
+
+## Smaller tiles for the quantized FFN tail
+
+The D4 consumer now uses a 16-row tile for batches of two through eight rows in the column layout.
+Other batch sizes retain the 32-row tile.
+This selection applies to the explicit quantized prefill modes.
+It preserves activation packing, packed weights, per-block accumulation order, buffer extents, and the launch grid.
+The accurate default, row-major attention path, and single-token decode remain unchanged.
+
+Standalone GPU checks compare both tile sizes byte-for-byte across complete outputs.
+Sampled outputs also match an independent quantized CPU oracle.
+The selected production entry matches that tested machine code and its 48-byte ABI.
+It uses 90 registers per thread, 7168 shared bytes, and no local, frame, or stack storage.
+
+On October 28, 2026, the full-model comparison used control, candidate, candidate, control capture order.
+Each capture used its exact corresponding source, Native image, and qualified module.
+Both modes selected `Q8_1WithAttention` on the RTX 4090 Laptop GPU.
+Each contributed four ordinary warm samples across two VMs.
+First passes and separately instrumented fourth passes are excluded from the timing comparison.
+The workload retained 37 prompt tokens, 128 teacher-forced decode steps, FP32 KV storage, and a 2048-token context.
+
+| Mode | Warm prefill | Decode |
+| --- | ---: | ---: |
+| Native 32-row FFN tile | 82.25 ms | 52.89 tokens/s |
+| Native 16-row FFN tail tile | 78.50 ms | 52.88 tokens/s |
+| Matched Linux llama.cpp b11827 | 43.04 ms | 58.35 tokens/s |
+
+The smaller tile reduces paired prefill time by 4.56%.
+Decode throughput changes by less than 0.02%.
+In the separate diagnostic passes, the 96 five-row FFN calls decrease from 19.65 ms to 14.57 ms on average.
+These instrumented measurements do not replace ordinary timing results.
+Both modes retain 9,516,859,392 resident weight bytes and transfer no activation tensors between host and GPU.
+Model imports average 6881 ms and 6932 ms respectively.
+Different Native and Linux storage paths prevent a matched cold-load claim.
+
+All 128 teacher-forced token decisions and complete reference-error statistics remain identical between Native modes.
+The original quantized FP32 gate still fails for 21,264,386 of 32,033,280 values.
+Its RMSE remains 0.01027 and maximum absolute error remains 0.205.
+This tile change adds no observed precision difference to the experimental attention mode.
+It does not establish general model quality or an independent oracle for every Native output.
+
+The fresh Linux baseline retains the same model, executable, libraries, headers, prompt, decode inputs, and settings.
+Its complete logit file is byte-identical to the prior baseline.
+Native still takes 1.82 times the Linux prefill time and reaches about 90.6% of its decode throughput.
+Performance parity remains open.
+
+A script path error and a RAM preflight stop paused the sequence before the second candidate capture.
+Neither stop created a VM.
+The two completed captures were retained, and only the remaining captures resumed.
+Automatic clocks and four warm samples per mode limit the strength of the timing claim.
+
+The combined module contains 273 entries.
+All 272 prior inference machine-text sections and both smaller cubins remain byte-exact.
+Math verification rules and executable Math sections remain unchanged.
+No default bundle promotion, whole-Burn, DOOM, or general quality acceptance follows.
