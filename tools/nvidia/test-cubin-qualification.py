@@ -395,6 +395,8 @@ class Int8MmaQualificationTests(unittest.TestCase):
             "@!UP0\tIMMA.16832.S8.S8.SAT\tR0,\tR16.ROW, R24.COL,RZ",
             "IMMA.16832.S8.S8.SAT R252 , R248.ROW , R250.COL , RZ",
             "IMMA.16832.S8.S8.SAT R44, R36.reuse.ROW, R44.COL, RZ",
+            "IMMA.16832.S8.S8.SAT R44, R44.ROW, R86.reuse.COL, RZ",
+            "IMMA.16832.S8.S8.SAT R44, R36.reuse.ROW, R86.reuse.COL, RZ",
         ):
             with self.subTest(instruction=instruction):
                 result = qualify_instructions(instruction)
@@ -406,10 +408,15 @@ class Int8MmaQualificationTests(unittest.TestCase):
 
     def test_other_shapes_types_or_modifiers_reject(self):
         for opcode in (
-            "IMMA", "IMMA.16832.S8.S8", "IMMA.16816.S8.S8.SAT",
-            "IMMA.16864.S8.S8.SAT", "IMMA.16832.U8.S8.SAT",
-            "IMMA.16832.S8.U8.SAT", "IMMA.16832.S4.S4.SAT",
-            "IMMA.16832.S8.S8.SATFINITE", "IMMA.16832.S8.S8.SAT.REUSE",
+            "IMMA",
+            "IMMA.16832.S8.S8",
+            "IMMA.16816.S8.S8.SAT",
+            "IMMA.16864.S8.S8.SAT",
+            "IMMA.16832.U8.S8.SAT",
+            "IMMA.16832.S8.U8.SAT",
+            "IMMA.16832.S4.S4.SAT",
+            "IMMA.16832.S8.S8.SATFINITE",
+            "IMMA.16832.S8.S8.SAT.REUSE",
         ):
             with self.subTest(opcode=opcode), self.assertRaises(ValueError):
                 qualify_instructions(
@@ -419,21 +426,57 @@ class Int8MmaQualificationTests(unittest.TestCase):
     def test_non_register_operands_layouts_and_accumulators_reject(self):
         operands = ["R8", "R8.ROW", "R22.COL", "RZ"]
         mutations = (
-            (0, "RZ"), (0, "UR8"), (0, "R255"), (0, "R999"), (0, "R08"),
-            (0, "R8.reuse"), (0, "R8.ROW"), (0, "-R8"),
-            (1, "R8"), (1, "R8.COL"), (1, "RZ.ROW"), (1, "UR8.ROW"),
-            (1, "R8.ROW.reuse"), (1, "R8.reuse.reuse.ROW"),
-            (1, "R8.REUSE.ROW"), (1, "|R8|.ROW"),
-            (2, "R22"), (2, "R22.ROW"), (2, "R22.COL.H0"), (2, "R255.COL"),
-            (3, "R0"), (3, "R8"), (3, "URZ"), (3, "-RZ"), (3, "RZ.reuse"),
+            (0, "RZ"),
+            (0, "UR8"),
+            (0, "R255"),
+            (0, "R999"),
+            (0, "R08"),
+            (0, "R8.reuse"),
+            (0, "R8.ROW"),
+            (0, "-R8"),
+            (1, "R8"),
+            (1, "R8.COL"),
+            (1, "RZ.ROW"),
+            (1, "UR8.ROW"),
+            (1, "R8.ROW.reuse"),
+            (1, "R8.reuse.reuse.ROW"),
+            (1, "R8.REUSE.ROW"),
+            (1, "|R8|.ROW"),
+            (2, "R22"),
+            (2, "R22.ROW"),
+            (2, "R22.COL.H0"),
+            (2, "R255.COL"),
+            (2, "R22.COL.reuse"),
+            (2, "R22.reuse.reuse.COL"),
+            (2, "R22.REUSE.COL"),
+            (2, "R255.reuse.COL"),
+            (2, "RZ.reuse.COL"),
+            (2, "UR22.reuse.COL"),
+            (2, "-R22.reuse.COL"),
+            (3, "R0"),
+            (3, "R8"),
+            (3, "URZ"),
+            (3, "-RZ"),
+            (3, "RZ.reuse"),
         )
         # Constants, immediates and indirect addresses cannot occupy any slot.
         for slot, replacement in (
             *mutations,
-            *((slot, value) for slot in range(4) for value in (
-                "0", "0x0", "c[0x0][0x160]", "c[0x2][0x8]", "c[0x4][0x8]",
-                "c[R0][0x8]", "cx[UR0]", "[R8]", "R8+0x4",
-            )),
+            *(
+                (slot, value)
+                for slot in range(4)
+                for value in (
+                    "0",
+                    "0x0",
+                    "c[0x0][0x160]",
+                    "c[0x2][0x8]",
+                    "c[0x4][0x8]",
+                    "c[R0][0x8]",
+                    "cx[UR0]",
+                    "[R8]",
+                    "R8+0x4",
+                )
+            ),
         ):
             changed = operands.copy()
             changed[slot] = replacement
@@ -477,19 +520,26 @@ class Int8MmaQualificationTests(unittest.TestCase):
         ):
             with self.subTest(sections=sections):
                 result = qualification.qualify(
-                    elf([
-                        (name, len(instructions) * 16)
-                        for name, instructions in sections
-                    ]),
+                    elf(
+                        [
+                            (name, len(instructions) * 16)
+                            for name, instructions in sections
+                        ]
+                    ),
                     sass(sections),
                 )
                 self.assertEqual(
                     result["metadata_unused_profile"], "sm89-direct-constant-v3"
                 )
                 evidence = result.pop("evidence_sha256")
-                self.assertEqual(evidence, hashlib.sha256(
-                    json.dumps(result, sort_keys=True, separators=(",", ":")).encode()
-                ).hexdigest())
+                self.assertEqual(
+                    evidence,
+                    hashlib.sha256(
+                        json.dumps(
+                            result, sort_keys=True, separators=(",", ":")
+                        ).encode()
+                    ).hexdigest(),
+                )
         self.assertEqual(qualify_instructions("EXIT"), baseline)
 
 

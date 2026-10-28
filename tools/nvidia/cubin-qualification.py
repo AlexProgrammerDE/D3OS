@@ -30,12 +30,12 @@ INDEXED = re.compile(r"(?:R\d+|UR\d+)(?:[+-]0x[0-9a-f]+)?")
 REGISTER = r"(?:R\d+|RZ)"
 # Only the observed signed dot32 form, with a literal zero accumulator.
 # Its zero-accumulator i8 dot is bounded by 32*128*128, so SAT is inert.
-# The optional LHS reuse hint retains the same register-only operand.
+# Optional matrix-operand reuse hints retain the same register-only operands.
 INT8_MMA_OPCODE = "IMMA.16832.S8.S8.SAT"
 INT8_MMA_REGISTER = r"R(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])"
 INT8_MMA_OPERANDS = re.compile(
     rf"{INT8_MMA_REGISTER}\s*,\s*{INT8_MMA_REGISTER}(?:\.reuse)?\.ROW\s*,\s*"
-    rf"{INT8_MMA_REGISTER}\.COL\s*,\s*RZ"
+    rf"{INT8_MMA_REGISTER}(?:\.reuse)?\.COL\s*,\s*RZ"
 )
 # Rust NVPTX emits this signed packed dot4 with register-only operands.
 # A register accumulator covers the second dot4 in each eight-value group.
