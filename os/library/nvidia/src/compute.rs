@@ -542,6 +542,7 @@ impl Kernel {
             (Self::ProjectQuantized, [_, _, _, 8, 1, 3]) => "q8_components_project",
             (Self::ProjectQuantized, [_, _, _, 8, 2, 3]) => "q8_columns32_components",
             (Self::ProjectQuantized, [_, _, _, 8, 0, 1]) => "q8_d4_pack",
+            (Self::ProjectQuantized, [_, _, _, 8, 1, 1]) => "q8_rowmajor_d4",
             (Self::ProjectQuantized, [_, _, _, 8, 2, 1]) => "q8_columns32_d4",
             (Self::ProjectQuantized, [_, _, _, 8, 2]) => "q8_columns32_vector",
             (Self::EmbeddingQuantized, [_, _, _, 8, 2]) => "q8_columns32_embedding",
@@ -852,7 +853,7 @@ impl Kernel {
                 (p[0], 3, 2, false)
             }
             // Four FP32 scales and 128 signed bytes per transposed D4 block.
-            (Self::ProjectQuantized, &[m, k, n, 8, phase @ (0 | 2), 1]) => {
+            (Self::ProjectQuantized, &[m, k, n, 8, phase @ 0..=2, 1]) => {
                 if m == 0 || k == 0 || !k.is_multiple_of(128) || n == 0 || !n.is_multiple_of(32) {
                     return Err(Error::InvalidField);
                 }

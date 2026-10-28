@@ -458,5 +458,6 @@ fn prefill_quantization_is_explicit_and_rejects_unsupported_backends() {
     let unchanged = model.clone().with_prefill_quantization(PrefillQuantization::Accurate).unwrap();
     assert_eq!(unchanged.prefill_quantization(), PrefillQuantization::Accurate);
     assert!(model.clone().with_prefill_quantization(PrefillQuantization::Q8_1).is_err());
+    assert!(model.clone().with_prefill_quantization(PrefillQuantization::Q8_1WithAttention).is_err());
     assert_eq!(model.prefill_quantization(), PrefillQuantization::Accurate);
 }

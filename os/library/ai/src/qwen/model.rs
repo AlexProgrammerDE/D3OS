@@ -174,6 +174,39 @@ enum Mixer {
     Full(FullAttention),
     Linear(LinearAttention),
 }
+impl Mixer {
+    fn set_prefill_quantization(&mut self, mode: PrefillQuantization) -> Result<()> {
+        let mode = if mode == PrefillQuantization::Q8_1WithAttention {
+            mode
+        } else {
+            PrefillQuantization::Accurate
+        };
+        let set = |matrix: &mut PackedMatrix| {
+            if mode != PrefillQuantization::Accurate
+                && (matrix.layout != MatrixLayout::RowMajor
+                    || matrix.format != MatrixFormat::Quantized(Quantization::Q8_0)
+                    || !matches!(matrix.shape, [1024 | 4096 | 8192, 4096]))
+            {
+                return Err(Error::from("Q8_1 attention prefill requires qualified row-major Q8_0 matrices"));
+            }
+            matrix.prefill_quantization = mode;
+            Ok(())
+        };
+        match self {
+            Self::Full(attention) => {
+                for matrix in [&mut attention.q, &mut attention.k, &mut attention.v, &mut attention.out] {
+                    set(matrix)?;
+                }
+            }
+            Self::Linear(attention) => {
+                for matrix in [&mut attention.qkv, &mut attention.z, &mut attention.out] {
+                    set(matrix)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
 #[derive(Module, Debug)]
 struct Layer {
     input_norm: Param<Tensor<1>>,
@@ -333,7 +366,7 @@ impl Qwen {
     }
     pub fn with_prefill_quantization(mut self, mode: PrefillQuantization) -> Result<Self> {
         mode.check_device(&self.device())?;
-        if mode == PrefillQuantization::Q8_1 {
+        if mode != PrefillQuantization::Accurate {
             for layer in &self.layers {
                 for matrix in [&layer.gate, &layer.up, &layer.down] {
                     if matrix.layout != MatrixLayout::Q8Columns32 || matrix.format != MatrixFormat::Quantized(Quantization::Q8_0) {
@@ -346,6 +379,7 @@ impl Qwen {
             layer.gate.prefill_quantization = mode;
             layer.up.prefill_quantization = mode;
             layer.down.prefill_quantization = mode;
+            layer.mixer.set_prefill_quantization(mode)?;
         }
         self.prefill_quantization = mode;
         Ok(self)

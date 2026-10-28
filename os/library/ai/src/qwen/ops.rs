@@ -168,11 +168,11 @@ impl QwenOps for d3os_burn_native::backend::Native {
         input: FloatTensor<Self>, weights: DeltaWeightPrimitive<Self>, parameters: DeltaParameterPrimitive<Self>, cache: DeltaCachePrimitive<Self>,
         config: super::DeltaConfig,
     ) -> DeltaResult<Self> {
-        let formats = [
-            (weights.qkv.format, weights.qkv.layout),
-            (weights.gate.format, weights.gate.layout),
-            (weights.beta.format, weights.beta.layout),
-            (weights.alpha.format, weights.alpha.layout),
+        let storage = [
+            ((weights.qkv.format, weights.qkv.layout), weights.qkv.prefill_quantization.native()),
+            ((weights.gate.format, weights.gate.layout), weights.gate.prefill_quantization.native()),
+            ((weights.beta.format, weights.beta.layout), weights.beta.prefill_quantization.native()),
+            ((weights.alpha.format, weights.alpha.layout), weights.alpha.prefill_quantization.native()),
         ];
         let [output, convolution, recurrent] = Self::qwen_project_delta(
             input,
@@ -181,7 +181,7 @@ impl QwenOps for d3os_burn_native::backend::Native {
             [cache.convolution, cache.recurrent],
             config.geometry(),
             config.epsilon,
-            formats,
+            storage,
         );
         DeltaResult {
             output,

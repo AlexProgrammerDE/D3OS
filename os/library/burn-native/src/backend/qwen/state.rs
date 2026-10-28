@@ -265,8 +265,10 @@ impl Native {
     /// Scalar parameters: convolution weights, log decay, time bias, norm.
     pub fn qwen_project_delta(
         input: BackendTensor, packed: [BackendTensor; 4], parameters: [BackendTensor; 4], cache: [BackendTensor; 2], geometry: [usize; 5], epsilon: f32,
-        formats: [(MatrixFormat, MatrixLayout); 4],
+        storage: [((MatrixFormat, MatrixLayout), PrefillQuantization); 4],
     ) -> [BackendTensor; 3] {
+        let formats = storage.map(|(format, _)| format);
+        let modes = storage.map(|(_, mode)| mode);
         let rows = input.shape().first().copied().unwrap_or(0);
         let [key_heads, heads, key_dim, value_dim, kernel] = geometry;
         let values = heads.checked_mul(value_dim).unwrap_or(0);
@@ -284,6 +286,9 @@ impl Native {
                 let channels = element_count(&[2, key_heads, key_dim])?
                     .checked_add(element_count(&[heads, value_dim])?)
                     .ok_or(Error::SizeOverflow)?;
+                for (i, out) in [channels, values, heads, heads].into_iter().enumerate() {
+                    super::projection_components(rows, [out, width], formats[i], modes[i])?;
+                }
                 let group_bf16 = rows == 1
                     && key_heads == heads
                     && width.is_multiple_of(2)
@@ -340,7 +345,7 @@ impl Native {
                     [channels, values, heads, heads]
                         .iter()
                         .enumerate()
-                        .map(|(i, &out)| projection(v[0], v[i + 1], [out, width], formats[i], PrefillQuantization::Accurate))
+                        .map(|(i, &out)| projection(v[0], v[i + 1], [out, width], formats[i], modes[i]))
                         .collect::<Result<Vec<_>>>()?
                 };
                 delta(

@@ -32,11 +32,12 @@ pub enum PrefillQuantization {
     #[default]
     Accurate,
     Q8_1,
+    Q8_1WithAttention,
 }
 
 impl PrefillQuantization {
     fn check_device(self, device: &Device) -> Result<()> {
-        if self == Self::Q8_1 && !native_matrix_device(device) {
+        if self != Self::Accurate && !native_matrix_device(device) {
             return Err(Error::from("Q8_1 prefill requires the Native NVIDIA backend"));
         }
         Ok(())
@@ -49,6 +50,7 @@ impl PrefillQuantization {
         match self {
             Self::Accurate => d3os_burn_native::backend::PrefillQuantization::Accurate,
             Self::Q8_1 => d3os_burn_native::backend::PrefillQuantization::Q8_1,
+            Self::Q8_1WithAttention => d3os_burn_native::backend::PrefillQuantization::Q8_1WithAttention,
         }
     }
 }

@@ -2614,3 +2614,60 @@ The combined module contains 271 entries.
 All 269 prior inference machine-text sections and both smaller cubins remain byte-exact.
 Math certificate rules remain unchanged.
 This checkpoint grants no whole-Burn, DOOM, general quality, or cross-OS performance-parity claim.
+
+## Optional Q8_1 attention prefill
+
+`PrefillQuantization::Q8_1WithAttention` extends the experimental FFN mode to qualified 32-row attention projections.
+The row-major Q8_0 matrices have output widths 1024, 4096, or 8192 and an input width of 4096.
+Smaller attention batches and single-token decode retain their existing routes.
+The default remains `Accurate`, and `Q8_1` retains its FFN-only behavior.
+The [Qwen guide](qwen.howto.md#experimental-q8_1-prefill-for-9b) describes the mode selection.
+
+The new row-major consumer uses the existing D4 activation format and signed INT8 MMA.
+Independent sampled CPU results match its quantized outputs bit-for-bit.
+The standalone GPU experiment also verifies source buffers, guards, and packing bytes against the pinned CUDA packer.
+These checks do not establish an independent oracle for every output in the full model.
+
+On October 28, 2026, the full-model comparison used FFN-only, attention, attention, FFN-only capture order.
+Both modes used the same Native image and qualified 272-entry module on the RTX 4090 Laptop GPU.
+Each mode contributed four ordinary warm samples across two VMs.
+First passes and separately instrumented fourth passes are excluded.
+The workload retained 37 prompt tokens, 128 teacher-forced decode steps, a 2048-token context, and FP32 KV storage.
+
+| Mode | Warm prefill | Decode |
+| --- | ---: | ---: |
+| Native Q8_1 FFN only | 89.50 ms | 52.88 tokens/s |
+| Native Q8_1 with attention | 83.25 ms | 52.93 tokens/s |
+| Matched Linux llama.cpp b11827 | 43.06 ms | 58.32 tokens/s |
+
+Attention quantization reduced paired prefill time by 6.98%.
+Decode throughput changed by 0.08%, with its arithmetic and dispatch unchanged.
+The candidate still takes 1.93 times the Linux prefill time and reaches 90.75% of Linux decode throughput.
+The Linux model, executable, libraries, headers, prompt, decode inputs, and settings match the prior baseline.
+Its complete logit file remains byte-exact.
+
+Both Native modes retain 9,516,859,392 resident weight bytes and transfer no activation tensors between host and GPU.
+Cold model loading averaged 7025 ms for the control and 7242 ms for the candidate.
+Those imports use different storage paths from Linux, so these results establish no cross-OS cold-load parity.
+Automatic clocks and four warm samples provide a bounded measurement, not a statistical guarantee.
+
+### Precision and remaining cost
+
+All four captures retain the original FP32 reference failure and exit with `INFERENCE_FAIL`.
+Attention quantization increases failing comparisons from 16,776,142 to 21,264,386 of 32,033,280 values.
+RMSE rises from 0.00736 to 0.01027, while maximum absolute error falls from 0.295 to 0.205.
+The original absolute tolerance of 0.002 and relative tolerance of 0.0005 remain unchanged.
+The candidate does not pass that policy.
+
+Both modes produce the same 128 teacher-forced token decisions and retain the single row-102 difference from Linux.
+Their measured errors remain smaller than Linux's RMSE of 0.04668 and maximum absolute error of 0.518 against the CPU reference.
+That comparison does not qualify other prompts or autonomous generation.
+The mode remains an explicit experiment.
+
+In the instrumented candidate pass, five-row FFN projections consume 19.47 ms, or 23.25% of total device kernel time.
+Separate smaller-tile experiments identify a possible reduction in that cost.
+They do not establish a full-model gain and are not part of this change.
+
+All 271 prior inference machine-text sections and both smaller cubins remain byte-exact.
+The Math certificate changes only its source context, with unchanged verification rules and executable Math sections.
+No default bundle promotion, whole-Burn, DOOM, general quality, or performance-parity acceptance follows.

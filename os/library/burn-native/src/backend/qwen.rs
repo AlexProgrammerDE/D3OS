@@ -18,6 +18,7 @@ pub enum PrefillQuantization {
     #[default]
     Accurate,
     Q8_1,
+    Q8_1WithAttention,
 }
 
 fn dense(input: &NativeTensor, dtype: DType) -> Result<NativeTensor> {
@@ -58,7 +59,13 @@ fn use_components(batch: usize, shape: [usize; 2], format: MatrixFormat) -> bool
 
 fn projection_components(batch: usize, shape: [usize; 2], storage: (MatrixFormat, MatrixLayout), mode: PrefillQuantization) -> Result<Option<usize>> {
     let (format, layout) = storage;
-    if mode == PrefillQuantization::Q8_1 {
+    if mode == PrefillQuantization::Q8_1WithAttention && layout == MatrixLayout::RowMajor {
+        if format != MatrixFormat::Quantized(Quantization::Q8_0) || !matches!(shape, [1024 | 4096 | 8192, 4096]) {
+            return Err(Error::InvalidParameter);
+        }
+        return Ok((batch == 32).then_some(1));
+    }
+    if mode != PrefillQuantization::Accurate {
         if layout != MatrixLayout::Q8Columns32 || format != MatrixFormat::Quantized(Quantization::Q8_0) || !matches!(shape, [12288, 4096] | [4096, 12288]) {
             return Err(Error::InvalidParameter);
         }
@@ -230,7 +237,7 @@ impl Native {
                 }
                 let shared_components = if gate_format == up_format
                     && gate_components == up_components
-                    && (use_components(batch, shape, gate_format) || mode == PrefillQuantization::Q8_1)
+                    && (use_components(batch, shape, gate_format) || mode != PrefillQuantization::Accurate)
                 {
                     gate_components
                 } else {
@@ -275,7 +282,7 @@ impl Native {
             if width != shape[1] || v[2].shape().as_slice() != [batch, shape[0]] {
                 return Err(Error::ShapeMismatch);
             }
-            if mode == PrefillQuantization::Q8_1 {
+            if mode != PrefillQuantization::Accurate {
                 projection_components(batch, shape, storage, mode)?;
             }
             let (format, _) = storage;
@@ -372,6 +379,29 @@ impl Native {
 #[cfg(test)]
 mod projection_mode_tests {
     use super::*;
+
+    #[test]
+    fn attention_quantization_preserves_small_batches_and_decode() {
+        let storage = (MatrixFormat::Quantized(Quantization::Q8_0), MatrixLayout::RowMajor);
+        for outputs in [1024, 4096, 8192] {
+            for batch in [1, 2, 5, 17, 31, 32, 33] {
+                assert_eq!(
+                    projection_components(batch, [outputs, 4096], storage, PrefillQuantization::Q8_1WithAttention).unwrap(),
+                    (batch == 32).then_some(1)
+                );
+                assert_eq!(
+                    projection_components(batch, [outputs, 4096], storage, PrefillQuantization::Accurate).unwrap(),
+                    None
+                );
+            }
+        }
+        for shape in [[32, 4096], [4096, 1024], [12288, 4096]] {
+            assert_eq!(
+                projection_components(32, shape, storage, PrefillQuantization::Q8_1WithAttention),
+                Err(Error::InvalidParameter)
+            );
+        }
+    }
 
     #[test]
     fn quantized_prefill_keeps_single_token_and_accurate_routes() {

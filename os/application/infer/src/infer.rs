@@ -151,7 +151,14 @@ fn run() -> Result<(), String> {
                 match option.as_str() {
                     "device-timing" if !device_timing => device_timing = true,
                     "q8-prefill" if quantization == qwen::PrefillQuantization::Accurate => quantization = qwen::PrefillQuantization::Q8_1,
-                    _ => return Err(String::from("usage: infer gpu-qwen-gguf-bench [device-timing] [q8-prefill]")),
+                    "q8-attention-prefill" if quantization == qwen::PrefillQuantization::Accurate => {
+                        quantization = qwen::PrefillQuantization::Q8_1WithAttention;
+                    }
+                    _ => {
+                        return Err(String::from(
+                            "usage: infer gpu-qwen-gguf-bench [device-timing] [q8-prefill|q8-attention-prefill]",
+                        ));
+                    }
                 }
             }
             let backend = Nvidia::new().map_err(|e| format!("{e}"))?;
@@ -166,7 +173,7 @@ fn run() -> Result<(), String> {
         }
         _ => {
             return Err(String::from(
-                "usage: infer self-test | burn-self-test | gpu-mnist-train | gpu-mnist-infer | gpu-mnist-bench | gpu-mnist-profile | fwcfg-self-test | gpu-self-test | gpu-kernel-bench | alexnet [MODEL FIXTURE] | gpu-alexnet [MODEL FIXTURE] | gpu-alexnet-bench | qwen [MAX_TOKENS PROMPT...] | qwen-verify | gpu-qwen [MAX_TOKENS PROMPT...] | gpu-qwen-verify | gpu-qwen-bench [long] [device-timing] | gpu-qwen-gguf [MAX_TOKENS PROMPT...] | gpu-qwen-gguf-bench [device-timing] [q8-prefill] | gpu-qwen-gguf-verify",
+                "usage: infer self-test | burn-self-test | gpu-mnist-train | gpu-mnist-infer | gpu-mnist-bench | gpu-mnist-profile | fwcfg-self-test | gpu-self-test | gpu-kernel-bench | alexnet [MODEL FIXTURE] | gpu-alexnet [MODEL FIXTURE] | gpu-alexnet-bench | qwen [MAX_TOKENS PROMPT...] | qwen-verify | gpu-qwen [MAX_TOKENS PROMPT...] | gpu-qwen-verify | gpu-qwen-bench [long] [device-timing] | gpu-qwen-gguf [MAX_TOKENS PROMPT...] | gpu-qwen-gguf-bench [device-timing] [q8-prefill|q8-attention-prefill] | gpu-qwen-gguf-verify",
             ));
         }
     }

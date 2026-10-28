@@ -346,6 +346,10 @@ The optional `Q8_1` mode quantizes activations for the qualified 9B Q8_0 FFN mat
 Attention and single-token decode retain their accurate routes.
 Weights retain their packed bytes and one resident GPU copy.
 
+The separate `Q8_1WithAttention` mode also quantizes qualified 32-row attention projections.
+It supports row-major Q8_0 matrices with shapes `[1024,4096]`, `[4096,4096]`, and `[8192,4096]`.
+Smaller attention batches and single-token decode retain their accurate routes.
+
 For a loaded Native model, select the mode explicitly:
 
 ```rust
@@ -353,6 +357,8 @@ use d3os_ai::qwen::PrefillQuantization;
 
 let model = model.with_prefill_quantization(PrefillQuantization::Q8_1)?;
 ```
+
+Select `PrefillQuantization::Q8_1WithAttention` to include those attention projections.
 
 The method rejects unsupported devices and weight layouts.
 Mode metadata belongs to the destination model.
@@ -366,8 +372,12 @@ The corresponding guest command is:
 infer gpu-qwen-gguf-bench device-timing q8-prefill
 ```
 
+For attention quantization, use the host flag `--qwen-prefill-q8-attention` or the guest option `q8-attention-prefill` instead.
+The two quantized options are mutually exclusive.
+
 Timing records precede the full-logit reference check.
 The check keeps its original tolerances and reports `INFERENCE_FAIL` for the measured Q8_1 precision differences.
 That result does not indicate FP32 equivalence or whole-model qualification.
 The mode remains experimental.
 Read the [measured performance and accuracy comparison](nvidia-performance.md#experimental-q8_1-prefill-on-the-9b-model).
+The [attention comparison](nvidia-performance.md#optional-q8_1-attention-prefill) records the additional speed and precision changes.

@@ -139,7 +139,7 @@ fn component_projection_rejects_partial_invalid_and_overflowing_packets() {
         vec![32, 4096, 0, 8, 0, 3],
         vec![32, 4096, 12288, 9, 1, 3],
         vec![32, 4096, 12288, 8, 3, 3],
-        vec![32, 4096, 12288, 8, 1, 1],
+        vec![32, 4096, 12288, 8, 1, 2],
         vec![32, 4096, 12288, 8, 0, 4],
         vec![32, 4096, 12288, 8, 1],
         vec![32, 1 << 27, 1, 8, 0, 3],
@@ -324,6 +324,15 @@ fn d4_activations_use_transposed_blocks_and_disjoint_buffers() {
     for [rows, inner, columns] in [[1u32, 512, 32], [5, 4096, 12288], [32, 12288, 4096], [65, 512, 288]] {
         let pack = Kernel::ProjectQuantized.work(&[rows, inner, columns, 8, 0, 1]).unwrap();
         let project = Kernel::ProjectQuantized.work(&[rows, inner, columns, 8, 2, 1]).unwrap();
+        let row_major = Kernel::ProjectQuantized.work(&[rows, inner, columns, 8, 1, 1]).unwrap();
+        assert_eq!(
+            (row_major.blocks, row_major.extents, row_major.pointers, row_major.output),
+            (project.blocks, project.extents, project.pointers, project.output)
+        );
+        assert_ne!(
+            Kernel::ProjectQuantized.entry(&[rows, inner, columns, 8, 1, 1]),
+            Kernel::ProjectQuantized.entry(&[rows, inner, columns, 8, 2, 1])
+        );
         let blocks128 = u64::from(rows) * u64::from(inner / 128);
         assert_eq!(&pack.extents[..2], &[u64::from(rows) * u64::from(inner), blocks128 * 36]);
         assert_eq!(pack.blocks, rows.div_ceil(4) * (inner / 32));
@@ -356,7 +365,7 @@ fn d4_rejects_wrong_block_geometry_phase_and_address_overflow() {
         [5, 1056, 12288, 8, 0, 1],
         [5, 4096, 0, 8, 2, 1],
         [5, 4096, 12287, 8, 2, 1],
-        [5, 4096, 12288, 8, 1, 1],
+        [5, 4096, 12288, 8, 3, 1],
         [5, 4096, 12288, 8, 2, 2],
         [1 << 23, 512, 32, 8, 0, 1],
         [1, 1 << 29, 32, 8, 2, 1],
