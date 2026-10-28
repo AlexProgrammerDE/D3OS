@@ -243,7 +243,11 @@ fn product(values: &[u32]) -> Result<u32> {
 // Narrow Q8 decode uses all four warps for one output. This changes only the
 // selected auxiliary entry and grid, retaining the existing wire packet.
 fn q8_vector_columns(inner: u32, outputs: u32) -> u32 {
-    if inner >= 1024 && (1..=128).contains(&outputs) { 1 } else { 4 }
+    if inner >= 1024 && (1..=128).contains(&outputs) {
+        1
+    } else {
+        4
+    }
 }
 
 fn quantized_words(elements: u32, format: u32) -> Result<u64> {
@@ -530,6 +534,8 @@ impl Kernel {
             (Self::RmsNorm, [_, 4096, _, _]) => "rms_norm_4096",
             (Self::ResidualNorm, [_, 4096, _]) => "residual_norm_4096",
             (Self::ProjectQuantized, [_, _, _, _, 8]) => "group_project_q8_0",
+            (Self::ProjectQuantized, [_, _, _, 8, 0, 3]) => "q8_components_pack",
+            (Self::ProjectQuantized, [_, _, _, 8, 1, 3]) => "q8_components_project",
             (Self::IntegerReduction, p) => integer_reduction::symbol(p).unwrap_or(self.symbol()),
             (Self::FloatExtrema, p) => float_extrema::symbol(p).unwrap_or(self.symbol()),
             (Self::Interpolate, p) if p.len() == interpolate::PARAMETERS => {
@@ -833,6 +839,29 @@ impl Kernel {
             (Self::TensorElementwise, p) => {
                 extents[..3].copy_from_slice(&elementwise::validate(p)?);
                 (p[0], 3, 2, false)
+            }
+            // Pack three component planes and their scales, or consume them.
+            (Self::ProjectQuantized, &[m, k, n, 8, phase @ 0..=1, 3]) => {
+                if !(1..=32).contains(&m) || k == 0 || !k.is_multiple_of(32) || n == 0 {
+                    return Err(Error::InvalidField);
+                }
+                // The byte-plane address arithmetic and following scale offset
+                // both remain representable in the shader's u32 indices.
+                let input = product(&[m, k])?;
+                let bytes = product(&[m, k, 3])?;
+                let scratch = bytes / 4 + input / 32;
+                // Q8 block loads use byte indices, unlike the word extents in
+                // the dispatch API. Check that address space before rounding.
+                let weight_bytes = product(&[k / 32, n, 34])?;
+                let weights = u64::from(weight_bytes).div_ceil(4);
+                let values = product(&[m, n])?;
+                if phase == 0 {
+                    extents[..2].copy_from_slice(&[u64::from(input), u64::from(scratch)]);
+                    (product(&[m.div_ceil(4), k / 32, 128])?, 2, 1, false)
+                } else {
+                    extents[..3].copy_from_slice(&[u64::from(scratch), weights, u64::from(values)]);
+                    (product(&[m.div_ceil(32), n.div_ceil(32), 128])?, 3, 2, false)
+                }
             }
             // Group qkv/gate/beta/alpha Q8_0 vectors into one output allocation.
             (Self::ProjectQuantized, &[k, q, z, h, 8]) => {

@@ -6,7 +6,7 @@ use alloc::sync::Arc;
 use burn_backend::{DType, Shape, TensorMetadata};
 use d3os_compute::{Error, Result, nvidia::Nvidia};
 use d3os_nvidia::compute::{Kernel, elementwise::Elementwise};
-use d3os_tensor_file::matrix::MatrixFormat;
+use d3os_tensor_file::{matrix::MatrixFormat, quantized::Quantization};
 
 fn dense(input: &NativeTensor, dtype: DType) -> Result<NativeTensor> {
     if input.dtype() != dtype {
@@ -34,6 +34,30 @@ fn output(shape: [usize; 2], kernel: Kernel, inputs: &[(&NativeTensor, usize)], 
     })
 }
 
+fn use_components(batch: usize, shape: [usize; 2], format: MatrixFormat) -> bool {
+    // Only the measured full-batch 9B FFN geometries use this route. Tails,
+    // attention projections and single-token decode keep their existing path.
+    batch == 32 && matches!(shape, [12288, 4096] | [4096, 12288]) && format == MatrixFormat::Quantized(Quantization::Q8_0)
+}
+
+fn prepare_components(input: &NativeTensor, outputs: usize) -> Result<NativeTensor> {
+    let [batch, inner] = *input.shape().as_slice() else {
+        return Err(Error::ShapeMismatch);
+    };
+    let elements = batch.checked_mul(inner).ok_or(Error::SizeOverflow)?;
+    let words = elements.checked_mul(3).ok_or(Error::SizeOverflow)? / 4 + elements / 32;
+    output([1, words], Kernel::ProjectQuantized, &[(input, 0)], &[batch, inner, outputs, 8, 0, 3])
+}
+
+fn project_components(components: &NativeTensor, packed: &NativeTensor, batch: usize, shape: [usize; 2]) -> Result<NativeTensor> {
+    output(
+        [batch, shape[0]],
+        Kernel::ProjectQuantized,
+        &[(components, 0), (packed, 0)],
+        &[batch, shape[1], shape[0], 8, 1, 3],
+    )
+}
+
 fn projection(input: &NativeTensor, packed: &NativeTensor, shape: [usize; 2], format: MatrixFormat) -> Result<NativeTensor> {
     let [batch, width] = *input.shape().as_slice() else {
         return Err(Error::ShapeMismatch);
@@ -44,6 +68,10 @@ fn projection(input: &NativeTensor, packed: &NativeTensor, shape: [usize; 2], fo
     }
     let input = dense(input, DType::F32)?;
     let packed = weights(packed, shape, format)?;
+    if use_components(batch, shape, format) {
+        let components = prepare_components(&input, outputs)?;
+        return project_components(&components, &packed, batch, shape);
+    }
     if format == MatrixFormat::Bf16 && (2..=32).contains(&batch) && (256..=2048).contains(&outputs) && width >= 512 {
         let partials = output(
             [16 * batch, outputs],
@@ -139,8 +167,21 @@ impl Native {
                         &[shape[1], shape[0]],
                     );
                 }
-                let gate = projection(v[0], v[1], shape, gate_format)?;
-                let up = projection(v[0], v[2], shape, up_format)?;
+                let (gate, up) = if use_components(batch, shape, gate_format) && gate_format == up_format {
+                    if v[0].shape().as_slice() != [batch, shape[1]] {
+                        return Err(Error::ShapeMismatch);
+                    }
+                    let input = dense(v[0], DType::F32)?;
+                    let gate = weights(v[1], shape, gate_format)?;
+                    let up = weights(v[2], shape, up_format)?;
+                    let components = prepare_components(&input, shape[0])?;
+                    (
+                        project_components(&components, &gate, batch, shape)?,
+                        project_components(&components, &up, batch, shape)?,
+                    )
+                } else {
+                    (projection(v[0], v[1], shape, gate_format)?, projection(v[0], v[2], shape, up_format)?)
+                };
                 Nvidia.dispatch_words(Kernel::SiluMul, &[(&gate.buffer, 0), (&up.buffer, 0), (&gate.buffer, 0)], &[batch * shape[0]])?;
                 Ok(gate)
             },

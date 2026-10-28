@@ -21,6 +21,7 @@ fn main() {
         "burn-deform-common.rs",
         "quantized.rs",
         "quantized-vector.rs",
+        "quantized-prefill.rs",
         "quad.rs",
         "elementwise.rs",
         "rms-wide.rs",

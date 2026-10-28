@@ -120,6 +120,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "vector_project_q8_0_narrow",
             "vector_project_q8_0_signed",
             "group_project_q8_0",
+            "q8_components_pack",
+            "q8_components_project",
             "rms_norm_4096",
             "residual_norm_4096",
             "project_m32_q8_0",
