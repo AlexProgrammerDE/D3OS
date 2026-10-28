@@ -243,11 +243,11 @@ fn product(values: &[u32]) -> Result<u32> {
 // Narrow Q8 decode uses all four warps for one output. This changes only the
 // selected auxiliary entry and grid, retaining the existing wire packet.
 fn q8_vector_columns(inner: u32, outputs: u32) -> u32 {
-    if inner >= 1024 && (1..=128).contains(&outputs) {
-        1
-    } else {
-        4
-    }
+    if inner >= 1024 && (1..=128).contains(&outputs) { 1 } else { 4 }
+}
+
+fn q8_batched_narrow(rows: u32, inner: u32, outputs: u32) -> bool {
+    (2..=32).contains(&rows) && inner >= 1024 && (1..=128).contains(&outputs)
 }
 
 fn quantized_words(elements: u32, format: u32) -> Result<u64> {
@@ -558,6 +558,7 @@ impl Kernel {
             (Self::TensorElementwise, p) if p.len() == elementwise::PARAMETERS => {
                 elementwise::Elementwise::from_raw(p[2] & 0xff).map_or(self.symbol(), |op| op.symbol())
             }
+            (Self::ProjectQuantized, [m, k, n, 8]) if q8_batched_narrow(*m, *k, *n) => "q8_batched_narrow_signed",
             (Self::ProjectQuantized, [m, _, _, 8]) if *m > 16 => "project_m32_q8_0",
             (Self::ProjectQuantized, [m, _, _, 11]) if *m > 16 => "project_m32_q3k",
             (Self::ProjectQuantized, [m, _, _, 12]) if *m > 16 => "project_m32_q4k",
@@ -888,14 +889,21 @@ impl Kernel {
             (Self::ProjectQuantized, &[m, k, n, format]) => {
                 quantized_words(k, format)?;
                 extents[..3].copy_from_slice(&[product(&[m, k])? as u64, quantized_words(product(&[k, n])?, format)?, product(&[m, n])? as u64]);
-                let columns = if m != 1 {
-                    32
-                } else if format == 8 {
-                    q8_vector_columns(k, n)
+                if format == 8 && q8_batched_narrow(m, k, n) {
+                    // Packed scale loads use byte indices; row offsets and the
+                    // output grid retain the existing checked element extents.
+                    product(&[k / 32, n, 34])?;
+                    (product(&[m, n, 128])?, 3, 2, false)
                 } else {
-                    4
-                };
-                (product(&[m.div_ceil(32), n.div_ceil(columns), 128])?, 3, 2, false)
+                    let columns = if m != 1 {
+                        32
+                    } else if format == 8 {
+                        q8_vector_columns(k, n)
+                    } else {
+                        4
+                    };
+                    (product(&[m.div_ceil(32), n.div_ceil(columns), 128])?, 3, 2, false)
+                }
             }
             (Self::Dequantize, &[n, format]) => {
                 extents[..2].copy_from_slice(&[quantized_words(n, format)?, product(&[n])? as u64]);

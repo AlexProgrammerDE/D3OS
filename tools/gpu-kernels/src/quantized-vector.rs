@@ -11,8 +11,8 @@ fn vector_q8_byte<const SIGNED: bool>(value: Tile<u32, { [128] }>) -> Tile<f32, 
 }
 
 unsafe fn vector_q8_pairs<const GROUP: i32, const NARROW: bool, const SIGNED: bool>(
-    a: *const f32, b: *const f32, col: Tile<u32, { [128] }>, lane: Tile<u32, { [128] }>, block: u32, blocks: u32, cols: u32, even: Tile<f32, { [128] }>,
-    odd: Tile<f32, { [128] }>,
+    a: *const f32, b: *const f32, col: Tile<u32, { [128] }>, lane: Tile<u32, { [128] }>, block: u32, blocks: u32, cols: u32, input_offset: u32,
+    even: Tile<f32, { [128] }>, odd: Tile<f32, { [128] }>,
 ) -> (Tile<f32, { [128] }>, Tile<f32, { [128] }>) {
     let group_blocks = if NARROW { 8u32 } else { 2u32 };
     let qblock = lane / broadcast_scalar(16u32, shape![128]) + broadcast_scalar(block + unsigned(GROUP) * group_blocks, shape![128]);
@@ -26,7 +26,7 @@ unsafe fn vector_q8_pairs<const GROUP: i32, const NARROW: bool, const SIGNED: bo
     let high = packed >> broadcast_scalar(8u32, shape![128]);
     let low = scale * vector_q8_byte::<SIGNED>(low);
     let high = scale * vector_q8_byte::<SIGNED>(high);
-    let index = qblock * broadcast_scalar(32u32, shape![128]) + pair * broadcast_scalar(2u32, shape![128]);
+    let index = broadcast_scalar(input_offset, shape![128]) + qblock * broadcast_scalar(32u32, shape![128]) + pair * broadcast_scalar(2u32, shape![128]);
     let x0 = unsafe { read_tile(a, index, mask, 0f32) };
     let x1 = unsafe { read_tile(a, index + broadcast_scalar(1u32, shape![128]), mask, 0f32) };
     (
@@ -37,11 +37,11 @@ unsafe fn vector_q8_pairs<const GROUP: i32, const NARROW: bool, const SIGNED: bo
 
 unsafe fn vector_project_q8<const NARROW: bool, const SIGNED: bool>(a: *const f32, b: *const f32, output: *mut f32, inner: u32, cols: u32) {
     let first = block_id() * if NARROW { 1u32 } else { 4u32 };
-    unsafe { vector_project_q8_at::<NARROW, SIGNED>(a, b, output, inner, cols, first, 0u32) }
+    unsafe { vector_project_q8_at::<NARROW, SIGNED>(a, b, output, inner, cols, first, 0u32, 0u32) }
 }
 
 unsafe fn vector_project_q8_at<const NARROW: bool, const SIGNED: bool>(
-    a: *const f32, b: *const f32, output: *mut f32, inner: u32, cols: u32, first: u32, output_offset: u32,
+    a: *const f32, b: *const f32, output: *mut f32, inner: u32, cols: u32, first: u32, output_offset: u32, input_offset: u32,
 ) {
     let lane = if NARROW {
         lanes::<128>()
@@ -64,16 +64,16 @@ unsafe fn vector_project_q8_at<const NARROW: bool, const SIGNED: bool>(
     let mut o3 = e0;
     let mut block = 0u32;
     while block < blocks {
-        let (even, odd) = unsafe { vector_q8_pairs::<0, NARROW, SIGNED>(a, b, col, lane, block, blocks, cols, e0, o0) };
+        let (even, odd) = unsafe { vector_q8_pairs::<0, NARROW, SIGNED>(a, b, col, lane, block, blocks, cols, input_offset, e0, o0) };
         e0 = even;
         o0 = odd;
-        let (even, odd) = unsafe { vector_q8_pairs::<1, NARROW, SIGNED>(a, b, col, lane, block, blocks, cols, e1, o1) };
+        let (even, odd) = unsafe { vector_q8_pairs::<1, NARROW, SIGNED>(a, b, col, lane, block, blocks, cols, input_offset, e1, o1) };
         e1 = even;
         o1 = odd;
-        let (even, odd) = unsafe { vector_q8_pairs::<2, NARROW, SIGNED>(a, b, col, lane, block, blocks, cols, e2, o2) };
+        let (even, odd) = unsafe { vector_q8_pairs::<2, NARROW, SIGNED>(a, b, col, lane, block, blocks, cols, input_offset, e2, o2) };
         e2 = even;
         o2 = odd;
-        let (even, odd) = unsafe { vector_q8_pairs::<3, NARROW, SIGNED>(a, b, col, lane, block, blocks, cols, e3, o3) };
+        let (even, odd) = unsafe { vector_q8_pairs::<3, NARROW, SIGNED>(a, b, col, lane, block, blocks, cols, input_offset, e3, o3) };
         e3 = even;
         o3 = odd;
         block = block + if NARROW { 32u32 } else { 8u32 };
@@ -105,6 +105,14 @@ unsafe fn vector_project_q8_at<const NARROW: bool, const SIGNED: bool>(
             )
         };
     }
+}
+
+// Parallelize narrow batched projections across rows and output columns.
+#[cutile::entry()]
+unsafe fn q8_batched_narrow_signed(input: *const f32, weights: *const f32, output: *mut f32, _rows: u32, inner: u32, cols: u32, _format: u32) {
+    let row = block_id() / cols;
+    let column = block_id() % cols;
+    unsafe { vector_project_q8_at::<true, true>(input, weights, output, inner, cols, column, row * cols, row * inner) };
 }
 
 // Group wide qkv/gate and narrow beta/alpha vectors without repacking weights.
@@ -152,9 +160,9 @@ unsafe fn group_project_q8_0(
         heads
     };
     if block < gate_end {
-        unsafe { vector_project_q8_at::<false, true>(input, weights, output, inner, cols, (block - first_block) * 4u32, output_offset) };
+        unsafe { vector_project_q8_at::<false, true>(input, weights, output, inner, cols, (block - first_block) * 4u32, output_offset, 0u32) };
     } else {
-        unsafe { vector_project_q8_at::<true, false>(input, weights, output, inner, cols, block - first_block, output_offset) };
+        unsafe { vector_project_q8_at::<true, false>(input, weights, output, inner, cols, block - first_block, output_offset, 0u32) };
     }
 }
 
