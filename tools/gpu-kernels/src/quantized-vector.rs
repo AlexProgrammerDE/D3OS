@@ -115,6 +115,14 @@ unsafe fn q8_batched_narrow_signed(input: *const f32, weights: *const f32, outpu
     unsafe { vector_project_q8_at::<true, true>(input, weights, output, inner, cols, column, row * cols, row * inner) };
 }
 
+// Schedule adjacent rows together to reuse each packed weight column.
+#[cutile::entry()]
+unsafe fn q8_batched_wide_column(input: *const f32, weights: *const f32, output: *mut f32, rows: u32, inner: u32, cols: u32, _format: u32) {
+    let row = block_id() % rows;
+    let column = (block_id() / rows) * 4u32;
+    unsafe { vector_project_q8_at::<false, true>(input, weights, output, inner, cols, column, row * cols, row * inner) };
+}
+
 // Group wide qkv/gate and narrow beta/alpha vectors without repacking weights.
 #[cutile::entry()]
 unsafe fn group_project_q8_0(

@@ -250,6 +250,10 @@ fn q8_batched_narrow(rows: u32, inner: u32, outputs: u32) -> bool {
     (2..=32).contains(&rows) && inner >= 1024 && (1..=128).contains(&outputs)
 }
 
+fn q8_batched_wide(rows: u32, inner: u32, outputs: u32) -> bool {
+    (2..=8).contains(&rows) && inner >= 1024 && outputs > 128
+}
+
 fn quantized_words(elements: u32, format: u32) -> Result<u64> {
     let (block, bytes) = match format {
         8 => (32, 34),
@@ -559,6 +563,7 @@ impl Kernel {
                 elementwise::Elementwise::from_raw(p[2] & 0xff).map_or(self.symbol(), |op| op.symbol())
             }
             (Self::ProjectQuantized, [m, k, n, 8]) if q8_batched_narrow(*m, *k, *n) => "q8_batched_narrow_signed",
+            (Self::ProjectQuantized, [m, k, n, 8]) if q8_batched_wide(*m, *k, *n) => "q8_batched_wide_column",
             (Self::ProjectQuantized, [m, _, _, 8]) if *m > 16 => "project_m32_q8_0",
             (Self::ProjectQuantized, [m, _, _, 11]) if *m > 16 => "project_m32_q3k",
             (Self::ProjectQuantized, [m, _, _, 12]) if *m > 16 => "project_m32_q4k",
@@ -894,6 +899,9 @@ impl Kernel {
                     // output grid retain the existing checked element extents.
                     product(&[k / 32, n, 34])?;
                     (product(&[m, n, 128])?, 3, 2, false)
+                } else if format == 8 && q8_batched_wide(m, k, n) {
+                    product(&[k / 32, n, 34])?;
+                    (product(&[m, n.div_ceil(4), 128])?, 3, 2, false)
                 } else {
                     let columns = if m != 1 {
                         32

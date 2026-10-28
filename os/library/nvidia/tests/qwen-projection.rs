@@ -213,3 +213,63 @@ fn batched_narrow_rejects_incomplete_blocks_and_packed_byte_address_overflow() {
         assert!(Kernel::ProjectQuantized.work(&parameters).is_err());
     }
 }
+
+#[test]
+fn batched_wide_projections_cover_column_tails_and_independent_rows() {
+    let selected = Kernel::ProjectQuantized.entry(&[5, 4096, 12288, 8]);
+    for [rows, inner, columns] in [[2, 1024, 129], [5, 4096, 12288], [5, 12288, 4096], [8, 1056, 259]] {
+        let parameters = [rows, inner, columns, 8];
+        let work = Kernel::ProjectQuantized.work(&parameters).unwrap();
+        assert_eq!(Kernel::ProjectQuantized.entry(&parameters), selected);
+        assert_eq!((work.blocks, work.threads, work.pointers, work.output), (rows * columns.div_ceil(4), 128, 3, 2));
+        assert_eq!(
+            &work.extents[..3],
+            &[
+                u64::from(rows * inner),
+                (u64::from(inner / 32) * u64::from(columns) * 34).div_ceil(4),
+                u64::from(rows * columns)
+            ]
+        );
+        let mut seen = vec![false; (rows * columns) as usize];
+        for block in 0..work.blocks {
+            let row = block % rows;
+            let first = (block / rows) * 4;
+            assert!(row * inner + inner - 1 < rows * inner);
+            for column in first..(first + 4).min(columns) {
+                let output = (row * columns + column) as usize;
+                assert!(!seen[output]);
+                seen[output] = true;
+            }
+        }
+        assert!(seen.into_iter().all(|value| value));
+        let pointers = [0x100000, 0x10000000, 0x40000000];
+        work.validate_aliases(&pointers).unwrap();
+        for source in 0..2 {
+            let mut overlap = pointers;
+            overlap[2] = overlap[source] + (work.extents[source] - 1) * 4;
+            assert!(work.validate_aliases(&overlap).is_err());
+        }
+    }
+    for parameters in [
+        [1, 4096, 4096, 8],
+        [9, 4096, 4096, 8],
+        [32, 4096, 4096, 8],
+        [5, 992, 4096, 8],
+        [5, 4096, 128, 8],
+        [5, 4096, 4096, 12],
+    ] {
+        assert_ne!(Kernel::ProjectQuantized.entry(&parameters), selected);
+        assert!(Kernel::ProjectQuantized.work(&parameters).is_ok());
+    }
+}
+
+#[test]
+fn batched_wide_checks_packed_byte_indices_before_word_extents() {
+    let columns = 129;
+    let largest_inner = (u32::MAX / (columns * 34)) * 32;
+    assert!(Kernel::ProjectQuantized.work(&[2, largest_inner, columns, 8]).is_ok());
+    assert!(Kernel::ProjectQuantized.work(&[2, largest_inner + 32, columns, 8]).is_err());
+    for parameters in [[0, 4096, 129, 8], [5, 4095, 129, 8], [5, 4096, 0, 8], [5, 4096, u32::MAX, 8]] {
+        assert!(Kernel::ProjectQuantized.work(&parameters).is_err());
+    }
+}
