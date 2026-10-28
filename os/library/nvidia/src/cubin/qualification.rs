@@ -178,9 +178,10 @@ fn validate_path(path: &str) -> Result<()> {
         || path.starts_with("lib64/")
         || path.strip_prefix("usr/share/nvidia/").is_some_and(|name| {
             !name.contains('/')
-                && [".tilebc", ".ptx"]
+                && ([".tilebc", ".ptx"]
                     .iter()
                     .any(|suffix| name.strip_suffix(suffix).is_some_and(|family| !family.is_empty()))
+                    || matches!(name, "vector-add.cubin" | "tensor-matmul.cubin" | "inference.cubin"))
         });
     if !allowed {
         return Err(Error::InvalidField);

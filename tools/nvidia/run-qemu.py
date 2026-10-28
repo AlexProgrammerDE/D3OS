@@ -54,12 +54,81 @@ def vfio_devices(gpu):
     return functions
 
 
+def validate_module_admission(text, manifest, families, *, precompiled):
+    """Bind each module record to its staged input, output, and loading mode."""
+    expected_mode = "qualified_cache" if precompiled else "native_compile"
+    if manifest.get("module_mode", "native_compile") != expected_mode:
+        raise RuntimeError("staged module mode differs from the requested mode")
+    marker = re.compile(r"(?<![A-Za-z0-9_])NVIDIA_COMPILE_MODULE ")
+    pattern = re.compile(
+        r"NVIDIA_COMPILE_MODULE os=d3os family=(?P<family>[a-z-]+) "
+        r"input=(?P<format>tile_ir|ptx) "
+        r"input_sha256=(?P<input_hash>[0-9a-f]{64}) "
+        r"target=sm_89 compile_ms=(?P<total>[0-9]+) "
+        r"image_load_ms=(?P<load>[0-9]+) execute_ms=(?P<execute>[0-9]+) "
+        r"output_ms=(?P<output>[0-9]+) bytes=(?P<bytes>[0-9]+) "
+        r"sha256=(?P<cubin_hash>[0-9a-f]{64}) exit=0"
+        r"(?: mode=(?P<mode>native_compile|qualified_cache) "
+        r"compiler_executed=(?P<executed>true|false))?\s*$"
+    )
+    clean = re.sub(r"\x1b\[[0-9;]*m", "", text)
+    lines = [line for line in clean.splitlines() if marker.search(line)]
+    if len(lines) != len(families):
+        raise RuntimeError("expected one admission record per kernel family")
+    records = {}
+    for line in lines:
+        match = marker.search(line)
+        record = pattern.fullmatch(line[match.start() :])
+        if record is None:
+            raise RuntimeError("malformed module admission record")
+        record = record.groupdict()
+        family = record["family"]
+        if family not in families or family in records:
+            raise RuntimeError("unknown or duplicate module family")
+        suffix = "tilebc" if record["format"] == "tile_ir" else "ptx"
+        asset = f"usr/share/nvidia/{family}.{suffix}"
+        qualification = manifest["legacy_qualifications"][family]
+        if (
+            asset not in manifest["assets"]
+            or record["input_hash"] != manifest["assets"][asset]["sha256"]
+            or record["input_hash"] != qualification["source_sha256"]
+            or record["cubin_hash"] != qualification["cubin_sha256"]
+            or int(record["bytes"]) != qualification["cubin_bytes"]
+        ):
+            raise RuntimeError(f"module does not match staged qualification: {family}")
+        if int(record["total"]) != sum(
+            int(record[phase]) for phase in ("load", "execute", "output")
+        ):
+            raise RuntimeError(f"module phase times disagree: {family}")
+        if precompiled:
+            cached = manifest["assets"].get(f"usr/share/nvidia/{family}.cubin")
+            if (
+                record["mode"] != expected_mode
+                or record["executed"] != "false"
+                or int(record["load"]) != 0
+                or int(record["execute"]) != 0
+                or cached is None
+                or cached["sha256"] != record["cubin_hash"]
+                or cached["bytes"] != int(record["bytes"])
+            ):
+                raise RuntimeError(f"qualified cache was not used: {family}")
+        elif record["mode"] not in (None, expected_mode) or record["executed"] not in (
+            None,
+            "true",
+        ):
+            raise RuntimeError(f"unexpected cache use in native compilation: {family}")
+        records[family] = record
+    return records
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gpu", default="0000:01:00.0")
     parser.add_argument("--image", type=Path, default=None)
     parser.add_argument(
-        "--directory", type=Path, default=ROOT / "target/nvidia/vm",
+        "--directory",
+        type=Path,
+        default=ROOT / "target/nvidia/vm",
         help="keep the staged image, compiler receipts, and capture in this directory",
     )
     parser.add_argument(
@@ -69,6 +138,11 @@ def main():
         "--kernels",
         type=Path,
         help="stage portable Tile IR or PTX kernels for compilation inside D3OS",
+    )
+    parser.add_argument(
+        "--precompiled-kernels",
+        action="store_true",
+        help="stage audited native modules with the same source and compiler bindings",
     )
     parser.add_argument(
         "--compiler-toolkit",
@@ -160,6 +234,8 @@ def main():
         help="pin guest CPUs individually to the caller's four host CPUs before boot",
     )
     args = parser.parse_args()
+    if args.precompiled_kernels and not (args.firmware and args.kernels):
+        parser.error("--precompiled-kernels requires --firmware and --kernels")
     if args.pin_vcpus and len(os.sched_getaffinity(0)) != 4:
         parser.error("--pin-vcpus requires an inherited affinity of four host CPUs")
     if args.kernel_image is not None and (
@@ -301,7 +377,10 @@ def main():
             spec.loader.exec_module(compiler)
             assets.extend(
                 compiler.prepare(
-                    args.kernels.resolve(), args.compiler_toolkit.resolve(), directory
+                    args.kernels.resolve(),
+                    args.compiler_toolkit.resolve(),
+                    directory,
+                    precompiled=args.precompiled_kernels,
                 )
             )
         if args.inference.startswith("gpu-doom"):
@@ -692,39 +771,12 @@ def main():
                         manifest = json.loads(
                             (directory / "guest-compiler-manifest.json").read_text()
                         )
-                        for family in compiler.FAMILIES:
-                            record = re.search(
-                                rf"NVIDIA_COMPILE_MODULE os=d3os family={re.escape(family)} "
-                                r"input=(?P<format>tile_ir|ptx) "
-                                r"input_sha256=(?P<input_hash>[0-9a-f]{64}) "
-                                r"target=sm_[0-9]+ compile_ms=(?P<total>[0-9]+) "
-                                r"image_load_ms=(?P<load>[0-9]+) "
-                                r"execute_ms=(?P<execute>[0-9]+) "
-                                r"output_ms=(?P<output>[0-9]+) "
-                                r"bytes=[0-9]+ sha256=[0-9a-f]{64} exit=0",
-                                text,
-                            )
-                            suffix = (
-                                "tilebc"
-                                if record and record["format"] == "tile_ir"
-                                else "ptx"
-                            )
-                            asset = f"usr/share/nvidia/{family}.{suffix}"
-                            if (
-                                not record
-                                or record["input_hash"]
-                                != manifest["assets"][asset]["sha256"]
-                            ):
-                                raise RuntimeError(
-                                    f"guest did not compile the staged input: {family}"
-                                )
-                            if int(record["total"]) != sum(
-                                int(record[phase])
-                                for phase in ("load", "execute", "output")
-                            ):
-                                raise RuntimeError(
-                                    f"guest compiler phase times disagree: {family}"
-                                )
+                        validate_module_admission(
+                            text,
+                            manifest,
+                            compiler.FAMILIES,
+                            precompiled=args.precompiled_kernels,
+                        )
                     if args.kernels and "NVIDIA_KERNEL_OK" not in text:
                         raise RuntimeError(
                             "native GPU kernel verification did not succeed"
@@ -732,9 +784,12 @@ def main():
                     if args.kernels and not re.search(
                         r"NVIDIA_RELOCATION_OK inputs=12 cases=4 comparisons=48 max_ulp=[01] "
                         r"table_addresses=gpu_virtual guards=ok tails=preserved source=preserved "
-                        r"image_cache=reused backend=nvidia", text
+                        r"image_cache=reused backend=nvidia",
+                        text,
                     ):
-                        raise RuntimeError("native CUDA table relocation verification did not succeed")
+                        raise RuntimeError(
+                            "native CUDA table relocation verification did not succeed"
+                        )
                     if args.kernels:
                         for symbol in ("tensor_matmul_f16", "tensor_matmul_bf16"):
                             if f"NVIDIA_TENSOR_OK kernel={symbol} cases=5" not in text:

@@ -101,6 +101,26 @@ fn inventory_decodes_sorted_assets_and_preserves_canonical_bytes() {
 }
 
 #[test]
+fn inventory_admits_only_the_three_registered_cached_module_paths() {
+    for family in ["vector-add", "tensor-matmul", "inference"] {
+        let path = format!("usr/share/nvidia/{family}.cubin");
+        let bytes = inventory(&[(&path, 4096, [7; 32])]);
+        let parsed = RuntimeInventory::parse(&bytes).unwrap();
+        assert_eq!(parsed.records()[0].path(), path);
+        assert_eq!(parsed.records()[0].bytes(), 4096);
+        assert_eq!(parsed.records()[0].sha256(), &[7; 32]);
+    }
+    for path in [
+        "usr/share/nvidia/other.cubin",
+        "usr/share/nvidia/.cubin",
+        "usr/share/nvidia/inference.cubin.extra",
+        "usr/share/nvidia/sub/inference.cubin",
+    ] {
+        assert!(RuntimeInventory::parse(&inventory(&[(path, 4096, [7; 32])])).is_err());
+    }
+}
+
+#[test]
 fn inventory_rejects_every_truncation_trailing_data_and_count_mismatch() {
     let valid = inventory(&[("usr/cuda/bin/tileiras", 123, [7; 32])]);
     for end in 0..valid.len() {

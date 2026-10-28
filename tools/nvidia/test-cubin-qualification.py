@@ -22,6 +22,7 @@ def load_module(name, filename):
 
 qualification = load_module("cubin_qualification", "cubin-qualification.py")
 guest = load_module("guest_compiler", "guest-compiler.py")
+native = load_module("native_qemu", "run-qemu.py")
 PRODUCER = b"Cuda compilation tools, release 13.4, V13.4.92\0-O 3 -arch sm_89 \0"
 
 
@@ -606,8 +607,50 @@ class StagingTests(unittest.TestCase):
     def write_manifest(self):
         (self.kernels / "manifest.json").write_text(json.dumps(self.manifest))
 
-    def prepare(self):
-        return guest.prepare(self.kernels, self.toolkit, self.directory)
+    def prepare(self, **options):
+        return guest.prepare(self.kernels, self.toolkit, self.directory, **options)
+
+    def test_precompiled_modules_are_covered_by_the_same_runtime_inventory(self):
+        assets = {
+            str(destination): source
+            for source, destination in self.prepare(precompiled=True)
+        }
+        manifest = json.loads(
+            (self.directory / "guest-compiler-manifest.json").read_text()
+        )
+        self.assertEqual(manifest["module_mode"], "qualified_cache")
+        self.assertEqual(len(manifest["assets"]), 11)
+        for family in guest.FAMILIES:
+            cached = f"usr/share/nvidia/{family}.cubin"
+            identity = manifest["assets"][cached]
+            self.assertEqual(identity["bytes"], len(self.cubin))
+            self.assertEqual(
+                identity["sha256"],
+                hashlib.sha256(assets[cached].read_bytes()).hexdigest(),
+            )
+            self.assertEqual(
+                identity["sha256"],
+                manifest["legacy_qualifications"][family]["cubin_sha256"],
+            )
+        runtime = assets["usr/share/nvidia/runtime.qualification"].read_bytes()
+        self.assertEqual(struct.unpack_from("<I", runtime, 8)[0], 11)
+        self.assertEqual(runtime[12:], guest.runtime_inventory(manifest["assets"]))
+        for family in guest.FAMILIES:
+            receipt = assets[f"usr/share/nvidia/{family}.qualification"].read_bytes()
+            self.assertEqual(receipt[-32:], hashlib.sha256(runtime[12:]).digest())
+
+    def test_precompiled_staging_rejects_changed_audited_code(self):
+        cubin = self.kernels / "host-audit/inference.cubin"
+        changed = bytearray(cubin.read_bytes())
+        changed[-1] ^= 1
+        cubin.write_bytes(changed)
+        with self.assertRaises(RuntimeError):
+            self.prepare(precompiled=True)
+        self.assertFalse(self.directory.exists())
+
+    def test_precompiled_mode_cannot_be_misattributed_to_linux(self):
+        with self.assertRaises(ValueError):
+            self.prepare(precompiled=True, execution_os="linux")
 
     def test_receipts_bind_actual_assets_and_exact_host_output(self):
         assets = self.prepare()
@@ -778,6 +821,138 @@ class StagingTests(unittest.TestCase):
                 self.assertRaises(ValueError),
             ):
                 guest.module_receipt(record, 1, compiler, runtime)
+
+
+class ModuleAdmissionTests(unittest.TestCase):
+    def fixture(self, cached, *, legacy=False):
+        manifest = {
+            "module_mode": "qualified_cache" if cached else "native_compile",
+            "assets": {},
+            "legacy_qualifications": {},
+        }
+        lines = []
+        for family in guest.FAMILIES:
+            source = hashlib.sha256(("source:" + family).encode()).hexdigest()
+            cubin = hashlib.sha256(("cubin:" + family).encode()).hexdigest()
+            manifest["assets"][f"usr/share/nvidia/{family}.tilebc"] = {
+                "bytes": 96,
+                "sha256": source,
+            }
+            manifest["legacy_qualifications"][family] = {
+                "source_sha256": source,
+                "cubin_sha256": cubin,
+                "cubin_bytes": 128,
+            }
+            if cached:
+                manifest["assets"][f"usr/share/nvidia/{family}.cubin"] = {
+                    "bytes": 128,
+                    "sha256": cubin,
+                }
+            phases = (
+                "compile_ms=12 image_load_ms=0 execute_ms=0 output_ms=12"
+                if cached
+                else "compile_ms=12 image_load_ms=2 execute_ms=8 output_ms=2"
+            )
+            mode = (
+                "qualified_cache compiler_executed=false"
+                if cached
+                else "native_compile compiler_executed=true"
+            )
+            suffix = "" if legacy else " mode=" + mode
+            lines.append(
+                f"[1.000] NVIDIA_COMPILE_MODULE os=d3os family={family} input=tile_ir input_sha256={source} target=sm_89 {phases} bytes=128 sha256={cubin} exit=0{suffix}"
+            )
+        return manifest, lines
+
+    def check(self, manifest, lines, cached):
+        return native.validate_module_admission(
+            "\n".join(lines), manifest, guest.FAMILIES, precompiled=cached
+        )
+
+    def test_native_legacy_and_explicit_cache_modes_bind_all_three_families(self):
+        for cached, legacy in [(False, False), (False, True), (True, False)]:
+            with self.subTest(cached=cached, legacy=legacy):
+                manifest, lines = self.fixture(cached, legacy=legacy)
+                lines = ["\x1b[36m" + line + "\x1b[39m" for line in lines]
+                self.assertEqual(
+                    set(self.check(manifest, lines, cached)), set(guest.FAMILIES)
+                )
+
+    def test_missing_duplicate_unknown_and_prefixed_records_reject(self):
+        manifest, lines = self.fixture(True)
+        mutations = [
+            lines[:-1],
+            lines + [lines[0]],
+            [lines[0], lines[0], lines[2]],
+            [lines[0].replace("vector-add", "unknown"), *lines[1:]],
+            [
+                line.replace("NVIDIA_COMPILE_MODULE", "NOT_NVIDIA_COMPILE_MODULE")
+                for line in lines
+            ],
+        ]
+        for mutated in mutations:
+            with self.subTest(lines=mutated), self.assertRaises(RuntimeError):
+                self.check(manifest, mutated, True)
+
+    def test_output_source_timing_mode_and_contradictory_status_mutations_reject(self):
+        for cached in [False, True]:
+            manifest, lines = self.fixture(cached)
+            source = manifest["legacy_qualifications"]["vector-add"]["source_sha256"]
+            cubin = manifest["legacy_qualifications"]["vector-add"]["cubin_sha256"]
+            replacements = [
+                (source, "00" * 32),
+                (cubin, "00" * 32),
+                ("bytes=128", "bytes=127"),
+                ("target=sm_89", "target=sm_90"),
+                ("compile_ms=12", "compile_ms=13"),
+                ("exit=0", "exit=1"),
+            ]
+            replacements += (
+                [
+                    ("compiler_executed=false", "compiler_executed=true"),
+                    (
+                        "image_load_ms=0 execute_ms=0 output_ms=12",
+                        "image_load_ms=0 execute_ms=1 output_ms=11",
+                    ),
+                ]
+                if cached
+                else [
+                    (
+                        "mode=native_compile compiler_executed=true",
+                        "mode=qualified_cache compiler_executed=false",
+                    )
+                ]
+            )
+            for old, new in replacements:
+                with (
+                    self.subTest(cached=cached, replacement=(old, new)),
+                    self.assertRaises(RuntimeError),
+                ):
+                    self.check(
+                        manifest, [lines[0].replace(old, new), *lines[1:]], cached
+                    )
+            for suffix in [" status=error", " exit=1", " mode=native_compile"]:
+                with (
+                    self.subTest(cached=cached, suffix=suffix),
+                    self.assertRaises(RuntimeError),
+                ):
+                    self.check(manifest, [lines[0] + suffix, *lines[1:]], cached)
+
+    def test_cache_requires_bound_cubin_and_explicit_zero_execution(self):
+        manifest, lines = self.fixture(True)
+        for field, value in [("sha256", "00" * 32), ("bytes", 127)]:
+            changed = copy.deepcopy(manifest)
+            changed["assets"]["usr/share/nvidia/vector-add.cubin"][field] = value
+            with self.subTest(field=field), self.assertRaises(RuntimeError):
+                self.check(changed, lines, True)
+        changed = copy.deepcopy(manifest)
+        del changed["assets"]["usr/share/nvidia/vector-add.cubin"]
+        with self.assertRaises(RuntimeError):
+            self.check(changed, lines, True)
+        with self.assertRaises(RuntimeError):
+            self.check(manifest, [line.split(" mode=", 1)[0] for line in lines], True)
+        with self.assertRaises(RuntimeError):
+            self.check(manifest, lines, False)
 
 
 if __name__ == "__main__":

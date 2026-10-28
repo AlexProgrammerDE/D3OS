@@ -199,7 +199,9 @@ def runtime_assets(sources):
     return [(source, destination) for destination, source in sorted(libraries.items())]
 
 
-def prepare(kernels, toolkit, directory, *, execution_os="d3os"):
+def prepare(kernels, toolkit, directory, *, execution_os="d3os", precompiled=False):
+    if precompiled and execution_os != "d3os":
+        raise ValueError("precompiled module staging requires execution_os=d3os")
     try:
         bundle = json.loads(
             (kernels / "manifest.json").read_text(), object_pairs_hook=unique_object
@@ -231,6 +233,11 @@ def prepare(kernels, toolkit, directory, *, execution_os="d3os"):
                 f"{family}: invalid host qualification: {error}"
             ) from error
         assets.append((present[0], Path("usr/share/nvidia") / present[0].name))
+        if precompiled:
+            cached = bundle_file(
+                kernels, bundle["kernels"][family]["host_audit"]["cubin"]
+            )
+            assets.append((cached, Path("usr/share/nvidia") / f"{family}.cubin"))
 
     elf_sources = []
     for relative in (
@@ -257,6 +264,7 @@ def prepare(kernels, toolkit, directory, *, execution_os="d3os"):
     manifest = {
         "compiler_version": VERSION,
         "execution_os": execution_os,
+        "module_mode": "qualified_cache" if precompiled else "native_compile",
         "assets": {
             str(destination): {
                 "bytes": source.stat().st_size,

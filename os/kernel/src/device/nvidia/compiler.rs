@@ -1,4 +1,4 @@
-//! Compile portable kernels in userspace before publishing executable modules.
+//! Admit qualified cached modules or compile portable kernels in userspace.
 use super::{
     DEVICE, Error, Result,
     cubin::{LegacyPolicy, LegacyQualification},
@@ -167,11 +167,6 @@ fn compile(family: &str, target: &str, sm: u32, assets: &CompilerAssets) -> Resu
     let receipt_bytes = immutable_file(&receipt_path)?;
     let qualification = ModuleQualification::parse(receipt_bytes)?;
     let input_hash = sha256(&source);
-    let output = format!("/tmp/{family}-{target}.cubin");
-    match api::unlink(&output) {
-        Ok(()) | Err(Errno::ENOENT) => (),
-        Err(_) => return Err(Error::Firmware),
-    }
     let compiler = if tile { "/usr/cuda/bin/tileiras" } else { "/usr/cuda/bin/ptxas" };
     let input_kind = if tile { InputKind::TileIr } else { InputKind::Ptx };
     if qualification.input_kind() != input_kind
@@ -184,26 +179,44 @@ fn compile(family: &str, target: &str, sm: u32, assets: &CompilerAssets) -> Resu
         return Err(d3os_nvidia::Error::Unsupported.into());
     }
     assets.verify_bindings()?;
-    let target_option = format!("--gpu-name={target}");
-    let options = vec![target_option.as_str(), "--opt-level=3", input.as_str(), "-o", output.as_str()];
     let start = crate::timer().systime_ms();
-    let thread = Thread::load_application(compiler, compiler, &options).map_err(|_| Error::Firmware)?;
-    let loaded = crate::timer().systime_ms();
-    let process = thread.process();
-    let id = thread.id();
-    scheduler().ready(thread);
-    let _ = scheduler().join(id);
-    let completed = crate::timer().systime_ms();
-    let status = process.exit_status.load(Ordering::Acquire);
-    if status != 0 {
-        log::warn!("NVIDIA_COMPILE_FAIL family={family} target={target} exit={status}");
-        return Err(Error::Firmware);
-    }
+    let cache_path = format!("/usr/share/nvidia/{family}.cubin");
+    let (bytes, loaded, completed, output, mode) = match api::stat(&cache_path) {
+        Ok(_) => {
+            // A file outside the sealed runtime inventory cannot become a cache
+            // hit. Its qualified output hash is checked below as for compilation.
+            let cached = assets.binding(&cache_path)?;
+            (cached.to_vec(), start, start, None, "qualified_cache")
+        }
+        Err(Errno::ENOENT) => {
+            let output = format!("/tmp/{family}-{target}.cubin");
+            match api::unlink(&output) {
+                Ok(()) | Err(Errno::ENOENT) => (),
+                Err(_) => return Err(Error::Firmware),
+            }
+            let target_option = format!("--gpu-name={target}");
+            let options = vec![target_option.as_str(), "--opt-level=3", input.as_str(), "-o", output.as_str()];
+            let thread = Thread::load_application(compiler, compiler, &options).map_err(|_| Error::Firmware)?;
+            let loaded = crate::timer().systime_ms();
+            let process = thread.process();
+            let id = thread.id();
+            scheduler().ready(thread);
+            let _ = scheduler().join(id);
+            let completed = crate::timer().systime_ms();
+            let status = process.exit_status.load(Ordering::Acquire);
+            if status != 0 {
+                log::warn!("NVIDIA_COMPILE_FAIL family={family} target={target} exit={status}");
+                return Err(Error::Firmware);
+            }
+            let bytes = crate::linux::read_file(&output).map_err(|_| Error::Firmware)?.into_owned();
+            (bytes, loaded, completed, Some(output), "native_compile")
+        }
+        Err(_) => return Err(Error::Firmware),
+    };
     assets.verify_bindings()?;
     if !core::ptr::eq(immutable_file(&receipt_path)?, receipt_bytes) {
         return Err(d3os_nvidia::Error::Unsupported.into());
     }
-    let bytes = crate::linux::read_file(&output).map_err(|_| Error::Firmware)?.into_owned();
     if <[u8; 32]>::from(Sha256::digest(&bytes)) != *qualification.cubin_sha256() {
         log::warn!(
             "NVIDIA_COMPILE_REJECT family={family} reason=qualified_output_identity sha256={}",
@@ -222,18 +235,21 @@ fn compile(family: &str, target: &str, sm: u32, assets: &CompilerAssets) -> Resu
     }
     let validated = crate::timer().systime_ms();
     log::info!(
-        "NVIDIA_COMPILE_MODULE os=d3os family={family} input={} input_sha256={input_hash} target={target} compile_ms={} image_load_ms={} execute_ms={} output_ms={} bytes={} sha256={} exit=0",
+        "NVIDIA_COMPILE_MODULE os=d3os family={family} input={} input_sha256={input_hash} target={target} compile_ms={} image_load_ms={} execute_ms={} output_ms={} bytes={} sha256={} exit=0 mode={mode} compiler_executed={}",
         if tile { "tile_ir" } else { "ptx" },
         validated - start,
         loaded - start,
         completed - loaded,
         validated - completed,
         bytes.len(),
-        sha256(&bytes)
+        sha256(&bytes),
+        output.is_some()
     );
     // The resident cache owns a private immutable copy. Temporary compiler
     // output cannot change an executable module after publication.
-    api::unlink(&output).map_err(|_| Error::Firmware)?;
+    if let Some(output) = output {
+        api::unlink(&output).map_err(|_| Error::Firmware)?;
+    }
     let evidence = format!("{} sass_sha256={}", qualification::PROFILE_LABEL, sha256_hex(qualification.sass_sha256()));
     Ok(CompiledModule {
         bytes,
