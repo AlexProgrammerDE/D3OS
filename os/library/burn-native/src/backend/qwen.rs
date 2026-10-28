@@ -1,4 +1,6 @@
 //! Packed transformer operations over Burn-owned storage.
+#[cfg(feature = "qwen-profiling")]
+pub mod profile;
 mod state;
 use super::{BackendTensor, Native};
 use crate::{NativeTensor, layout::Layout};
@@ -26,7 +28,11 @@ fn weights(input: &NativeTensor, shape: [usize; 2], format: MatrixFormat) -> Res
 fn output(shape: [usize; 2], kernel: Kernel, inputs: &[(&NativeTensor, usize)], parameters: &[usize]) -> Result<NativeTensor> {
     let layout = Layout::contiguous(Shape::new(shape))?;
     let pointers: alloc::vec::Vec<_> = inputs.iter().map(|(t, offset)| (&*t.buffer, t.layout.offset() + offset)).collect();
-    let buffer = Nvidia.produce_words(layout.len(), kernel, &pointers, parameters)?;
+    let produce = || Nvidia.produce_words(layout.len(), kernel, &pointers, parameters);
+    #[cfg(feature = "qwen-profiling")]
+    let buffer = profile::measure(kernel, parameters, produce)?;
+    #[cfg(not(feature = "qwen-profiling"))]
+    let buffer = produce()?;
     Ok(NativeTensor {
         buffer: Arc::new(buffer),
         layout,

@@ -141,9 +141,16 @@ pub(super) fn benchmark(device: &Device, backend: &d3os_compute::nvidia::Nvidia,
         } else {
             None
         };
+        #[cfg(feature = "qwen-profiling")]
+        let projections = instrumented
+            .then(d3os_ai::native::backend::ProjectionProfiler::start)
+            .transpose()
+            .map_err(|e| format!("Qwen projection collector: {e}"))?;
         let start = time::systime().num_milliseconds();
         let mut logits = session.prefill(prompt).map_err(|e| format!("{e}"))?;
         let prefill_ms = time::systime().num_milliseconds() - start;
+        #[cfg(feature = "qwen-profiling")]
+        let prefill_projections = projections.as_ref().map(|collector| collector.take());
         let decode_before = backend.service_profile().map_err(|e| format!("{e}"))?;
         let decode_profile = if profile {
             Some((
@@ -163,6 +170,10 @@ pub(super) fn benchmark(device: &Device, backend: &d3os_compute::nvidia::Nvidia,
             logits = session.step(input).map_err(|e| format!("{e}"))?;
         }
         let decode_ms = time::systime().num_milliseconds() - start;
+        #[cfg(feature = "qwen-profiling")]
+        let decode_projections = projections.as_ref().map(|collector| collector.take());
+        #[cfg(feature = "qwen-profiling")]
+        drop(projections);
         let decode_after = backend.service_profile().map_err(|e| format!("{e}"))?;
         if let Some((kernels, queue)) = decode_profile {
             let after = backend.profile().map_err(|e| format!("{e}"))?;
@@ -170,6 +181,11 @@ pub(super) fn benchmark(device: &Device, backend: &d3os_compute::nvidia::Nvidia,
             let prefill_phase = if instrumented { "large_prefill_device" } else { "large_prefill" };
             let decode_phase = if instrumented { "large_decode_device" } else { "large_decode" };
             let (prefill_kernels, prefill_queue) = prefill_profile.expect("profile snapshots are paired");
+            #[cfg(feature = "qwen-profiling")]
+            if let (Some(prefill), Some(decode)) = (prefill_projections, decode_projections) {
+                super::benchmark::projection_profile(&prefill, &prefill_kernels, &kernels, prefill_phase)?;
+                super::benchmark::projection_profile(&decode, &kernels, &after, decode_phase)?;
+            }
             super::benchmark::profile(&prefill_kernels, &kernels, prefill_phase);
             super::benchmark::queue_profile(prefill_queue, queue, prefill_phase);
             super::benchmark::service_profile(&prefill_before, &decode_before, prefill_phase);

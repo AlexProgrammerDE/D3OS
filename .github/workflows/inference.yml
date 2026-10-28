@@ -125,12 +125,12 @@ jobs:
         run: >-
           cargo test --locked -p d3os-compute -p d3os-nvidia
           -p d3os-ai -p d3os-burn-native -p d3os-tensor-file -p linux-compat
-          --features d3os-compute/nvidia,d3os-ai/cpu,d3os-ai/training,d3os-ai/native
+          --features d3os-compute/nvidia,d3os-ai/cpu,d3os-ai/training,d3os-ai/native,d3os-ai/qwen-profiling
       - name: Check compute and inference code
         run: >-
           cargo clippy --locked -p d3os-compute -p d3os-nvidia
           -p d3os-ai -p d3os-burn-native -p d3os-tensor-file -p linux-compat
-          --features d3os-compute/nvidia,d3os-ai/cpu,d3os-ai/training,d3os-ai/native
+          --features d3os-compute/nvidia,d3os-ai/cpu,d3os-ai/training,d3os-ai/native,d3os-ai/qwen-profiling
           --all-targets -- -D warnings
       - name: Check the Linux MNIST reference without CUDA
         working-directory: tools/mnist-benchmark

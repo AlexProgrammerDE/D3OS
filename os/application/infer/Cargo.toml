@@ -10,6 +10,9 @@ test = false
 doctest = false
 bench = false
 
+[features]
+qwen-profiling = ["d3os-ai/qwen-profiling"]
+
 [dependencies]
 d3os-tensor-file = { path = "../../library/tensor-file" }
 crc32fast = { version = "=1.5.3", default-features = false }

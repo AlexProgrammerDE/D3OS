@@ -3,6 +3,9 @@ name = "d3os-burn-native"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+qwen-profiling = []
+
 [dependencies]
 d3os-tensor-file = { path = "../tensor-file" }
 burn-backend = { version = "=0.22.1", default-features = false }

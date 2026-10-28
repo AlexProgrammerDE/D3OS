@@ -25,6 +25,8 @@ use d3os_nvidia::compute::{elementwise::Elementwise, reduction::Reduction, words
 pub use execution::BackendTensor;
 use execution::CONTEXT;
 pub use quantized::BackendQuantizedTensor;
+#[cfg(feature = "qwen-profiling")]
+pub use qwen::profile::{ProjectionEntry, ProjectionProfiler};
 
 /// D3OS's process-owned native NVIDIA backend.
 #[derive(Clone, Debug, Default)]

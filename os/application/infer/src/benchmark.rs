@@ -30,6 +30,41 @@ pub(super) fn profile(before: &[d3os_nvidia::compute::ProfileEntry], after: &[d3
     }
 }
 
+#[cfg(feature = "qwen-profiling")]
+pub(super) fn projection_profile(
+    entries: &[d3os_ai::native::backend::ProjectionEntry], before: &[d3os_nvidia::compute::ProfileEntry], after: &[d3os_nvidia::compute::ProfileEntry],
+    phase: &str,
+) -> Result<(), String> {
+    let a = before[Kernel::ProjectQuantized as usize];
+    let b = after[Kernel::ProjectQuantized as usize];
+    let totals = entries.iter().fold([0u64; 4], |total, row| {
+        [
+            total[0] + row.calls,
+            total[1] + row.prepare_cycles,
+            total[2] + row.serial_wait_cycles,
+            total[3] + row.device_ns,
+        ]
+    });
+    if totals
+        != [
+            b.calls.wrapping_sub(a.calls),
+            b.cycles.wrapping_sub(a.cycles),
+            b.wait_cycles.wrapping_sub(a.wait_cycles),
+            b.device_ns.wrapping_sub(a.device_ns),
+        ]
+    {
+        return Err(String::from("Qwen projection breakdown differs from kernel totals"));
+    }
+    for row in entries {
+        let parameters = serde_json::to_string(&row.parameters).map_err(|e| format!("{e}"))?;
+        report(format_args!(
+            "NATIVE_QWEN_PROJECTION_PROFILE entry={} parameters={parameters} calls={} prepare_cycles={} serial_wait_cycles={} device_ns={} phase={phase} instrumented=true performance_comparison=false",
+            row.entry, row.calls, row.prepare_cycles, row.serial_wait_cycles, row.device_ns
+        ));
+    }
+    Ok(())
+}
+
 pub(super) fn queue_profile(before: d3os_nvidia::compute::QueueProfile, after: d3os_nvidia::compute::QueueProfile, phase: &str) {
     report(format_args!(
         "NATIVE_QUEUE_PROFILE phase={phase} batches={} launches={} submit_cycles={} wait_cycles={}",

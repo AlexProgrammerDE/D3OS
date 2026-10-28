@@ -8,6 +8,7 @@ default = []
 cpu = ["burn/flex", "dep:burn-flex"]
 training = ["burn/optim", "dep:burn-optim"]
 native = ["dep:d3os-burn-native", "dep:burn-dispatch", "burn-dispatch/d3os-native", "burn-optim?/d3os-native"]
+qwen-profiling = ["native", "d3os-burn-native/qwen-profiling"]
 
 [dependencies]
 unicode-normalization = { version = "0.1", default-features = false }
