@@ -13,6 +13,13 @@ use d3os_tensor_file::{
     quantized::Quantization,
 };
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PrefillQuantization {
+    #[default]
+    Accurate,
+    Q8_1,
+}
+
 fn dense(input: &NativeTensor, dtype: DType) -> Result<NativeTensor> {
     if input.dtype() != dtype {
         return Err(Error::InvalidParameter);
@@ -49,25 +56,46 @@ fn use_components(batch: usize, shape: [usize; 2], format: MatrixFormat) -> bool
     batch == 32 && matches!(shape, [12288, 4096] | [4096, 12288]) && format == MatrixFormat::Quantized(Quantization::Q8_0)
 }
 
-fn prepare_components(input: &NativeTensor, outputs: usize) -> Result<NativeTensor> {
+fn projection_components(batch: usize, shape: [usize; 2], storage: (MatrixFormat, MatrixLayout), mode: PrefillQuantization) -> Result<Option<usize>> {
+    let (format, layout) = storage;
+    if mode == PrefillQuantization::Q8_1 {
+        if layout != MatrixLayout::Q8Columns32 || format != MatrixFormat::Quantized(Quantization::Q8_0) || !matches!(shape, [12288, 4096] | [4096, 12288]) {
+            return Err(Error::InvalidParameter);
+        }
+        if batch > 1 {
+            return Ok(Some(1));
+        }
+    }
+    Ok((use_components(batch, shape, format) || (layout == MatrixLayout::Q8Columns32 && batch > 8)).then_some(3))
+}
+
+fn prepare_activations(input: &NativeTensor, outputs: usize, components: usize) -> Result<NativeTensor> {
     let [batch, inner] = *input.shape().as_slice() else {
         return Err(Error::ShapeMismatch);
     };
     let elements = batch.checked_mul(inner).ok_or(Error::SizeOverflow)?;
-    let words = elements.checked_mul(3).ok_or(Error::SizeOverflow)? / 4 + elements / 32;
-    output([1, words], Kernel::ProjectQuantized, &[(input, 0)], &[batch, inner, outputs, 8, 0, 3])
+    let words = match components {
+        1 => elements.checked_mul(9).ok_or(Error::SizeOverflow)? / 32,
+        3 => elements.checked_mul(3).ok_or(Error::SizeOverflow)? / 4 + elements / 32,
+        _ => return Err(Error::InvalidParameter),
+    };
+    output([1, words], Kernel::ProjectQuantized, &[(input, 0)], &[batch, inner, outputs, 8, 0, components])
 }
 
-fn project_components(components: &NativeTensor, packed: &NativeTensor, batch: usize, shape: [usize; 2], layout: MatrixLayout) -> Result<NativeTensor> {
+fn project_prepared(
+    activations: &NativeTensor, packed: &NativeTensor, batch: usize, shape: [usize; 2], layout: MatrixLayout, components: usize,
+) -> Result<NativeTensor> {
     output(
         [batch, shape[0]],
         Kernel::ProjectQuantized,
-        &[(components, 0), (packed, 0)],
-        &[batch, shape[1], shape[0], 8, if layout == MatrixLayout::RowMajor { 1 } else { 2 }, 3],
+        &[(activations, 0), (packed, 0)],
+        &[batch, shape[1], shape[0], 8, if layout == MatrixLayout::RowMajor { 1 } else { 2 }, components],
     )
 }
 
-fn projection(input: &NativeTensor, packed: &NativeTensor, shape: [usize; 2], storage: (MatrixFormat, MatrixLayout)) -> Result<NativeTensor> {
+fn projection(
+    input: &NativeTensor, packed: &NativeTensor, shape: [usize; 2], storage: (MatrixFormat, MatrixLayout), mode: PrefillQuantization,
+) -> Result<NativeTensor> {
     let (format, layout) = storage;
     let [batch, width] = *input.shape().as_slice() else {
         return Err(Error::ShapeMismatch);
@@ -76,11 +104,12 @@ fn projection(input: &NativeTensor, packed: &NativeTensor, shape: [usize; 2], st
     if batch == 0 || width != inner {
         return Err(Error::ShapeMismatch);
     }
+    let components = projection_components(batch, shape, storage, mode)?;
     let input = dense(input, DType::F32)?;
     let packed = weights(packed, shape, storage)?;
-    if use_components(batch, shape, format) || (layout == MatrixLayout::Q8Columns32 && batch > 8) {
-        let components = prepare_components(&input, outputs)?;
-        return project_components(&components, &packed, batch, shape, layout);
+    if let Some(components) = components {
+        let activations = prepare_activations(&input, outputs, components)?;
+        return project_prepared(&activations, &packed, batch, shape, layout, components);
     }
     if layout == MatrixLayout::Q8Columns32 {
         return output(
@@ -133,10 +162,12 @@ impl Native {
         })
     }
 
-    pub fn qwen_project(input: BackendTensor, packed: BackendTensor, shape: [usize; 2], storage: (MatrixFormat, MatrixLayout)) -> BackendTensor {
+    pub fn qwen_project(
+        input: BackendTensor, packed: BackendTensor, shape: [usize; 2], storage: (MatrixFormat, MatrixLayout), mode: PrefillQuantization,
+    ) -> BackendTensor {
         let batch = input.shape().first().copied().unwrap_or(0);
         BackendTensor::apply("packed projection", Shape::new([batch, shape[0]]), DType::F32, &[&input, &packed], |v| {
-            projection(v[0], v[1], shape, storage)
+            projection(v[0], v[1], shape, storage, mode)
         })
     }
 
@@ -170,7 +201,7 @@ impl Native {
 
     pub fn qwen_gated_project(
         input: BackendTensor, gate: BackendTensor, up: BackendTensor, shape: [usize; 2], gate_storage: (MatrixFormat, MatrixLayout),
-        up_storage: (MatrixFormat, MatrixLayout),
+        up_storage: (MatrixFormat, MatrixLayout), mode: PrefillQuantization,
     ) -> BackendTensor {
         let batch = input.shape().first().copied().unwrap_or(0);
         let (gate_format, gate_layout) = gate_storage;
@@ -181,6 +212,8 @@ impl Native {
             DType::F32,
             &[&input, &gate, &up],
             |v| {
+                let gate_components = projection_components(batch, shape, gate_storage, mode)?;
+                let up_components = projection_components(batch, shape, up_storage, mode)?;
                 if batch == 1 && gate_format == MatrixFormat::Bf16 && up_format == MatrixFormat::Bf16 {
                     if v[0].shape().as_slice() != [1, shape[1]] {
                         return Err(Error::ShapeMismatch);
@@ -195,20 +228,31 @@ impl Native {
                         &[shape[1], shape[0]],
                     );
                 }
-                let (gate, up) = if use_components(batch, shape, gate_format) && gate_format == up_format {
+                let shared_components = if gate_format == up_format
+                    && gate_components == up_components
+                    && (use_components(batch, shape, gate_format) || mode == PrefillQuantization::Q8_1)
+                {
+                    gate_components
+                } else {
+                    None
+                };
+                let (gate, up) = if let Some(components) = shared_components {
                     if v[0].shape().as_slice() != [batch, shape[1]] {
                         return Err(Error::ShapeMismatch);
                     }
                     let input = dense(v[0], DType::F32)?;
                     let gate = weights(v[1], shape, gate_storage)?;
                     let up = weights(v[2], shape, up_storage)?;
-                    let components = prepare_components(&input, shape[0])?;
+                    let activations = prepare_activations(&input, shape[0], components)?;
                     (
-                        project_components(&components, &gate, batch, shape, gate_layout)?,
-                        project_components(&components, &up, batch, shape, up_layout)?,
+                        project_prepared(&activations, &gate, batch, shape, gate_layout, components)?,
+                        project_prepared(&activations, &up, batch, shape, up_layout, components)?,
                     )
                 } else {
-                    (projection(v[0], v[1], shape, gate_storage)?, projection(v[0], v[2], shape, up_storage)?)
+                    (
+                        projection(v[0], v[1], shape, gate_storage, mode)?,
+                        projection(v[0], v[2], shape, up_storage, mode)?,
+                    )
                 };
                 Nvidia.dispatch_words(Kernel::SiluMul, &[(&gate.buffer, 0), (&up.buffer, 0), (&gate.buffer, 0)], &[batch * shape[0]])?;
                 Ok(gate)
@@ -218,6 +262,7 @@ impl Native {
 
     pub fn qwen_project_add(
         input: BackendTensor, packed: BackendTensor, residual: BackendTensor, shape: [usize; 2], storage: (MatrixFormat, MatrixLayout),
+        mode: PrefillQuantization,
     ) -> BackendTensor {
         let result_shape = residual.shape();
         // Check before creating any temporary storage aliases. In-place dispatch is
@@ -229,6 +274,9 @@ impl Native {
             };
             if width != shape[1] || v[2].shape().as_slice() != [batch, shape[0]] {
                 return Err(Error::ShapeMismatch);
+            }
+            if mode == PrefillQuantization::Q8_1 {
+                projection_components(batch, shape, storage, mode)?;
             }
             let (format, _) = storage;
             if batch == 1 && width.is_multiple_of(2) && shape[0] <= 8192 && format == MatrixFormat::Bf16 {
@@ -250,7 +298,7 @@ impl Native {
                 )?;
                 return Ok(residual);
             }
-            projection(v[0], v[1], shape, storage)?.binary(v[2], Elementwise::Add)
+            projection(v[0], v[1], shape, storage, mode)?.binary(v[2], Elementwise::Add)
         })
     }
 
@@ -318,5 +366,45 @@ impl Native {
                 }
             },
         )
+    }
+}
+
+#[cfg(test)]
+mod projection_mode_tests {
+    use super::*;
+
+    #[test]
+    fn quantized_prefill_keeps_single_token_and_accurate_routes() {
+        let storage = (MatrixFormat::Quantized(Quantization::Q8_0), MatrixLayout::Q8Columns32);
+        for shape in [[12288, 4096], [4096, 12288]] {
+            assert_eq!(projection_components(1, shape, storage, PrefillQuantization::Q8_1).unwrap(), None);
+            for batch in [2, 5, 32] {
+                assert_eq!(projection_components(batch, shape, storage, PrefillQuantization::Q8_1).unwrap(), Some(1));
+            }
+            assert_eq!(projection_components(5, shape, storage, PrefillQuantization::Accurate).unwrap(), None);
+            assert_eq!(projection_components(32, shape, storage, PrefillQuantization::Accurate).unwrap(), Some(3));
+        }
+    }
+
+    #[test]
+    fn quantized_prefill_rejects_unqualified_weight_encodings() {
+        for storage in [
+            (MatrixFormat::Bf16, MatrixLayout::RowMajor),
+            (MatrixFormat::Quantized(Quantization::Q8_0), MatrixLayout::RowMajor),
+        ] {
+            assert_eq!(
+                projection_components(32, [12288, 4096], storage, PrefillQuantization::Q8_1),
+                Err(Error::InvalidParameter)
+            );
+        }
+        assert_eq!(
+            projection_components(
+                32,
+                [4096, 4096],
+                (MatrixFormat::Quantized(Quantization::Q8_0), MatrixLayout::Q8Columns32),
+                PrefillQuantization::Q8_1
+            ),
+            Err(Error::InvalidParameter)
+        );
     }
 }

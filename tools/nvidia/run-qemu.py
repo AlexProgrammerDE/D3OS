@@ -184,6 +184,11 @@ def main():
         help="firmware parts from prepare-qwen-shards.py",
     )
     parser.add_argument(
+        "--qwen-prefill-q8",
+        action="store_true",
+        help="use experimental Q8_1 activation quantization for the large-model prefill benchmark",
+    )
+    parser.add_argument(
         "--qwen-device-timing",
         action="store_true",
         help="collect per-kernel GPU timestamps in a separate large-model pass or small-model run 1",
@@ -317,6 +322,8 @@ def main():
         parser.error("--qwen-device-timing requires a Qwen benchmark")
     if args.qwen_long_bench and args.inference != "gpu-qwen-bench":
         parser.error("--qwen-long-bench requires --inference gpu-qwen-bench")
+    if args.qwen_prefill_q8 and args.inference != "gpu-qwen-gguf-bench":
+        parser.error("--qwen-prefill-q8 requires --inference gpu-qwen-gguf-bench")
     affinity = ",".join(str(cpu) for cpu in sorted(os.sched_getaffinity(0)))
     print(f"NVIDIA_HOST_CPU_AFFINITY cpus={affinity}", flush=True)
     if (
@@ -592,6 +599,7 @@ def main():
                             if args.inference == "cpu-self-test"
                             else f"infer {args.inference}"
                             + (" device-timing" if args.qwen_device_timing else "")
+                            + (" q8-prefill" if args.qwen_prefill_q8 else "")
                             + (" long" if args.qwen_long_bench else "")
                         )
                     started = True

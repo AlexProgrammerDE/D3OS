@@ -5,7 +5,7 @@ use core::fmt::Write;
 use d3os_ai::{
     burn::tensor::Device,
     qwen::{
-        Error, Qwen,
+        Error, PrefillQuantization, Qwen,
         gguf::{
             Gguf, ReadAt,
             shards::{Index, Sharded},
@@ -79,7 +79,9 @@ pub(super) fn verify(device: &Device) -> core::result::Result<(), String> {
     Ok(())
 }
 
-pub(super) fn benchmark(device: &Device, backend: &d3os_compute::nvidia::Nvidia, device_timing: bool) -> core::result::Result<(), String> {
+pub(super) fn benchmark(
+    device: &Device, backend: &d3os_compute::nvidia::Nvidia, device_timing: bool, quantization: PrefillQuantization,
+) -> core::result::Result<(), String> {
     let bytes = read_file("/fwcfg/model.reference")?;
     if bytes.len() < 64 || &bytes[..8] != b"D3QLOG\0\0" {
         return Err(String::from("invalid GGUF logit reference"));
@@ -106,11 +108,16 @@ pub(super) fn benchmark(device: &Device, backend: &d3os_compute::nvidia::Nvidia,
     let (prompt, reference) = ids.split_at(prompt_count);
     let start = time::systime().num_milliseconds();
     let (model, identity) = load(device)?;
+    let model = model.with_prefill_quantization(quantization).map_err(|e| format!("{e}"))?;
     if identity.as_slice() != &bytes[32..64] {
         return Err(String::from("GGUF reference targets a different model"));
     }
     let load_ms = time::systime().num_milliseconds() - start;
     let memory = backend.memory_profile().map_err(|e| format!("{e}"))?;
+    super::report(format_args!(
+        "NATIVE_LARGE_QWEN_MODE prefill_quantization={:?} decode_quantization=accurate reference_policy=unchanged",
+        model.prefill_quantization()
+    ));
     super::report(format_args!(
         "NATIVE_LARGE_QWEN_MODEL os=d3os framework=burn backend=nvidia layers={} hidden={} load_ms={load_ms} live_bytes={} cached_bytes={} retired_bytes={}",
         model.config().layers,
@@ -225,6 +232,7 @@ pub(super) fn benchmark(device: &Device, backend: &d3os_compute::nvidia::Nvidia,
     let mut failures = 0usize;
     let mut max_absolute = 0f32;
     let mut max_scaled_error = 0f32;
+    let mut squared_error = 0f64;
     let mut selection_mismatches = 0usize;
     for row in 0..=decode_count {
         let actual = logits.clone().try_into_vec_as::<f32>().map_err(|e| format!("GGUF validation read: {e:?}"))?;
@@ -244,6 +252,7 @@ pub(super) fn benchmark(device: &Device, backend: &d3os_compute::nvidia::Nvidia,
             let scaled = error / (2e-3 + 5e-4 * expected.abs());
             max_absolute = max_absolute.max(error);
             max_scaled_error = max_scaled_error.max(scaled);
+            squared_error += f64::from(error) * f64::from(error);
             failures += usize::from(scaled > 1.);
         }
         if row < decode_count {
@@ -261,7 +270,7 @@ pub(super) fn benchmark(device: &Device, backend: &d3os_compute::nvidia::Nvidia,
         }
     }
     super::report(format_args!(
-        "NATIVE_LARGE_QWEN_REFERENCE os=d3os framework=burn backend=nvidia rows={} vocab={vocab} values={} failures={failures} max_absolute={max_absolute} max_scaled_error={max_scaled_error} selection_mismatches={selection_mismatches} absolute_tolerance=0.002 relative_tolerance=0.0005 inputs=linux_reference",
+        "NATIVE_LARGE_QWEN_REFERENCE os=d3os framework=burn backend=nvidia rows={} vocab={vocab} values={} failures={failures} max_absolute={max_absolute} max_scaled_error={max_scaled_error} squared_error={squared_error} selection_mismatches={selection_mismatches} absolute_tolerance=0.002 relative_tolerance=0.0005 inputs=linux_reference",
         decode_count + 1,
         (decode_count + 1) * vocab
     ));

@@ -2561,3 +2561,56 @@ target/test-scheduler-inbox
 python3 tools/kernel/test-linux-threads.py --accel kvm --cpus 4 --repeat 10
 python3 tools/kernel/test-process-exit.py --accel tcg --cpus 4 --repeat 30 --sleeping-workers --timeout 240
 ```
+
+## Experimental Q8_1 prefill on the 9B model
+
+The optional Q8_1 mode reduces activation precision for the 9B Q8_0 FFN projections during batched prefill.
+The default accurate mode, attention projections, and single-token decode retain their existing arithmetic.
+The [Qwen guide](qwen.howto.md#experimental-q8_1-prefill-for-9b) describes the API and benchmark flag.
+
+The activation packer follows the pinned [llama.cpp MMQ D4 layout](https://github.com/ggml-org/llama.cpp/blob/b11827/ggml/src/ggml-cuda/quantize.cu).
+Each transposed block contains four FP32 scales and 128 signed bytes.
+The Rust packer matches the actual pinned CUDA template and an independent CPU implementation byte-for-byte on the measured cases.
+Sampled projection outputs also match the quantized CPU oracle bit-for-bit.
+The matrix kernel uses signed INT8 MMA and FP32 accumulation.
+Gate and up projections share one activation conversion.
+Packed weight bytes and the single resident weight allocation remain unchanged.
+
+On October 28, 2026, paired Native runs used accurate, Q8_1, Q8_1, accurate order on the RTX 4090 Laptop GPU.
+Each mode contributed four ordinary warm samples across two VMs.
+The fourth pass in each VM collected device timings separately.
+The workload used 37 prompt tokens, 128 teacher-forced decode steps, a 2048-token context, and FP32 KV storage.
+
+| Native mode | Warm prefill | Decode |
+| --- | ---: | ---: |
+| Accurate | 121 ms | 52.75 tokens/s |
+| Q8_1 prefill | 91.5 ms | 52.79 tokens/s |
+| Linux llama.cpp b11827 | 43.30 ms | 58.18 tokens/s |
+
+The Linux run used the same model, prompt, decode inputs, context, and KV format.
+Its two ordinary warm samples exclude the first pass.
+The arithmetic differs between modes, so this table does not establish FP32 equivalence.
+
+The quantized Native mode used 24.4% less prefill time than accurate Native mode.
+Decode throughput remained effectively unchanged.
+Both modes retained 9,516,859,392 bytes of model weights and transferred no activation tensors between host and GPU during inference.
+Cold model loading averaged 6912 ms and 6878 ms respectively, with identical import paths.
+Automatic GPU clocks and four warm samples do not establish a statistical guarantee.
+
+### Accuracy scope
+
+All 32,033,280 logit comparisons pass the original FP32 policy in accurate mode.
+In Q8_1 mode, 16,776,142 values exceed that policy.
+The benchmark retains this reference failure and does not emit its numerical success marker.
+Timing records precede the reference check.
+
+The Q8_1 run has FP32 logit RMSE of 0.00736 and maximum absolute error of 0.295 on this fixture.
+The matched Linux llama.cpp run has RMSE of 0.04668 and maximum absolute error of 0.518 against the same CPU reference.
+Both Native modes produce the same 128 teacher-forced token decisions, including the existing row-102 difference from Linux.
+These measurements do not qualify other prompts or autonomous generation trajectories.
+The mode remains experimental and does not replace the accurate default.
+
+The combined module contains 271 entries.
+All 269 prior inference machine-text sections and both smaller cubins remain byte-exact.
+Math certificate rules remain unchanged.
+This checkpoint grants no whole-Burn, DOOM, general quality, or cross-OS performance-parity claim.

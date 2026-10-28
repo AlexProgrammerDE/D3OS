@@ -1,6 +1,7 @@
 //! Burn model composition and independent per-sequence state.
 use super::{
-    AttentionInputs, AttentionState, Config, DeltaParameters, DeltaState, DeltaWeights, MatrixFormat, PackedMatrix, device_supported, residual_norm, rms_norm,
+    AttentionInputs, AttentionState, Config, DeltaParameters, DeltaState, DeltaWeights, MatrixFormat, MatrixLayout, PackedMatrix, PrefillQuantization,
+    Quantization, device_supported, residual_norm, rms_norm,
 };
 use alloc::{
     borrow::Cow,
@@ -187,6 +188,8 @@ struct Layer {
 pub struct Qwen {
     #[module(skip)]
     config: Config,
+    #[module(skip)]
+    prefill_quantization: PrefillQuantization,
     embedding: PackedMatrix,
     output: Option<PackedMatrix>,
     norm: Param<Tensor<1>>,
@@ -303,6 +306,7 @@ impl Qwen {
         device.sync()?;
         Ok(Self {
             config,
+            prefill_quantization: PrefillQuantization::Accurate,
             embedding,
             output,
             norm,
@@ -323,6 +327,28 @@ impl Qwen {
     }
     pub fn config(&self) -> Config {
         self.config
+    }
+    pub fn prefill_quantization(&self) -> PrefillQuantization {
+        self.prefill_quantization
+    }
+    pub fn with_prefill_quantization(mut self, mode: PrefillQuantization) -> Result<Self> {
+        mode.check_device(&self.device())?;
+        if mode == PrefillQuantization::Q8_1 {
+            for layer in &self.layers {
+                for matrix in [&layer.gate, &layer.up, &layer.down] {
+                    if matrix.layout != MatrixLayout::Q8Columns32 || matrix.format != MatrixFormat::Quantized(Quantization::Q8_0) {
+                        return Err(Error::from("Q8_1 prefill requires the qualified Q8_0 FFN weight layout"));
+                    }
+                }
+            }
+        }
+        for layer in &mut self.layers {
+            layer.gate.prefill_quantization = mode;
+            layer.up.prefill_quantization = mode;
+            layer.down.prefill_quantization = mode;
+        }
+        self.prefill_quantization = mode;
+        Ok(self)
     }
     pub fn device(&self) -> Device {
         self.norm.val().device()
@@ -380,6 +406,7 @@ impl<'a> Session<'a> {
         }
         let device = model.device();
         device_supported(&device)?;
+        model.prefill_quantization.check_device(&device)?;
         let caches = scope(&device, || {
             model
                 .layers

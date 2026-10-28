@@ -1,5 +1,5 @@
 //! Fused state updates consume Burn storage and preserve any surviving aliases.
-use super::{dense, output, projection, weights};
+use super::{PrefillQuantization, dense, output, projection, weights};
 use crate::{
     NativeTensor,
     backend::{BackendTensor, Native},
@@ -340,7 +340,7 @@ impl Native {
                     [channels, values, heads, heads]
                         .iter()
                         .enumerate()
-                        .map(|(i, &out)| projection(v[0], v[i + 1], [out, width], formats[i]))
+                        .map(|(i, &out)| projection(v[0], v[i + 1], [out, width], formats[i], PrefillQuantization::Accurate))
                         .collect::<Result<Vec<_>>>()?
                 };
                 delta(

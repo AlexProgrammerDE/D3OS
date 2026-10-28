@@ -541,6 +541,8 @@ impl Kernel {
             (Self::ProjectQuantized, [_, _, _, 8, 0, 3]) => "q8_components_pack",
             (Self::ProjectQuantized, [_, _, _, 8, 1, 3]) => "q8_components_project",
             (Self::ProjectQuantized, [_, _, _, 8, 2, 3]) => "q8_columns32_components",
+            (Self::ProjectQuantized, [_, _, _, 8, 0, 1]) => "q8_d4_pack",
+            (Self::ProjectQuantized, [_, _, _, 8, 2, 1]) => "q8_columns32_d4",
             (Self::ProjectQuantized, [_, _, _, 8, 2]) => "q8_columns32_vector",
             (Self::EmbeddingQuantized, [_, _, _, 8, 2]) => "q8_columns32_embedding",
             (Self::IntegerReduction, p) => integer_reduction::symbol(p).unwrap_or(self.symbol()),
@@ -848,6 +850,23 @@ impl Kernel {
             (Self::TensorElementwise, p) => {
                 extents[..3].copy_from_slice(&elementwise::validate(p)?);
                 (p[0], 3, 2, false)
+            }
+            // Four FP32 scales and 128 signed bytes per transposed D4 block.
+            (Self::ProjectQuantized, &[m, k, n, 8, phase @ (0 | 2), 1]) => {
+                if m == 0 || k == 0 || !k.is_multiple_of(128) || n == 0 || !n.is_multiple_of(32) {
+                    return Err(Error::InvalidField);
+                }
+                let input = product(&[m, k])?;
+                let scratch_bytes = product(&[m, k / 128, 144])?;
+                let weight_bytes = product(&[k / 32, n, 34])?;
+                let values = product(&[m, n])?;
+                if phase == 0 {
+                    extents[..2].copy_from_slice(&[u64::from(input), u64::from(scratch_bytes / 4)]);
+                    (product(&[m.div_ceil(4), k / 32, 128])?, 2, 1, false)
+                } else {
+                    extents[..3].copy_from_slice(&[u64::from(scratch_bytes / 4), u64::from(weight_bytes).div_ceil(4), u64::from(values)]);
+                    (product(&[m.div_ceil(32), n / 32, 128])?, 3, 2, false)
+                }
             }
             // Pack three component planes and their scales, or consume them.
             (Self::ProjectQuantized, &[m, k, n, 8, phase @ 0..=2, 3]) => {

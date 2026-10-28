@@ -338,3 +338,36 @@ GGUF reorders grouped value heads during export.
 The reader restores input projections and state parameters to the model's head order.
 Output projection weights retain their packed bytes, including quantization blocks that span multiple heads.
 Burn reorders the small input activation on the GPU before that projection.
+
+### Experimental Q8_1 prefill for 9B
+
+The default `PrefillQuantization::Accurate` mode retains the existing FP32 reference policy.
+The optional `Q8_1` mode quantizes activations for the qualified 9B Q8_0 FFN matrices during batched prefill.
+Attention and single-token decode retain their accurate routes.
+Weights retain their packed bytes and one resident GPU copy.
+
+For a loaded Native model, select the mode explicitly:
+
+```rust
+use d3os_ai::qwen::PrefillQuantization;
+
+let model = model.with_prefill_quantization(PrefillQuantization::Q8_1)?;
+```
+
+The method rejects unsupported devices and weight layouts.
+Mode metadata belongs to the destination model.
+Record loading preserves that mode, but weight records do not encode it.
+A quantized model moved to CPU rejects execution until its mode changes to `Accurate`.
+
+For a diagnostic benchmark, add `--qwen-prefill-q8` to the host command for `gpu-qwen-gguf-bench`.
+The corresponding guest command is:
+
+```text
+infer gpu-qwen-gguf-bench device-timing q8-prefill
+```
+
+Timing records precede the full-logit reference check.
+The check keeps its original tolerances and reports `INFERENCE_FAIL` for the measured Q8_1 precision differences.
+That result does not indicate FP32 equivalence or whole-model qualification.
+The mode remains experimental.
+Read the [measured performance and accuracy comparison](nvidia-performance.md#experimental-q8_1-prefill-on-the-9b-model).

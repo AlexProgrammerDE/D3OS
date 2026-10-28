@@ -127,6 +127,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "q8_columns32_components",
             "q8_columns32_vector",
             "q8_columns32_embedding",
+            "q8_d4_pack",
+            "q8_columns32_d4",
             "rms_norm_4096",
             "residual_norm_4096",
             "project_m32_q8_0",

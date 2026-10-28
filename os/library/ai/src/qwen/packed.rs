@@ -33,6 +33,19 @@ mod tests {
     use burn::{module::Module, tensor::Device};
 
     #[test]
+    fn device_moves_cannot_silently_replace_quantized_arithmetic() {
+        let device = Device::flex();
+        let shape = [32, 32];
+        let format = MatrixFormat::Quantized(Quantization::Q8_0);
+        let bytes = alloc::vec![0; format.byte_len(shape).unwrap()];
+        let mut matrix = PackedMatrix::from_bytes(shape, format, &bytes, &device).unwrap();
+        matrix.prefill_quantization = crate::qwen::PrefillQuantization::Q8_1;
+        let moved = matrix.to_device(&device);
+        assert_eq!(moved.prefill_quantization, crate::qwen::PrefillQuantization::Q8_1);
+        assert!(moved.project(Tensor::ones([2, 32], &device)).is_err());
+    }
+
+    #[test]
     fn records_load_between_physical_layouts_without_changing_projection_or_embedding() {
         let device = Device::flex();
         let shape = [64, 96];
@@ -56,6 +69,7 @@ mod tests {
             shape,
             format,
             layout: MatrixLayout::Q8Columns32,
+            prefill_quantization: crate::qwen::PrefillQuantization::Accurate,
         };
         let expected = ordinary.project(Tensor::ones([2, 96], &device)).unwrap().try_into_vec_as::<f32>().unwrap();
         for restored in [

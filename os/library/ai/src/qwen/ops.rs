@@ -12,6 +12,7 @@ pub struct MatrixPrimitive<B: Backend> {
     pub shape: [usize; 2],
     pub format: MatrixFormat,
     pub layout: MatrixLayout,
+    pub prefill_quantization: super::PrefillQuantization,
 }
 
 #[derive(ExtensionType)]
@@ -190,16 +191,37 @@ impl QwenOps for d3os_burn_native::backend::Native {
     }
 
     fn project(input: FloatTensor<Self>, matrix: MatrixPrimitive<Self>) -> FloatTensor<Self> {
-        Self::qwen_project(input, matrix.words, matrix.shape, (matrix.format, matrix.layout))
+        Self::qwen_project(
+            input,
+            matrix.words,
+            matrix.shape,
+            (matrix.format, matrix.layout),
+            matrix.prefill_quantization.native(),
+        )
     }
     fn embedding(matrix: MatrixPrimitive<Self>, tokens: Vec<u32>) -> FloatTensor<Self> {
         Self::qwen_embedding(matrix.words, matrix.shape, (matrix.format, matrix.layout), tokens)
     }
     fn gated_project(input: FloatTensor<Self>, gate: MatrixPrimitive<Self>, up: MatrixPrimitive<Self>) -> FloatTensor<Self> {
-        Self::qwen_gated_project(input, gate.words, up.words, gate.shape, (gate.format, gate.layout), (up.format, up.layout))
+        Self::qwen_gated_project(
+            input,
+            gate.words,
+            up.words,
+            gate.shape,
+            (gate.format, gate.layout),
+            (up.format, up.layout),
+            gate.prefill_quantization.native(),
+        )
     }
     fn project_add(input: FloatTensor<Self>, matrix: MatrixPrimitive<Self>, residual: FloatTensor<Self>) -> FloatTensor<Self> {
-        Self::qwen_project_add(input, matrix.words, residual, matrix.shape, (matrix.format, matrix.layout))
+        Self::qwen_project_add(
+            input,
+            matrix.words,
+            residual,
+            matrix.shape,
+            (matrix.format, matrix.layout),
+            matrix.prefill_quantization.native(),
+        )
     }
     fn rms_norm(input: FloatTensor<Self>, weight: FloatTensor<Self>, epsilon: f32) -> FloatTensor<Self> {
         Self::qwen_rms_norm(input, weight, epsilon)

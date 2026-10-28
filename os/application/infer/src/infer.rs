@@ -144,9 +144,18 @@ fn run() -> Result<(), String> {
                 &args[1..],
             )?;
         }
-        Some("gpu-qwen-gguf-bench") if args.len() == 1 || (args.len() == 2 && args[1] == "device-timing") => {
+        Some("gpu-qwen-gguf-bench") => {
+            let mut device_timing = false;
+            let mut quantization = qwen::PrefillQuantization::Accurate;
+            for option in &args[1..] {
+                match option.as_str() {
+                    "device-timing" if !device_timing => device_timing = true,
+                    "q8-prefill" if quantization == qwen::PrefillQuantization::Accurate => quantization = qwen::PrefillQuantization::Q8_1,
+                    _ => return Err(String::from("usage: infer gpu-qwen-gguf-bench [device-timing] [q8-prefill]")),
+                }
+            }
             let backend = Nvidia::new().map_err(|e| format!("{e}"))?;
-            model_file::benchmark(&d3os_ai::native_device().map_err(|e| format!("{e}"))?, &backend, args.len() == 2)?;
+            model_file::benchmark(&d3os_ai::native_device().map_err(|e| format!("{e}"))?, &backend, device_timing, quantization)?;
         }
         Some("gpu-qwen-gguf-verify") if args.len() == 1 => {
             model_file::verify(&d3os_ai::native_device().map_err(|e| format!("{e}"))?)?;
@@ -157,7 +166,7 @@ fn run() -> Result<(), String> {
         }
         _ => {
             return Err(String::from(
-                "usage: infer self-test | burn-self-test | gpu-mnist-train | gpu-mnist-infer | gpu-mnist-bench | gpu-mnist-profile | fwcfg-self-test | gpu-self-test | gpu-kernel-bench | alexnet [MODEL FIXTURE] | gpu-alexnet [MODEL FIXTURE] | gpu-alexnet-bench | qwen [MAX_TOKENS PROMPT...] | qwen-verify | gpu-qwen [MAX_TOKENS PROMPT...] | gpu-qwen-verify | gpu-qwen-bench [long] [device-timing] | gpu-qwen-gguf [MAX_TOKENS PROMPT...] | gpu-qwen-gguf-bench [device-timing] | gpu-qwen-gguf-verify",
+                "usage: infer self-test | burn-self-test | gpu-mnist-train | gpu-mnist-infer | gpu-mnist-bench | gpu-mnist-profile | fwcfg-self-test | gpu-self-test | gpu-kernel-bench | alexnet [MODEL FIXTURE] | gpu-alexnet [MODEL FIXTURE] | gpu-alexnet-bench | qwen [MAX_TOKENS PROMPT...] | qwen-verify | gpu-qwen [MAX_TOKENS PROMPT...] | gpu-qwen-verify | gpu-qwen-bench [long] [device-timing] | gpu-qwen-gguf [MAX_TOKENS PROMPT...] | gpu-qwen-gguf-bench [device-timing] [q8-prefill] | gpu-qwen-gguf-verify",
             ));
         }
     }

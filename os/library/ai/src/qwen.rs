@@ -27,6 +27,32 @@ pub use d3os_tensor_file::{
 
 pub type Result<T> = core::result::Result<T, Error>;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PrefillQuantization {
+    #[default]
+    Accurate,
+    Q8_1,
+}
+
+impl PrefillQuantization {
+    fn check_device(self, device: &Device) -> Result<()> {
+        if self == Self::Q8_1 && !native_matrix_device(device) {
+            return Err(Error::from("Q8_1 prefill requires the Native NVIDIA backend"));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "native")]
+impl PrefillQuantization {
+    fn native(self) -> d3os_burn_native::backend::PrefillQuantization {
+        match self {
+            Self::Accurate => d3os_burn_native::backend::PrefillQuantization::Accurate,
+            Self::Q8_1 => d3os_burn_native::backend::PrefillQuantization::Q8_1,
+        }
+    }
+}
+
 pub(crate) fn device_supported(device: &Device) -> Result<()> {
     if device.is_autodiff() {
         return Err(Error::from("packed Qwen operations support inference devices only"));
@@ -61,6 +87,8 @@ pub struct PackedMatrix {
     format: MatrixFormat,
     #[module(skip)]
     layout: MatrixLayout,
+    #[module(skip)]
+    prefill_quantization: PrefillQuantization,
 }
 
 impl PackedMatrix {
@@ -104,6 +132,7 @@ impl PackedMatrix {
             shape,
             format,
             layout,
+            prefill_quantization: PrefillQuantization::Accurate,
         })
     }
 
@@ -145,7 +174,7 @@ impl PackedMatrix {
     /// Compute silu(gate(input)) * up(input), preserving packed weight storage.
     pub fn gated_project(&self, up: &Self, input: Tensor<2>) -> Result<Tensor<2>> {
         self.check_input(&input)?;
-        if up.shape != self.shape || up.device() != self.device() {
+        if up.shape != self.shape || up.device() != self.device() || up.prefill_quantization != self.prefill_quantization {
             return Err(Error::from("Qwen gated projection matrices differ"));
         }
         Ok(Tensor::from_dispatch(<burn::backend::Dispatch as ops::QwenOps>::gated_project(
@@ -170,6 +199,7 @@ impl PackedMatrix {
     fn check_input(&self, input: &Tensor<2>) -> Result<()> {
         device_supported(&input.device())?;
         device_supported(&self.device())?;
+        self.prefill_quantization.check_device(&input.device())?;
         let [batch, width] = input.dims();
         if batch == 0 || width != self.shape[1] || input.dtype() != DType::F32 || input.device() != self.device() {
             return Err(Error::from("Qwen projection input shape, dtype, or device differs"));
@@ -184,6 +214,7 @@ impl PackedMatrix {
             shape: self.shape,
             format: self.format,
             layout: self.layout,
+            prefill_quantization: self.prefill_quantization,
         }
     }
 }

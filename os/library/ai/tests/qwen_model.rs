@@ -449,3 +449,14 @@ fn burn_module_records_preserve_packed_parameters_and_inference_predictions() {
     }
     assert!(model.train().session(8).is_err());
 }
+
+#[test]
+fn prefill_quantization_is_explicit_and_rejects_unsupported_backends() {
+    use d3os_ai::qwen::PrefillQuantization;
+    let model = Qwen::load(&Device::flex(), &archive(&model_records())).unwrap();
+    assert_eq!(model.prefill_quantization(), PrefillQuantization::Accurate);
+    let unchanged = model.clone().with_prefill_quantization(PrefillQuantization::Accurate).unwrap();
+    assert_eq!(unchanged.prefill_quantization(), PrefillQuantization::Accurate);
+    assert!(model.clone().with_prefill_quantization(PrefillQuantization::Q8_1).is_err());
+    assert_eq!(model.prefill_quantization(), PrefillQuantization::Accurate);
+}
