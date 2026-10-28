@@ -2841,3 +2841,39 @@ Finalization reused all six validated captures and matching host checks without 
 Cached passes are reported as retained evidence rather than fresh executions.
 
 Decode parity, broader prompt quality, the latest 0.8B comparison, DOOM, and full-backend acceptance remain open.
+
+## Rejected fused FFN decode experiment
+
+Cached full-model profiles identify projections as about 91% of instrumented decode GPU time.
+The FFN gate, up, and down projections account for the largest share.
+Earlier wider-output tile experiments already showed no useful gain, so this checkpoint did not repeat them.
+
+Two cache-only kernels combined gate/up projection and SiLU multiplication in one launch.
+The sequential variant retained each projection's existing FP32 accumulator chains and reduction tree.
+The interleaved variant alternated work between those same independent chains.
+Both variants retained the original packed weights and SiLU formula.
+
+Both compiled, passed the unchanged machine qualifier, and matched complete baseline outputs across six geometries on the RTX 4090 Laptop GPU.
+Checks included both output poison patterns, small K tails, zero inputs, complete actual FFN matrices, and unchanged source buffers and guards.
+The run checked 201,216 finite written values and 134,144 bitwise output comparisons.
+It also verified 1,142,056,192 bytes during weight preparation.
+
+The complete 9B FFN comparison used `[4096, 12288]` input/output dimensions and eight rotating weight pairs.
+Each timing sample averaged a 16-repeat graph, with 32 samples in rotated variant order.
+
+| Decode implementation | GPU time |
+| --- | ---: |
+| Separate gate, up, and SiLU kernels | 210.46 us |
+| Sequential fused kernel | 210.56 us |
+| Interleaved fused kernel | 221.40 us |
+
+The sequential variant provides no measured gain, while the interleaved variant is about 5.2% slower.
+Fusion increases register use from 64 to 87 or 90 registers per thread.
+The occupancy query reports five resident blocks per SM for either fusion, compared with eight for the projection baseline.
+These resource measurements do not isolate the cause of the timing result.
+
+Both variants were rejected before any Native integration, full-family export, model rebuild, or full-model VM run.
+The baseline module, model fixtures, and qualification records were reused after their hashes matched.
+The completed GPU capture remains cached with its exact inputs to prevent another identical experiment.
+Production kernels and the measured full-model throughput remain unchanged.
+No full-model gain, broader numerical guarantee, or performance-parity acceptance follows.
