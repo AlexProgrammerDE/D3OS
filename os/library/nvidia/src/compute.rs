@@ -540,6 +540,9 @@ impl Kernel {
             (Self::ProjectQuantized, [_, _, _, _, 8]) => "group_project_q8_0",
             (Self::ProjectQuantized, [_, _, _, 8, 0, 3]) => "q8_components_pack",
             (Self::ProjectQuantized, [_, _, _, 8, 1, 3]) => "q8_components_project",
+            (Self::ProjectQuantized, [_, _, _, 8, 2, 3]) => "q8_columns32_components",
+            (Self::ProjectQuantized, [_, _, _, 8, 2]) => "q8_columns32_vector",
+            (Self::EmbeddingQuantized, [_, _, _, 8, 2]) => "q8_columns32_embedding",
             (Self::IntegerReduction, p) => integer_reduction::symbol(p).unwrap_or(self.symbol()),
             (Self::FloatExtrema, p) => float_extrema::symbol(p).unwrap_or(self.symbol()),
             (Self::Interpolate, p) if p.len() == interpolate::PARAMETERS => {
@@ -847,8 +850,8 @@ impl Kernel {
                 (p[0], 3, 2, false)
             }
             // Pack three component planes and their scales, or consume them.
-            (Self::ProjectQuantized, &[m, k, n, 8, phase @ 0..=1, 3]) => {
-                if !(1..=32).contains(&m) || k == 0 || !k.is_multiple_of(32) || n == 0 {
+            (Self::ProjectQuantized, &[m, k, n, 8, phase @ 0..=2, 3]) => {
+                if m == 0 || k == 0 || !k.is_multiple_of(32) || n == 0 || (phase == 2 && !n.is_multiple_of(32)) {
                     return Err(Error::InvalidField);
                 }
                 // The byte-plane address arithmetic and following scale offset
@@ -868,6 +871,26 @@ impl Kernel {
                     extents[..3].copy_from_slice(&[u64::from(scratch), weights, u64::from(values)]);
                     (product(&[m.div_ceil(32), n.div_ceil(32), 128])?, 3, 2, false)
                 }
+            }
+            // Same Q8_0 blocks in 32-column tiles. No padding or extra storage.
+            (Self::ProjectQuantized, &[m, k, n, 8, 2]) => {
+                if !(1..=8).contains(&m) || k == 0 || n == 0 || !k.is_multiple_of(32) || !n.is_multiple_of(32) {
+                    return Err(Error::InvalidField);
+                }
+                let bytes = product(&[k / 32, n, 34])?;
+                extents[..3].copy_from_slice(&[u64::from(product(&[m, k])?), u64::from(bytes).div_ceil(4), u64::from(product(&[m, n])?)]);
+                (product(&[m, n / 4, 128])?, 3, 2, false)
+            }
+            (Self::EmbeddingQuantized, &[vocab, width, rows, 8, 2]) => {
+                if vocab == 0 || width == 0 || rows == 0 || !vocab.is_multiple_of(32) || !width.is_multiple_of(32) {
+                    return Err(Error::InvalidField);
+                }
+                product(&[vocab, width])?;
+                let bytes = product(&[vocab, width / 32, 34])?;
+                let values = product(&[rows, width])?;
+                // The shader reconstructs packed-element indices before decode.
+                extents[..3].copy_from_slice(&[u64::from(bytes).div_ceil(4), u64::from(rows), u64::from(values)]);
+                (values, 3, 2, false)
             }
             // Group qkv/gate/beta/alpha Q8_0 vectors into one output allocation.
             (Self::ProjectQuantized, &[k, q, z, h, 8]) => {

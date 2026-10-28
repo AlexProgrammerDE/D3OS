@@ -8,7 +8,10 @@ use alloc::sync::Arc;
 use burn_backend::{DType, Shape, TensorMetadata};
 use d3os_compute::{Error, Result, nvidia::Nvidia};
 use d3os_nvidia::compute::{Kernel, elementwise::Elementwise};
-use d3os_tensor_file::{matrix::MatrixFormat, quantized::Quantization};
+use d3os_tensor_file::{
+    matrix::{MatrixFormat, MatrixLayout},
+    quantized::Quantization,
+};
 
 fn dense(input: &NativeTensor, dtype: DType) -> Result<NativeTensor> {
     if input.dtype() != dtype {
@@ -17,8 +20,8 @@ fn dense(input: &NativeTensor, dtype: DType) -> Result<NativeTensor> {
     if input.layout.is_contiguous() { Ok(input.clone()) } else { input.copy() }
 }
 
-fn weights(input: &NativeTensor, shape: [usize; 2], format: MatrixFormat) -> Result<NativeTensor> {
-    let words = format.byte_len(shape)?.div_ceil(4);
+fn weights(input: &NativeTensor, shape: [usize; 2], storage: (MatrixFormat, MatrixLayout)) -> Result<NativeTensor> {
+    let words = storage.1.byte_len(shape, storage.0)?.div_ceil(4);
     if input.shape().as_slice() != [words] {
         return Err(Error::ShapeMismatch);
     }
@@ -55,16 +58,17 @@ fn prepare_components(input: &NativeTensor, outputs: usize) -> Result<NativeTens
     output([1, words], Kernel::ProjectQuantized, &[(input, 0)], &[batch, inner, outputs, 8, 0, 3])
 }
 
-fn project_components(components: &NativeTensor, packed: &NativeTensor, batch: usize, shape: [usize; 2]) -> Result<NativeTensor> {
+fn project_components(components: &NativeTensor, packed: &NativeTensor, batch: usize, shape: [usize; 2], layout: MatrixLayout) -> Result<NativeTensor> {
     output(
         [batch, shape[0]],
         Kernel::ProjectQuantized,
         &[(components, 0), (packed, 0)],
-        &[batch, shape[1], shape[0], 8, 1, 3],
+        &[batch, shape[1], shape[0], 8, if layout == MatrixLayout::RowMajor { 1 } else { 2 }, 3],
     )
 }
 
-fn projection(input: &NativeTensor, packed: &NativeTensor, shape: [usize; 2], format: MatrixFormat) -> Result<NativeTensor> {
+fn projection(input: &NativeTensor, packed: &NativeTensor, shape: [usize; 2], storage: (MatrixFormat, MatrixLayout)) -> Result<NativeTensor> {
+    let (format, layout) = storage;
     let [batch, width] = *input.shape().as_slice() else {
         return Err(Error::ShapeMismatch);
     };
@@ -73,10 +77,18 @@ fn projection(input: &NativeTensor, packed: &NativeTensor, shape: [usize; 2], fo
         return Err(Error::ShapeMismatch);
     }
     let input = dense(input, DType::F32)?;
-    let packed = weights(packed, shape, format)?;
-    if use_components(batch, shape, format) {
+    let packed = weights(packed, shape, storage)?;
+    if use_components(batch, shape, format) || (layout == MatrixLayout::Q8Columns32 && batch > 8) {
         let components = prepare_components(&input, outputs)?;
-        return project_components(&components, &packed, batch, shape);
+        return project_components(&components, &packed, batch, shape, layout);
+    }
+    if layout == MatrixLayout::Q8Columns32 {
+        return output(
+            [batch, outputs],
+            Kernel::ProjectQuantized,
+            &[(&input, 0), (&packed, 0)],
+            &[batch, width, outputs, 8, 2],
+        );
     }
     if format == MatrixFormat::Bf16 && (2..=32).contains(&batch) && (256..=2048).contains(&outputs) && width >= 512 {
         let partials = output(
@@ -121,20 +133,21 @@ impl Native {
         })
     }
 
-    pub fn qwen_project(input: BackendTensor, packed: BackendTensor, shape: [usize; 2], format: MatrixFormat) -> BackendTensor {
+    pub fn qwen_project(input: BackendTensor, packed: BackendTensor, shape: [usize; 2], storage: (MatrixFormat, MatrixLayout)) -> BackendTensor {
         let batch = input.shape().first().copied().unwrap_or(0);
         BackendTensor::apply("packed projection", Shape::new([batch, shape[0]]), DType::F32, &[&input, &packed], |v| {
-            projection(v[0], v[1], shape, format)
+            projection(v[0], v[1], shape, storage)
         })
     }
 
-    pub fn qwen_embedding(packed: BackendTensor, shape: [usize; 2], format: MatrixFormat, tokens: alloc::vec::Vec<u32>) -> BackendTensor {
+    pub fn qwen_embedding(packed: BackendTensor, shape: [usize; 2], storage: (MatrixFormat, MatrixLayout), tokens: alloc::vec::Vec<u32>) -> BackendTensor {
         let [vocab, width] = shape;
         BackendTensor::apply("packed embedding", Shape::new([tokens.len(), width]), DType::F32, &[&packed], |v| {
             if tokens.is_empty() || tokens.iter().any(|&id| id as usize >= vocab) {
                 return Err(Error::InvalidParameter);
             }
-            let packed = weights(v[0], shape, format)?;
+            let packed = weights(v[0], shape, storage)?;
+            let (format, layout) = storage;
             let ids = Nvidia.upload_words(&tokens)?;
             let ids = NativeTensor {
                 buffer: Arc::new(ids),
@@ -145,14 +158,23 @@ impl Native {
                 MatrixFormat::Quantized(format) => (Kernel::EmbeddingQuantized, format as usize),
                 _ => (Kernel::Embedding, usize::from(format == MatrixFormat::Bf16)),
             };
-            output([tokens.len(), width], kernel, &[(&packed, 0), (&ids, 0)], &[vocab, width, tokens.len(), code])
+            let parameters = [vocab, width, tokens.len(), code, 2];
+            output(
+                [tokens.len(), width],
+                kernel,
+                &[(&packed, 0), (&ids, 0)],
+                &parameters[..if layout == MatrixLayout::RowMajor { 4 } else { 5 }],
+            )
         })
     }
 
     pub fn qwen_gated_project(
-        input: BackendTensor, gate: BackendTensor, up: BackendTensor, shape: [usize; 2], gate_format: MatrixFormat, up_format: MatrixFormat,
+        input: BackendTensor, gate: BackendTensor, up: BackendTensor, shape: [usize; 2], gate_storage: (MatrixFormat, MatrixLayout),
+        up_storage: (MatrixFormat, MatrixLayout),
     ) -> BackendTensor {
         let batch = input.shape().first().copied().unwrap_or(0);
+        let (gate_format, gate_layout) = gate_storage;
+        let (up_format, up_layout) = up_storage;
         BackendTensor::apply(
             "gated packed projection",
             Shape::new([batch, shape[0]]),
@@ -164,8 +186,8 @@ impl Native {
                         return Err(Error::ShapeMismatch);
                     }
                     let input = dense(v[0], DType::F32)?;
-                    let gate = weights(v[1], shape, gate_format)?;
-                    let up = weights(v[2], shape, up_format)?;
+                    let gate = weights(v[1], shape, gate_storage)?;
+                    let up = weights(v[2], shape, up_storage)?;
                     return output(
                         [1, shape[0]],
                         Kernel::GatedProjectBf16,
@@ -178,15 +200,15 @@ impl Native {
                         return Err(Error::ShapeMismatch);
                     }
                     let input = dense(v[0], DType::F32)?;
-                    let gate = weights(v[1], shape, gate_format)?;
-                    let up = weights(v[2], shape, up_format)?;
+                    let gate = weights(v[1], shape, gate_storage)?;
+                    let up = weights(v[2], shape, up_storage)?;
                     let components = prepare_components(&input, shape[0])?;
                     (
-                        project_components(&components, &gate, batch, shape)?,
-                        project_components(&components, &up, batch, shape)?,
+                        project_components(&components, &gate, batch, shape, gate_layout)?,
+                        project_components(&components, &up, batch, shape, up_layout)?,
                     )
                 } else {
-                    (projection(v[0], v[1], shape, gate_format)?, projection(v[0], v[2], shape, up_format)?)
+                    (projection(v[0], v[1], shape, gate_storage)?, projection(v[0], v[2], shape, up_storage)?)
                 };
                 Nvidia.dispatch_words(Kernel::SiluMul, &[(&gate.buffer, 0), (&up.buffer, 0), (&gate.buffer, 0)], &[batch * shape[0]])?;
                 Ok(gate)
@@ -194,7 +216,9 @@ impl Native {
         )
     }
 
-    pub fn qwen_project_add(input: BackendTensor, packed: BackendTensor, residual: BackendTensor, shape: [usize; 2], format: MatrixFormat) -> BackendTensor {
+    pub fn qwen_project_add(
+        input: BackendTensor, packed: BackendTensor, residual: BackendTensor, shape: [usize; 2], storage: (MatrixFormat, MatrixLayout),
+    ) -> BackendTensor {
         let result_shape = residual.shape();
         // Check before creating any temporary storage aliases. In-place dispatch is
         // valid only when no other Burn tensor can observe the residual allocation.
@@ -206,9 +230,10 @@ impl Native {
             if width != shape[1] || v[2].shape().as_slice() != [batch, shape[0]] {
                 return Err(Error::ShapeMismatch);
             }
+            let (format, _) = storage;
             if batch == 1 && width.is_multiple_of(2) && shape[0] <= 8192 && format == MatrixFormat::Bf16 {
                 let input = dense(v[0], DType::F32)?;
-                let packed = weights(v[1], shape, format)?;
+                let packed = weights(v[1], shape, storage)?;
                 let residual = if unique { dense(v[2], DType::F32)? } else { v[2].copy()? };
                 if residual.dtype() != DType::F32 {
                     return Err(Error::InvalidParameter);
@@ -225,7 +250,7 @@ impl Native {
                 )?;
                 return Ok(residual);
             }
-            projection(v[0], v[1], shape, format)?.binary(v[2], Elementwise::Add)
+            projection(v[0], v[1], shape, storage)?.binary(v[2], Elementwise::Add)
         })
     }
 

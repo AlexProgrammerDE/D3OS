@@ -22,6 +22,7 @@ fn main() {
         "quantized.rs",
         "quantized-vector.rs",
         "quantized-prefill.rs",
+        "quantized-columns.rs",
         "quad.rs",
         "elementwise.rs",
         "rms-wide.rs",

@@ -8,7 +8,10 @@ use alloc::vec::Vec;
 use burn_backend::{DType, Shape, Slice, TensorMetadata};
 use d3os_compute::{Error, Result, element_count, nvidia::Nvidia};
 use d3os_nvidia::compute::Kernel;
-use d3os_tensor_file::{matrix::MatrixFormat, quantized::Quantization};
+use d3os_tensor_file::{
+    matrix::{MatrixFormat, MatrixLayout},
+    quantized::Quantization,
+};
 
 fn check(tensor: &NativeTensor, shape: &[usize]) -> Result<()> {
     if tensor.shape().as_slice() != shape || tensor.dtype() != DType::F32 {
@@ -262,7 +265,7 @@ impl Native {
     /// Scalar parameters: convolution weights, log decay, time bias, norm.
     pub fn qwen_project_delta(
         input: BackendTensor, packed: [BackendTensor; 4], parameters: [BackendTensor; 4], cache: [BackendTensor; 2], geometry: [usize; 5], epsilon: f32,
-        formats: [MatrixFormat; 4],
+        formats: [(MatrixFormat, MatrixLayout); 4],
     ) -> [BackendTensor; 3] {
         let rows = input.shape().first().copied().unwrap_or(0);
         let [key_heads, heads, key_dim, value_dim, kernel] = geometry;
@@ -290,7 +293,7 @@ impl Native {
                     && key_dim <= 128
                     && value_dim <= 128
                     && kernel <= 8
-                    && formats.iter().all(|&f| f == MatrixFormat::Bf16);
+                    && formats.iter().all(|&f| f == (MatrixFormat::Bf16, MatrixLayout::RowMajor));
                 let group_q8 = rows == 1
                     && width >= 1024
                     && width.is_multiple_of(32)
@@ -300,7 +303,9 @@ impl Native {
                     && key_dim <= 128
                     && value_dim <= 128
                     && kernel <= 8
-                    && formats.iter().all(|&f| f == MatrixFormat::Quantized(Quantization::Q8_0));
+                    && formats
+                        .iter()
+                        .all(|&f| f == (MatrixFormat::Quantized(Quantization::Q8_0), MatrixLayout::RowMajor));
                 let projected = if group_bf16 || group_q8 {
                     let hidden = dense(v[0], DType::F32)?;
                     let matrices = [channels, values, heads, heads].map(|out| [out, width]);

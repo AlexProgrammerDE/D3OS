@@ -1,5 +1,5 @@
 #![cfg_attr(not(any(feature = "cpu", feature = "native")), allow(unused_variables))]
-use super::MatrixFormat;
+use super::{MatrixFormat, MatrixLayout};
 use alloc::vec::Vec;
 use burn::backend::{
     Backend, ExtensionType, backend_extension,
@@ -11,6 +11,7 @@ pub struct MatrixPrimitive<B: Backend> {
     pub words: IntTensor<B>,
     pub shape: [usize; 2],
     pub format: MatrixFormat,
+    pub layout: MatrixLayout,
 }
 
 #[derive(ExtensionType)]
@@ -166,7 +167,12 @@ impl QwenOps for d3os_burn_native::backend::Native {
         input: FloatTensor<Self>, weights: DeltaWeightPrimitive<Self>, parameters: DeltaParameterPrimitive<Self>, cache: DeltaCachePrimitive<Self>,
         config: super::DeltaConfig,
     ) -> DeltaResult<Self> {
-        let formats = [weights.qkv.format, weights.gate.format, weights.beta.format, weights.alpha.format];
+        let formats = [
+            (weights.qkv.format, weights.qkv.layout),
+            (weights.gate.format, weights.gate.layout),
+            (weights.beta.format, weights.beta.layout),
+            (weights.alpha.format, weights.alpha.layout),
+        ];
         let [output, convolution, recurrent] = Self::qwen_project_delta(
             input,
             [weights.qkv.words, weights.gate.words, weights.beta.words, weights.alpha.words],
@@ -184,16 +190,16 @@ impl QwenOps for d3os_burn_native::backend::Native {
     }
 
     fn project(input: FloatTensor<Self>, matrix: MatrixPrimitive<Self>) -> FloatTensor<Self> {
-        Self::qwen_project(input, matrix.words, matrix.shape, matrix.format)
+        Self::qwen_project(input, matrix.words, matrix.shape, (matrix.format, matrix.layout))
     }
     fn embedding(matrix: MatrixPrimitive<Self>, tokens: Vec<u32>) -> FloatTensor<Self> {
-        Self::qwen_embedding(matrix.words, matrix.shape, matrix.format, tokens)
+        Self::qwen_embedding(matrix.words, matrix.shape, (matrix.format, matrix.layout), tokens)
     }
     fn gated_project(input: FloatTensor<Self>, gate: MatrixPrimitive<Self>, up: MatrixPrimitive<Self>) -> FloatTensor<Self> {
-        Self::qwen_gated_project(input, gate.words, up.words, gate.shape, gate.format, up.format)
+        Self::qwen_gated_project(input, gate.words, up.words, gate.shape, (gate.format, gate.layout), (up.format, up.layout))
     }
     fn project_add(input: FloatTensor<Self>, matrix: MatrixPrimitive<Self>, residual: FloatTensor<Self>) -> FloatTensor<Self> {
-        Self::qwen_project_add(input, matrix.words, residual, matrix.shape, matrix.format)
+        Self::qwen_project_add(input, matrix.words, residual, matrix.shape, (matrix.format, matrix.layout))
     }
     fn rms_norm(input: FloatTensor<Self>, weight: FloatTensor<Self>, epsilon: f32) -> FloatTensor<Self> {
         Self::qwen_rms_norm(input, weight, epsilon)

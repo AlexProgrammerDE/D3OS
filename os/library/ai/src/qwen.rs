@@ -7,6 +7,7 @@ mod cpu_state;
 pub mod gguf;
 mod model;
 mod ops;
+mod packed;
 pub mod tokenizer;
 pub use config::Config;
 pub use model::{Error, Generation, Qwen, Session, StopReason, WeightData, greedy, is_stop, verify, verify_fixture};
@@ -15,11 +16,14 @@ pub use state::{AttentionConfig, AttentionInputs, AttentionState, DeltaConfig, D
 
 use alloc::{format, string::String, vec::Vec};
 use burn::{
-    module::{Module, Param, ParamId},
+    module::{Module, Param},
     tensor::{DType, Device, Int, Tensor, TensorData},
 };
 use d3os_tensor_file::element_count;
-pub use d3os_tensor_file::{matrix::MatrixFormat, quantized::Quantization};
+pub use d3os_tensor_file::{
+    matrix::{MatrixFormat, MatrixLayout},
+    quantized::Quantization,
+};
 
 pub type Result<T> = core::result::Result<T, Error>;
 
@@ -37,7 +41,16 @@ pub(crate) fn device_supported(device: &Device) -> Result<()> {
     }
 }
 
-/// Immutable, validated row-major weights stored as exact packed I32 words.
+fn native_matrix_device(device: &Device) -> bool {
+    match device.as_dispatch() {
+        #[cfg(feature = "native")]
+        burn::backend::DispatchDevice::Native(_) => true,
+        #[allow(unreachable_patterns)]
+        _ => false,
+    }
+}
+
+/// Immutable, validated weights stored as exact packed I32 words.
 /// The logical matrix shape is independent of its physical Burn storage shape.
 #[derive(Module, Debug)]
 pub struct PackedMatrix {
@@ -46,6 +59,8 @@ pub struct PackedMatrix {
     shape: [usize; 2],
     #[module(skip)]
     format: MatrixFormat,
+    #[module(skip)]
+    layout: MatrixLayout,
 }
 
 impl PackedMatrix {
@@ -53,22 +68,42 @@ impl PackedMatrix {
     pub fn from_bytes(shape: [usize; 2], format: MatrixFormat, bytes: &[u8], device: &Device) -> Result<Self> {
         device_supported(device)?;
         format.validate(shape, bytes).map_err(|e| format!("Qwen packed matrix: {e}"))?;
+        // Reorder only the measured 9B FFN geometries. The file encoding and
+        // numerical format stay unchanged; the device owns one packed copy.
+        let layout = if cfg!(feature = "native")
+            && native_matrix_device(device)
+            && matches!(shape, [12288, 4096] | [4096, 12288])
+            && format == MatrixFormat::Quantized(Quantization::Q8_0)
+        {
+            MatrixLayout::Q8Columns32
+        } else {
+            MatrixLayout::RowMajor
+        };
         let count = bytes.len().div_ceil(4);
         let length = count.checked_mul(4).ok_or(Error::AllocationFailed)?;
-        let mut packed = Vec::new();
+        let mut packed = if layout == MatrixLayout::Q8Columns32 {
+            layout.pack(shape, format, bytes)?
+        } else {
+            Vec::new()
+        };
         packed
-            .try_reserve_exact(length)
+            .try_reserve_exact(length - packed.len())
             .map_err(|_| String::from("cannot allocate Qwen packed matrix"))?;
         // Copy the complete encoding once, then initialize only its partial word.
-        packed.extend_from_slice(bytes);
+        if layout == MatrixLayout::RowMajor {
+            packed.extend_from_slice(bytes);
+        }
         packed.resize(length, 0);
         Ok(Self {
-            words: Param::initialized(
-                ParamId::new(),
+            words: packed::parameter(
                 Tensor::<1, Int>::from_data(TensorData::from_bytes_vec(packed, [count], DType::I32), device),
+                shape,
+                format,
+                layout,
             ),
             shape,
             format,
+            layout,
         })
     }
 
@@ -148,6 +183,7 @@ impl PackedMatrix {
             words: self.words.val().into_dispatch(),
             shape: self.shape,
             format: self.format,
+            layout: self.layout,
         }
     }
 }

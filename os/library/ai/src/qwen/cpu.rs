@@ -16,7 +16,8 @@ fn decode(matrix: MatrixPrimitive<Flex>) -> FloatTensor<Flex> {
         return FlexTensor::from_arc(data, Layout::contiguous(Shape::new(matrix.shape)), DType::F32);
     }
     let count = matrix.format.byte_len(matrix.shape).unwrap();
-    let values = matrix.format.decode(matrix.shape, &data[..count]).unwrap();
+    let bytes = matrix.layout.row_major_bytes(matrix.shape, matrix.format, &data[..count]).unwrap();
+    let values = matrix.format.decode(matrix.shape, &bytes).unwrap();
     Flex::float_from_data(TensorData::new(values, matrix.shape), &device)
 }
 
@@ -47,6 +48,8 @@ impl QwenOps for Flex {
         let rows = tokens.len();
         let row_bytes = matrix.format.byte_len([1, width]).unwrap();
         let data = matrix.words.to_contiguous().data_arc();
+        let count = matrix.format.byte_len(matrix.shape).unwrap();
+        let data = matrix.layout.row_major_bytes(matrix.shape, matrix.format, &data[..count]).unwrap();
         let mut output = Vec::with_capacity(rows * width);
         for token in tokens {
             let start = token as usize * row_bytes;

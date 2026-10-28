@@ -134,12 +134,11 @@ fn component_projection_covers_byte_planes_scale_tail_and_each_source() {
 fn component_projection_rejects_partial_invalid_and_overflowing_packets() {
     for parameters in [
         vec![0, 4096, 12288, 8, 0, 3],
-        vec![33, 4096, 12288, 8, 1, 3],
         vec![32, 0, 12288, 8, 0, 3],
         vec![32, 4095, 12288, 8, 1, 3],
         vec![32, 4096, 0, 8, 0, 3],
         vec![32, 4096, 12288, 9, 1, 3],
-        vec![32, 4096, 12288, 8, 2, 3],
+        vec![32, 4096, 12288, 8, 3, 3],
         vec![32, 4096, 12288, 8, 1, 1],
         vec![32, 4096, 12288, 8, 0, 4],
         vec![32, 4096, 12288, 8, 1],
@@ -149,6 +148,52 @@ fn component_projection_rejects_partial_invalid_and_overflowing_packets() {
         vec![32, 4096, 12288, 8, 0, 3, 0],
     ] {
         assert!(Kernel::ProjectQuantized.work(&parameters).is_err());
+    }
+}
+
+#[test]
+fn lossless_column_layout_dispatches_complete_storage_and_preserves_alias_guards() {
+    for [rows, inner, columns] in [[1u32, 32, 32], [5, 1056, 96], [32, 4096, 12288], [64, 12288, 4096]] {
+        let phase = if rows <= 8 {
+            vec![rows, inner, columns, 8, 2]
+        } else {
+            vec![rows, inner, columns, 8, 2, 3]
+        };
+        let work = Kernel::ProjectQuantized.work(&phase).unwrap();
+        let input = if rows <= 8 { rows * inner } else { rows * inner * 3 / 4 + rows * inner / 32 };
+        let blocks = if rows <= 8 { rows * columns / 4 } else { rows.div_ceil(32) * columns / 32 };
+        assert_eq!(
+            &work.extents[..3],
+            &[
+                u64::from(input),
+                (u64::from(inner / 32) * u64::from(columns) * 34).div_ceil(4),
+                u64::from(rows * columns)
+            ]
+        );
+        assert_eq!((work.blocks, work.pointers, work.output), (blocks, 3, 2));
+        let pointers = [0x100000, 0x10000000, 0x40000000];
+        work.validate_aliases(&pointers).unwrap();
+        for source in 0..2 {
+            let mut alias = pointers;
+            alias[2] = alias[source] + 4 * (work.extents[source] - 1);
+            assert!(work.validate_aliases(&alias).is_err());
+        }
+        let embedding = Kernel::EmbeddingQuantized.work(&[columns, inner, rows, 8, 2]).unwrap();
+        assert_eq!(&embedding.extents[..3], &[work.extents[1], u64::from(rows), u64::from(rows * inner)]);
+        assert!(Kernel::ProjectQuantized.work(&[rows, inner, columns, 8, 0, 3]).is_ok());
+    }
+    for p in [
+        vec![1, 32, 33, 8, 2],
+        vec![9, 32, 32, 8, 2],
+        vec![0, 32, 32, 8, 2],
+        vec![32, 32, 33, 8, 2, 3],
+        vec![32, 31, 32, 8, 2, 3],
+        vec![32, 1 << 27, 32, 8, 2, 3],
+    ] {
+        assert!(Kernel::ProjectQuantized.work(&p).is_err());
+    }
+    for p in [[33, 32, 1, 8, 2], [32, 33, 1, 8, 2], [32, 32, 0, 8, 2], [32, u32::MAX - 31, 1, 8, 2]] {
+        assert!(Kernel::EmbeddingQuantized.work(&p).is_err());
     }
 }
 
