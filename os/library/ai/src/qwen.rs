@@ -98,11 +98,11 @@ impl PackedMatrix {
     pub fn from_bytes(shape: [usize; 2], format: MatrixFormat, bytes: &[u8], device: &Device) -> Result<Self> {
         device_supported(device)?;
         format.validate(shape, bytes).map_err(|e| format!("Qwen packed matrix: {e}"))?;
-        // Reorder only the measured 9B FFN geometries. The file encoding and
+        // Reorder the measured wide 9B FFN and attention geometries. File encoding and
         // numerical format stay unchanged; the device owns one packed copy.
         let layout = if cfg!(feature = "native")
             && native_matrix_device(device)
-            && matches!(shape, [12288, 4096] | [4096, 12288])
+            && matches!(shape, [12288, 4096] | [4096, 12288] | [8192, 4096] | [4096, 4096])
             && format == MatrixFormat::Quantized(Quantization::Q8_0)
         {
             MatrixLayout::Q8Columns32
@@ -111,26 +111,26 @@ impl PackedMatrix {
         };
         let count = bytes.len().div_ceil(4);
         let length = count.checked_mul(4).ok_or(Error::AllocationFailed)?;
-        let mut packed = if layout == MatrixLayout::Q8Columns32 {
-            layout.pack(shape, format, bytes)?
-        } else {
-            Vec::new()
-        };
+        let mut packed = Vec::new();
         packed
             .try_reserve_exact(length - packed.len())
             .map_err(|_| String::from("cannot allocate Qwen packed matrix"))?;
         // Copy the complete encoding once, then initialize only its partial word.
-        if layout == MatrixLayout::RowMajor {
-            packed.extend_from_slice(bytes);
-        }
+        packed.extend_from_slice(bytes);
         packed.resize(length, 0);
+        let words = Tensor::<1, Int>::from_data(TensorData::from_bytes_vec(packed, [count], DType::I32), device);
+        #[cfg(feature = "native")]
+        let words = if layout == MatrixLayout::Q8Columns32 {
+            use crate::native::backend::Native;
+            let input = words
+                .try_into_primitive::<Native>()
+                .map_err(|_| String::from("Qwen packed weights require Native integer storage"))?;
+            Tensor::<1, Int>::from_primitive::<Native>(Native::qwen_pack_q8_weights(input, shape))
+        } else {
+            words
+        };
         Ok(Self {
-            words: packed::parameter(
-                Tensor::<1, Int>::from_data(TensorData::from_bytes_vec(packed, [count], DType::I32), device),
-                shape,
-                format,
-                layout,
-            ),
+            words: packed::parameter(words, shape, format, layout),
             shape,
             format,
             layout,

@@ -183,11 +183,11 @@ impl Mixer {
         };
         let set = |matrix: &mut PackedMatrix| {
             if mode != PrefillQuantization::Accurate
-                && (matrix.layout != MatrixLayout::RowMajor
+                && (!matches!(matrix.layout, MatrixLayout::RowMajor | MatrixLayout::Q8Columns32)
                     || matrix.format != MatrixFormat::Quantized(Quantization::Q8_0)
                     || !matches!(matrix.shape, [1024 | 4096 | 8192, 4096]))
             {
-                return Err(Error::from("Q8_1 attention prefill requires qualified row-major Q8_0 matrices"));
+                return Err(Error::from("Q8_1 attention prefill requires qualified packed Q8_0 matrices"));
             }
             matrix.prefill_quantization = mode;
             Ok(())

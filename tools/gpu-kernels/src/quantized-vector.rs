@@ -124,8 +124,7 @@ unsafe fn q8_batched_wide_column(input: *const f32, weights: *const f32, output:
 }
 
 // Group wide qkv/gate and narrow beta/alpha vectors without repacking weights.
-#[cutile::entry()]
-unsafe fn group_project_q8_0(
+unsafe fn group_project_q8<const TILED: bool>(
     input: *const f32, qkv: *const f32, gate: *const f32, beta: *const f32, alpha: *const f32, output: *mut f32, inner: u32, qkv_cols: u32, gate_cols: u32,
     heads: u32, _format: u32,
 ) {
@@ -168,7 +167,11 @@ unsafe fn group_project_q8_0(
         heads
     };
     if block < gate_end {
-        unsafe { vector_project_q8_at::<false, true>(input, weights, output, inner, cols, (block - first_block) * 4u32, output_offset, 0u32) };
+        if TILED {
+            unsafe { blocked_vector_at::<1, false, true>(input, weights, output, inner, cols, (block - first_block) * 4u32, output_offset, 0u32) };
+        } else {
+            unsafe { vector_project_q8_at::<false, true>(input, weights, output, inner, cols, (block - first_block) * 4u32, output_offset, 0u32) };
+        }
     } else {
         unsafe { vector_project_q8_at::<true, false>(input, weights, output, inner, cols, block - first_block, output_offset, 0u32) };
     }
@@ -246,6 +249,22 @@ unsafe fn vector_quantized_fma<const G: i32>(
     };
     fma(x, w, sum, rounding::NearestEven, ftz::Disabled)
 }
+#[cutile::entry()]
+unsafe fn group_project_q8_0(
+    input: *const f32, qkv: *const f32, gate: *const f32, beta: *const f32, alpha: *const f32, output: *mut f32, inner: u32, qkv_cols: u32, gate_cols: u32,
+    heads: u32, _format: u32,
+) {
+    unsafe { group_project_q8::<false>(input, qkv, gate, beta, alpha, output, inner, qkv_cols, gate_cols, heads, _format) }
+}
+
+#[cutile::entry()]
+unsafe fn group_project_q8_columns32(
+    input: *const f32, qkv: *const f32, gate: *const f32, beta: *const f32, alpha: *const f32, output: *mut f32, inner: u32, qkv_cols: u32, gate_cols: u32,
+    heads: u32, _format: u32, _layout: u32,
+) {
+    unsafe { group_project_q8::<true>(input, qkv, gate, beta, alpha, output, inner, qkv_cols, gate_cols, heads, _format) }
+}
+
 unsafe fn vector_project_k<const FORMAT: u32>(a: *const f32, b: *const f32, output: *mut f32, inner: u32, cols: u32) {
     let first = block_id() * 4u32;
     let lane = lanes::<128>() % broadcast_scalar(32u32, shape![128]);

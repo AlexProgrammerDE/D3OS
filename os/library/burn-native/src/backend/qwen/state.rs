@@ -13,6 +13,23 @@ use d3os_tensor_file::{
     quantized::Quantization,
 };
 
+// The narrow beta/alpha matrices retain their row-major layout.
+fn grouped_q8_layout(formats: [(MatrixFormat, MatrixLayout); 4]) -> Option<MatrixLayout> {
+    if formats.iter().any(|&(format, _)| format != MatrixFormat::Quantized(Quantization::Q8_0)) {
+        return None;
+    }
+    match formats.map(|(_, layout)| layout) {
+        [MatrixLayout::RowMajor, MatrixLayout::RowMajor, MatrixLayout::RowMajor, MatrixLayout::RowMajor] => Some(MatrixLayout::RowMajor),
+        [
+            MatrixLayout::Q8Columns32,
+            MatrixLayout::Q8Columns32,
+            MatrixLayout::RowMajor,
+            MatrixLayout::RowMajor,
+        ] => Some(MatrixLayout::Q8Columns32),
+        _ => None,
+    }
+}
+
 fn check(tensor: &NativeTensor, shape: &[usize]) -> Result<()> {
     if tensor.shape().as_slice() != shape || tensor.dtype() != DType::F32 {
         return Err(Error::ShapeMismatch);
@@ -299,6 +316,7 @@ impl Native {
                     && value_dim <= 128
                     && kernel <= 8
                     && formats.iter().all(|&f| f == (MatrixFormat::Bf16, MatrixLayout::RowMajor));
+                let q8_layout = grouped_q8_layout(formats);
                 let group_q8 = rows == 1
                     && width >= 1024
                     && width.is_multiple_of(32)
@@ -308,9 +326,7 @@ impl Native {
                     && key_dim <= 128
                     && value_dim <= 128
                     && kernel <= 8
-                    && formats
-                        .iter()
-                        .all(|&f| f == (MatrixFormat::Quantized(Quantization::Q8_0), MatrixLayout::RowMajor));
+                    && q8_layout.is_some();
                 let projected = if group_bf16 || group_q8 {
                     let hidden = dense(v[0], DType::F32)?;
                     let matrices = [channels, values, heads, heads].map(|out| [out, width]);
@@ -323,12 +339,19 @@ impl Native {
                         .checked_add(values)
                         .and_then(|n| heads.checked_mul(2).and_then(|h| n.checked_add(h)))
                         .ok_or(Error::SizeOverflow)?;
-                    let parameters = [width, channels, values, heads, 8];
+                    let parameters = [width, channels, values, heads, 8, 2];
+                    let count = if group_q8 && q8_layout == Some(MatrixLayout::Q8Columns32) {
+                        6
+                    } else if group_q8 {
+                        5
+                    } else {
+                        4
+                    };
                     let all = output(
                         [1, total],
                         if group_q8 { Kernel::ProjectQuantized } else { Kernel::GroupedProjectBf16 },
                         &[(&hidden, 0), (&weights[0], 0), (&weights[1], 0), (&weights[2], 0), (&weights[3], 0)],
-                        &parameters[..if group_q8 { 5 } else { 4 }],
+                        &parameters[..count],
                     )?;
                     let mut offset = 0;
                     [channels, values, heads, heads]
@@ -357,5 +380,21 @@ impl Native {
                 )
             },
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn grouped_layout_requires_consistent_wide_and_narrow_storage() {
+        let row = (MatrixFormat::Quantized(Quantization::Q8_0), MatrixLayout::RowMajor);
+        let tiled = (row.0, MatrixLayout::Q8Columns32);
+        assert_eq!(grouped_q8_layout([row; 4]), Some(MatrixLayout::RowMajor));
+        assert_eq!(grouped_q8_layout([tiled, tiled, row, row]), Some(MatrixLayout::Q8Columns32));
+        for formats in [[tiled, row, row, row], [row, tiled, row, row], [tiled; 4], [(MatrixFormat::Bf16, row.1); 4]] {
+            assert_eq!(grouped_q8_layout(formats), None);
+        }
     }
 }

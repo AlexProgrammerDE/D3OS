@@ -2778,3 +2778,66 @@ Completed captures remained intact, and only the missing final control resumed.
 The test preparation reused matching kernel qualifications and dependencies.
 The unchanged Math artifact and rules retained their earlier mutation-test evidence, with fresh source-binding checks.
 No default bundle promotion, broader quality, DOOM, or performance-parity acceptance follows.
+
+## GPU-side Q8 weight reordering
+
+The next candidate uploads canonical Q8_0 blocks and reorders them on the GPU during Native model import.
+It uses the existing 32-column layout for the measured wide FFN and attention shapes.
+Narrow attention weights keep their row-major layout.
+The permutation preserves every scale and quantized byte without numerical conversion.
+Canonical file encoding, record hooks, and the accurate activation default remain unchanged.
+
+Complete standalone GPU comparisons covered 4,707,828,224 output bytes and 1,711,730,816 source bytes across eleven geometries.
+Both complementary output poisons, buffer guards, partial final blocks, and exceptional half-scale bit patterns passed.
+The production permutation entry has identical machine text to that tested implementation.
+
+The October 29 checkpoint used the same 9B model, 37 prompt tokens, 128 teacher-forced steps, FP32 KV storage, and 2048-token context.
+Control, candidate, candidate, control capture order contributed four ordinary warm samples per experimental mode.
+First passes and separately instrumented fourth passes remain excluded from warm timing comparisons.
+
+| Native measurement | Existing layout/import | GPU reorder and wide attention layout |
+| --- | ---: | ---: |
+| Warm prefill, 37 tokens | 78.25 ms | 73.75 ms |
+| Teacher-forced decode, 128 steps | 52.508 tokens/s | 52.573 tokens/s |
+| Model import | 7655 ms | 6787 ms |
+
+Paired prefill time decreased by 5.75% and model import time decreased by 11.34%.
+The 0.12% decode difference does not establish a throughput gain.
+Control imports measured 8053 and 7257 ms; candidate imports measured 6760 and 6814 ms.
+Automatic clocks and the small sample count limit these timing claims.
+Different Native and Linux storage paths still prevent a matched cold-load comparison.
+
+Both layouts retain 9,516,859,392 live weight bytes and zero retired bytes after import.
+The candidate retains 77,922,304 allocator cache bytes, within the predeclared 256 MiB limit.
+Temporary upload storage returns to that allocator cache; the loaded model retains one packed weight copy.
+No host activation transfers occurred.
+
+Separate accurate-default captures passed the original FP32 gate with zero failing values in both layouts.
+Their two ordinary warm samples averaged 119.5 and 114.5 ms prefill, with no decode gain.
+The explicit quantized mode retains identical reference-error statistics and all 128 teacher-forced decisions between layouts.
+It still fails the original FP32 gate for 21,264,386 of 32,033,280 values.
+No tolerance, precision policy, or token rule changed.
+
+The combined module contains 275 inference entries.
+All 273 prior inference machine-text sections and both smaller cubins remain byte-exact.
+The two new entries implement weight permutation and grouped column-layout decode.
+Host checks passed 299 SDK/Native tests, six Qwen tests, and strict SDK/Native/AI Clippy.
+The first AI check failed on error formatting; the corrected source passed and the failed receipt remains preserved.
+Math verification rules and executable sections remain unchanged.
+The default kernel bundle is not promoted by this checkpoint.
+
+### Reuse before each test
+
+Before each test, the runner checks for a completed result with matching inputs.
+The capture cache binds source, image, module, execution contract, runner, validator, serial log, and result hashes.
+A matching completed capture is reused without another VM launch.
+Unclassified captures remain preserved and stop automatic retries.
+Explicit performance repeats have separate identities because they measure run-to-run variation.
+
+Unchanged builds, qualified modules, and validation evidence are reused separately.
+Source switches restore original candidate timestamps to avoid unnecessary Cargo invalidation.
+The unchanged Math rules reuse the prior artifact-mutation suite, with fresh provenance checks for the current source context.
+Finalization reused all six validated captures and matching host checks without another test, build, disassembly, or GPU run.
+Cached passes are reported as retained evidence rather than fresh executions.
+
+Decode parity, broader prompt quality, the latest 0.8B comparison, DOOM, and full-backend acceptance remain open.

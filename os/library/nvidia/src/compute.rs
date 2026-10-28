@@ -537,6 +537,8 @@ impl Kernel {
         match (self, parameters) {
             (Self::RmsNorm, [_, 4096, _, _]) => "rms_norm_4096",
             (Self::ResidualNorm, [_, 4096, _]) => "residual_norm_4096",
+            (Self::ProjectQuantized, [_, _, 8, 3]) => "q8_columns32_pack",
+            (Self::ProjectQuantized, [_, _, _, _, 8, 2]) => "group_project_q8_columns32",
             (Self::ProjectQuantized, [_, _, _, _, 8]) => "group_project_q8_0",
             (Self::ProjectQuantized, [_, _, _, 8, 0, 3]) => "q8_components_pack",
             (Self::ProjectQuantized, [_, _, _, 8, 1, 3]) => "q8_components_project",
@@ -913,8 +915,21 @@ impl Kernel {
                 extents[..3].copy_from_slice(&[u64::from(bytes).div_ceil(4), u64::from(rows), u64::from(values)]);
                 (values, 3, 2, false)
             }
+            // Permute complete uploaded Q8_0 blocks without interpreting their bits.
+            (Self::ProjectQuantized, &[columns, inner, 8, 3]) => {
+                if !columns.is_multiple_of(32) || !inner.is_multiple_of(32) {
+                    return Err(Error::InvalidField);
+                }
+                let elements = product(&[columns, inner])?;
+                let words = quantized_words(elements, 8)?;
+                extents[..2].copy_from_slice(&[words, words]);
+                (u32::try_from(words).map_err(|_| Error::InvalidField)?, 2, 1, false)
+            }
             // Group qkv/gate/beta/alpha Q8_0 vectors into one output allocation.
-            (Self::ProjectQuantized, &[k, q, z, h, 8]) => {
+            (Self::ProjectQuantized, &[k, q, z, h, 8] | &[k, q, z, h, 8, 2]) => {
+                if p.len() == 6 && (!q.is_multiple_of(32) || !z.is_multiple_of(32)) {
+                    return Err(Error::InvalidField);
+                }
                 if k < 1024 || !k.is_multiple_of(32) || q < 256 || z < 256 || !(1..=128).contains(&h) {
                     return Err(Error::InvalidField);
                 }

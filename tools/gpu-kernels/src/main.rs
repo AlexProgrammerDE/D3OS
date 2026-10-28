@@ -122,6 +122,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "q8_batched_narrow_signed",
             "q8_batched_wide_column",
             "group_project_q8_0",
+            "group_project_q8_columns32",
+            "q8_columns32_pack",
             "q8_components_pack",
             "q8_components_project",
             "q8_columns32_components",

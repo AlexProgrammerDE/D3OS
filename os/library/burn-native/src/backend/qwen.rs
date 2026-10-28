@@ -59,11 +59,17 @@ fn use_components(batch: usize, shape: [usize; 2], format: MatrixFormat) -> bool
 
 fn projection_components(batch: usize, shape: [usize; 2], storage: (MatrixFormat, MatrixLayout), mode: PrefillQuantization) -> Result<Option<usize>> {
     let (format, layout) = storage;
-    if mode == PrefillQuantization::Q8_1WithAttention && layout == MatrixLayout::RowMajor {
-        if format != MatrixFormat::Quantized(Quantization::Q8_0) || !matches!(shape, [1024 | 4096 | 8192, 4096]) {
+    if mode == PrefillQuantization::Q8_1WithAttention && matches!(shape, [1024 | 4096 | 8192, 4096]) {
+        if format != MatrixFormat::Quantized(Quantization::Q8_0) {
             return Err(Error::InvalidParameter);
         }
-        return Ok((batch == 32).then_some(1));
+        return Ok(if batch == 32 {
+            Some(1)
+        } else if layout == MatrixLayout::Q8Columns32 && batch > 8 {
+            Some(3)
+        } else {
+            None
+        });
     }
     if mode != PrefillQuantization::Accurate {
         if layout != MatrixLayout::Q8Columns32 || format != MatrixFormat::Quantized(Quantization::Q8_0) || !matches!(shape, [12288, 4096] | [4096, 12288]) {
@@ -150,6 +156,24 @@ fn projection(
 }
 
 impl Native {
+    pub fn qwen_pack_q8_weights(input: BackendTensor, shape: [usize; 2]) -> BackendTensor {
+        BackendTensor::apply("pack Q8 weights", input.shape(), DType::I32, &[&input], |v| {
+            let input = weights(v[0], shape, (MatrixFormat::Quantized(Quantization::Q8_0), MatrixLayout::Q8Columns32))?;
+            let words = input.layout.len();
+            let buffer = Nvidia.produce_words(
+                words,
+                Kernel::ProjectQuantized,
+                &[(&input.buffer, input.layout.offset())],
+                &[shape[0], shape[1], 8, 3],
+            )?;
+            Ok(NativeTensor {
+                buffer: Arc::new(buffer),
+                layout: Layout::contiguous(Shape::new([words]))?,
+                dtype: DType::I32,
+            })
+        })
+    }
+
     pub fn qwen_greedy(input: BackendTensor) -> core::result::Result<Option<u32>, burn_backend::ExecutionError> {
         input.read_value("greedy selection", |input| {
             let [1, columns] = *input.shape().as_slice() else {
@@ -399,6 +423,29 @@ mod projection_mode_tests {
             assert_eq!(
                 projection_components(32, shape, storage, PrefillQuantization::Q8_1WithAttention),
                 Err(Error::InvalidParameter)
+            );
+        }
+    }
+
+    #[test]
+    fn tiled_attention_keeps_decode_and_uses_compensation_for_long_tails() {
+        let storage = (MatrixFormat::Quantized(Quantization::Q8_0), MatrixLayout::Q8Columns32);
+        for columns in [4096, 8192] {
+            for rows in [1, 2, 5, 8] {
+                assert_eq!(
+                    projection_components(rows, [columns, 4096], storage, PrefillQuantization::Q8_1WithAttention).unwrap(),
+                    None
+                );
+            }
+            for rows in [17, 31] {
+                assert_eq!(
+                    projection_components(rows, [columns, 4096], storage, PrefillQuantization::Q8_1WithAttention).unwrap(),
+                    Some(3)
+                );
+            }
+            assert_eq!(
+                projection_components(32, [columns, 4096], storage, PrefillQuantization::Q8_1WithAttention).unwrap(),
+                Some(1)
             );
         }
     }

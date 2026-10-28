@@ -391,3 +391,47 @@ fn d4_rejects_wrong_block_geometry_phase_and_address_overflow() {
         assert!(Kernel::ProjectQuantized.work(&packet).is_err());
     }
 }
+
+#[test]
+fn tiled_grouped_decode_preserves_extents_and_rejects_partial_tiles() {
+    for [k, q, z, h] in [[1024, 256, 256, 1], [4096, 8192, 4096, 32]] {
+        let ordinary = Kernel::ProjectQuantized.work(&[k, q, z, h, 8]).unwrap();
+        let tiled = Kernel::ProjectQuantized.work(&[k, q, z, h, 8, 2]).unwrap();
+        assert_eq!(tiled.extents, ordinary.extents);
+        assert_eq!(
+            (tiled.blocks, tiled.pointers, tiled.output),
+            (ordinary.blocks, ordinary.pointers, ordinary.output)
+        );
+        assert_ne!(
+            Kernel::ProjectQuantized.entry(&[k, q, z, h, 8, 2]),
+            Kernel::ProjectQuantized.entry(&[k, q, z, h, 8])
+        );
+        assert!(Kernel::ProjectQuantized.work(&[k, q - 1, z, h, 8, 2]).is_err());
+        assert!(Kernel::ProjectQuantized.work(&[k, q, z - 1, h, 8, 2]).is_err());
+        assert!(Kernel::ProjectQuantized.work(&[k, q, z, h, 8, 3]).is_err());
+    }
+}
+
+#[test]
+fn weight_reordering_checks_complete_blocks_and_rejects_aliases() {
+    for [columns, inner] in [[32u32, 32], [64, 96], [96, 608], [12288, 4096], [4096, 12288]] {
+        let work = Kernel::ProjectQuantized.work(&[columns, inner, 8, 3]).unwrap();
+        let words = u64::from(columns) * u64::from(inner / 32) * 34 / 4;
+        assert_eq!(&work.extents[..2], &[words, words]);
+        assert_eq!((work.pointers, work.output, work.threads, work.in_place), (2, 1, 128, false));
+        assert_eq!(u64::from(work.blocks), words.div_ceil(128));
+        work.validate_aliases(&[0x100000, 0x10000000]).unwrap();
+        assert!(work.validate_aliases(&[0x100000, 0x100000]).is_err());
+        assert!(work.validate_aliases(&[0x100000, 0x100004]).is_err());
+    }
+    for parameters in [
+        [0, 32, 8, 3],
+        [32, 0, 8, 3],
+        [31, 32, 8, 3],
+        [32, 31, 8, 3],
+        [32, 33, 8, 3],
+        [1 << 30, 32, 8, 3],
+    ] {
+        assert!(Kernel::ProjectQuantized.work(&parameters).is_err());
+    }
+}
