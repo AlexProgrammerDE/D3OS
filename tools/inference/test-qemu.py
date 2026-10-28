@@ -23,6 +23,21 @@ def read_serial(path):
     return path.read_text(errors="replace").rpartition("\n")[0]
 
 
+def qemu_exit_error(directory, status, stage):
+    details = [f"QEMU exited {stage} with status {status}."]
+    for name in ("qemu.log", "serial.log"):
+        path = directory / name
+        try:
+            with path.open("rb") as log:
+                log.seek(0, os.SEEK_END)
+                log.seek(max(0, log.tell() - 4096))
+                tail = log.read().decode(errors="replace")
+        except OSError as error:
+            tail = f"Unable to read log: {error}"
+        details.append(f"Last 4096 bytes of {path}:\n{tail}")
+    return RuntimeError("\n".join(details))
+
+
 def capture_failure(directory, port):
     if port is None:
         return
@@ -454,9 +469,7 @@ def main():
                 if "name = shell" in text:
                     break
                 if process.poll() is not None:
-                    raise RuntimeError(
-                        f"QEMU exited before boot. Read {directory / 'qemu.log'}"
-                    )
+                    raise qemu_exit_error(directory, process.returncode, "before boot")
                 time.sleep(0.05)
             else:
                 raise TimeoutError(f"D3OS did not start its shell. Read {serial}")
@@ -491,7 +504,9 @@ def main():
                     )
                     return
                 if process.poll() is not None:
-                    raise RuntimeError(f"QEMU exited during inference. Read {serial}")
+                    raise qemu_exit_error(
+                        directory, process.returncode, "during inference"
+                    )
                 time.sleep(0.1)
             raise TimeoutError(
                 f"D3OS completed {count} of {args.repeat} inference runs. Read {serial}"
