@@ -529,6 +529,7 @@ impl Kernel {
         match (self, parameters) {
             (Self::RmsNorm, [_, 4096, _, _]) => "rms_norm_4096",
             (Self::ResidualNorm, [_, 4096, _]) => "residual_norm_4096",
+            (Self::ProjectQuantized, [_, _, _, _, 8]) => "group_project_q8_0",
             (Self::IntegerReduction, p) => integer_reduction::symbol(p).unwrap_or(self.symbol()),
             (Self::FloatExtrema, p) => float_extrema::symbol(p).unwrap_or(self.symbol()),
             (Self::Interpolate, p) if p.len() == interpolate::PARAMETERS => {
@@ -832,6 +833,28 @@ impl Kernel {
             (Self::TensorElementwise, p) => {
                 extents[..3].copy_from_slice(&elementwise::validate(p)?);
                 (p[0], 3, 2, false)
+            }
+            // Group qkv/gate/beta/alpha Q8_0 vectors into one output allocation.
+            (Self::ProjectQuantized, &[k, q, z, h, 8]) => {
+                if k < 1024 || !k.is_multiple_of(32) || q < 256 || z < 256 || !(1..=128).contains(&h) {
+                    return Err(Error::InvalidField);
+                }
+                let total = q.checked_add(z).and_then(|n| n.checked_add(2 * h)).ok_or(Error::InvalidField)?;
+                let blocks = q
+                    .div_ceil(4)
+                    .checked_add(z.div_ceil(4))
+                    .and_then(|n| n.checked_add(2 * h))
+                    .ok_or(Error::InvalidField)?;
+                let small = quantized_words(product(&[k, h])?, 8)?;
+                extents[..6].copy_from_slice(&[
+                    k as u64,
+                    quantized_words(product(&[k, q])?, 8)?,
+                    quantized_words(product(&[k, z])?, 8)?,
+                    small,
+                    small,
+                    total as u64,
+                ]);
+                (product(&[blocks, 128])?, 6, 5, false)
             }
             (Self::ProjectQuantized, &[m, k, n, format]) => {
                 quantized_words(k, format)?;

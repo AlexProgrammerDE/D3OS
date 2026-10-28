@@ -37,6 +37,12 @@ unsafe fn vector_q8_pairs<const GROUP: i32, const NARROW: bool, const SIGNED: bo
 
 unsafe fn vector_project_q8<const NARROW: bool, const SIGNED: bool>(a: *const f32, b: *const f32, output: *mut f32, inner: u32, cols: u32) {
     let first = block_id() * if NARROW { 1u32 } else { 4u32 };
+    unsafe { vector_project_q8_at::<NARROW, SIGNED>(a, b, output, inner, cols, first, 0u32) }
+}
+
+unsafe fn vector_project_q8_at<const NARROW: bool, const SIGNED: bool>(
+    a: *const f32, b: *const f32, output: *mut f32, inner: u32, cols: u32, first: u32, output_offset: u32,
+) {
     let lane = if NARROW {
         lanes::<128>()
     } else {
@@ -78,12 +84,77 @@ unsafe fn vector_project_q8<const NARROW: bool, const SIGNED: bool>(a: *const f3
         let sum: Tile<f32, { [1, 128] }> = sum.reshape(shape![1, 128]);
         let value: Tile<f32, { [1] }> = reduce_sum(sum, 1i32);
         let col = broadcast_scalar(first, shape![1]);
-        unsafe { write_tile(output, col, value, lt_tile(col, broadcast_scalar(cols, shape![1]))) };
+        unsafe {
+            write_tile(
+                output,
+                col + broadcast_scalar(output_offset, shape![1]),
+                value,
+                lt_tile(col, broadcast_scalar(cols, shape![1])),
+            )
+        };
     } else {
         let sum: Tile<f32, { [4, 32] }> = sum.reshape(shape![4, 32]);
         let value: Tile<f32, { [4] }> = reduce_sum(sum, 1i32);
         let col = lanes::<4>() + broadcast_scalar(first, shape![4]);
-        unsafe { write_tile(output, col, value, lt_tile(col, broadcast_scalar(cols, shape![4]))) };
+        unsafe {
+            write_tile(
+                output,
+                col + broadcast_scalar(output_offset, shape![4]),
+                value,
+                lt_tile(col, broadcast_scalar(cols, shape![4])),
+            )
+        };
+    }
+}
+
+// Group wide qkv/gate and narrow beta/alpha vectors without repacking weights.
+#[cutile::entry()]
+unsafe fn group_project_q8_0(
+    input: *const f32, qkv: *const f32, gate: *const f32, beta: *const f32, alpha: *const f32, output: *mut f32, inner: u32, qkv_cols: u32, gate_cols: u32,
+    heads: u32, _format: u32,
+) {
+    let block = block_id();
+    let qkv_blocks = (qkv_cols + 3u32) / 4u32;
+    let gate_end = qkv_blocks + (gate_cols + 3u32) / 4u32;
+    let beta_end = gate_end + heads;
+    let weights = if block < qkv_blocks {
+        qkv
+    } else if block < gate_end {
+        gate
+    } else if block < beta_end {
+        beta
+    } else {
+        alpha
+    };
+    let first_block = if block < qkv_blocks {
+        0u32
+    } else if block < gate_end {
+        qkv_blocks
+    } else if block < beta_end {
+        gate_end
+    } else {
+        beta_end
+    };
+    let output_offset = if block < qkv_blocks {
+        0u32
+    } else if block < gate_end {
+        qkv_cols
+    } else if block < beta_end {
+        qkv_cols + gate_cols
+    } else {
+        qkv_cols + gate_cols + heads
+    };
+    let cols = if block < qkv_blocks {
+        qkv_cols
+    } else if block < gate_end {
+        gate_cols
+    } else {
+        heads
+    };
+    if block < gate_end {
+        unsafe { vector_project_q8_at::<false, true>(input, weights, output, inner, cols, (block - first_block) * 4u32, output_offset) };
+    } else {
+        unsafe { vector_project_q8_at::<true, false>(input, weights, output, inner, cols, block - first_block, output_offset) };
     }
 }
 

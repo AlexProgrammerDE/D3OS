@@ -53,3 +53,47 @@ fn signed_decode_preserves_packed_extents_and_small_projection_routes() {
         assert_ne!(Kernel::ProjectQuantized.entry(&parameters), signed);
     }
 }
+
+#[test]
+fn grouped_q8_checks_each_packed_matrix_and_combined_output_range() {
+    for [inner, qkv, gate, heads] in [[1024u32, 256, 256, 1], [1056, 257, 259, 3], [4096, 8192, 4096, 32], [5120, 12288, 4096, 128]] {
+        let work = Kernel::ProjectQuantized.work(&[inner, qkv, gate, heads, 8]).unwrap();
+        let words = |rows| (u64::from(inner / 32) * u64::from(rows) * 34).div_ceil(4);
+        let total = qkv + gate + 2 * heads;
+        assert_eq!(
+            work.extents[..6],
+            [u64::from(inner), words(qkv), words(gate), words(heads), words(heads), u64::from(total)]
+        );
+        assert_eq!(
+            (work.blocks, work.threads, work.pointers, work.output, work.mutated),
+            (qkv.div_ceil(4) + gate.div_ceil(4) + 2 * heads, 128, 6, 5, 0)
+        );
+        let pointers = [0x100000, 0x10000000, 0x20000000, 0x30000000, 0x40000000, 0x50000000];
+        work.validate_aliases(&pointers).unwrap();
+        for source in 0..5 {
+            let mut aliases = pointers;
+            aliases[5] = aliases[source] + 4 * (work.extents[source] - 1);
+            assert!(work.validate_aliases(&aliases).is_err());
+        }
+        assert_ne!(
+            Kernel::ProjectQuantized.entry(&[inner, qkv, gate, heads, 8]),
+            Kernel::ProjectQuantized.entry(&[1, inner, qkv, 8])
+        );
+        let ordinary = Kernel::ProjectQuantized.work(&[1, inner, qkv, 8]).unwrap();
+        assert_eq!((ordinary.blocks, ordinary.pointers, ordinary.output), (qkv.div_ceil(4), 3, 2));
+    }
+    for parameters in [
+        [992, 256, 256, 1, 8],
+        [1055, 256, 256, 1, 8],
+        [1024, 255, 256, 1, 8],
+        [1024, 256, 255, 1, 8],
+        [1024, 256, 256, 0, 8],
+        [1024, 256, 256, 129, 8],
+        [1024, 256, 256, 32, 9],
+        [1024, u32::MAX, 256, 32, 8],
+        [1024, 256, u32::MAX, 32, 8],
+        [1 << 30, 256, 256, 32, 8],
+    ] {
+        assert!(Kernel::ProjectQuantized.work(&parameters).is_err());
+    }
+}

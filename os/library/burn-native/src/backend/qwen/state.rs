@@ -8,7 +8,7 @@ use alloc::vec::Vec;
 use burn_backend::{DType, Shape, Slice, TensorMetadata};
 use d3os_compute::{Error, Result, element_count, nvidia::Nvidia};
 use d3os_nvidia::compute::Kernel;
-use d3os_tensor_file::matrix::MatrixFormat;
+use d3os_tensor_file::{matrix::MatrixFormat, quantized::Quantization};
 
 fn check(tensor: &NativeTensor, shape: &[usize]) -> Result<()> {
     if tensor.shape().as_slice() != shape || tensor.dtype() != DType::F32 {
@@ -281,7 +281,7 @@ impl Native {
                 let channels = element_count(&[2, key_heads, key_dim])?
                     .checked_add(element_count(&[heads, value_dim])?)
                     .ok_or(Error::SizeOverflow)?;
-                let projected = if rows == 1
+                let group_bf16 = rows == 1
                     && key_heads == heads
                     && width.is_multiple_of(2)
                     && channels.is_multiple_of(4)
@@ -290,8 +290,18 @@ impl Native {
                     && key_dim <= 128
                     && value_dim <= 128
                     && kernel <= 8
-                    && formats.iter().all(|&f| f == MatrixFormat::Bf16)
-                {
+                    && formats.iter().all(|&f| f == MatrixFormat::Bf16);
+                let group_q8 = rows == 1
+                    && width >= 1024
+                    && width.is_multiple_of(32)
+                    && channels >= 256
+                    && values >= 256
+                    && (1..=128).contains(&heads)
+                    && key_dim <= 128
+                    && value_dim <= 128
+                    && kernel <= 8
+                    && formats.iter().all(|&f| f == MatrixFormat::Quantized(Quantization::Q8_0));
+                let projected = if group_bf16 || group_q8 {
                     let hidden = dense(v[0], DType::F32)?;
                     let matrices = [channels, values, heads, heads].map(|out| [out, width]);
                     let weights = matrices
@@ -303,11 +313,12 @@ impl Native {
                         .checked_add(values)
                         .and_then(|n| heads.checked_mul(2).and_then(|h| n.checked_add(h)))
                         .ok_or(Error::SizeOverflow)?;
+                    let parameters = [width, channels, values, heads, 8];
                     let all = output(
                         [1, total],
-                        Kernel::GroupedProjectBf16,
+                        if group_q8 { Kernel::ProjectQuantized } else { Kernel::GroupedProjectBf16 },
                         &[(&hidden, 0), (&weights[0], 0), (&weights[1], 0), (&weights[2], 0), (&weights[3], 0)],
-                        &[width, channels, values, heads],
+                        &parameters[..if group_q8 { 5 } else { 4 }],
                     )?;
                     let mut offset = 0;
                     [channels, values, heads, heads]
