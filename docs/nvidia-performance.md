@@ -2726,3 +2726,55 @@ The combined module contains 273 entries.
 All 272 prior inference machine-text sections and both smaller cubins remain byte-exact.
 Math verification rules and executable Math sections remain unchanged.
 No default bundle promotion, whole-Burn, DOOM, or general quality acceptance follows.
+
+
+## Rejected CPU attention-weight reordering experiment
+
+A later October 28 experiment tested the existing 32-column layout for wide Q8_0 attention weights.
+It covered matrices shaped `[8192, 4096]` and `[4096, 4096]`.
+Narrow attention matrices retained row-major storage.
+A grouped decode variant preserved the narrow beta/alpha layout and the original FP32 arithmetic.
+All weights retained their original scales, signed bytes, and total storage size.
+
+Standalone GPU checks showed large streaming attention projection gains and complete output equality.
+The selected grouped decode entry also matched the tested prototype's machine code.
+The combined module preserved all 273 existing inference text sections and both smaller cubins.
+Those kernel results did not predict the complete application tradeoff.
+
+The full-model experiment used the same 9B workload and `Q8_1WithAttention` mode as the preceding checkpoint.
+Control, candidate, candidate, control capture order produced four ordinary warm samples per mode.
+The first and separately instrumented fourth passes remain excluded.
+The retained Linux baseline remains unchanged and is not a new execution.
+
+| Native measurement | Existing layout | CPU-reordered attention |
+| --- | ---: | ---: |
+| Warm prefill, 37 tokens | 77.75 ms | 75.75 ms |
+| Teacher-forced decode, 128 steps | 52.757 tokens/s | 52.589 tokens/s |
+| Model import | 6989.5 ms | 8031.5 ms |
+
+Prefill time decreased by 2.57%, while decode throughput changed by -0.32%.
+The small decode difference provides no evidence of a gain.
+Import increased by 1042 ms, or 14.91%.
+The CPU performed the extra attention-weight transpose before upload.
+The experiment retained one resident packed weight copy, 9,516,859,392 bytes, and zero host activation transfers.
+
+The accurate default passed its original FP32 gate with zero failing values in both control and candidate captures.
+Each accurate mode contributed two ordinary warm samples from one VM.
+Those samples measured 118.5 ms and 117.0 ms prefill respectively, with no decode gain.
+This smaller comparison establishes the checked numerical result, not a strong performance claim.
+
+The quantized modes retained identical reference-error statistics and all 128 teacher-forced decisions.
+They still failed the original FP32 gate for 21,264,386 of 32,033,280 values.
+No tolerance, token rule, or precision policy changed.
+Cold imports still use a different storage path from Linux, so cross-OS cold-load parity remains unmeasured.
+
+The unconditional CPU-repack candidate was rejected and all production source changes were restored.
+Loop blocking and fixed-array copy alternatives also showed no broad host-side gain.
+The next candidate is GPU-side reordering after upload, which can avoid the additional CPU transpose.
+It still requires implementation, allocation/lifetime checks, and fresh application measurements.
+
+Three RAM preflight stops created no VM.
+Completed captures remained intact, and only the missing final control resumed.
+The test preparation reused matching kernel qualifications and dependencies.
+The unchanged Math artifact and rules retained their earlier mutation-test evidence, with fresh source-binding checks.
+No default bundle promotion, broader quality, DOOM, or performance-parity acceptance follows.
