@@ -3726,7 +3726,8 @@ Both current provenance tests pass and reject the stale v35 binding.
 The v36 current-source cuTile compilation and audit pass in CI.
 The following Qwen step failed because the clean runner lacked an offline Rust standard-library dependency.
 Preparation now fetches those pinned dependencies explicitly before the offline build.
-An isolated empty-cache fetch followed by an offline fetch passes; the updated CI run remains pending.
+An isolated empty-cache fetch followed by an offline fetch passes.
+The updated normal four-family build and audit also pass CI, together with the Linux and macOS build workflows.
 
 Sources, build-cache restoration and verified archival receipts, Native checks, parser controls, and frozen model criteria remain under `~/.cache/d3os/qwen-q4-components-integration-v1/`.
 Complete captures remain under `~/.cache/d3os/qwen-q4-components-paired-01-v1/` and `~/.cache/d3os/qwen-q4-components-paired-02-v1/`.
@@ -3738,3 +3739,47 @@ The completed operator and model evidence therefore remains applicable without a
 Seven filesystem controls cover publication, interrupted copies, stale assets, and the explicit core-only output.
 This packaging change leaves projection defaults unchanged and establishes no additional throughput result.
 Receipts remain under `~/.cache/d3os/qwen-components-default-bundle-v1/`.
+
+## Native Q3/Q4 default-loading result
+
+Normal Native Qwen loading now selects the measured component kernels when the model contains Q3_K or Q4_K weights.
+Other weight formats and CPU model loading retain their existing routes.
+The original enum selectors remain available for explicit legacy comparisons.
+
+The combined experiment compares both original projection paths against an unmodified model loaded with the new defaults.
+It uses two predeclared VMs, each with two warmups, eight balanced ordinary passes, two instrumented passes, and both complete reference checks.
+Each variant therefore contributes eight ordinary samples to the pooled means.
+
+| Qwen3.6-27B Q3_K_M, matched Native measurement | Both original paths | Normal Native defaults |
+| --- | ---: | ---: |
+| Mean decode time, 128 tokens | 8,719.750 ms | 6,522.125 ms |
+| Decode throughput from mean time | 14.6793 tokens/s | 19.6255 tokens/s |
+| Mean prefill time, 37 tokens | 898.250 ms | 903.750 ms |
+
+The defaults reduce decode time by 25.20% and increase throughput by 33.69% within this paired experiment.
+All four balanced blocks improve, with decode-time reductions from 24.84% to 25.48%.
+Prefill time increases by 0.61%, within the predeclared 2% limit.
+
+All 128,133,120 original logit comparisons pass with zero failures, and all 24 token sequences match.
+Both variants retain the same two greedy differences from the Linux reference.
+The candidate uses the loaded selections directly, and the instrumentation confirms both component kernels and their exact activation-pack populations.
+Weights remain shared, with no additional resident weight copies or activation transfers.
+
+The original kernel and all four GPU-module records remain byte-exact.
+Existing guarded operator and SDK/Native test evidence is reused.
+The changed AI source passes six Qwen unit tests, 12 model tests, and strict Clippy.
+Parser checks revalidate three previous captures and reject 142 malformed combined records.
+
+A replay appeared before the second launch, so preflight held that launch until the process exited naturally.
+The held preflight is retained separately. No process was stopped, no completed VM was replaced, and no extra performance sample was taken.
+Replay start-time inspection raced with its exit, so no precise overlap interval with the first capture is claimed.
+Both captures passed the memory guards; their minimum available host RAM remained above 5.9 GB.
+
+The measured default reaches 19.6255 tokens/s, 42.67% below the cached matched llama.cpp reference of 34.2330 tokens/s.
+This is a fresh combined experiment, not a product of the earlier stage gains or a direct trend between capture dates.
+The Linux reference was reused rather than rerun. Prefill, cold-load, broader workload, and full performance parity remain open.
+
+Verified incremental build-cache archives preserve the warm artifacts while releasing over 6 GB of RAM before the GPU runs.
+The deltas occupy about 210 MB, rather than duplicating both complete cache archives.
+Contracts, build receipts, cache restoration data, parser controls, and pooled analysis remain under `~/.cache/d3os/qwen-component-defaults-v1/`.
+Complete captures remain under `~/.cache/d3os/qwen-defaults-paired-01-v1/` and `~/.cache/d3os/qwen-defaults-paired-02-v1/`.

@@ -86,10 +86,16 @@ pub(super) enum ProjectionPair {
     Q4Narrow,
     Q3Components,
     Q4Components,
+    NativeDefaults,
 }
 
 impl ProjectionPair {
     fn control(self, model: Qwen) -> Result<Qwen> {
+        // Historical experiments retain their original FP32 routes even when
+        // ordinary Native loading selects the measured component kernels.
+        let model = model
+            .with_q3_vector_kernel(Q3VectorKernel::Default)?
+            .with_q4_vector_kernel(Q4VectorKernel::Default)?;
         match self {
             Self::Q4Components => model.with_q3_vector_kernel(Q3VectorKernel::Components),
             _ => Ok(model),
@@ -97,10 +103,17 @@ impl ProjectionPair {
     }
 
     fn configure(self, model: Qwen) -> Result<Qwen> {
+        let model = if matches!(self, Self::NativeDefaults) { model } else { self.control(model)? };
         match self {
             Self::Q4Narrow => model.with_q4_vector_kernel(Q4VectorKernel::Narrow),
             Self::Q3Components => model.with_q3_vector_kernel(Q3VectorKernel::Components),
             Self::Q4Components => model.with_q4_vector_kernel(Q4VectorKernel::Components),
+            Self::NativeDefaults => {
+                if model.q3_vector_kernel() != Q3VectorKernel::Components || model.q4_vector_kernel() != Q4VectorKernel::Components {
+                    return Err(Error::from("native default experiment requires both component kernels at model load"));
+                }
+                Ok(model)
+            }
         }
     }
 
@@ -108,7 +121,7 @@ impl ProjectionPair {
         match self {
             Self::Q4Narrow => format!("q4_vector_kernel={:?}", model.q4_vector_kernel()),
             Self::Q3Components => format!("q3_vector_kernel={:?}", model.q3_vector_kernel()),
-            Self::Q4Components => format!(
+            Self::Q4Components | Self::NativeDefaults => format!(
                 "q4_vector_kernel={:?} q3_vector_kernel={:?}",
                 model.q4_vector_kernel(),
                 model.q3_vector_kernel()
@@ -157,8 +170,10 @@ pub(super) fn benchmark(
     let load_ms = time::systime().num_milliseconds() - start;
     let memory = backend.memory_profile().map_err(|e| format!("{e}"))?;
     super::report(format_args!(
-        "NATIVE_LARGE_QWEN_MODE prefill_quantization={:?} decode_quantization=accurate reference_policy=unchanged",
-        model.prefill_quantization()
+        "NATIVE_LARGE_QWEN_MODE prefill_quantization={:?} decode_quantization=per_format reference_policy=unchanged q3_vector_kernel={:?} q4_vector_kernel={:?}",
+        model.prefill_quantization(),
+        model.q3_vector_kernel(),
+        model.q4_vector_kernel()
     ));
     super::report(format_args!(
         "NATIVE_LARGE_QWEN_MODEL os=d3os framework=burn backend=nvidia layers={} hidden={} load_ms={load_ms} live_bytes={} cached_bytes={} retired_bytes={}",
@@ -168,15 +183,11 @@ pub(super) fn benchmark(
         memory.device_cached_bytes,
         memory.device_retired_bytes
     ));
-    let model = if let Some(pair) = pair {
-        pair.control(model).map_err(|e| format!("{e}"))?
-    } else {
-        model
-    };
-    let models = if paired {
+    let models = if let Some(pair) = pair {
         let before = backend.memory_profile().map_err(|e| format!("{e}"))?;
         let services_before = backend.service_profile().map_err(|e| format!("{e}"))?;
-        let candidate = pair.unwrap().configure(model.clone()).map_err(|e| format!("{e}"))?;
+        let candidate = pair.configure(model.clone()).map_err(|e| format!("{e}"))?;
+        let model = pair.control(model).map_err(|e| format!("{e}"))?;
         let after = backend.memory_profile().map_err(|e| format!("{e}"))?;
         let services_after = backend.service_profile().map_err(|e| format!("{e}"))?;
         if (before.process_live_bytes, before.device_cached_bytes, before.device_retired_bytes)

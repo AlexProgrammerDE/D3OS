@@ -425,11 +425,12 @@ The guest emits `NATIVE_LARGE_QWEN_PAIRED_*` records and the separate `INFERENCE
 The launcher rejects incomplete schedules and mismatched references.
 Ordinary benchmark commands retain their existing schedule and records.
 
-## Explicit three-component Q3_K and Q4_K decode
+## Native Q3_K and Q4_K decode defaults
 
-The optional Q3_K and Q4_K routes use three signed-byte activation residuals and DP4A integer dots.
+Native Qwen loading selects three signed-byte activation residuals and DP4A integer dots for Q3_K and Q4_K weights.
 They retain the original packed weight layout and FP32 output accumulation.
-The default projection choices remain unchanged.
+CPU loading and other weight formats retain their existing paths.
+Standalone `PackedMatrix` construction also retains its existing explicit selection policy.
 
 The route needs the `qwen-vector` PTX module and a matching Native image.
 Normal `prepare-kernels.py` output now includes that module.
@@ -488,18 +489,23 @@ This comparison fixes Q3 components in both variants and changes Q4 from `Defaul
 Both routes retain the original logit tolerances and identical token sequences.
 The parser binds each activation pack to the combined Q3/Q4 projection workload.
 
-For a loaded Native model, select both implementations through the public API:
+Use `--qwen-paired-defaults` to compare the normal Native model-loading path against both original implementations.
+The candidate keeps the model's loaded selections without a manual kernel override.
+The historical experiment modes explicitly restore their original control paths.
+
+For a loaded model, select both legacy implementations through the public API:
 
 ```rust
 use d3os_ai::qwen::{Q3VectorKernel, Q4VectorKernel};
 
 let model = model
-    .with_q3_vector_kernel(Q3VectorKernel::Components)?
-    .with_q4_vector_kernel(Q4VectorKernel::Components)?;
+    .with_q3_vector_kernel(Q3VectorKernel::Default)?
+    .with_q4_vector_kernel(Q4VectorKernel::Default)?;
 ```
 
 Selection changes metadata and shares existing packed weight storage.
+The enum's `Default` variant names the original implementation; normal Native model loading selects `Components` for each present format.
 Unsupported backends reject the selection. A missing Qwen module fails when dispatch starts.
 
-Both component stages passed their predeclared full-model comparisons.
-The [performance record](nvidia-performance.md#q4_k-native-integration-and-model-result) gives the separate controls, timing scope, and remaining Linux gap.
+Both component stages and the combined default-loading comparison passed their predeclared full-model criteria.
+The [performance record](nvidia-performance.md#native-q3q4-default-loading-result) gives the controls, timing scope, and remaining Linux gap.

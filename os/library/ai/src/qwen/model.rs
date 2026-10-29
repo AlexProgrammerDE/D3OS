@@ -236,6 +236,8 @@ pub struct Qwen {
 struct Loader<'a, F> {
     source: F,
     device: &'a Device,
+    has_q3: bool,
+    has_q4: bool,
 }
 impl<'a, 'data, F: FnMut(&str, &[usize]) -> Result<WeightData<'data>>> Loader<'a, F> {
     fn data(&mut self, name: &str, shape: &[usize]) -> Result<WeightData<'data>> {
@@ -247,6 +249,8 @@ impl<'a, 'data, F: FnMut(&str, &[usize]) -> Result<WeightData<'data>>> Loader<'a
     }
     fn matrix(&mut self, name: &str, shape: [usize; 2]) -> Result<PackedMatrix> {
         let data = self.data(name, &shape)?;
+        self.has_q3 |= data.format == MatrixFormat::Quantized(Quantization::Q3K);
+        self.has_q4 |= data.format == MatrixFormat::Quantized(Quantization::Q4K);
         #[cfg(feature = "cpu")]
         if *self.device == Device::flex() && data.format == MatrixFormat::Bf16 {
             // Flex projections accumulate in FP32. Expand constant BF16
@@ -286,7 +290,12 @@ impl Qwen {
     pub fn load_weights<'a>(config: Config, device: &Device, source: impl FnMut(&str, &[usize]) -> Result<WeightData<'a>>) -> Result<Self> {
         config.validate()?;
         device_supported(device)?;
-        let mut load = Loader { source, device };
+        let mut load = Loader {
+            source,
+            device,
+            has_q3: false,
+            has_q4: false,
+        };
         let embedding = load.matrix("embed_tokens.weight", [config.vocab, config.hidden])?;
         let output = if config.tied_embeddings {
             None
@@ -341,7 +350,7 @@ impl Qwen {
             });
         }
         device.sync()?;
-        Ok(Self {
+        let mut model = Self {
             config,
             prefill_quantization: PrefillQuantization::Accurate,
             q4_vector_kernel: Q4VectorKernel::Default,
@@ -351,7 +360,16 @@ impl Qwen {
             norm,
             layers,
         }
-        .valid())
+        .valid();
+        if super::native_matrix_device(device) {
+            if load.has_q3 {
+                model = model.with_q3_vector_kernel(Q3VectorKernel::Components)?;
+            }
+            if load.has_q4 {
+                model = model.with_q4_vector_kernel(Q4VectorKernel::Components)?;
+            }
+        }
+        Ok(model)
     }
     fn output_weights(&self) -> &PackedMatrix {
         self.output.as_ref().unwrap_or(&self.embedding)
