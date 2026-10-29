@@ -3616,6 +3616,67 @@ The paired parsers reject 44 Q4 controls and 37 Q3 controls.
 The final bundle reuses the exact Native-validated portable and machine files without another GPU run.
 The getter-only API correction, initial packaging-key error, and Clippy precision correction remain recorded.
 
-The default route and accepted model TPS remain unchanged.
-The full-model experiment still needs both original numerical references and its balanced timing samples.
+The default route remains unchanged. The completed model experiment follows.
 Preparation and the completed Native check remain under `~/.cache/d3os/qwen-q3-components-integration-v1/` and `~/.cache/d3os/qwen-q3-native-check-v1/`.
+
+### Balanced 27B model result
+
+The replay finished without intervention before the model benchmark started.
+Both predeclared VMs completed within the RAM guard, with no replacement captures.
+Each VM ran two warmups, eight ordinary passes in balanced order, and two instrumented passes.
+Only the 16 ordinary passes contribute to these means.
+
+| Qwen3.6-27B Q3_K_M, matched Native measurement | Existing Q3 route | Three-component DP4A |
+| --- | ---: | ---: |
+| Mean decode time, 128 tokens | 8,598.625 ms | 7,497.750 ms |
+| Decode throughput from mean time | 14.8861 tokens/s | 17.0718 tokens/s |
+| Mean prefill time, 37 tokens | 882.875 ms | 882.625 ms |
+
+The candidate reduces decode time by 12.80%, which increases throughput by 14.68%.
+All four balanced blocks improve, with time reductions from 11.84% to 13.15%.
+Prefill time remains within the predeclared 2% regression limit.
+
+Both routes pass 32,033,280 independent logit comparisons per VM at the original tolerances.
+The four reference checks total 128,133,120 comparisons with zero tolerance failures.
+All 24 token sequences match. The two existing greedy differences from the Linux reference remain unchanged.
+The same packed weight storage serves both routes without activation transfers or duplicate resident weights.
+
+The candidate passes the predeclared retention criteria and remains an explicit option.
+Its 17.0718 tokens/s is 50.13% below the cached matched llama.cpp baseline of 34.2330 tokens/s.
+The earlier accepted default measurement of 15.6675 tokens/s came from separate runs and is not the paired control.
+This experiment does not establish cold-load or broader workload parity.
+
+Complete captures remain under `~/.cache/d3os/qwen-q3-components-paired-01-v1/` and `~/.cache/d3os/qwen-q3-components-paired-02-v1/`.
+The frozen criteria, source pins, per-block results, and resource receipts accompany `model-result.json` in the integration cache.
+
+## Q4_K component projection operator
+
+The next private Rust NVPTX kernel applies the three-component method to Q4_K scale and minimum terms.
+It reuses the qualified activation packer and the original real-weight projection fixtures.
+The two input widths are 6,144 for the SSM output and 17,408 for the FFN down projection.
+Both fixtures have 5,120 outputs.
+
+The CPU audit reproduces both original FP64 references bit for bit and decodes all 120,586,240 weights exactly.
+The first GPU capture passes 105,288 projection comparisons at the unchanged `0.0002 + 0.0002*abs(reference)` tolerance.
+Two poison trials per shape also preserve guards and immutable sources.
+The packer reproduces 147,200 checked activation bytes exactly across both fixtures and both trials.
+Nine output extents cover 1, 3, 4, 31, 32, 33, 128, 129, and 5,120 columns.
+
+| Eight rotating weight buffers, mean latency | Existing FP32 | DP4A only | DP4A with packing | Reduction with packing |
+| --- | ---: | ---: | ---: | ---: |
+| SSM output, 6144 to 5120 | 73.565 us | 44.042 us | 45.999 us | 37.47% |
+| FFN down, 17408 to 5120 | 224.829 us | 131.895 us | 134.882 us | 40.01% |
+
+Each dataset and cache mode contains 42 round-robin samples after 12 warmup rounds, with 16 graph iterations per sample.
+Both datasets pass the predeclared 5% rotating-weight criterion, including activation packing.
+The candidate uses 40 registers per thread, 128 threads, and no shared memory, local memory, or stack.
+No extra samples replace this capture.
+
+The compiler emits a literal CB2 word read for the signed byte sum and a register-only `SGXT.U32` extraction with selector `0x4`.
+The v5 machine-code profile admits these exact operand forms and bounds each CB2 word against one read-only per-entry ELF section.
+Other banks, dynamic offsets, ambiguous bindings, signedness variants, and extraction selectors remain rejected.
+All four previous module qualification records remain exact, and 82 actual-SASS mutation controls reject.
+The underlying opcode set and CB4 rules remain unchanged.
+
+This result supports Native integration and a full-model comparison. It does not establish a Q4 model TPS gain or change any default.
+The original compiler attempts, CPU audit, fixed criteria, and complete GPU capture remain under `~/.cache/d3os/qwen-q4-dp4a-components-probe-v1/`.
