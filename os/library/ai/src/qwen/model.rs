@@ -1,7 +1,7 @@
 //! Burn model composition and independent per-sequence state.
 use super::{
     AttentionInputs, AttentionState, Config, DeltaParameters, DeltaState, DeltaWeights, MatrixFormat, MatrixLayout, PackedMatrix, PrefillQuantization,
-    Quantization, device_supported, residual_norm, rms_norm,
+    Q4VectorKernel, Quantization, device_supported, residual_norm, rms_norm,
 };
 use alloc::{
     borrow::Cow,
@@ -223,6 +223,8 @@ pub struct Qwen {
     config: Config,
     #[module(skip)]
     prefill_quantization: PrefillQuantization,
+    #[module(skip)]
+    q4_vector_kernel: Q4VectorKernel,
     embedding: PackedMatrix,
     output: Option<PackedMatrix>,
     norm: Param<Tensor<1>>,
@@ -340,6 +342,7 @@ impl Qwen {
         Ok(Self {
             config,
             prefill_quantization: PrefillQuantization::Accurate,
+            q4_vector_kernel: Q4VectorKernel::Default,
             embedding,
             output,
             norm,
@@ -363,6 +366,54 @@ impl Qwen {
     }
     pub fn prefill_quantization(&self) -> PrefillQuantization {
         self.prefill_quantization
+    }
+    pub fn q4_vector_kernel(&self) -> Q4VectorKernel {
+        self.q4_vector_kernel
+    }
+
+    /// Configure projection dispatch while retaining the existing weight tensors.
+    pub fn with_q4_vector_kernel(mut self, kernel: Q4VectorKernel) -> Result<Self> {
+        kernel.check_device(&self.device())?;
+        let mut selected = 0;
+        let mut configure = |matrix: &mut PackedMatrix| -> Result<()> {
+            if matrix.format == MatrixFormat::Quantized(Quantization::Q4K) {
+                matrix.set_q4_vector_kernel(kernel)?;
+                selected += 1;
+            }
+            Ok(())
+        };
+        configure(&mut self.embedding)?;
+        if let Some(output) = &mut self.output {
+            configure(output)?;
+        }
+        for layer in &mut self.layers {
+            for matrix in [&mut layer.gate, &mut layer.up, &mut layer.down] {
+                configure(matrix)?;
+            }
+            match &mut layer.mixer {
+                Mixer::Full(attention) => {
+                    for matrix in [&mut attention.q, &mut attention.k, &mut attention.v, &mut attention.out] {
+                        configure(matrix)?;
+                    }
+                }
+                Mixer::Linear(attention) => {
+                    for matrix in [
+                        &mut attention.qkv,
+                        &mut attention.z,
+                        &mut attention.beta,
+                        &mut attention.alpha,
+                        &mut attention.out,
+                    ] {
+                        configure(matrix)?;
+                    }
+                }
+            }
+        }
+        if kernel != Q4VectorKernel::Default && selected == 0 {
+            return Err(Error::from("Q4 vector selection requires a model with Q4_K weights"));
+        }
+        self.q4_vector_kernel = kernel;
+        Ok(self)
     }
     pub fn with_prefill_quantization(mut self, mode: PrefillQuantization) -> Result<Self> {
         mode.check_device(&self.device())?;
@@ -441,6 +492,7 @@ impl<'a> Session<'a> {
         let device = model.device();
         device_supported(&device)?;
         model.prefill_quantization.check_device(&device)?;
+        model.q4_vector_kernel.check_device(&device)?;
         let caches = scope(&device, || {
             model
                 .layers

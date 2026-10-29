@@ -593,6 +593,7 @@ impl Kernel {
             (Self::Dequantize, [_, 11]) => "dequantize_q3k",
             (Self::EmbeddingQuantized, [_, _, _, 11]) => "embedding_q3k",
             (Self::ProjectQuantized, [1, _, _, 12]) => "vector_project_q4k",
+            (Self::ProjectQuantized, [1, _, _, 12, 1]) => "vector_project_q4k_narrow",
             (Self::ProjectQuantized, [_, _, _, 12]) => "project_q4k",
             (Self::Dequantize, [_, 12]) => "dequantize_q4k",
             (Self::EmbeddingQuantized, [_, _, _, 12]) => "embedding_q4k",
@@ -958,7 +959,7 @@ impl Kernel {
                 ]);
                 (product(&[blocks, 128])?, 6, 5, false)
             }
-            (Self::ProjectQuantized, &[m, k, n, format]) => {
+            (Self::ProjectQuantized, &[m, k, n, format] | &[m @ 1, k, n, format @ 12, 1]) => {
                 quantized_words(k, format)?;
                 extents[..3].copy_from_slice(&[product(&[m, k])? as u64, quantized_words(product(&[k, n])?, format)?, product(&[m, n])? as u64]);
                 if format == 8 && q8_batched_narrow(m, k, n) {

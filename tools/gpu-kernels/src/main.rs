@@ -147,6 +147,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "dequantize_q3k",
             "embedding_q3k",
             "vector_project_q4k",
+            "vector_project_q4k_narrow",
             "project_q4k",
             "dequantize_q4k",
             "embedding_q4k",

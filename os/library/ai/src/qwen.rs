@@ -35,6 +35,31 @@ pub enum PrefillQuantization {
     Q8_1WithAttention,
 }
 
+/// Select a Q4_K vector implementation without changing its numerical policy.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Q4VectorKernel {
+    #[default]
+    Default,
+    Narrow,
+}
+
+impl Q4VectorKernel {
+    fn check_device(self, device: &Device) -> Result<()> {
+        if self != Self::Default && !native_matrix_device(device) {
+            return Err(Error::from("Q4 vector selection requires the Native NVIDIA backend"));
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "native")]
+    fn native(self) -> d3os_burn_native::backend::Q4VectorKernel {
+        match self {
+            Self::Default => d3os_burn_native::backend::Q4VectorKernel::Default,
+            Self::Narrow => d3os_burn_native::backend::Q4VectorKernel::Narrow,
+        }
+    }
+}
+
 impl PrefillQuantization {
     fn check_device(self, device: &Device) -> Result<()> {
         if self != Self::Accurate && !native_matrix_device(device) {
@@ -102,6 +127,8 @@ pub struct PackedMatrix {
     layout: MatrixLayout,
     #[module(skip)]
     prefill_quantization: PrefillQuantization,
+    #[module(skip)]
+    q4_vector_kernel: Q4VectorKernel,
 }
 
 impl PackedMatrix {
@@ -138,6 +165,7 @@ impl PackedMatrix {
             format,
             layout,
             prefill_quantization: PrefillQuantization::Accurate,
+            q4_vector_kernel: Q4VectorKernel::Default,
         })
     }
 
@@ -152,6 +180,15 @@ impl PackedMatrix {
     }
     pub fn storage_words(&self) -> usize {
         self.words.val().dims()[0]
+    }
+
+    pub fn set_q4_vector_kernel(&mut self, kernel: Q4VectorKernel) -> Result<()> {
+        if self.format != MatrixFormat::Quantized(Quantization::Q4K) {
+            return Err(Error::from("Q4 vector selection requires Q4_K weights"));
+        }
+        kernel.check_device(&self.device())?;
+        self.q4_vector_kernel = kernel;
+        Ok(())
     }
 
     pub fn project(&self, input: Tensor<2>) -> Result<Tensor<2>> {
@@ -179,6 +216,7 @@ impl PackedMatrix {
     /// Compute silu(gate(input)) * up(input), preserving packed weight storage.
     pub fn gated_project(&self, up: &Self, input: Tensor<2>) -> Result<Tensor<2>> {
         self.check_input(&input)?;
+        up.check_input(&input)?;
         if up.shape != self.shape || up.device() != self.device() || up.prefill_quantization != self.prefill_quantization {
             return Err(Error::from("Qwen gated projection matrices differ"));
         }
@@ -205,6 +243,7 @@ impl PackedMatrix {
         device_supported(&input.device())?;
         device_supported(&self.device())?;
         self.prefill_quantization.check_device(&input.device())?;
+        self.q4_vector_kernel.check_device(&input.device())?;
         let [batch, width] = input.dims();
         if batch == 0 || width != self.shape[1] || input.dtype() != DType::F32 || input.device() != self.device() {
             return Err(Error::from("Qwen projection input shape, dtype, or device differs"));
@@ -220,6 +259,7 @@ impl PackedMatrix {
             format: self.format,
             layout: self.layout,
             prefill_quantization: self.prefill_quantization,
+            q4_vector_kernel: self.q4_vector_kernel,
         }
     }
 }

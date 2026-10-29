@@ -61,6 +61,25 @@ mod tests {
     }
 
     #[test]
+    fn q4_selection_cannot_silently_fall_back_after_device_movement() {
+        let device = Device::flex();
+        let shape = [32, 256];
+        let format = MatrixFormat::Quantized(Quantization::Q4K);
+        let bytes = alloc::vec![0; format.byte_len(shape).unwrap()];
+        let mut matrix = PackedMatrix::from_bytes(shape, format, &bytes, &device).unwrap();
+        assert!(matrix.set_q4_vector_kernel(crate::qwen::Q4VectorKernel::Narrow).is_err());
+        assert_eq!(matrix.q4_vector_kernel, crate::qwen::Q4VectorKernel::Default);
+        let input = Tensor::<2>::ones([1, 256], &device);
+        let expected = matrix.project(input.clone()).unwrap().try_into_vec_as::<f32>().unwrap();
+        matrix.q4_vector_kernel = crate::qwen::Q4VectorKernel::Narrow;
+        let moved = matrix.clone().to_device(&device);
+        assert_eq!(moved.q4_vector_kernel, crate::qwen::Q4VectorKernel::Narrow);
+        assert!(moved.project(input.clone()).is_err());
+        matrix.q4_vector_kernel = crate::qwen::Q4VectorKernel::Default;
+        assert_eq!(matrix.project(input).unwrap().try_into_vec_as::<f32>().unwrap(), expected);
+    }
+
+    #[test]
     fn records_load_between_physical_layouts_without_changing_projection_or_embedding() {
         let device = Device::flex();
         let shape = [64, 96];
@@ -85,6 +104,7 @@ mod tests {
             format,
             layout: MatrixLayout::Q8Columns32,
             prefill_quantization: crate::qwen::PrefillQuantization::Accurate,
+            q4_vector_kernel: crate::qwen::Q4VectorKernel::Default,
         };
         let expected = ordinary.project(Tensor::ones([2, 96], &device)).unwrap().try_into_vec_as::<f32>().unwrap();
         for restored in [

@@ -3484,6 +3484,67 @@ Boot clock telemetry stops before inference, so it cannot identify clocks during
 These records do not prove a clock, thermal, TSC, or host-scheduling cause.
 The next comparison needs paired sampling within one resident-model run or stronger control of run variation.
 
+## Paired Q4_K comparison with shared resident weights
+
+The next experiment adds an explicit Q4_K implementation choice and a paired benchmark within one VM.
+The default route remains unchanged.
+Both configurations share the original packed weights and retain Accurate FP32 activations, FMA, and reduction.
+The benchmark rejects an unexpected weight allocation or transfer during configuration.
+
+The new bundle contains 278 inference entries.
+All 277 existing machine-text sections remain byte-identical to the accepted Q3 bundle.
+Both smaller cubins also remain byte-identical.
+The optional Q4 entry matches the previously checked 7,296-byte prototype body exactly.
+Its ABI adds one unused trailing `u32`, with the first seven parameters unchanged.
+Math v34 changes context pins only. All certificate function and class ASTs remain exact.
+
+Each VM plans two warmups, eight ordinary samples in `ABBA BAAB` order, and two instrumented samples.
+Each configuration also runs the complete original logit reference.
+The instrumented samples do not contribute to the performance decision.
+Each paired phase ends with `device.sync()` inside its timer.
+These completion semantics differ from the earlier separate-VM timing records.
+
+The rule predates execution: at least 2% pooled decode-time reduction across two complete VMs.
+Each VM and each balanced four-pass block must show a positive reduction.
+Candidate mean prefill time must not exceed control time by more than 2%.
+Tokens, original numerical statistics, projection workloads, and transfer counts must remain unchanged.
+
+The first VM completed all gates:
+
+| First complete VM, ordinary samples only | Control | Candidate |
+| --- | ---: | ---: |
+| Mean decode time, 128 steps | 8,982.0 ms | 8,760.5 ms |
+| Mean prefill time, 37 tokens | 912.0 ms | 926.25 ms |
+| Samples | 4 | 4 |
+
+The first VM records a 2.466% decode-time reduction and a 1.563% prefill regression.
+Its two balanced blocks record 3.018% and 1.967% decode-time reductions.
+Both complete references pass 32,033,280 values with zero failures and unchanged statistics.
+All 12 token sequences match, and both decode profiles account for exactly 51,328 packed projections.
+The candidate profile identifies the optional Q4 entry and its five-word parameter packet.
+
+The second VM stopped at the host-memory guard before either complete reference finished.
+It retained all eight ordinary samples and one instrumented sample, but lacks the required final gates.
+The guard observed 3,148,488,704 available bytes and 126,976 free swap bytes.
+Their combined total fell below its 3 GiB reserve.
+No guest inference error appeared before termination.
+The partial capture remains incomplete, and no replacement capture seeks a passing result.
+
+The two-VM experiment therefore has no performance acceptance.
+The first VM does not establish a retained speedup or replace the earlier accepted TPS measurements.
+The optional route remains explicit, and the default Q4 arithmetic stays unchanged.
+
+Host validation passes 68 SDK tests, 77 Native tests, five AI unit tests, and 12 model tests.
+Two actual-source schedule tests and 44 parser rejection controls also pass.
+Targeted strict Clippy, formatting, the Native image build, and the fresh full GPU audit pass.
+The build reuses restored warm targets, existing model shards, independent references, and cached Linux evidence.
+Verified compressed archives preserve the idle build caches before their RAM copies are removed.
+
+The preparation and results remain under `~/.cache/d3os/qwen-q4-paired-model-v1/`.
+The complete capture is `~/.cache/d3os/qwen-q4-pair-01-v1/`.
+The interrupted capture is `~/.cache/d3os/qwen-q4-pair-02-v1/`.
+The [paired benchmark guide](qwen.howto.md#paired-q4_k-measurements-within-one-vm) describes the command and timing scope.
+
 All attempts, references, compiled artifacts, captures, and the source reversion proof remain under
 `~/.cache/d3os/qwen-k-narrow-conversion-probe-v1/`.
 The original Native image, model shards, Linux baseline, and matching references were reused.

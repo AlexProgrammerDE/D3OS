@@ -1,11 +1,13 @@
 //! Seek model firmware parts without retaining the complete model in guest RAM.
+mod schedule;
+
 use super::{File, read_file};
 use alloc::{format, string::String, vec::Vec};
 use core::fmt::Write;
 use d3os_ai::{
     burn::tensor::Device,
     qwen::{
-        Error, PrefillQuantization, Qwen,
+        Error, PrefillQuantization, Q4VectorKernel, Qwen,
         gguf::{
             Gguf, ReadAt,
             shards::{Index, Sharded},
@@ -80,8 +82,11 @@ pub(super) fn verify(device: &Device) -> core::result::Result<(), String> {
 }
 
 pub(super) fn benchmark(
-    device: &Device, backend: &d3os_compute::nvidia::Nvidia, device_timing: bool, quantization: PrefillQuantization,
+    device: &Device, backend: &d3os_compute::nvidia::Nvidia, device_timing: bool, quantization: PrefillQuantization, paired_q4: bool,
 ) -> core::result::Result<(), String> {
+    if paired_q4 && (!device_timing || quantization != PrefillQuantization::Accurate) {
+        return Err(String::from("paired Q4 benchmarking requires device timing and accurate activations"));
+    }
     let bytes = read_file("/fwcfg/model.reference")?;
     if bytes.len() < 64 || &bytes[..8] != b"D3QLOG\0\0" {
         return Err(String::from("invalid GGUF logit reference"));
@@ -126,10 +131,31 @@ pub(super) fn benchmark(
         memory.device_cached_bytes,
         memory.device_retired_bytes
     ));
-    // Preserve all three ordinary samples. An optional fourth pass isolates
-    // serialized device timings without presenting them as warm throughput.
-    for run in 0..3 + usize::from(device_timing) {
-        let instrumented = run == 3;
+    let models = if paired_q4 {
+        let before = backend.memory_profile().map_err(|e| format!("{e}"))?;
+        let services_before = backend.service_profile().map_err(|e| format!("{e}"))?;
+        let candidate = model.clone().with_q4_vector_kernel(Q4VectorKernel::Narrow).map_err(|e| format!("{e}"))?;
+        let after = backend.memory_profile().map_err(|e| format!("{e}"))?;
+        let services_after = backend.service_profile().map_err(|e| format!("{e}"))?;
+        if (before.process_live_bytes, before.device_cached_bytes, before.device_retired_bytes)
+            != (after.process_live_bytes, after.device_cached_bytes, after.device_retired_bytes)
+            || [d3os_nvidia::compute::UPLOAD, d3os_nvidia::compute::DOWNLOAD]
+                .into_iter()
+                .any(|kind| services_before[kind as usize].calls != services_after[kind as usize].calls)
+        {
+            return Err(String::from("paired Q4 configuration changed resident weight storage"));
+        }
+        super::report(format_args!(
+            "NATIVE_LARGE_QWEN_PAIRED_SETUP variants=2 shared_weight_storage=true resident_weight_bytes={} weight_uploads=0 weight_downloads=0 ordinary_samples_per_variant=4 phase_completion=device_sync",
+            after.process_live_bytes
+        ));
+        alloc::vec![model, candidate]
+    } else {
+        alloc::vec![model]
+    };
+    for (run, pass) in schedule::passes(paired_q4, device_timing).enumerate() {
+        let model = &models[pass.variant.index()];
+        let instrumented = pass.instrumented;
         let timing = if instrumented {
             Some(super::benchmark::DeviceTiming::start(backend).map_err(|e| format!("{e}"))?)
         } else {
@@ -139,7 +165,7 @@ pub(super) fn benchmark(
         let mut session = model.session(2048).map_err(|e| format!("{e}"))?;
         let state_ms = time::systime().num_milliseconds() - state_start;
         let prefill_before = backend.service_profile().map_err(|e| format!("{e}"))?;
-        let profile = run == 1 || instrumented;
+        let profile = (!paired_q4 && run == 1) || instrumented;
         let prefill_profile = if profile {
             Some((
                 backend.profile().map_err(|e| format!("{e}"))?,
@@ -155,6 +181,9 @@ pub(super) fn benchmark(
             .map_err(|e| format!("Qwen projection collector: {e}"))?;
         let start = time::systime().num_milliseconds();
         let mut logits = session.prefill(prompt).map_err(|e| format!("{e}"))?;
+        if paired_q4 {
+            device.sync().map_err(|e| format!("paired Q4 prefill completion: {e}"))?;
+        }
         let prefill_ms = time::systime().num_milliseconds() - start;
         #[cfg(feature = "qwen-profiling")]
         let prefill_projections = projections.as_ref().map(|collector| collector.take());
@@ -176,6 +205,9 @@ pub(super) fn benchmark(
             checksum = checksum.wrapping_mul(31).wrapping_add(u64::from(token));
             logits = session.step(input).map_err(|e| format!("{e}"))?;
         }
+        if paired_q4 {
+            device.sync().map_err(|e| format!("paired Q4 decode completion: {e}"))?;
+        }
         let decode_ms = time::systime().num_milliseconds() - start;
         #[cfg(feature = "qwen-profiling")]
         let decode_projections = projections.as_ref().map(|collector| collector.take());
@@ -185,20 +217,28 @@ pub(super) fn benchmark(
         if let Some((kernels, queue)) = decode_profile {
             let after = backend.profile().map_err(|e| format!("{e}"))?;
             let queue_after = backend.queue_profile().map_err(|e| format!("{e}"))?;
-            let prefill_phase = if instrumented { "large_prefill_device" } else { "large_prefill" };
-            let decode_phase = if instrumented { "large_decode_device" } else { "large_decode" };
+            let prefill_phase = if paired_q4 {
+                format!("paired_{:?}_prefill_device", pass.variant)
+            } else {
+                String::from(if instrumented { "large_prefill_device" } else { "large_prefill" })
+            };
+            let decode_phase = if paired_q4 {
+                format!("paired_{:?}_decode_device", pass.variant)
+            } else {
+                String::from(if instrumented { "large_decode_device" } else { "large_decode" })
+            };
             let (prefill_kernels, prefill_queue) = prefill_profile.expect("profile snapshots are paired");
             #[cfg(feature = "qwen-profiling")]
             if let (Some(prefill), Some(decode)) = (prefill_projections, decode_projections) {
-                super::benchmark::projection_profile(&prefill, &prefill_kernels, &kernels, prefill_phase)?;
-                super::benchmark::projection_profile(&decode, &kernels, &after, decode_phase)?;
+                super::benchmark::projection_profile(&prefill, &prefill_kernels, &kernels, &prefill_phase)?;
+                super::benchmark::projection_profile(&decode, &kernels, &after, &decode_phase)?;
             }
-            super::benchmark::profile(&prefill_kernels, &kernels, prefill_phase);
-            super::benchmark::queue_profile(prefill_queue, queue, prefill_phase);
-            super::benchmark::service_profile(&prefill_before, &decode_before, prefill_phase);
-            super::benchmark::profile(&kernels, &after, decode_phase);
-            super::benchmark::queue_profile(queue, queue_after, decode_phase);
-            super::benchmark::service_profile(&decode_before, &decode_after, decode_phase);
+            super::benchmark::profile(&prefill_kernels, &kernels, &prefill_phase);
+            super::benchmark::queue_profile(prefill_queue, queue, &prefill_phase);
+            super::benchmark::service_profile(&prefill_before, &decode_before, &prefill_phase);
+            super::benchmark::profile(&kernels, &after, &decode_phase);
+            super::benchmark::queue_profile(queue, queue_after, &decode_phase);
+            super::benchmark::service_profile(&decode_before, &decode_after, &decode_phase);
         }
         if let Some(timing) = timing {
             timing.finish().map_err(|e| format!("{e}"))?;
@@ -216,17 +256,90 @@ pub(super) fn benchmark(
         {
             return Err(String::from("GGUF benchmark transferred resident activation tensors"));
         }
+        let context = if paired_q4 {
+            format!(
+                " variant={:?} q4_vector_kernel={:?} sample={:?}",
+                pass.variant,
+                model.q4_vector_kernel(),
+                pass.sample
+            )
+        } else {
+            String::new()
+        };
+        let resident_marker = if paired_q4 {
+            "NATIVE_LARGE_QWEN_PAIRED_RESIDENT_OK"
+        } else {
+            "NATIVE_LARGE_QWEN_RESIDENT_OK"
+        };
         super::report(format_args!(
-            "NATIVE_LARGE_QWEN_RESIDENT_OK os=d3os framework=burn backend=nvidia run={run} prompt_id_uploads={prompt_uploads} decode_id_uploads={decode_uploads} selection_read_calls={decode_downloads} selection_bytes_per_read=256 selection_candidates_per_read=32 activation_uploads=0 activation_downloads=0"
+            "{resident_marker} os=d3os framework=burn backend=nvidia run={run} prompt_id_uploads={prompt_uploads} decode_id_uploads={decode_uploads} selection_read_calls={decode_downloads} selection_bytes_per_read=256 selection_candidates_per_read=32 activation_uploads=0 activation_downloads=0{context}"
         ));
         let matching_prefix = generated.iter().zip(reference).take_while(|(actual, expected)| actual == expected).count();
+        let bench_marker = if paired_q4 {
+            "NATIVE_LARGE_QWEN_PAIRED_BENCH"
+        } else {
+            "NATIVE_LARGE_QWEN_BENCH"
+        };
         super::report(format_args!(
-            "NATIVE_LARGE_QWEN_BENCH os=d3os framework=burn backend=nvidia run={run} warm={} instrumented={instrumented} state_ms={state_ms} prompt_tokens={prompt_count} prefill_ms={prefill_ms} decode_tokens={decode_count} decode_ms={decode_ms} decode_tps={:.3} checksum={checksum} cache=f32 n_ctx=2048 reference_prefix={matching_prefix} inputs=linux_reference eos=continue_for_benchmark",
-            run > 0,
+            "{bench_marker} os=d3os framework=burn backend=nvidia run={run} warm={} instrumented={instrumented} state_ms={state_ms} prompt_tokens={prompt_count} prefill_ms={prefill_ms} decode_tokens={decode_count} decode_ms={decode_ms} decode_tps={:.3} checksum={checksum} cache=f32 n_ctx=2048 reference_prefix={matching_prefix} inputs=linux_reference eos=continue_for_benchmark{context}",
+            pass.warm(),
             decode_count as f64 * 1000. / decode_ms.max(1) as f64
         ));
-        super::report(format_args!("NATIVE_LARGE_QWEN_TOKENS run={run} ids={generated:?}"));
+        let token_marker = if paired_q4 {
+            "NATIVE_LARGE_QWEN_PAIRED_TOKENS"
+        } else {
+            "NATIVE_LARGE_QWEN_TOKENS"
+        };
+        super::report(format_args!("{token_marker} run={run}{context} ids={generated:?}"));
     }
+    let reference_data = LogitReference {
+        bytes: &bytes,
+        prompt,
+        decode: reference,
+        ids_end,
+        vocab,
+    };
+    for (index, model) in models.iter().enumerate() {
+        let variant = paired_q4.then_some(if index == 0 {
+            schedule::Variant::Control
+        } else {
+            schedule::Variant::Candidate
+        });
+        verify_logits(model, &reference_data, variant)?;
+    }
+    if paired_q4 {
+        super::report(format_args!(
+            "INFERENCE_BENCH_PAIR_OK qwen-gguf backend=nvidia framework=burn os=d3os variants=2 reference_values_per_variant={}",
+            (decode_count + 1) * vocab
+        ));
+    } else {
+        super::report(format_args!(
+            "INFERENCE_BENCH_OK qwen-gguf backend=nvidia framework=burn os=d3os reference_tokens={decode_count}"
+        ));
+    }
+    Ok(())
+}
+
+struct LogitReference<'a> {
+    bytes: &'a [u8],
+    prompt: &'a [u32],
+    decode: &'a [u32],
+    ids_end: usize,
+    vocab: usize,
+}
+
+fn verify_logits(model: &Qwen, data: &LogitReference<'_>, variant: Option<schedule::Variant>) -> core::result::Result<(), String> {
+    let LogitReference {
+        bytes,
+        prompt,
+        decode: reference,
+        ids_end,
+        vocab,
+    } = *data;
+    let decode_count = reference.len();
+    let context = variant
+        .map(|variant| format!(" variant={variant:?} q4_vector_kernel={:?}", model.q4_vector_kernel()))
+        .unwrap_or_default();
     let mut session = model.session(2048).map_err(|e| format!("{e}"))?;
     let mut logits = session.prefill(prompt).map_err(|e| format!("{e}"))?;
     let mut failures = 0usize;
@@ -260,8 +373,13 @@ pub(super) fn benchmark(
             let expected_id = reference[row] as usize;
             if selected as usize != expected_id {
                 selection_mismatches += 1;
+                let marker = if variant.is_some() {
+                    "NATIVE_LARGE_QWEN_PAIRED_SELECTION"
+                } else {
+                    "NATIVE_LARGE_QWEN_SELECTION"
+                };
                 super::report(format_args!(
-                    "NATIVE_LARGE_QWEN_SELECTION row={row} actual={selected} expected={expected_id} actual_margin={} reference_margin={}",
+                    "{marker} row={row} actual={selected} expected={expected_id} actual_margin={} reference_margin={}{context}",
                     actual[selected as usize] - actual[expected_id],
                     expected[expected_id] - expected[selected as usize]
                 ));
@@ -269,16 +387,18 @@ pub(super) fn benchmark(
             logits = session.step(reference[row]).map_err(|e| format!("{e}"))?;
         }
     }
+    let marker = if variant.is_some() {
+        "NATIVE_LARGE_QWEN_PAIRED_REFERENCE"
+    } else {
+        "NATIVE_LARGE_QWEN_REFERENCE"
+    };
     super::report(format_args!(
-        "NATIVE_LARGE_QWEN_REFERENCE os=d3os framework=burn backend=nvidia rows={} vocab={vocab} values={} failures={failures} max_absolute={max_absolute} max_scaled_error={max_scaled_error} squared_error={squared_error} selection_mismatches={selection_mismatches} absolute_tolerance=0.002 relative_tolerance=0.0005 inputs=linux_reference",
+        "{marker} os=d3os framework=burn backend=nvidia rows={} vocab={vocab} values={} failures={failures} max_absolute={max_absolute} max_scaled_error={max_scaled_error} squared_error={squared_error} selection_mismatches={selection_mismatches} absolute_tolerance=0.002 relative_tolerance=0.0005 inputs=linux_reference{context}",
         decode_count + 1,
         (decode_count + 1) * vocab
     ));
     if failures != 0 {
         return Err(String::from("native GGUF logits differ from the staged numerical reference"));
     }
-    super::report(format_args!(
-        "INFERENCE_BENCH_OK qwen-gguf backend=nvidia framework=burn os=d3os reference_tokens={decode_count}"
-    ));
     Ok(())
 }

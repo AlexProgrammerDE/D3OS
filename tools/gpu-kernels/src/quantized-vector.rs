@@ -209,7 +209,7 @@ fn vector_q3_group<const G: i32>(
     let q: Tile<f32, { [128] }> = itof(q, rounding::NearestEven);
     (d * scale) * q
 }
-fn vector_q4_group<const FORMAT: u32, const G: i32>(
+fn vector_q4_group<const FORMAT: u32, const G: i32, const NARROW: bool>(
     q: Tile<u32, { [128] }>, high: Tile<u32, { [128] }>, s0: Tile<u32, { [128] }>, s1: Tile<u32, { [128] }>, s2: Tile<u32, { [128] }>, d: Tile<f32, { [128] }>,
     dmin: Tile<f32, { [128] }>,
 ) -> Tile<f32, { [128] }> {
@@ -232,9 +232,25 @@ fn vector_q4_group<const FORMAT: u32, const G: i32>(
     } else {
         q
     };
-    let scale: Tile<f32, { [128] }> = itof(scale, rounding::NearestEven);
-    let minimum: Tile<f32, { [128] }> = itof(minimum, rounding::NearestEven);
-    let q: Tile<f32, { [128] }> = itof(q, rounding::NearestEven);
+    // All three operands fit u8. Select the conversion route at compile time.
+    let scale: Tile<f32, { [128] }> = if NARROW {
+        let small: Tile<u8, { [128] }> = trunci(scale, overflow::NoUnsignedWrap);
+        itof(small, rounding::NearestEven)
+    } else {
+        itof(scale, rounding::NearestEven)
+    };
+    let minimum: Tile<f32, { [128] }> = if NARROW {
+        let small: Tile<u8, { [128] }> = trunci(minimum, overflow::NoUnsignedWrap);
+        itof(small, rounding::NearestEven)
+    } else {
+        itof(minimum, rounding::NearestEven)
+    };
+    let q: Tile<f32, { [128] }> = if NARROW {
+        let small: Tile<u8, { [128] }> = trunci(q, overflow::NoUnsignedWrap);
+        itof(small, rounding::NearestEven)
+    } else {
+        itof(q, rounding::NearestEven)
+    };
     (d * scale) * q - dmin * minimum
 }
 fn vector_q6_group<const G: i32>(
@@ -275,7 +291,7 @@ unsafe fn group_project_q8_columns32(
     unsafe { group_project_q8::<true>(input, qkv, gate, beta, alpha, output, inner, qkv_cols, gate_cols, heads, _format) }
 }
 
-unsafe fn vector_project_k<const FORMAT: u32>(a: *const f32, b: *const f32, output: *mut f32, inner: u32, cols: u32) {
+unsafe fn vector_project_k<const FORMAT: u32, const NARROW: bool>(a: *const f32, b: *const f32, output: *mut f32, inner: u32, cols: u32) {
     let first = block_id() * 4u32;
     let lane = lanes::<128>() % broadcast_scalar(32u32, shape![128]);
     let col = lanes::<128>() / broadcast_scalar(32u32, shape![128]) + broadcast_scalar(first, shape![128]);
@@ -370,21 +386,21 @@ unsafe fn vector_project_k<const FORMAT: u32>(a: *const f32, b: *const f32, outp
             } else {
                 broadcast_scalar(0u32, shape![128])
             };
-            let w = vector_q4_group::<FORMAT, 0>(q0, h, s0, s1, s2, d, dmin);
+            let w = vector_q4_group::<FORMAT, 0, NARROW>(q0, h, s0, s1, s2, d, dmin);
             sum0 = unsafe { vector_quantized_fma::<0>(a, start, lane, w, sum0) };
-            let w = vector_q4_group::<FORMAT, 1>(q0, h, s0, s1, s2, d, dmin);
+            let w = vector_q4_group::<FORMAT, 1, NARROW>(q0, h, s0, s1, s2, d, dmin);
             sum1 = unsafe { vector_quantized_fma::<1>(a, start, lane, w, sum1) };
-            let w = vector_q4_group::<FORMAT, 2>(q1, h, s0, s1, s2, d, dmin);
+            let w = vector_q4_group::<FORMAT, 2, NARROW>(q1, h, s0, s1, s2, d, dmin);
             sum2 = unsafe { vector_quantized_fma::<2>(a, start, lane, w, sum2) };
-            let w = vector_q4_group::<FORMAT, 3>(q1, h, s0, s1, s2, d, dmin);
+            let w = vector_q4_group::<FORMAT, 3, NARROW>(q1, h, s0, s1, s2, d, dmin);
             sum3 = unsafe { vector_quantized_fma::<3>(a, start, lane, w, sum3) };
-            let w = vector_q4_group::<FORMAT, 4>(q2, h, s0, s1, s2, d, dmin);
+            let w = vector_q4_group::<FORMAT, 4, NARROW>(q2, h, s0, s1, s2, d, dmin);
             sum0 = unsafe { vector_quantized_fma::<4>(a, start, lane, w, sum0) };
-            let w = vector_q4_group::<FORMAT, 5>(q2, h, s0, s1, s2, d, dmin);
+            let w = vector_q4_group::<FORMAT, 5, NARROW>(q2, h, s0, s1, s2, d, dmin);
             sum1 = unsafe { vector_quantized_fma::<5>(a, start, lane, w, sum1) };
-            let w = vector_q4_group::<FORMAT, 6>(q3, h, s0, s1, s2, d, dmin);
+            let w = vector_q4_group::<FORMAT, 6, NARROW>(q3, h, s0, s1, s2, d, dmin);
             sum2 = unsafe { vector_quantized_fma::<6>(a, start, lane, w, sum2) };
-            let w = vector_q4_group::<FORMAT, 7>(q3, h, s0, s1, s2, d, dmin);
+            let w = vector_q4_group::<FORMAT, 7, NARROW>(q3, h, s0, s1, s2, d, dmin);
             sum3 = unsafe { vector_quantized_fma::<7>(a, start, lane, w, sum3) };
         } else {
             let d = unsafe { quant_half_128(b, base + broadcast_scalar(208u32, shape![128]), mask) };

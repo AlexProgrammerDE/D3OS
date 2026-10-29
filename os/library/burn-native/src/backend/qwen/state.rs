@@ -1,5 +1,5 @@
 //! Fused state updates consume Burn storage and preserve any surviving aliases.
-use super::{PrefillQuantization, dense, output, projection, weights};
+use super::{ProjectionOptions, dense, output, projection, weights};
 use crate::{
     NativeTensor,
     backend::{BackendTensor, Native},
@@ -282,7 +282,7 @@ impl Native {
     /// Scalar parameters: convolution weights, log decay, time bias, norm.
     pub fn qwen_project_delta(
         input: BackendTensor, packed: [BackendTensor; 4], parameters: [BackendTensor; 4], cache: [BackendTensor; 2], geometry: [usize; 5], epsilon: f32,
-        storage: [((MatrixFormat, MatrixLayout), PrefillQuantization); 4],
+        storage: [((MatrixFormat, MatrixLayout), ProjectionOptions); 4],
     ) -> [BackendTensor; 3] {
         let formats = storage.map(|(format, _)| format);
         let modes = storage.map(|(_, mode)| mode);
@@ -304,7 +304,7 @@ impl Native {
                     .checked_add(element_count(&[heads, value_dim])?)
                     .ok_or(Error::SizeOverflow)?;
                 for (i, out) in [channels, values, heads, heads].into_iter().enumerate() {
-                    super::projection_components(rows, [out, width], formats[i], modes[i])?;
+                    super::projection_components(rows, [out, width], formats[i], modes[i].prefill)?;
                 }
                 let group_bf16 = rows == 1
                     && key_heads == heads

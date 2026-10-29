@@ -21,6 +21,19 @@ pub enum PrefillQuantization {
     Q8_1WithAttention,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Q4VectorKernel {
+    #[default]
+    Default,
+    Narrow,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProjectionOptions {
+    pub prefill: PrefillQuantization,
+    pub q4_vector: Q4VectorKernel,
+}
+
 fn dense(input: &NativeTensor, dtype: DType) -> Result<NativeTensor> {
     if input.dtype() != dtype {
         return Err(Error::InvalidParameter);
@@ -107,7 +120,7 @@ fn project_prepared(
 }
 
 fn projection(
-    input: &NativeTensor, packed: &NativeTensor, shape: [usize; 2], storage: (MatrixFormat, MatrixLayout), mode: PrefillQuantization,
+    input: &NativeTensor, packed: &NativeTensor, shape: [usize; 2], storage: (MatrixFormat, MatrixLayout), options: ProjectionOptions,
 ) -> Result<NativeTensor> {
     let (format, layout) = storage;
     let [batch, width] = *input.shape().as_slice() else {
@@ -117,9 +130,17 @@ fn projection(
     if batch == 0 || width != inner {
         return Err(Error::ShapeMismatch);
     }
-    let components = projection_components(batch, shape, storage, mode)?;
+    let components = projection_components(batch, shape, storage, options.prefill)?;
     let input = dense(input, DType::F32)?;
     let packed = weights(packed, shape, storage)?;
+    if batch == 1 && format == MatrixFormat::Quantized(Quantization::Q4K) && options.q4_vector == Q4VectorKernel::Narrow {
+        return output(
+            [1, outputs],
+            Kernel::ProjectQuantized,
+            &[(&input, 0), (&packed, 0)],
+            &[1, width, outputs, 12, 1],
+        );
+    }
     if let Some(components) = components {
         let activations = prepare_activations(&input, outputs, components)?;
         return project_prepared(&activations, &packed, batch, shape, layout, components);
@@ -194,11 +215,11 @@ impl Native {
     }
 
     pub fn qwen_project(
-        input: BackendTensor, packed: BackendTensor, shape: [usize; 2], storage: (MatrixFormat, MatrixLayout), mode: PrefillQuantization,
+        input: BackendTensor, packed: BackendTensor, shape: [usize; 2], storage: (MatrixFormat, MatrixLayout), options: ProjectionOptions,
     ) -> BackendTensor {
         let batch = input.shape().first().copied().unwrap_or(0);
         BackendTensor::apply("packed projection", Shape::new([batch, shape[0]]), DType::F32, &[&input, &packed], |v| {
-            projection(v[0], v[1], shape, storage, mode)
+            projection(v[0], v[1], shape, storage, options)
         })
     }
 
@@ -232,7 +253,7 @@ impl Native {
 
     pub fn qwen_gated_project(
         input: BackendTensor, gate: BackendTensor, up: BackendTensor, shape: [usize; 2], gate_storage: (MatrixFormat, MatrixLayout),
-        up_storage: (MatrixFormat, MatrixLayout), mode: PrefillQuantization,
+        up_storage: (MatrixFormat, MatrixLayout), options: [ProjectionOptions; 2],
     ) -> BackendTensor {
         let batch = input.shape().first().copied().unwrap_or(0);
         let (gate_format, gate_layout) = gate_storage;
@@ -243,8 +264,8 @@ impl Native {
             DType::F32,
             &[&input, &gate, &up],
             |v| {
-                let gate_components = projection_components(batch, shape, gate_storage, mode)?;
-                let up_components = projection_components(batch, shape, up_storage, mode)?;
+                let gate_components = projection_components(batch, shape, gate_storage, options[0].prefill)?;
+                let up_components = projection_components(batch, shape, up_storage, options[1].prefill)?;
                 if batch == 1 && gate_format == MatrixFormat::Bf16 && up_format == MatrixFormat::Bf16 {
                     if v[0].shape().as_slice() != [1, shape[1]] {
                         return Err(Error::ShapeMismatch);
@@ -261,7 +282,7 @@ impl Native {
                 }
                 let shared_components = if gate_format == up_format
                     && gate_components == up_components
-                    && (use_components(batch, shape, gate_format) || mode != PrefillQuantization::Accurate)
+                    && (use_components(batch, shape, gate_format) || options[0].prefill != PrefillQuantization::Accurate)
                 {
                     gate_components
                 } else {
@@ -281,8 +302,8 @@ impl Native {
                     )
                 } else {
                     (
-                        projection(v[0], v[1], shape, gate_storage, mode)?,
-                        projection(v[0], v[2], shape, up_storage, mode)?,
+                        projection(v[0], v[1], shape, gate_storage, options[0])?,
+                        projection(v[0], v[2], shape, up_storage, options[1])?,
                     )
                 };
                 Nvidia.dispatch_words(Kernel::SiluMul, &[(&gate.buffer, 0), (&up.buffer, 0), (&gate.buffer, 0)], &[batch * shape[0]])?;
@@ -293,7 +314,7 @@ impl Native {
 
     pub fn qwen_project_add(
         input: BackendTensor, packed: BackendTensor, residual: BackendTensor, shape: [usize; 2], storage: (MatrixFormat, MatrixLayout),
-        mode: PrefillQuantization,
+        options: ProjectionOptions,
     ) -> BackendTensor {
         let result_shape = residual.shape();
         // Check before creating any temporary storage aliases. In-place dispatch is
@@ -306,8 +327,8 @@ impl Native {
             if width != shape[1] || v[2].shape().as_slice() != [batch, shape[0]] {
                 return Err(Error::ShapeMismatch);
             }
-            if mode != PrefillQuantization::Accurate {
-                projection_components(batch, shape, storage, mode)?;
+            if options.prefill != PrefillQuantization::Accurate {
+                projection_components(batch, shape, storage, options.prefill)?;
             }
             let (format, _) = storage;
             if batch == 1 && width.is_multiple_of(2) && shape[0] <= 8192 && format == MatrixFormat::Bf16 {
@@ -329,7 +350,7 @@ impl Native {
                 )?;
                 return Ok(residual);
             }
-            projection(v[0], v[1], shape, storage, mode)?.binary(v[2], Elementwise::Add)
+            projection(v[0], v[1], shape, storage, options)?.binary(v[2], Elementwise::Add)
         })
     }
 

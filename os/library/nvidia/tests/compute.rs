@@ -1,6 +1,39 @@
 use d3os_nvidia::compute::Kernel;
 
 #[test]
+fn q4_vector_selection_preserves_geometry_and_rejects_other_packet_forms() {
+    for inner in [256, 5120, 6144, 17408] {
+        for columns in [1, 3, 32, 129, 5120] {
+            let ordinary = [1, inner, columns, 12];
+            let selected = [1, inner, columns, 12, 1];
+            let a = Kernel::ProjectQuantized.work(&ordinary).unwrap();
+            let b = Kernel::ProjectQuantized.work(&selected).unwrap();
+            assert_eq!(a.extents, b.extents);
+            assert_eq!(
+                (a.blocks, a.threads, a.pointers, a.output, a.in_place),
+                (b.blocks, b.threads, b.pointers, b.output, b.in_place)
+            );
+            assert_ne!(Kernel::ProjectQuantized.entry(&ordinary), Kernel::ProjectQuantized.entry(&selected));
+            assert!(b.validate_aliases(&[0x1000, 0x2000, 0x1000]).is_err());
+        }
+    }
+    for packet in [
+        [0, 256, 1, 12, 1],
+        [2, 256, 1, 12, 1],
+        [1, 255, 1, 12, 1],
+        [1, 256, 0, 12, 1],
+        [1, 256, u32::MAX, 12, 1],
+        [1, 256, 1, 11, 1],
+        [1, 256, 1, 13, 1],
+        [1, 256, 1, 14, 1],
+        [1, 256, 1, 12, 0],
+        [1, 256, 1, 12, 2],
+    ] {
+        assert!(Kernel::ProjectQuantized.work(&packet).is_err());
+    }
+}
+
+#[test]
 fn conversions_check_both_physical_widths_and_logical_geometry() {
     use d3os_nvidia::compute::cast::{self, Format};
     let mut p = [0u32; 32];

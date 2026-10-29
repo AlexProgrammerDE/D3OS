@@ -381,3 +381,46 @@ That result does not indicate FP32 equivalence or whole-model qualification.
 The mode remains experimental.
 Read the [measured performance and accuracy comparison](nvidia-performance.md#experimental-q8_1-prefill-on-the-9b-model).
 The [attention comparison](nvidia-performance.md#optional-q8_1-attention-prefill) records the additional speed and precision changes.
+
+### Paired Q4_K measurements within one VM
+
+The paired benchmark compares Q4_K implementations with one resident model.
+Both model configurations share the original packed weight tensors.
+A memory and transfer check rejects an unexpected weight allocation or copy.
+
+The control uses the existing Q4_K conversion path.
+The candidate converts bounded unsigned weight operands through `u8` before FP32 arithmetic.
+Both paths retain FP32 activations, multiplication, FMA, and reduction.
+The candidate is an explicit choice. The default remains unchanged.
+
+The measured order is `ABBA BAAB`, where A is the control and B is the candidate.
+Each configuration first receives one warmup pass.
+Two instrumented passes follow the eight ordinary samples.
+The instrumented passes do not contribute to the speed comparison.
+
+Each paired phase ends with `device.sync()` inside its timer.
+These times include completion of the final submitted GPU work.
+Earlier separate-VM times use a different completion scope and remain separate evidence.
+
+The benchmark runs the complete original logit reference for each configuration.
+Each reference covers 32,033,280 values with the original absolute and relative tolerances.
+The launcher also requires matching generated tokens, projection workloads, and transfer counts.
+The projection profiles identify the actual selected Q4_K entry.
+
+Before a run, compare the source, image, module, model, and reference identities with existing receipts.
+Reuse a matching completed capture.
+For a new source or measurement scope, retain its reason and comparison rule before the run.
+
+Use the normal GGUF benchmark command with these additional flags:
+
+```sh
+--inference gpu-qwen-gguf-bench --qwen-device-timing --qwen-paired-q4
+```
+
+The paired command requires Accurate activation arithmetic.
+It rejects either Q8_1 prefill flag.
+Use a short capture directory because QMP uses a UNIX socket within that directory.
+
+The guest emits `NATIVE_LARGE_QWEN_PAIRED_*` records and the separate `INFERENCE_BENCH_PAIR_OK` footer.
+The launcher rejects incomplete schedules and mismatched references.
+Ordinary benchmark commands retain their existing schedule and records.

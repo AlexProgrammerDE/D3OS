@@ -154,23 +154,31 @@ fn run() -> Result<(), String> {
         }
         Some("gpu-qwen-gguf-bench") => {
             let mut device_timing = false;
+            let mut paired_q4 = false;
             let mut quantization = qwen::PrefillQuantization::Accurate;
             for option in &args[1..] {
                 match option.as_str() {
                     "device-timing" if !device_timing => device_timing = true,
+                    "paired-q4" if !paired_q4 => paired_q4 = true,
                     "q8-prefill" if quantization == qwen::PrefillQuantization::Accurate => quantization = qwen::PrefillQuantization::Q8_1,
                     "q8-attention-prefill" if quantization == qwen::PrefillQuantization::Accurate => {
                         quantization = qwen::PrefillQuantization::Q8_1WithAttention;
                     }
                     _ => {
                         return Err(String::from(
-                            "usage: infer gpu-qwen-gguf-bench [device-timing] [q8-prefill|q8-attention-prefill]",
+                            "usage: infer gpu-qwen-gguf-bench [device-timing] [paired-q4|q8-prefill|q8-attention-prefill]",
                         ));
                     }
                 }
             }
             let backend = Nvidia::new().map_err(|e| format!("{e}"))?;
-            model_file::benchmark(&d3os_ai::native_device().map_err(|e| format!("{e}"))?, &backend, device_timing, quantization)?;
+            model_file::benchmark(
+                &d3os_ai::native_device().map_err(|e| format!("{e}"))?,
+                &backend,
+                device_timing,
+                quantization,
+                paired_q4,
+            )?;
         }
         Some("gpu-qwen-gguf-verify") if args.len() == 1 => {
             model_file::verify(&d3os_ai::native_device().map_err(|e| format!("{e}"))?)?;
@@ -181,7 +189,7 @@ fn run() -> Result<(), String> {
         }
         _ => {
             return Err(String::from(
-                "usage: infer self-test | burn-self-test | gpu-mnist-train | gpu-mnist-infer | gpu-mnist-bench | gpu-mnist-profile | fwcfg-self-test | gpu-self-test | gpu-kernel-bench | alexnet [MODEL FIXTURE] | gpu-alexnet [MODEL FIXTURE] | gpu-alexnet-bench | qwen [MAX_TOKENS PROMPT...] | qwen-verify | gpu-qwen [MAX_TOKENS PROMPT...] | gpu-qwen-verify | gpu-qwen-bench [long] [device-timing] [firmware-model] | gpu-qwen-gguf [MAX_TOKENS PROMPT...] | gpu-qwen-gguf-bench [device-timing] [q8-prefill|q8-attention-prefill] | gpu-qwen-gguf-verify",
+                "usage: infer self-test | burn-self-test | gpu-mnist-train | gpu-mnist-infer | gpu-mnist-bench | gpu-mnist-profile | fwcfg-self-test | gpu-self-test | gpu-kernel-bench | alexnet [MODEL FIXTURE] | gpu-alexnet [MODEL FIXTURE] | gpu-alexnet-bench | qwen [MAX_TOKENS PROMPT...] | qwen-verify | gpu-qwen [MAX_TOKENS PROMPT...] | gpu-qwen-verify | gpu-qwen-bench [long] [device-timing] [firmware-model] | gpu-qwen-gguf [MAX_TOKENS PROMPT...] | gpu-qwen-gguf-bench [device-timing] [paired-q4|q8-prefill|q8-attention-prefill] | gpu-qwen-gguf-verify",
             ));
         }
     }

@@ -451,8 +451,8 @@ fn burn_module_records_preserve_packed_parameters_and_inference_predictions() {
 }
 
 #[test]
-fn prefill_quantization_is_explicit_and_rejects_unsupported_backends() {
-    use d3os_ai::qwen::PrefillQuantization;
+fn projection_choices_are_explicit_and_reject_unsupported_backends() {
+    use d3os_ai::qwen::{PrefillQuantization, Q4VectorKernel};
     let model = Qwen::load(&Device::flex(), &archive(&model_records())).unwrap();
     assert_eq!(model.prefill_quantization(), PrefillQuantization::Accurate);
     let unchanged = model.clone().with_prefill_quantization(PrefillQuantization::Accurate).unwrap();
@@ -460,4 +460,9 @@ fn prefill_quantization_is_explicit_and_rejects_unsupported_backends() {
     assert!(model.clone().with_prefill_quantization(PrefillQuantization::Q8_1).is_err());
     assert!(model.clone().with_prefill_quantization(PrefillQuantization::Q8_1WithAttention).is_err());
     assert_eq!(model.prefill_quantization(), PrefillQuantization::Accurate);
+    assert_eq!(model.q4_vector_kernel(), Q4VectorKernel::Default);
+    let unchanged = model.clone().with_q4_vector_kernel(Q4VectorKernel::Default).unwrap();
+    assert_eq!(unchanged.q4_vector_kernel(), Q4VectorKernel::Default);
+    assert!(model.clone().with_q4_vector_kernel(Q4VectorKernel::Narrow).is_err());
+    assert_eq!(model.q4_vector_kernel(), Q4VectorKernel::Default);
 }

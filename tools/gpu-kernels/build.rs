@@ -753,11 +753,12 @@ fn main() {
     }
     source.push_str("#[cutile::entry()] unsafe fn vector_project_q8_0_narrow(a:*const f32,b:*const f32,out:*mut f32,_m:u32,k:u32,n:u32,_format:u32){unsafe{vector_project_q8::<true,false>(a,b,out,k,n)}}\n");
     source.push_str("#[cutile::entry()] unsafe fn vector_project_q8_0_signed(a:*const f32,b:*const f32,out:*mut f32,_m:u32,k:u32,n:u32,_format:u32){unsafe{vector_project_q8::<false,true>(a,b,out,k,n)}}\n");
+    source.push_str("#[cutile::entry()] unsafe fn vector_project_q4k_narrow(a:*const f32,b:*const f32,out:*mut f32,_m:u32,k:u32,n:u32,_format:u32,_variant:u32){unsafe{vector_project_k::<12,true>(a,b,out,k,n)}}\n");
     for (format, name) in [(8, "q8_0"), (11, "q3k"), (12, "q4k"), (13, "q5k"), (14, "q6k")] {
         let vector = if format == 8 {
             "vector_project_q8::<false,false>".to_owned()
         } else {
-            format!("vector_project_k::<{format}>")
+            format!("vector_project_k::<{format}, false>")
         };
         source.push_str(&format!("#[cutile::entry()] unsafe fn vector_project_{name}(a:*const f32,b:*const f32,out:*mut f32,_m:u32,k:u32,n:u32,_format:u32){{unsafe{{ {vector}(a,b,out,k,n) }} }}\n"));
         source.push_str(&format!("#[cutile::entry()] unsafe fn project_m32_{name}(a:*const f32,b:*const f32,out:*mut f32,m:u32,k:u32,n:u32,_format:u32){{unsafe{{ compensated_matrix_16_m32::<true,false,false,{format}>(a,b,out,m,k,n,1u32) }} }}\n"));

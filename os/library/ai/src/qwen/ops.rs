@@ -13,6 +13,15 @@ pub struct MatrixPrimitive<B: Backend> {
     pub format: MatrixFormat,
     pub layout: MatrixLayout,
     pub prefill_quantization: super::PrefillQuantization,
+    pub q4_vector_kernel: super::Q4VectorKernel,
+}
+
+#[cfg(feature = "native")]
+fn native_options<B: Backend>(matrix: &MatrixPrimitive<B>) -> crate::native::backend::ProjectionOptions {
+    crate::native::backend::ProjectionOptions {
+        prefill: matrix.prefill_quantization.native(),
+        q4_vector: matrix.q4_vector_kernel.native(),
+    }
 }
 
 #[derive(ExtensionType)]
@@ -169,10 +178,10 @@ impl QwenOps for d3os_burn_native::backend::Native {
         config: super::DeltaConfig,
     ) -> DeltaResult<Self> {
         let storage = [
-            ((weights.qkv.format, weights.qkv.layout), weights.qkv.prefill_quantization.native()),
-            ((weights.gate.format, weights.gate.layout), weights.gate.prefill_quantization.native()),
-            ((weights.beta.format, weights.beta.layout), weights.beta.prefill_quantization.native()),
-            ((weights.alpha.format, weights.alpha.layout), weights.alpha.prefill_quantization.native()),
+            ((weights.qkv.format, weights.qkv.layout), native_options(&weights.qkv)),
+            ((weights.gate.format, weights.gate.layout), native_options(&weights.gate)),
+            ((weights.beta.format, weights.beta.layout), native_options(&weights.beta)),
+            ((weights.alpha.format, weights.alpha.layout), native_options(&weights.alpha)),
         ];
         let [output, convolution, recurrent] = Self::qwen_project_delta(
             input,
@@ -191,18 +200,14 @@ impl QwenOps for d3os_burn_native::backend::Native {
     }
 
     fn project(input: FloatTensor<Self>, matrix: MatrixPrimitive<Self>) -> FloatTensor<Self> {
-        Self::qwen_project(
-            input,
-            matrix.words,
-            matrix.shape,
-            (matrix.format, matrix.layout),
-            matrix.prefill_quantization.native(),
-        )
+        let options = native_options(&matrix);
+        Self::qwen_project(input, matrix.words, matrix.shape, (matrix.format, matrix.layout), options)
     }
     fn embedding(matrix: MatrixPrimitive<Self>, tokens: Vec<u32>) -> FloatTensor<Self> {
         Self::qwen_embedding(matrix.words, matrix.shape, (matrix.format, matrix.layout), tokens)
     }
     fn gated_project(input: FloatTensor<Self>, gate: MatrixPrimitive<Self>, up: MatrixPrimitive<Self>) -> FloatTensor<Self> {
+        let options = [native_options(&gate), native_options(&up)];
         Self::qwen_gated_project(
             input,
             gate.words,
@@ -210,18 +215,12 @@ impl QwenOps for d3os_burn_native::backend::Native {
             gate.shape,
             (gate.format, gate.layout),
             (up.format, up.layout),
-            gate.prefill_quantization.native(),
+            options,
         )
     }
     fn project_add(input: FloatTensor<Self>, matrix: MatrixPrimitive<Self>, residual: FloatTensor<Self>) -> FloatTensor<Self> {
-        Self::qwen_project_add(
-            input,
-            matrix.words,
-            residual,
-            matrix.shape,
-            (matrix.format, matrix.layout),
-            matrix.prefill_quantization.native(),
-        )
+        let options = native_options(&matrix);
+        Self::qwen_project_add(input, matrix.words, residual, matrix.shape, (matrix.format, matrix.layout), options)
     }
     fn rms_norm(input: FloatTensor<Self>, weight: FloatTensor<Self>, epsilon: f32) -> FloatTensor<Self> {
         Self::qwen_rms_norm(input, weight, epsilon)
