@@ -3898,3 +3898,47 @@ Both original operator references pass its staged CPU fold, and the unchanged co
 It uses 40 registers, one barrier, 16 shared bytes, and no spills.
 This is compiler and CPU evidence only; GPU accuracy, operator speed, and full-model acceptance remain unproven.
 Those artifacts remain under `~/.cache/d3os/qwen-q4-split-k4-v1/`.
+
+## Synchronized 0.8B baseline
+
+A fresh Native capture uses the corrected prefill and final-decode completion boundaries.
+The exact model archive, fixtures, completed application image, and qualified kernels are reused.
+The cached Linux capture is reused after checking its original token contract, weight audit, benchmark executable, libraries, and serial hash.
+All 320 model tensors and 19 settings remain matched.
+
+| Ordinary warm measurement | Native, fresh | llama.cpp, cached new context |
+| --- | ---: | ---: |
+| Decode throughput | 260.1665 tokens/s | 261.3285 tokens/s |
+| Prompt processing | 10.000 ms | 6.783 ms |
+
+Native is 0.44% below cached Linux decode throughput on this workload.
+Prompt latency remains 47.4% longer.
+The workload retains 22 prompt tokens, 64 decode tokens, FP32 state, a 256-token context, four pinned vCPUs, and 12 GiB guest RAM.
+All three Native token traces match the cached workload exactly.
+The original 105 tokenizer cases, 29 reference positions, 24 layers, batched execution, cache comparison, and residency gates pass.
+
+One capture per OS and two ordinary warm samples do not establish a statistical guarantee.
+Automatic clocks and Native millisecond timing remain limitations.
+This is a corrected baseline, not a measured improvement over the unsynchronized capture.
+Native firmware and Linux 9p model transports still differ, so their file timings do not establish cold-storage parity.
+
+The previous 12 GiB Native run used 13.1 GiB of host available RAM at peak.
+This measurement uses a documented model-specific 24 GiB start threshold and a live 6 GiB reserve; the 27B policy remains unchanged.
+The actual minimum available RAM was 19.7 GiB, with no recorder overlap or material swap drawdown.
+No other project's processes were stopped.
+
+The capture, source/image bindings, unchanged reference checks, cached Linux comparison, and resource receipts remain under `~/.cache/d3os/qwen-08b-synchronized-baseline-v1/`.
+
+## Rejected operator alternatives after the timing repair
+
+The four-warp Q4 split-reduction operator passes all 105,288 original reference comparisons and 62,884 bit-exact staged CPU comparisons.
+Packing, guards, and source checks pass.
+Rotating-weight mean latency, including the same packing, falls by 2.51% for 6144 inputs and 6.30% for 17408 inputs.
+The prospectively fixed requirement was at least 5% for both cases, so this general replacement is not retained and receives no model acceptance.
+The complete result remains under `~/.cache/d3os/qwen-q4-split-k4-v1/`.
+
+The separate GPU-only Q3 unpack-to-F32 scratch experiment fails its final guard check.
+Its timing scratch allocation did not upload initialized sentinel guards before use, making that final comparison invalid.
+The failure and original capture are preserved; no numerical, physical, or performance acceptance is granted.
+Reported timings are diagnostic, and no replacement run or production integration follows.
+Evidence remains under `~/.cache/d3os/qwen-q3-scratch-prefill-v1/`.
