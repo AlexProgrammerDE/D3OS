@@ -19,7 +19,7 @@ from pathlib import Path
 
 ENTRY = "burn_float_arithmetic"
 TEXT = f".text.{ENTRY}"
-PROFILE = "sm89-typed-erf25-library-scratch-v30"
+PROFILE = "sm89-typed-erf25-library-scratch-v32"
 REVISION = "2f47ad0036a7c18ec11d460f70b297a5824f9788"
 # Crate-relative keys are also consumed by prepare-kernels.py before/after
 # compilation. Bind SDK protocol 55 and the batched/component/grouped/signed Q8 and wide RMS/residual variants in
@@ -56,7 +56,7 @@ SOURCE_HASHES = {
     "src/burn-mixed-matmul.rs.in": "9c5a328d5063828dfa644272e93e8e051cede5f62abb39eb6d5cda67a9be05bb",
     "../../os/library/nvidia/src/compute/indexed_accumulation.rs": "39f67fa33a61e2b75ecc2f8ec32b20ea2a35d3e60b0bcd124a01096f86d8f3c6",
     "src/burn-indexed-accumulation.rs.in": "6d01ad5122fc28551df86e7cad76f5e633e62d6db0427e4ddb243d7ddf6f4193",
-    "src/quantized-vector.rs": "b2168a5d324b324e8d9e4cfe8c889b40ffc113bca62fae46af063fb72bf45f93",
+    "src/quantized-vector.rs": "b45b001ef3b1a39e6c29cd684f6c748760f81847ae794e80d104c9bb26def67f",
     "src/rms-wide.rs": "db46698647c421bad0d9d5d5bb513d76a172099d2fa30a153530632fa431a90b",
     "src/quantized-columns.rs": "17b4470167d980ad9deef9c99426c28976cb7447cce2c2ab4786e69ddd23b7c6",
 }

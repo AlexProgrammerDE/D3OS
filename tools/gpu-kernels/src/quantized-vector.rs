@@ -184,23 +184,29 @@ unsafe fn group_project_q8<const TILED: bool>(
 // Decode each 256-weight block with 32 logical lanes per output row. A CTA
 // projects four rows, reusing packed bytes across eight 32-value groups.
 // Keep FP32 activations and the generic decoder's scale multiplication order.
+// Narrow signed conversion keeps integer bias off the FP32 pipeline.
+// Masked values and both biased ranges fit i8 exactly.
 fn vector_q3_group<const G: i32>(
     q: Tile<u32, { [128] }>, high: Tile<u32, { [128] }>, low_scale: Tile<u32, { [128] }>, high_scale: Tile<u32, { [128] }>, d: Tile<f32, { [128] }>,
 ) -> Tile<f32, { [128] }> {
     let low = (low_scale >> broadcast_scalar(4u32 * (unsigned(G) / 4u32), shape![128])) & broadcast_scalar(15u32, shape![128]);
     let high_scale = (high_scale >> broadcast_scalar(2u32 * (unsigned(G) / 2u32), shape![128])) & broadcast_scalar(3u32, shape![128]);
-    let scale: Tile<f32, { [128] }> = itof(low | (high_scale << broadcast_scalar(4u32, shape![128])), rounding::NearestEven);
-    let scale = scale - broadcast_scalar(32f32, shape![128]);
+    let small: Tile<u8, { [128] }> = trunci(low | (high_scale << broadcast_scalar(4u32, shape![128])), overflow::NoUnsignedWrap);
+    let scale: Tile<i8, { [128] }> = bitcast(small);
+    let scale = scale - broadcast_scalar(32i8, shape![128]);
+    let scale: Tile<f32, { [128] }> = itof(scale, rounding::NearestEven);
     let q = (q >> broadcast_scalar(2u32 * (unsigned(G) % 4u32), shape![128])) & broadcast_scalar(3u32, shape![128]);
-    let q: Tile<f32, { [128] }> = itof(q, rounding::NearestEven);
+    let small: Tile<u8, { [128] }> = trunci(q, overflow::NoUnsignedWrap);
+    let q: Tile<i8, { [128] }> = bitcast(small);
     let q = q - select(
         eq_tile(
             (high >> broadcast_scalar(unsigned(G), shape![128])) & broadcast_scalar(1u32, shape![128]),
             broadcast_scalar(0u32, shape![128]),
         ),
-        broadcast_scalar(4f32, shape![128]),
-        broadcast_scalar(0f32, shape![128]),
+        broadcast_scalar(4i8, shape![128]),
+        broadcast_scalar(0i8, shape![128]),
     );
+    let q: Tile<f32, { [128] }> = itof(q, rounding::NearestEven);
     (d * scale) * q
 }
 fn vector_q4_group<const FORMAT: u32, const G: i32>(

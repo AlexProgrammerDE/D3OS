@@ -3364,3 +3364,68 @@ Its storage transport differs from Linux, so these import timings do not establi
 
 Complete cache decisions, identities, reference checks, and the current profile remain under
 `~/.cache/d3os/qwen-27b-current-baseline-v1/`.
+
+## Signed Q3_K conversions before FP32 accumulation
+
+The Q3_K vector decoder now applies its integer biases before conversion to FP32.
+Masked scale values fit `0..=63`, and biased scales fit `-32..=31`.
+Masked quant values fit `0..=3`, and biased quants fit `-4..=3`.
+All values therefore fit the intermediate `u8` and `i8` types exactly.
+The resulting FP32 operands, packed storage, weight multiplications, FMA sequence, and reduction order remain unchanged.
+This change adds no activation quantization.
+
+A bounded check covers all 4,096 group/scale/quant/sign combinations, including positive-zero operands.
+An initial I32 form compiles but produces larger code and more registers. It remains unintegrated without a GPU timing run.
+The signed-byte form removes 16 FP32 add instructions and reduces executable size from 7,168 to 6,912 bytes.
+Registers change from 69 to 70, with unchanged 512-byte shared storage and seven active CTAs per SM.
+Both versions use 128 threads and zero local storage.
+
+The isolated GPU comparison passes 288,936 reference comparisons and 144,468 bit-equal output comparisons.
+Its eight cases cover all decoded scale/quant values, zeros, small K, output tails, and cached real checkpoint data.
+Both poison patterns, complete source preservation, and all storage guards pass.
+The existing full-tensor FP64 references are reused.
+
+| Rotating-weight Q3_K projection | Existing mean | Signed-byte mean | Time reduction |
+| --- | ---: | ---: | ---: |
+| 5120 to 17408 | 203.080 us | 181.028 us | 10.86% |
+| 5120 to 6144 | 72.664 us | 65.301 us | 10.13% |
+| 5120 to 12288 | 141.561 us | 126.911 us | 10.35% |
+
+Each row contains 32 paired samples with alternating order and eight disjoint weight buffers.
+The new kernel wins all 32 samples in each row.
+The compiled production body and its 40-byte ABI match the GPU-checked prototype exactly.
+Only `vector_project_q3k` changes in the combined 277-entry module.
+All other 276 inference code sections and both smaller GPU families remain byte-identical.
+Math v32 renews the source context. Its certificate functions and rules remain unchanged.
+
+The full-model comparison reuses the completed current 27B baseline as its first control.
+It then runs two candidate VMs and one final control, with identical image, weights, inputs, FP32 cache, and accuracy limits.
+This sequence is not described as a contiguous fresh ABBA run.
+
+| Ordinary warm measurement | Controls | Candidates |
+| --- | ---: | ---: |
+| First VM decode mean | 15.528 tokens/s, cached | 15.658 tokens/s |
+| Second VM decode mean | 14.854 tokens/s, fresh | 15.677 tokens/s |
+| Combined decode mean | 15.191 tokens/s | 15.668 tokens/s |
+| First VM prefill mean | 744.0 ms | 788.0 ms |
+| Second VM prefill mean | 864.5 ms | 765.5 ms |
+
+The candidate satisfies the recorded 3% decode retention threshold, with a 3.14% increase against the combined controls.
+Both candidate VM means exceed both control means.
+The controls vary substantially, which limits the whole-model timing conclusion.
+Prefill kernel bodies remain unchanged. Their timing variation does not establish a prefill speedup.
+The candidate decode mean remains 54.23% below the retained Linux rate of 34.233 tokens/s.
+Linux activation arithmetic still differs, and the performance goal remains open.
+
+All four captures pass the original 32,033,280-value reference gate with identical error statistics.
+All 16 token traces match, including the retained row 69 and 112 differences against Linux selections.
+All projection route counts, weight residency, and zero host activation transfers remain unchanged.
+A preboot QMP path-length failure is preserved. Its shorter-path replacement reuses the completed first candidate without recompilation.
+
+Strict exporter Clippy, Rustfmt, and both Math provenance tests pass.
+Unchanged Native/SDK builds, AI tests, Math rule tests, Linux execution, and standalone GPU evidence reuse their matching results.
+The existing Native image matches all 1,118 OS source pins, so no Native rebuild was needed.
+The private candidate bundle remains separate from the root default bundle.
+
+Operator evidence and preserved source variants remain under `~/.cache/d3os/qwen-q3-signed-conversion-probe-v1/`.
+Production audits, the frozen criterion, completed captures, and cache decisions remain in its `production-work/` directory.
