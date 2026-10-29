@@ -60,6 +60,31 @@ impl Q4VectorKernel {
     }
 }
 
+/// Select the experimental three-component Q3_K vector implementation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Q3VectorKernel {
+    #[default]
+    Default,
+    Components,
+}
+
+impl Q3VectorKernel {
+    fn check_device(self, device: &Device) -> Result<()> {
+        if self != Self::Default && !native_matrix_device(device) {
+            return Err(Error::from("Q3 vector selection requires the Native NVIDIA backend"));
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "native")]
+    fn native(self) -> d3os_burn_native::backend::Q3VectorKernel {
+        match self {
+            Self::Default => d3os_burn_native::backend::Q3VectorKernel::Default,
+            Self::Components => d3os_burn_native::backend::Q3VectorKernel::Components,
+        }
+    }
+}
+
 impl PrefillQuantization {
     fn check_device(self, device: &Device) -> Result<()> {
         if self != Self::Accurate && !native_matrix_device(device) {
@@ -129,6 +154,8 @@ pub struct PackedMatrix {
     prefill_quantization: PrefillQuantization,
     #[module(skip)]
     q4_vector_kernel: Q4VectorKernel,
+    #[module(skip)]
+    q3_vector_kernel: Q3VectorKernel,
 }
 
 impl PackedMatrix {
@@ -166,6 +193,7 @@ impl PackedMatrix {
             layout,
             prefill_quantization: PrefillQuantization::Accurate,
             q4_vector_kernel: Q4VectorKernel::Default,
+            q3_vector_kernel: Q3VectorKernel::Default,
         })
     }
 
@@ -188,6 +216,15 @@ impl PackedMatrix {
         }
         kernel.check_device(&self.device())?;
         self.q4_vector_kernel = kernel;
+        Ok(())
+    }
+
+    pub fn set_q3_vector_kernel(&mut self, kernel: Q3VectorKernel) -> Result<()> {
+        if self.format != MatrixFormat::Quantized(Quantization::Q3K) {
+            return Err(Error::from("Q3 vector selection requires Q3_K weights"));
+        }
+        kernel.check_device(&self.device())?;
+        self.q3_vector_kernel = kernel;
         Ok(())
     }
 
@@ -244,6 +281,7 @@ impl PackedMatrix {
         device_supported(&self.device())?;
         self.prefill_quantization.check_device(&input.device())?;
         self.q4_vector_kernel.check_device(&input.device())?;
+        self.q3_vector_kernel.check_device(&input.device())?;
         let [batch, width] = input.dims();
         if batch == 0 || width != self.shape[1] || input.dtype() != DType::F32 || input.device() != self.device() {
             return Err(Error::from("Qwen projection input shape, dtype, or device differs"));
@@ -260,6 +298,7 @@ impl PackedMatrix {
             layout: self.layout,
             prefill_quantization: self.prefill_quantization,
             q4_vector_kernel: self.q4_vector_kernel,
+            q3_vector_kernel: self.q3_vector_kernel,
         }
     }
 }

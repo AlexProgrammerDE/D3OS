@@ -27,6 +27,7 @@ static COMPLETION: Once<crate::sync::wait_queue::WaitQueue> = Once::new();
 static STATUS: AtomicU8 = AtomicU8::new(0);
 static MODULES: Once<[CompiledModule; 3]> = Once::new();
 static FAILURE: Once<Errno> = Once::new();
+static QWEN_VECTOR: Once<Option<CompiledModule>> = Once::new();
 
 struct CompiledModule {
     bytes: Vec<u8>,
@@ -92,7 +93,10 @@ impl CompilerAssets {
 pub(super) fn legacy_policy(bytes: &'static [u8]) -> Result<LegacyPolicy<'static>> {
     let Some(module) = MODULES
         .get()
-        .and_then(|modules| modules.iter().find(|module| core::ptr::eq(module.bytes.as_slice(), bytes)))
+        .into_iter()
+        .flatten()
+        .chain(QWEN_VECTOR.get().and_then(Option::as_ref))
+        .find(|module| core::ptr::eq(module.bytes.as_slice(), bytes))
     else {
         return Ok(LegacyPolicy::Reject);
     };
@@ -146,6 +150,19 @@ pub(super) fn wait() -> core::result::Result<(), Errno> {
 
 pub(super) fn inference() -> Option<&'static [u8]> {
     MODULES.get().map(|modules| modules[2].bytes.as_slice())
+}
+
+/// Optional PTX entries retain the same immutable-module admission as Tile IR.
+/// Missing optional code fails explicitly instead of falling back to another kernel.
+pub(super) fn projection_module(symbol: &str) -> Result<Option<&'static [u8]>> {
+    match symbol {
+        "q3_components_dp4a" => QWEN_VECTOR
+            .get()
+            .and_then(Option::as_ref)
+            .map(|module| Some(module.bytes.as_slice()))
+            .ok_or(d3os_nvidia::Error::Unsupported.into()),
+        _ => Ok(None),
+    }
 }
 
 fn sha256(bytes: &[u8]) -> String {
@@ -278,6 +295,12 @@ fn prepare() -> Result<()> {
         compile(FAMILIES[1], target, sm, &assets)?,
         compile(FAMILIES[2], target, sm, &assets)?,
     ];
+    let qwen = match api::stat("/usr/share/nvidia/qwen-vector.ptx") {
+        Ok(_) => Some(compile("qwen-vector", target, sm, &assets)?),
+        Err(Errno::ENOENT) => None,
+        Err(_) => return Err(Error::Firmware),
+    };
+    QWEN_VECTOR.call_once(|| qwen);
     let compile_ms = crate::timer().systime_ms() - start;
     let modules = MODULES.call_once(|| modules);
     let _preempt = PreemptGuard::new();

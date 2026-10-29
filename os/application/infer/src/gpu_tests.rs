@@ -78,6 +78,10 @@ fn verify_syscall_direction_flag(backend: &Nvidia) -> Result<(), d3os_compute::E
     Ok(())
 }
 
+pub(super) fn q3_components(backend: &Nvidia) -> Result<(), String> {
+    quantized::components(backend)
+}
+
 pub(super) fn run(backend: &Nvidia) -> Result<(), String> {
     use d3os_nvidia::compute as abi;
 

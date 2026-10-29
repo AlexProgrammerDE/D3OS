@@ -7,7 +7,7 @@ use core::fmt::Write;
 use d3os_ai::{
     burn::tensor::Device,
     qwen::{
-        Error, PrefillQuantization, Q4VectorKernel, Qwen,
+        Error, PrefillQuantization, Q3VectorKernel, Q4VectorKernel, Qwen,
         gguf::{
             Gguf, ReadAt,
             shards::{Index, Sharded},
@@ -81,11 +81,34 @@ pub(super) fn verify(device: &Device) -> core::result::Result<(), String> {
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum ProjectionPair {
+    Q4Narrow,
+    Q3Components,
+}
+
+impl ProjectionPair {
+    fn configure(self, model: Qwen) -> Result<Qwen> {
+        match self {
+            Self::Q4Narrow => model.with_q4_vector_kernel(Q4VectorKernel::Narrow),
+            Self::Q3Components => model.with_q3_vector_kernel(Q3VectorKernel::Components),
+        }
+    }
+
+    fn context(self, model: &Qwen) -> String {
+        match self {
+            Self::Q4Narrow => format!("q4_vector_kernel={:?}", model.q4_vector_kernel()),
+            Self::Q3Components => format!("q3_vector_kernel={:?}", model.q3_vector_kernel()),
+        }
+    }
+}
+
 pub(super) fn benchmark(
-    device: &Device, backend: &d3os_compute::nvidia::Nvidia, device_timing: bool, quantization: PrefillQuantization, paired_q4: bool,
+    device: &Device, backend: &d3os_compute::nvidia::Nvidia, device_timing: bool, quantization: PrefillQuantization, pair: Option<ProjectionPair>,
 ) -> core::result::Result<(), String> {
-    if paired_q4 && (!device_timing || quantization != PrefillQuantization::Accurate) {
-        return Err(String::from("paired Q4 benchmarking requires device timing and accurate activations"));
+    let paired = pair.is_some();
+    if paired && (!device_timing || quantization != PrefillQuantization::Accurate) {
+        return Err(String::from("paired projection benchmarking requires device timing and accurate activations"));
     }
     let bytes = read_file("/fwcfg/model.reference")?;
     if bytes.len() < 64 || &bytes[..8] != b"D3QLOG\0\0" {
@@ -131,10 +154,10 @@ pub(super) fn benchmark(
         memory.device_cached_bytes,
         memory.device_retired_bytes
     ));
-    let models = if paired_q4 {
+    let models = if paired {
         let before = backend.memory_profile().map_err(|e| format!("{e}"))?;
         let services_before = backend.service_profile().map_err(|e| format!("{e}"))?;
-        let candidate = model.clone().with_q4_vector_kernel(Q4VectorKernel::Narrow).map_err(|e| format!("{e}"))?;
+        let candidate = pair.unwrap().configure(model.clone()).map_err(|e| format!("{e}"))?;
         let after = backend.memory_profile().map_err(|e| format!("{e}"))?;
         let services_after = backend.service_profile().map_err(|e| format!("{e}"))?;
         if (before.process_live_bytes, before.device_cached_bytes, before.device_retired_bytes)
@@ -143,7 +166,7 @@ pub(super) fn benchmark(
                 .into_iter()
                 .any(|kind| services_before[kind as usize].calls != services_after[kind as usize].calls)
         {
-            return Err(String::from("paired Q4 configuration changed resident weight storage"));
+            return Err(String::from("paired projection configuration changed resident weight storage"));
         }
         super::report(format_args!(
             "NATIVE_LARGE_QWEN_PAIRED_SETUP variants=2 shared_weight_storage=true resident_weight_bytes={} weight_uploads=0 weight_downloads=0 ordinary_samples_per_variant=4 phase_completion=device_sync",
@@ -153,7 +176,7 @@ pub(super) fn benchmark(
     } else {
         alloc::vec![model]
     };
-    for (run, pass) in schedule::passes(paired_q4, device_timing).enumerate() {
+    for (run, pass) in schedule::passes(paired, device_timing).enumerate() {
         let model = &models[pass.variant.index()];
         let instrumented = pass.instrumented;
         let timing = if instrumented {
@@ -165,7 +188,7 @@ pub(super) fn benchmark(
         let mut session = model.session(2048).map_err(|e| format!("{e}"))?;
         let state_ms = time::systime().num_milliseconds() - state_start;
         let prefill_before = backend.service_profile().map_err(|e| format!("{e}"))?;
-        let profile = (!paired_q4 && run == 1) || instrumented;
+        let profile = (!paired && run == 1) || instrumented;
         let prefill_profile = if profile {
             Some((
                 backend.profile().map_err(|e| format!("{e}"))?,
@@ -181,7 +204,7 @@ pub(super) fn benchmark(
             .map_err(|e| format!("Qwen projection collector: {e}"))?;
         let start = time::systime().num_milliseconds();
         let mut logits = session.prefill(prompt).map_err(|e| format!("{e}"))?;
-        if paired_q4 {
+        if paired {
             device.sync().map_err(|e| format!("paired Q4 prefill completion: {e}"))?;
         }
         let prefill_ms = time::systime().num_milliseconds() - start;
@@ -205,7 +228,7 @@ pub(super) fn benchmark(
             checksum = checksum.wrapping_mul(31).wrapping_add(u64::from(token));
             logits = session.step(input).map_err(|e| format!("{e}"))?;
         }
-        if paired_q4 {
+        if paired {
             device.sync().map_err(|e| format!("paired Q4 decode completion: {e}"))?;
         }
         let decode_ms = time::systime().num_milliseconds() - start;
@@ -217,12 +240,12 @@ pub(super) fn benchmark(
         if let Some((kernels, queue)) = decode_profile {
             let after = backend.profile().map_err(|e| format!("{e}"))?;
             let queue_after = backend.queue_profile().map_err(|e| format!("{e}"))?;
-            let prefill_phase = if paired_q4 {
+            let prefill_phase = if paired {
                 format!("paired_{:?}_prefill_device", pass.variant)
             } else {
                 String::from(if instrumented { "large_prefill_device" } else { "large_prefill" })
             };
-            let decode_phase = if paired_q4 {
+            let decode_phase = if paired {
                 format!("paired_{:?}_decode_device", pass.variant)
             } else {
                 String::from(if instrumented { "large_decode_device" } else { "large_decode" })
@@ -256,17 +279,12 @@ pub(super) fn benchmark(
         {
             return Err(String::from("GGUF benchmark transferred resident activation tensors"));
         }
-        let context = if paired_q4 {
-            format!(
-                " variant={:?} q4_vector_kernel={:?} sample={:?}",
-                pass.variant,
-                model.q4_vector_kernel(),
-                pass.sample
-            )
+        let context = if paired {
+            format!(" variant={:?} {} sample={:?}", pass.variant, pair.unwrap().context(model), pass.sample)
         } else {
             String::new()
         };
-        let resident_marker = if paired_q4 {
+        let resident_marker = if paired {
             "NATIVE_LARGE_QWEN_PAIRED_RESIDENT_OK"
         } else {
             "NATIVE_LARGE_QWEN_RESIDENT_OK"
@@ -275,7 +293,7 @@ pub(super) fn benchmark(
             "{resident_marker} os=d3os framework=burn backend=nvidia run={run} prompt_id_uploads={prompt_uploads} decode_id_uploads={decode_uploads} selection_read_calls={decode_downloads} selection_bytes_per_read=256 selection_candidates_per_read=32 activation_uploads=0 activation_downloads=0{context}"
         ));
         let matching_prefix = generated.iter().zip(reference).take_while(|(actual, expected)| actual == expected).count();
-        let bench_marker = if paired_q4 {
+        let bench_marker = if paired {
             "NATIVE_LARGE_QWEN_PAIRED_BENCH"
         } else {
             "NATIVE_LARGE_QWEN_BENCH"
@@ -285,7 +303,7 @@ pub(super) fn benchmark(
             pass.warm(),
             decode_count as f64 * 1000. / decode_ms.max(1) as f64
         ));
-        let token_marker = if paired_q4 {
+        let token_marker = if paired {
             "NATIVE_LARGE_QWEN_PAIRED_TOKENS"
         } else {
             "NATIVE_LARGE_QWEN_TOKENS"
@@ -300,14 +318,14 @@ pub(super) fn benchmark(
         vocab,
     };
     for (index, model) in models.iter().enumerate() {
-        let variant = paired_q4.then_some(if index == 0 {
+        let variant = paired.then_some(if index == 0 {
             schedule::Variant::Control
         } else {
             schedule::Variant::Candidate
         });
-        verify_logits(model, &reference_data, variant)?;
+        verify_logits(model, &reference_data, variant, pair)?;
     }
-    if paired_q4 {
+    if paired {
         super::report(format_args!(
             "INFERENCE_BENCH_PAIR_OK qwen-gguf backend=nvidia framework=burn os=d3os variants=2 reference_values_per_variant={}",
             (decode_count + 1) * vocab
@@ -328,7 +346,9 @@ struct LogitReference<'a> {
     vocab: usize,
 }
 
-fn verify_logits(model: &Qwen, data: &LogitReference<'_>, variant: Option<schedule::Variant>) -> core::result::Result<(), String> {
+fn verify_logits(
+    model: &Qwen, data: &LogitReference<'_>, variant: Option<schedule::Variant>, pair: Option<ProjectionPair>,
+) -> core::result::Result<(), String> {
     let LogitReference {
         bytes,
         prompt,
@@ -338,7 +358,7 @@ fn verify_logits(model: &Qwen, data: &LogitReference<'_>, variant: Option<schedu
     } = *data;
     let decode_count = reference.len();
     let context = variant
-        .map(|variant| format!(" variant={variant:?} q4_vector_kernel={:?}", model.q4_vector_kernel()))
+        .map(|variant| format!(" variant={variant:?} {}", pair.unwrap().context(model)))
         .unwrap_or_default();
     let mut session = model.session(2048).map_err(|e| format!("{e}"))?;
     let mut logits = session.prefill(prompt).map_err(|e| format!("{e}"))?;

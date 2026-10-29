@@ -424,3 +424,48 @@ Use a short capture directory because QMP uses a UNIX socket within that directo
 The guest emits `NATIVE_LARGE_QWEN_PAIRED_*` records and the separate `INFERENCE_BENCH_PAIR_OK` footer.
 The launcher rejects incomplete schedules and mismatched references.
 Ordinary benchmark commands retain their existing schedule and records.
+
+## Experimental three-component Q3_K decode
+
+The optional Q3_K route uses three signed-byte activation residuals and DP4A integer dots.
+It retains the original packed weight layout and FP32 output accumulation.
+This route is experimental. The default Q3_K projection remains unchanged.
+
+The route needs the optional `qwen-vector` PTX module and a matching Native image.
+The existing three Tile IR modules remain intact.
+The optional module uses the same source, compiler, runtime, and output qualification checks.
+An absent module produces an error. It does not select another implementation.
+
+Build the optional module from an existing audited three-family bundle:
+
+```sh
+export CARGO_TARGET_DIR=/path/to/existing/nvptx-build-cache
+python3 -B tools/nvidia/prepare-qwen-vector.py \
+  --bundle /path/to/audited-kernel-bundle \
+  --output /path/to/new-q3-kernel-bundle \
+  --toolkit target/nvidia/cutile-toolkit/packages/nvidia/cu13
+```
+
+The compiler uses the crate's pinned Rust nightly and CUDA 13.4.92 host tools.
+The output retains every original module and adds the qualified PTX module.
+An existing output directory is rejected to preserve previous evidence.
+
+The targeted Native check uses `--inference gpu-q3-components-check` with the new bundle and image.
+It exercises guarded raw dispatch and public Burn projections across nine shapes.
+Its completion record requires 53,022 comparisons, preserved sources, and intact storage guards.
+
+For the full 27B experiment, use `--qwen-paired-q3` in place of `--qwen-paired-q4`.
+All other paired benchmark prerequisites and timing boundaries remain unchanged.
+The configurations share resident weights and use the balanced schedule from the preceding section.
+The candidate changes single-row Q3_K projections only.
+Other formats, batched prefill, and the default configuration retain their existing paths.
+
+Both configurations must pass all 32,033,280 original logit comparisons with zero failures.
+The tolerances remain `0.002 + 0.0005 * abs(reference)`.
+Every benchmark token sequence must match between configurations.
+Q3 error statistics can differ within these original limits because its activation arithmetic differs.
+The Q4 comparison still requires identical numerical statistics.
+The Q3 parser also binds activation-pack counts to projection counts for every geometry.
+
+A faster isolated operator does not establish a full-model TPS improvement.
+The model experiment remains pending. Existing accepted TPS results remain unchanged.

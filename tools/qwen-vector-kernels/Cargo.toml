@@ -1,0 +1,15 @@
+[package]
+name = "d3os-qwen-vector-kernels"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[lib]
+crate-type = ["rlib"]
+
+[profile.release]
+opt-level = 3
+panic = "abort"
+debug = 0
+incremental = false

@@ -545,6 +545,7 @@ impl Kernel {
             (Self::ProjectQuantized, [_, _, 8, 3]) => "q8_columns32_pack",
             (Self::ProjectQuantized, [_, _, _, _, 8, 2]) => "group_project_q8_columns32",
             (Self::ProjectQuantized, [_, _, _, _, 8]) => "group_project_q8_0",
+            (Self::ProjectQuantized, [1, _, _, 11, 1, 3]) => "q3_components_dp4a",
             (Self::ProjectQuantized, [_, _, _, 8, 0, 3]) => "q8_components_pack",
             (Self::ProjectQuantized, [_, _, _, 8, 1, 3]) => "q8_components_project",
             (Self::ProjectQuantized, [_, _, _, 8, 2, 3]) => "q8_columns32_components",
@@ -879,6 +880,17 @@ impl Kernel {
                     extents[..3].copy_from_slice(&[u64::from(scratch_bytes / 4), u64::from(weight_bytes).div_ceil(4), u64::from(values)]);
                     (product(&[m.div_ceil(32), n / 32, 128])?, 3, 2, false)
                 }
+            }
+            // Three activation planes consumed by the optional Q3 DP4A module.
+            (Self::ProjectQuantized, &[1, k, n, 11, 1, 3]) => {
+                if k == 0 || !k.is_multiple_of(256) || n == 0 {
+                    return Err(Error::InvalidField);
+                }
+                let bytes = product(&[k, 3])?;
+                let scratch = bytes / 4 + k / 32;
+                let weights = product(&[k / 256, n, 110])?;
+                extents[..3].copy_from_slice(&[u64::from(scratch), u64::from(weights).div_ceil(4), u64::from(n)]);
+                (product(&[n.div_ceil(4), 128])?, 3, 2, false)
             }
             // Pack three component planes and their scales, or consume them.
             (Self::ProjectQuantized, &[m, k, n, 8, phase @ 0..=2, 3]) => {

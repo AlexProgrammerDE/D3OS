@@ -610,6 +610,40 @@ class StagingTests(unittest.TestCase):
     def prepare(self, **options):
         return guest.prepare(self.kernels, self.toolkit, self.directory, **options)
 
+    def test_optional_qwen_module_is_qualified_and_sealed_like_core_modules(self):
+        record = self.manifest["kernels"]["inference"]
+        record = json.loads(json.dumps(record))
+        record["input"] = "qwen-vector.ptx"
+        (self.kernels / record["input"]).write_bytes(
+            (self.kernels / "inference.tilebc").read_bytes()
+        )
+        self.manifest["kernels"]["qwen-vector"] = record
+        self.write_manifest()
+        assets = {
+            str(destination): source
+            for source, destination in self.prepare(precompiled=True)
+        }
+        staged = json.loads(
+            (self.directory / "guest-compiler-manifest.json").read_text()
+        )
+        self.assertEqual(
+            guest.family_names(staged["legacy_qualifications"]),
+            (*guest.FAMILIES, "qwen-vector"),
+        )
+        receipt = assets["usr/share/nvidia/qwen-vector.qualification"].read_bytes()
+        self.assertEqual(struct.unpack_from("<I", receipt, 24)[0], 2)
+        self.assertEqual(receipt[-32:].hex(), staged["runtime_inventory_sha256"])
+        self.assertIn("usr/share/nvidia/qwen-vector.ptx", staged["assets"])
+        self.assertIn("usr/share/nvidia/qwen-vector.cubin", staged["assets"])
+        (self.kernels / record["input"]).write_bytes(b"changed source")
+        with self.assertRaises(RuntimeError):
+            self.prepare(precompiled=True)
+
+    def test_optional_families_cannot_remove_core_or_add_arbitrary_modules(self):
+        for names in [("inference", "qwen-vector"), (*guest.FAMILIES, "unknown")]:
+            with self.subTest(names=names), self.assertRaises(ValueError):
+                guest.family_names(names)
+
     def test_precompiled_modules_are_covered_by_the_same_runtime_inventory(self):
         assets = {
             str(destination): source

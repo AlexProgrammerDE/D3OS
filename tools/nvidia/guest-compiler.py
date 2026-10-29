@@ -17,6 +17,16 @@ MAX_ASSETS = 128
 MAX_PATH_BYTES = 512
 
 
+def family_names(records):
+    """Require all core modules and only the explicitly supported PTX extension."""
+    names = set(records)
+    if not set(FAMILIES) <= names or names - set(FAMILIES) - {"qwen-vector"}:
+        raise ValueError(
+            "kernel bundle needs all three core families and only supported extensions"
+        )
+    return FAMILIES + (("qwen-vector",) if "qwen-vector" in names else ())
+
+
 def qualification_module():
     spec = importlib.util.spec_from_file_location(
         "cubin_qualification", Path(__file__).with_name("cubin-qualification.py")
@@ -208,10 +218,7 @@ def prepare(kernels, toolkit, directory, *, execution_os="d3os", precompiled=Fal
         )
         if not isinstance(bundle, dict) or not isinstance(bundle.get("kernels"), dict):
             raise TypeError("invalid kernel bundle manifest")
-        if set(bundle["kernels"]) != set(FAMILIES):
-            raise ValueError(
-                "kernel bundle must contain exactly the three supported families"
-            )
+        families = family_names(bundle["kernels"])
     except (OSError, ValueError, TypeError) as error:
         raise RuntimeError(
             f"invalid qualification bundle; regenerate with --audit: {error}"
@@ -219,11 +226,13 @@ def prepare(kernels, toolkit, directory, *, execution_os="d3os", precompiled=Fal
     qualifier = qualification_module()
     qualifications = {}
     assets = []
-    for family in FAMILIES:
+    for family in families:
         inputs = [kernels / f"{family}.{suffix}" for suffix in ("tilebc", "ptx")]
         present = [path for path in inputs if path.is_file()]
         if len(present) != 1:
             raise RuntimeError(f"{family}: provide exactly one Tile IR or PTX input")
+        if family == "qwen-vector" and present[0].suffix != ".ptx":
+            raise RuntimeError("qwen-vector requires portable Rust PTX")
         try:
             qualifications[family] = checked_qualification(
                 kernels, family, present[0], bundle["kernels"][family], qualifier
@@ -283,7 +292,7 @@ def prepare(kernels, toolkit, directory, *, execution_os="d3os", precompiled=Fal
         RUNTIME_MAGIC + struct.pack("<I", len(assets)) + canonical_records
     )
     assets.append((runtime_path, Path("usr/share/nvidia/runtime.qualification")))
-    for family in FAMILIES:
+    for family in families:
         source_name = bundle["kernels"][family]["input"]
         input_kind = 1 if source_name.endswith(".tilebc") else 2
         compiler = "tileiras" if input_kind == 1 else "ptxas"

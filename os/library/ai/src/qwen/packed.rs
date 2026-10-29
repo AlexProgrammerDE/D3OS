@@ -80,6 +80,21 @@ mod tests {
     }
 
     #[test]
+    fn q3_components_require_native_and_survive_device_moves_without_fallback() {
+        let device = Device::flex();
+        let shape = [4, 256];
+        let format = MatrixFormat::Quantized(Quantization::Q3K);
+        let bytes = alloc::vec![0; format.byte_len(shape).unwrap()];
+        let mut matrix = PackedMatrix::from_bytes(shape, format, &bytes, &device).unwrap();
+        assert!(matrix.set_q3_vector_kernel(crate::qwen::Q3VectorKernel::Components).is_err());
+        assert_eq!(matrix.q3_vector_kernel, crate::qwen::Q3VectorKernel::Default);
+        matrix.q3_vector_kernel = crate::qwen::Q3VectorKernel::Components;
+        let moved = matrix.to_device(&device);
+        assert_eq!(moved.q3_vector_kernel, crate::qwen::Q3VectorKernel::Components);
+        assert!(moved.project(Tensor::ones([1, 256], &device)).is_err());
+    }
+
+    #[test]
     fn records_load_between_physical_layouts_without_changing_projection_or_embedding() {
         let device = Device::flex();
         let shape = [64, 96];
@@ -105,6 +120,7 @@ mod tests {
             layout: MatrixLayout::Q8Columns32,
             prefill_quantization: crate::qwen::PrefillQuantization::Accurate,
             q4_vector_kernel: crate::qwen::Q4VectorKernel::Default,
+            q3_vector_kernel: crate::qwen::Q3VectorKernel::Default,
         };
         let expected = ordinary.project(Tensor::ones([2, 96], &device)).unwrap().try_into_vec_as::<f32>().unwrap();
         for restored in [

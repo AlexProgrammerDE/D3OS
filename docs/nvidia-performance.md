@@ -3596,3 +3596,26 @@ All sources, original attempts, compiler receipts, and complete captures remain 
 
 The cached model weights, activation packer, independent reference, platform libraries, and production bundle remain unchanged.
 No full production export or Native model rebuild occurs in these private operator experiments.
+
+### Optional Native Q3 module
+
+The Q3 candidate now has an explicit Native projection option and a separate portable Rust PTX module.
+The existing three module files and their manifest records remain byte-identical.
+The new module retains the GPU-tested machine body and extends its ABI to 48 bytes with unused selector arguments.
+Safety documentation and constant-expression cleanup also reproduce the same PTX, cubin, and SASS bytes.
+
+A fresh 4 GiB D3OS guest admits all four qualified modules.
+Guarded SDK dispatch and public Burn projections pass 53,022 comparisons across nine shapes.
+These cases include input widths from 256 to 17,408 and both poison patterns.
+The activation, weight, and output extents retain their existing alias checks.
+Missing optional code returns an error instead of selecting a fallback.
+
+Host validation passes 69 SDK tests, 77 Native tests, six Qwen unit tests, and 12 model tests.
+Strict Native, AI, and NVPTX Clippy checks pass.
+The paired parsers reject 44 Q4 controls and 37 Q3 controls.
+The final bundle reuses the exact Native-validated portable and machine files without another GPU run.
+The getter-only API correction, initial packaging-key error, and Clippy precision correction remain recorded.
+
+The default route and accepted model TPS remain unchanged.
+The full-model experiment still needs both original numerical references and its balanced timing samples.
+Preparation and the completed Native check remain under `~/.cache/d3os/qwen-q3-components-integration-v1/` and `~/.cache/d3os/qwen-q3-native-check-v1/`.

@@ -14,6 +14,7 @@ pub struct MatrixPrimitive<B: Backend> {
     pub layout: MatrixLayout,
     pub prefill_quantization: super::PrefillQuantization,
     pub q4_vector_kernel: super::Q4VectorKernel,
+    pub q3_vector_kernel: super::Q3VectorKernel,
 }
 
 #[cfg(feature = "native")]
@@ -21,6 +22,7 @@ fn native_options<B: Backend>(matrix: &MatrixPrimitive<B>) -> crate::native::bac
     crate::native::backend::ProjectionOptions {
         prefill: matrix.prefill_quantization.native(),
         q4_vector: matrix.q4_vector_kernel.native(),
+        q3_vector: matrix.q3_vector_kernel.native(),
     }
 }
 

@@ -29,7 +29,8 @@ impl Compute {
     pub(super) fn dispatch(&mut self, device: &Device, kernel: Kernel, addresses: &[u64], parameters: &[u32]) -> Result<()> {
         let work = kernel.work(parameters)?;
         work.validate_aliases(addresses)?;
-        let module = self.inference_module.ok_or(Error::Firmware)?;
+        let symbol = kernel.entry(parameters);
+        let module = super::compiler::projection_module(symbol)?.or(self.inference_module).ok_or(Error::Firmware)?;
         let mut arguments = alloc::vec::Vec::with_capacity(addresses.len() * 8 + parameters.len() * 4);
         for address in addresses {
             arguments.extend_from_slice(&address.to_le_bytes());
@@ -40,7 +41,7 @@ impl Compute {
         let deferred = self.defer_launch && !self.device_timing;
         self.last_flush_cycles = 0;
         let start = unsafe { core::arch::x86_64::_rdtsc() };
-        let result = self.launch(device, module, kernel.entry(parameters), &arguments, [work.threads, work.blocks]);
+        let result = self.launch(device, module, symbol, &arguments, [work.threads, work.blocks]);
         let elapsed = unsafe { core::arch::x86_64::_rdtsc() }.wrapping_sub(start);
         let cycles = elapsed.saturating_sub(self.last_flush_cycles);
         let profile = &mut self.profile[kernel as usize];

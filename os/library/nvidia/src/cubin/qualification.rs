@@ -181,7 +181,7 @@ fn validate_path(path: &str) -> Result<()> {
                 && ([".tilebc", ".ptx"]
                     .iter()
                     .any(|suffix| name.strip_suffix(suffix).is_some_and(|family| !family.is_empty()))
-                    || matches!(name, "vector-add.cubin" | "tensor-matmul.cubin" | "inference.cubin"))
+                    || matches!(name, "vector-add.cubin" | "tensor-matmul.cubin" | "inference.cubin" | "qwen-vector.cubin"))
         });
     if !allowed {
         return Err(Error::InvalidField);

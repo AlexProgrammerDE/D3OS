@@ -122,7 +122,11 @@ def validate_module_admission(text, manifest, families, *, precompiled):
     return records
 
 
-def validate_paired_q4(text):
+def validate_paired_projection(text, *, format_code=12):
+    if format_code not in (11, 12):
+        raise ValueError("paired projection format must be Q3_K or Q4_K")
+    field = "q3_vector_kernel" if format_code == 11 else "q4_vector_kernel"
+
     def records(marker):
         rows = []
         for payload in re.findall(
@@ -132,13 +136,13 @@ def validate_paired_q4(text):
             if marker == "NATIVE_LARGE_QWEN_PAIRED_TOKENS":
                 payload, separator, encoded = payload.partition(" ids=")
                 if not separator:
-                    raise RuntimeError("paired Q4 token record has no sequence")
+                    raise RuntimeError("paired projection token record has no sequence")
                 tokens = json.loads(encoded)
             pairs = re.findall(r"([A-Za-z0-9_]+)=([^\s]+)", payload)
             row = dict(pairs)
             if len(row) != len(pairs) or "status" in row:
                 raise RuntimeError(
-                    "paired Q4 record has duplicate or contradictory fields"
+                    "paired projection record has duplicate or contradictory fields"
                 )
             if tokens is not None:
                 row["ids"] = tokens
@@ -161,7 +165,7 @@ def validate_paired_q4(text):
         )
         or int(setup[0].get("resident_weight_bytes", "0")) <= 0
     ):
-        raise RuntimeError("paired Q4 weights or measurement setup differs")
+        raise RuntimeError("paired projection weights or measurement setup differs")
     roles = [
         "Control",
         "Candidate",
@@ -176,19 +180,22 @@ def validate_paired_q4(text):
         "Control",
         "Candidate",
     ]
-    kernels = {"Control": "Default", "Candidate": "Narrow"}
+    kernels = {
+        "Control": "Default",
+        "Candidate": "Components" if format_code == 11 else "Narrow",
+    }
     benches = records("NATIVE_LARGE_QWEN_PAIRED_BENCH")
     resident = records("NATIVE_LARGE_QWEN_PAIRED_RESIDENT_OK")
     tokens = records("NATIVE_LARGE_QWEN_PAIRED_TOKENS")
     if len(benches) != 12 or len(resident) != 12 or len(tokens) != 12:
-        raise RuntimeError("paired Q4 pass population differs")
+        raise RuntimeError("paired projection pass population differs")
     for run, (row, storage, token, role) in enumerate(
         zip(benches, resident, tokens, roles, strict=True)
     ):
         context = {
             "run": str(run),
             "variant": role,
-            "q4_vector_kernel": kernels[role],
+            field: kernels[role],
             "sample": f"Some({run - 2})" if 2 <= run < 10 else "None",
         }
         if any(
@@ -197,7 +204,9 @@ def validate_paired_q4(text):
             or token.get(key) != value
             for key, value in context.items()
         ):
-            raise RuntimeError("paired Q4 variant, order, or sample identity differs")
+            raise RuntimeError(
+                "paired projection variant, order, or sample identity differs"
+            )
         sequence = token.get("ids")
         if (
             not isinstance(sequence, list)
@@ -207,12 +216,14 @@ def validate_paired_q4(text):
             )
             or sequence != tokens[0].get("ids")
         ):
-            raise RuntimeError("paired Q4 token sequences differ or are invalid")
+            raise RuntimeError(
+                "paired projection token sequences differ or are invalid"
+            )
         checksum = 0
         for value in sequence:
             checksum = (checksum * 31 + value) & ((1 << 64) - 1)
         if checksum != int(row["checksum"]):
-            raise RuntimeError("paired Q4 token checksum differs")
+            raise RuntimeError("paired projection token checksum differs")
         expected = {
             "warm": "false" if run < 2 else "true",
             "instrumented": "true" if run >= 10 else "false",
@@ -224,7 +235,7 @@ def validate_paired_q4(text):
             "eos": "continue_for_benchmark",
         }
         if any(row.get(key) != value for key, value in expected.items()):
-            raise RuntimeError("paired Q4 workload or timing scope differs")
+            raise RuntimeError("paired projection workload or timing scope differs")
         ms, tps = int(row["decode_ms"]), float(row["decode_tps"])
         if (
             ms <= 0
@@ -232,7 +243,7 @@ def validate_paired_q4(text):
             or not math.isfinite(tps)
             or abs(tps - 128000 / ms) > 0.00051
         ):
-            raise RuntimeError("paired Q4 timing record is inconsistent")
+            raise RuntimeError("paired projection timing record is inconsistent")
         expected = {
             "prompt_id_uploads": "2",
             "decode_id_uploads": "128",
@@ -243,13 +254,13 @@ def validate_paired_q4(text):
             "activation_downloads": "0",
         }
         if any(storage.get(key) != value for key, value in expected.items()):
-            raise RuntimeError("paired Q4 resident transfers differ")
+            raise RuntimeError("paired projection resident transfers differ")
     references = records("NATIVE_LARGE_QWEN_PAIRED_REFERENCE")
     if len(references) != 2 or [row.get("variant") for row in references] != [
         "Control",
         "Candidate",
     ]:
-        raise RuntimeError("paired Q4 needs both complete numerical references")
+        raise RuntimeError("paired projection needs both complete numerical references")
     for row in references:
         expected = {
             "os": "d3os",
@@ -262,10 +273,12 @@ def validate_paired_q4(text):
             "absolute_tolerance": "0.002",
             "relative_tolerance": "0.0005",
             "inputs": "linux_reference",
-            "q4_vector_kernel": kernels[row["variant"]],
+            field: kernels[row["variant"]],
         }
         if any(row.get(key) != value for key, value in expected.items()):
-            raise RuntimeError("paired Q4 numerical policy or population differs")
+            raise RuntimeError(
+                "paired projection numerical policy or population differs"
+            )
         for key in ["max_absolute", "max_scaled_error", "squared_error"]:
             value = float(row[key])
             if (
@@ -273,17 +286,25 @@ def validate_paired_q4(text):
                 or value < 0
                 or (key == "max_scaled_error" and value > 1)
             ):
-                raise RuntimeError("paired Q4 numerical statistics are invalid")
+                raise RuntimeError("paired projection numerical statistics are invalid")
         if not 0 <= int(row["selection_mismatches"]) <= 128:
-            raise RuntimeError("paired Q4 selection count is invalid")
-    for key in [
-        "max_absolute",
-        "max_scaled_error",
-        "squared_error",
-        "selection_mismatches",
-    ]:
+            raise RuntimeError("paired projection selection count is invalid")
+    # Q4 changes conversion width only and retains exact numerical statistics.
+    # Q3 has three activation residuals: both variants must pass the original
+    # full reference tolerances, and all generated tokens remain identical.
+    equal_statistics = (
+        ["selection_mismatches"]
+        if format_code == 11
+        else [
+            "max_absolute",
+            "max_scaled_error",
+            "squared_error",
+            "selection_mismatches",
+        ]
+    )
+    for key in equal_statistics:
         if references[0][key] != references[1][key]:
-            raise RuntimeError("paired Q4 changed numerical results")
+            raise RuntimeError("paired projection changed numerical results")
     profiles = records("NATIVE_QWEN_PROJECTION_PROFILE")
     ledgers = []
     for role in ["Control", "Candidate"]:
@@ -292,29 +313,58 @@ def validate_paired_q4(text):
             for row in profiles
             if row.get("phase") == f"paired_{role}_decode_device"
         ]
-        q4 = [row for row in selected if json.loads(row["parameters"])[3] == 12]
-        expected_entry = "vector_project_q4k" + (
-            "_narrow" if role == "Candidate" else ""
+        chosen = [
+            row for row in selected if json.loads(row["parameters"])[3] == format_code
+        ]
+        expected_entry = (
+            ("q3_components_dp4a" if role == "Candidate" else "vector_project_q3k")
+            if format_code == 11
+            else "vector_project_q4k" + ("_narrow" if role == "Candidate" else "")
         )
-        if not q4 or any(row["entry"] != expected_entry for row in q4):
-            raise RuntimeError("paired Q4 did not execute the selected implementation")
+        if not chosen or any(row["entry"] != expected_entry for row in chosen):
+            raise RuntimeError(
+                "paired projection did not execute the selected implementation"
+            )
         ledger = {}
+        packs = {}
+        expected_packs = {}
         for row in selected:
             params = json.loads(row["parameters"])
-            if row in q4 and (
-                len(params) != (5 if role == "Candidate" else 4)
-                or (len(params) == 5 and params[4] != 1)
+            calls = int(row["calls"])
+            if calls <= 0:
+                raise RuntimeError("paired projection call count is invalid")
+            if (
+                format_code == 11
+                and role == "Candidate"
+                and len(params) == 6
+                and params[3:] == [8, 0, 3]
             ):
-                raise RuntimeError("paired Q4 executed an invalid selector packet")
+                if row["entry"] != "q8_components_pack" or tuple(params[:3]) in packs:
+                    raise RuntimeError("invalid or duplicate Q3 activation pack")
+                packs[tuple(params[:3])] = calls
+                continue
+            if row in chosen:
+                suffix = [1, 3] if format_code == 11 else [1]
+                expected = params[:4] + (suffix if role == "Candidate" else [])
+                if params != expected:
+                    raise RuntimeError(
+                        "paired projection executed an invalid selector packet"
+                    )
+                if format_code == 11 and role == "Candidate":
+                    expected_packs[tuple(params[:3])] = calls
             key = tuple(params[:4])
-            if key in ledger or int(row["calls"]) <= 0:
-                raise RuntimeError("paired Q4 projection ledger is invalid")
-            ledger[key] = int(row["calls"])
+            if key in ledger:
+                raise RuntimeError("paired projection ledger is invalid")
+            ledger[key] = calls
+        if format_code == 11 and role == "Candidate" and packs != expected_packs:
+            raise RuntimeError("Q3 activation pack and projection populations differ")
         if sum(ledger.values()) != 51328:
-            raise RuntimeError("paired Q4 projection count differs")
+            raise RuntimeError("paired projection projection count differs")
         ledgers.append(ledger)
     if ledgers[0] != ledgers[1]:
-        raise RuntimeError("paired Q4 variants executed different projection workloads")
+        raise RuntimeError(
+            "paired projection variants executed different projection workloads"
+        )
     footer = records("INFERENCE_BENCH_PAIR_OK qwen-gguf")
     if footer != [
         {
@@ -325,7 +375,7 @@ def validate_paired_q4(text):
             "reference_values_per_variant": "32033280",
         }
     ]:
-        raise RuntimeError("paired Q4 completion record differs")
+        raise RuntimeError("paired projection completion record differs")
 
 
 def main():
@@ -373,6 +423,7 @@ def main():
             "gpu-alexnet-bench",
             "gpu-qwen",
             "gpu-qwen-verify",
+            "gpu-q3-components-check",
             "gpu-qwen-bench",
             "gpu-qwen-gguf",
             "gpu-qwen-gguf-bench",
@@ -409,6 +460,11 @@ def main():
         "--qwen-paired-q4",
         action="store_true",
         help="compare accurate Q4 vector implementations with shared weights; requires --qwen-device-timing",
+    )
+    parser.add_argument(
+        "--qwen-paired-q3",
+        action="store_true",
+        help="compare FP32 and three-component Q3 decode with shared weights; requires --qwen-device-timing",
     )
     parser.add_argument(
         "--qwen-long-bench",
@@ -563,14 +619,16 @@ def main():
         )
     if args.qwen_prefill_q8 and args.qwen_prefill_q8_attention:
         parser.error("select one Qwen prefill quantization mode")
-    if args.qwen_paired_q4 and (
+    if args.qwen_paired_q4 and args.qwen_paired_q3:
+        parser.error("select one paired Qwen projection experiment")
+    if (args.qwen_paired_q4 or args.qwen_paired_q3) and (
         args.inference != "gpu-qwen-gguf-bench"
         or not args.qwen_device_timing
         or args.qwen_prefill_q8
         or args.qwen_prefill_q8_attention
     ):
         parser.error(
-            "--qwen-paired-q4 requires the accurate GGUF benchmark and --qwen-device-timing"
+            "paired Qwen projections require the accurate GGUF benchmark and --qwen-device-timing"
         )
     affinity = ",".join(str(cpu) for cpu in sorted(os.sched_getaffinity(0)))
     print(f"NVIDIA_HOST_CPU_AFFINITY cpus={affinity}", flush=True)
@@ -858,7 +916,13 @@ def main():
                                 if args.qwen_prefill_q8_attention
                                 else ""
                             )
-                            + (" paired-q4" if args.qwen_paired_q4 else "")
+                            + (
+                                " paired-q4"
+                                if args.qwen_paired_q4
+                                else " paired-q3"
+                                if args.qwen_paired_q3
+                                else ""
+                            )
                             + (" long" if args.qwen_long_bench else "")
                             + (" firmware-model" if args.qwen_firmware_model else "")
                         )
@@ -886,6 +950,7 @@ def main():
                     "gpu-mnist-bench": "INFERENCE_OK mnist mode=bench os=d3os backend=nvidia",
                     "gpu-mnist-profile": "INFERENCE_OK mnist mode=profile os=d3os backend=nvidia",
                     "gpu-self-test": "INFERENCE_OK self-test backend=nvidia",
+                    "gpu-q3-components-check": "INFERENCE_OK q3-components backend=nvidia cases=9 guards=ok public=ok",
                     "gpu-kernel-bench": "INFERENCE_BENCH_OK kernels backend=nvidia",
                     "gpu-alexnet": "INFERENCE_OK alexnet backend=nvidia layers=8",
                     "gpu-alexnet-bench": "INFERENCE_BENCH_OK alexnet backend=nvidia reference_layers=8",
@@ -899,11 +964,13 @@ def main():
                     "gpu-doom-verify": "NVIDIA_DOOM_FRAME_OK frame=600",
                     "gpu-doom-bench": "NVIDIA_DOOM_PROFILE_DONE",
                 }[args.inference]
-                if args.qwen_paired_q4:
+                if args.qwen_paired_q4 or args.qwen_paired_q3:
                     expected = "INFERENCE_BENCH_PAIR_OK qwen-gguf backend=nvidia framework=burn os=d3os variants=2 reference_values_per_variant=32033280"
                 if expected in text:
-                    if args.qwen_paired_q4:
-                        validate_paired_q4(text)
+                    if args.qwen_paired_q4 or args.qwen_paired_q3:
+                        validate_paired_projection(
+                            text, format_code=11 if args.qwen_paired_q3 else 12
+                        )
                     if args.inference == "gpu-doom-bench":
                         result = re.search(
                             r"DOOM_ENGINE_REPORT timed (\d+) gametics in (\d+) realtics \(([0-9.]+) fps\)",
@@ -1046,7 +1113,7 @@ def main():
                         validate_module_admission(
                             text,
                             manifest,
-                            compiler.FAMILIES,
+                            compiler.family_names(manifest["legacy_qualifications"]),
                             precompiled=args.precompiled_kernels,
                         )
                     if args.kernels and "NVIDIA_KERNEL_OK" not in text:

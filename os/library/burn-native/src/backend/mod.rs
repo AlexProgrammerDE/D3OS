@@ -27,7 +27,7 @@ use execution::CONTEXT;
 pub use quantized::BackendQuantizedTensor;
 #[cfg(feature = "qwen-profiling")]
 pub use qwen::profile::{ProjectionEntry, ProjectionProfiler};
-pub use qwen::{PrefillQuantization, ProjectionOptions, Q4VectorKernel};
+pub use qwen::{PrefillQuantization, ProjectionOptions, Q3VectorKernel, Q4VectorKernel};
 
 /// D3OS's process-owned native NVIDIA backend.
 #[derive(Clone, Debug, Default)]

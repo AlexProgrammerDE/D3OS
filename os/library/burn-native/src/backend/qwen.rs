@@ -29,9 +29,17 @@ pub enum Q4VectorKernel {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Q3VectorKernel {
+    #[default]
+    Default,
+    Components,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ProjectionOptions {
     pub prefill: PrefillQuantization,
     pub q4_vector: Q4VectorKernel,
+    pub q3_vector: Q3VectorKernel,
 }
 
 fn dense(input: &NativeTensor, dtype: DType) -> Result<NativeTensor> {
@@ -139,6 +147,15 @@ fn projection(
             Kernel::ProjectQuantized,
             &[(&input, 0), (&packed, 0)],
             &[1, width, outputs, 12, 1],
+        );
+    }
+    if batch == 1 && format == MatrixFormat::Quantized(Quantization::Q3K) && options.q3_vector == Q3VectorKernel::Components {
+        let activations = prepare_activations(&input, outputs, 3)?;
+        return output(
+            [1, outputs],
+            Kernel::ProjectQuantized,
+            &[(&activations, 0), (&packed, 0)],
+            &[1, width, outputs, 11, 1, 3],
         );
     }
     if let Some(components) = components {
