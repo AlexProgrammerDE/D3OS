@@ -1,6 +1,34 @@
 use d3os_nvidia::compute::Kernel;
 
 #[test]
+fn vocabulary_head_preserves_complete_projection_storage_and_neighboring_routes() {
+    let parameters = [1, 4096, 248320, 8, 2];
+    let work = Kernel::ProjectQuantized.work(&parameters).unwrap();
+    assert_eq!(work.extents[..3], [4096, 1080688640 / 4, 248320]);
+    assert_eq!((work.blocks, work.threads, work.pointers, work.output), (248320 / 4, 128, 3, 2));
+    assert_eq!(
+        Kernel::ProjectQuantized.entry(&parameters),
+        Kernel::ProjectQuantized.entry(&[1, 4096, 12288, 8, 2])
+    );
+    let ordinary = Kernel::ProjectQuantized.entry(&[1, 4096, 4096, 8, 2]);
+    for parameters in [
+        [1, 4096, 248288, 8, 2],
+        [1, 4096, 248352, 8, 2],
+        [1, 4128, 248320, 8, 2],
+        [2, 4096, 248320, 8, 2],
+    ] {
+        assert_eq!(Kernel::ProjectQuantized.entry(&parameters), ordinary);
+    }
+    let pointers = [0x100000, 0x10000000, 0x60000000];
+    work.validate_aliases(&pointers).unwrap();
+    for source in 0..2 {
+        let mut aliases = pointers;
+        aliases[2] = aliases[source] + 4 * (work.extents[source] - 1);
+        assert!(work.validate_aliases(&aliases).is_err());
+    }
+}
+
+#[test]
 fn narrow_decode_uses_complete_rows_without_changing_storage() {
     let wide_entry = Kernel::ProjectQuantized.entry(&[1, 4096, 129, 8]);
     for (inner, outputs, columns) in [(4096u32, 32u32, 1u32), (4096, 128, 1), (1024, 1, 1), (992, 32, 4), (4096, 129, 4)] {

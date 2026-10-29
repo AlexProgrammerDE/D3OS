@@ -78,6 +78,17 @@ fn native_matrix_device(device: &Device) -> bool {
     }
 }
 
+fn packed_matrix_layout(native: bool, shape: [usize; 2], format: MatrixFormat) -> MatrixLayout {
+    if native
+        && matches!(shape, [12288, 4096] | [4096, 12288] | [8192, 4096] | [4096, 4096] | [248320, 4096])
+        && format == MatrixFormat::Quantized(Quantization::Q8_0)
+    {
+        MatrixLayout::Q8Columns32
+    } else {
+        MatrixLayout::RowMajor
+    }
+}
+
 /// Immutable, validated weights stored as exact packed I32 words.
 /// The logical matrix shape is independent of its physical Burn storage shape.
 #[derive(Module, Debug)]
@@ -98,17 +109,9 @@ impl PackedMatrix {
     pub fn from_bytes(shape: [usize; 2], format: MatrixFormat, bytes: &[u8], device: &Device) -> Result<Self> {
         device_supported(device)?;
         format.validate(shape, bytes).map_err(|e| format!("Qwen packed matrix: {e}"))?;
-        // Reorder the measured wide 9B FFN and attention geometries. File encoding and
+        // Reorder the measured wide 9B FFN, attention and vocabulary geometries. File encoding and
         // numerical format stay unchanged; the device owns one packed copy.
-        let layout = if cfg!(feature = "native")
-            && native_matrix_device(device)
-            && matches!(shape, [12288, 4096] | [4096, 12288] | [8192, 4096] | [4096, 4096])
-            && format == MatrixFormat::Quantized(Quantization::Q8_0)
-        {
-            MatrixLayout::Q8Columns32
-        } else {
-            MatrixLayout::RowMajor
-        };
+        let layout = packed_matrix_layout(cfg!(feature = "native") && native_matrix_device(device), shape, format);
         let count = bytes.len().div_ceil(4);
         let length = count.checked_mul(4).ok_or(Error::AllocationFailed)?;
         let mut packed = Vec::new();

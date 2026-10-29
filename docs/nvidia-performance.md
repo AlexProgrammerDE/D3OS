@@ -3042,3 +3042,54 @@ The padded16 experiment reused both GPU prototype captures, unchanged AI tests, 
 The new SDK geometry, Native integration, provenance, and model route required fresh checks.
 Idle Cargo targets remain reusable through hash-verified compressed archives.
 The combined GPU exporter still processes unchanged entries for a changed bundle, so its compilation cache remains less complete than its test cache.
+
+## Lossless vocabulary layout for 9B decode
+
+The 248320-by-4096 Q8_0 vocabulary matrices now use the existing Native column layout and streaming projection kernel.
+Import preserves every quantized block byte, and records retain canonical file order.
+Other devices, formats, and neighboring geometries keep their existing layout.
+FP32 activations and the accurate default remain unchanged.
+
+The standalone head measurement used the actual output weights and a representative final hidden vector from the CPU reference.
+All outputs matched the existing row-major kernel bit-for-bit and passed the original serial-FMA tolerance.
+The streaming head averaged 1929.903 microseconds versus 2003.364 microseconds for row-major storage, about 3.7% faster.
+The matrix exceeds the GPU L2 cache, unlike the smaller prefix cases.
+
+The matched Native comparison used control, candidate, candidate, control capture order.
+Each mode contributed four ordinary warm samples across two VMs.
+The workload retained 37 prompt tokens, 128 decode steps, FP32 state, and a 2048-token context.
+
+| Warm measurement | Control | Vocabulary column layout |
+| --- | ---: | ---: |
+| Decode throughput | 53.992 tokens/s | 54.163 tokens/s |
+| Prompt processing | 110.5 ms | 112.0 ms |
+| Model import | 6435.5 ms | 6391.5 ms |
+
+The observed decode gain was 0.32%, exceeding the 0.25% threshold recorded before execution.
+Both candidate VM means exceeded both control means.
+Candidate means were 54.169 and 54.157 tokens/s; control means were 54.112 and 53.872 tokens/s.
+Automatic clocks and four samples per mode limit this small result.
+No prompt-processing or import improvement is claimed.
+
+Each capture passed all 32,033,280 original reference values with identical error statistics and token decisions.
+The existing selection difference at row 102 remained unchanged.
+Live weights remained 9,516,859,392 bytes, with zero retired bytes and no host activation transfers.
+Allocator cache bytes decreased from 77,922,304 to 71,188,480 in these captures.
+Instrumented candidate decode recorded 9344 streaming calls, including 128 vocabulary projections.
+All non-vocabulary projection counts stayed unchanged.
+
+All 276 GPU entries, Tile IR files, and cubins were reused byte-for-byte.
+Only the host selector changed in the SDK; the GPU generator inputs and entry inventory stayed unchanged.
+The Math certificate binds that new host context under v29, with unchanged verification rules and retained compiler-origin evidence.
+The matching D3OS kernel and inference application required fresh compilation, but no GPU export was repeated.
+Validation passed 18 SDK projection tests, three packed-matrix tests, seven Qwen tests, strict Clippy, and two fresh provenance tests.
+The unchanged Math mutation suite, Linux baseline, and standalone oracle evidence were reused.
+
+The retained Linux baseline remains 58.354 tokens/s, leaving Native about 7.2% behind for this workload.
+Linux activation quantization differs from the accurate Native path.
+This result does not establish broader workload, sustained-performance, 27B, or DOOM parity.
+The default kernel bundle remains unpromoted.
+
+Evidence and cache identities remain under `~/.cache/d3os/qwen-q8-vocab-layout-probe-v1/production-work/`.
+The separate eight-column prototype is not integrated: its corrected harness stopped on a bit mismatch before timing.
+Its independent numerical qualification remains open, and the initial cleanup error remains preserved separately.

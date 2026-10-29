@@ -33,6 +33,21 @@ mod tests {
     use burn::{module::Module, tensor::Device};
 
     #[test]
+    fn native_layout_selection_preserves_other_devices_formats_and_geometries() {
+        let q8 = MatrixFormat::Quantized(Quantization::Q8_0);
+        for shape in [[12288, 4096], [4096, 12288], [8192, 4096], [4096, 4096], [248320, 4096]] {
+            assert_eq!(crate::qwen::packed_matrix_layout(true, shape, q8), MatrixLayout::Q8Columns32);
+            assert_eq!(crate::qwen::packed_matrix_layout(false, shape, q8), MatrixLayout::RowMajor);
+            for format in [MatrixFormat::F32, MatrixFormat::Bf16, MatrixFormat::Quantized(Quantization::Q4K)] {
+                assert_eq!(crate::qwen::packed_matrix_layout(true, shape, format), MatrixLayout::RowMajor);
+            }
+        }
+        for shape in [[248319, 4096], [248352, 4096], [248320, 4095], [4096, 248320], [32, 32]] {
+            assert_eq!(crate::qwen::packed_matrix_layout(true, shape, q8), MatrixLayout::RowMajor);
+        }
+    }
+
+    #[test]
     fn device_moves_cannot_silently_replace_quantized_arithmetic() {
         let device = Device::flex();
         let shape = [32, 32];
