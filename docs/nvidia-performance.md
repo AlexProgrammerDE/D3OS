@@ -4045,6 +4045,72 @@ All 89,128,960 decoded weights and scale bits are verified against the existing 
 The prepared layout occupies 89,825,280 bytes; all 574,464 cached multi-row reference values are reused.
 The matrix dot and three-residual accumulation source remains unchanged.
 
-This preparation has no compiler, GPU, model, or performance acceptance.
-Any retention measurement must include GPU weight preparation, activation packing, and projection on every timed call.
-The CPU layout, source diff, original reference bindings, and pending compiler requirements remain under `~/.cache/d3os/qwen-q3-prepared-prefill-v1/`.
+The subsequent compiler and GPU checks pass, including 5,773,928 reference comparisons and 101 exact prepared-weight checks.
+The complete timed pipeline includes GPU weight preparation, activation packing, and projection on every call.
+Its rotating-weight mean is 1881.8207 microseconds, against 1469.7428 for the accurate baseline.
+Even the diagnostic route with weights already prepared takes 1522.6589 microseconds.
+The pipeline therefore fails its fixed speed criterion and is not retained.
+Its original compiler stops, corrected attempts, references, physical checks, and complete capture remain under `~/.cache/d3os/qwen-q3-prepared-prefill-v1/`.
+
+## Direct-register Q3 prefill
+
+The Rust NVPTX module now has a Q3 prefill entry with four independent M16/N8 warps per CTA.
+Each warp decodes raw Q3 blocks directly into signed register fragments for `mma.sync.aligned.m16n8k32`.
+It needs no prepared-weight buffer, shared memory, or CTA barriers.
+
+The packed conversion produces four signed bytes of `q3 * subgroup_scale - 1` with carry-free integer arithmetic.
+An activation-sum correction restores the unbiased dot exactly before FP32 scaling.
+All three activation residuals and compensated FP32 accumulation remain active.
+The integer bounds prevent saturation in the signed S32 matrix instruction.
+NVIDIA documents the register mapping in the [PTX matrix-fragment specification](https://docs.nvidia.com/cuda/parallel-thread-execution/#warp-level-matrix-fragment-mma-16832).
+
+Two host tests check every four-code pattern at all 64 scales and 22,282,240 actual packed words.
+The kernel passes the unchanged machine qualifier with 45 registers, zero spills, and zero CTA barriers.
+The production entry's machine text and literal bytes match the tested operator exactly.
+Both existing decode entries and all three core-family qualification records remain unchanged.
+
+| Rotating-weight operator mean, including activation packing | Accurate baseline | Register MMA |
+| --- | ---: | ---: |
+| 32 rows, 5120 inputs, 17408 outputs | 1434.3619 microseconds | 1026.2252 microseconds |
+
+Latency falls by 28.45%, above the fixed 5% requirement.
+All 4,659,816 original reference comparisons pass across 43 matrix cases, including row and column tails.
+The two poison patterns, 16 exact activation-pack checks, allocation guards, and immutable-source checks pass.
+The single capture uses 40 balanced samples per cache mode, including eight rotating weight buffers.
+It has no recorder overlap or replacement capture.
+
+Native selects this route only for Accurate Q3 RowMajor projections with 32 rows, 5120 inputs, and 17408 outputs.
+It also requires the existing Components selection, so explicit legacy comparisons keep the original prefill route.
+Other formats, shapes, tails, and single-token decode retain their existing selection.
+The SDK checks the exact packet, storage extents, grid, and aliases.
+All 21 projection tests, 75 Native tests, and strict SDK/Native Clippy checks pass.
+
+## Full 27B prefill result
+
+A fresh matched capture uses the final kernel and application image with the unchanged model and independent references.
+Four ordinary samples per variant use balanced ABBA/BAAB ordering, with explicit device completion at each phase boundary.
+Both variants share the same resident weight allocations.
+
+| Ordinary warm measurement | Control | Candidate |
+| --- | ---: | ---: |
+| Prompt processing, 37 tokens | 891.250 ms | 824.250 ms |
+| Decode throughput, 128 tokens | 14.8225 tokens/s | 19.7097 tokens/s |
+
+Prompt-processing latency falls by 7.52%, with both balanced blocks improving.
+The Control uses the explicit legacy Q3/Q4 decode paths.
+The Candidate retains the accepted three-residual decode paths and adds only the measured Q3 prefill route.
+The decode difference between these variants therefore includes the previously accepted decoder improvement.
+The new prefill kernel establishes no additional decode speedup.
+
+All 64,066,560 original logit comparisons pass with zero failures at absolute tolerance 0.002 and relative tolerance 0.0005.
+All 12 token traces match, with the same two existing near-tie differences from Linux.
+The residency gates pass, and profiling confirms 128 new matrix calls with 128 matching activation packs.
+Sources and inputs remain unchanged during execution. No recorder overlap or resource stop occurs.
+
+The fresh Candidate decode result remains 42.42% below the cached matched llama.cpp result of 34.2330 tokens/s.
+One capture, four ordinary samples per variant, automatic clocks, and millisecond phase timers do not establish a statistical guarantee.
+The unchanged 0.8B and 9B paths reuse their existing results.
+Cold-storage matching, broader prefill shapes, the remaining decode gap, and full performance parity remain open.
+
+Contracts, preserved failures, complete samples, source/image bindings, verified cache deltas, and captures remain under `~/.cache/d3os/qwen-q3-warp-mma-v1/`.
+An unintended formatter expansion was removed before the final build. Its before/after canonical comparison is retained.

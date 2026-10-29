@@ -541,3 +541,20 @@ fn component_vectors_bound_scratch_packed_words_grid_and_aliases() {
         }
     }
 }
+
+#[test]
+fn q3_register_prefill_bounds_all_allocations_and_rejects_unmeasured_packets() {
+    let packet = [32, 5120, 17408, 11, 2, 3];
+    let work = Kernel::ProjectQuantized.work(&packet).unwrap();
+    assert_eq!(&work.extents[..3], &[128000, 9574400, 557056]);
+    assert_eq!((work.blocks, work.threads, work.pointers, work.output), (1088, 128, 3, 2));
+    work.validate_aliases(&[0x100000, 0x10000000, 0x40000000]).unwrap();
+    for output in [0x100000, 0x100004, 0x10000000, 0x10000004] {
+        assert!(work.validate_aliases(&[0x100000, 0x10000000, output]).is_err());
+    }
+    for (field, value) in [(0, 31), (0, 33), (1, 5119), (1, 5376), (2, 17407), (2, 17440), (3, 12), (4, 0), (4, 1), (5, 1)] {
+        let mut invalid = packet;
+        invalid[field] = value;
+        assert!(Kernel::ProjectQuantized.work(&invalid).is_err());
+    }
+}

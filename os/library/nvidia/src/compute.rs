@@ -547,6 +547,7 @@ impl Kernel {
             (Self::ProjectQuantized, [_, _, _, _, 8]) => "group_project_q8_0",
             (Self::ProjectQuantized, [1, _, _, 11, 1, 3]) => "q3_components_dp4a",
             (Self::ProjectQuantized, [1, _, _, 12, 1, 3]) => "q4_components_dp4a",
+            (Self::ProjectQuantized, [32, 5120, 17408, 11, 2, 3]) => "q3_warp_m16",
             (Self::ProjectQuantized, [_, _, _, 8, 0, 3]) => "q8_components_pack",
             (Self::ProjectQuantized, [_, _, _, 8, 1, 3]) => "q8_components_project",
             (Self::ProjectQuantized, [_, _, _, 8, 2, 3]) => "q8_columns32_components",
@@ -892,6 +893,11 @@ impl Kernel {
                 let weights = product(&[k / 256, n, if format == 11 { 110 } else { 144 }])?;
                 extents[..3].copy_from_slice(&[u64::from(scratch), u64::from(weights).div_ceil(4), u64::from(n)]);
                 (product(&[n.div_ceil(4), 128])?, 3, 2, false)
+            }
+            // The measured 27B Q3 gate/up prefill geometry uses register MMA.
+            (Self::ProjectQuantized, &[32, 5120, 17408, 11, 2, 3]) => {
+                extents[..3].copy_from_slice(&[32 * (3 * 5120 / 4 + 5120 / 32), 17408 * (5120 / 256) * 110 / 4, 32 * 17408]);
+                (2 * (17408 / 32) * 128, 3, 2, false)
             }
             // Pack three component planes and their scales, or consume them.
             (Self::ProjectQuantized, &[m, k, n, 8, phase @ 0..=2, 3]) => {

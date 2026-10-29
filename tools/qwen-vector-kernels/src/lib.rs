@@ -133,4 +133,5 @@ pub unsafe extern "ptx-kernel" fn q3_components_dp4a(
     }
 }
 
+mod q3_prefill;
 mod q4;

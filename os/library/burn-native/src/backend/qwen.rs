@@ -104,6 +104,14 @@ fn projection_components(batch: usize, shape: [usize; 2], storage: (MatrixFormat
     Ok((use_components(batch, shape, format) || (layout == MatrixLayout::Q8Columns32 && batch > 8)).then_some(3))
 }
 
+fn use_q3_prefill(batch: usize, shape: [usize; 2], storage: (MatrixFormat, MatrixLayout), options: ProjectionOptions) -> bool {
+    batch == 32
+        && shape == [17408, 5120]
+        && storage == (MatrixFormat::Quantized(Quantization::Q3K), MatrixLayout::RowMajor)
+        && options.prefill == PrefillQuantization::Accurate
+        && options.q3_vector == Q3VectorKernel::Components
+}
+
 fn prepare_activations(input: &NativeTensor, outputs: usize, components: usize) -> Result<NativeTensor> {
     let [batch, inner] = *input.shape().as_slice() else {
         return Err(Error::ShapeMismatch);
@@ -142,6 +150,15 @@ fn projection(
     let components = projection_components(batch, shape, storage, options.prefill)?;
     let input = dense(input, DType::F32)?;
     let packed = weights(packed, shape, storage)?;
+    if use_q3_prefill(batch, shape, storage, options) {
+        let activations = prepare_activations(&input, outputs, 3)?;
+        return output(
+            [batch, outputs],
+            Kernel::ProjectQuantized,
+            &[(&activations, 0), (&packed, 0)],
+            &[batch, width, outputs, 11, 2, 3],
+        );
+    }
     if batch == 1 && format == MatrixFormat::Quantized(Quantization::Q4K) && options.q4_vector == Q4VectorKernel::Narrow {
         return output(
             [1, outputs],
@@ -505,6 +522,38 @@ mod projection_mode_tests {
             assert_eq!(projection_components(5, shape, storage, PrefillQuantization::Accurate).unwrap(), None);
             assert_eq!(projection_components(32, shape, storage, PrefillQuantization::Accurate).unwrap(), Some(3));
         }
+    }
+
+    #[test]
+    fn q3_prefill_uses_only_the_measured_packed_geometry() {
+        let storage = (MatrixFormat::Quantized(Quantization::Q3K), MatrixLayout::RowMajor);
+        let options = ProjectionOptions {
+            q3_vector: Q3VectorKernel::Components,
+            ..Default::default()
+        };
+        assert!(use_q3_prefill(32, [17408, 5120], storage, options));
+        for batch in [0, 1, 2, 16, 31, 33] {
+            assert!(!use_q3_prefill(batch, [17408, 5120], storage, options));
+        }
+        for shape in [[5120, 17408], [17407, 5120], [17408, 5119]] {
+            assert!(!use_q3_prefill(32, shape, storage, options));
+        }
+        for other in [
+            (MatrixFormat::Quantized(Quantization::Q4K), MatrixLayout::RowMajor),
+            (MatrixFormat::Quantized(Quantization::Q3K), MatrixLayout::Q8Columns32),
+        ] {
+            assert!(!use_q3_prefill(32, [17408, 5120], other, options));
+        }
+        assert!(!use_q3_prefill(32, [17408, 5120], storage, ProjectionOptions::default()));
+        assert!(!use_q3_prefill(
+            32,
+            [17408, 5120],
+            storage,
+            ProjectionOptions {
+                prefill: PrefillQuantization::Q8_1,
+                ..options
+            }
+        ));
     }
 
     #[test]

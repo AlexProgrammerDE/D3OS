@@ -13,7 +13,7 @@ from pathlib import Path
 import tomllib
 
 ROOT = Path(__file__).resolve().parents[2]
-ENTRIES = ("q3_components_dp4a", "q4_components_dp4a")
+ENTRIES = ("q3_components_dp4a", "q4_components_dp4a", "q3_warp_m16")
 FAMILY = "qwen-vector"
 CRATE = ROOT / "tools/qwen-vector-kernels"
 FLAGS = ["-C", "target-cpu=sm_89", "-C", "target-feature=+ptx80", "--emit=asm"]
@@ -56,6 +56,7 @@ def compile_module(directory, toolkit, target):
             CRATE / "rust-toolchain.toml",
             CRATE / "src/lib.rs",
             CRATE / "src/q4.rs",
+            CRATE / "src/q3_prefill.rs",
         ]
     }
     env = dict(
