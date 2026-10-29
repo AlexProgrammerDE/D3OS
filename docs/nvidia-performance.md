@@ -3549,3 +3549,50 @@ All attempts, references, compiled artifacts, captures, and the source reversion
 `~/.cache/d3os/qwen-k-narrow-conversion-probe-v1/`.
 The original Native image, model shards, Linux baseline, and matching references were reused.
 No Native rebuild or model-reference regeneration occurred.
+
+## Q3_K projection with three activation components
+
+The next operator experiment reuses the existing three-component activation packer and the original independent FP64 projection reference.
+The activation buffer contains three signed-byte residual planes and one FP32 scale per 32 inputs.
+Weights retain their original Q3_K layout. No weight repacking occurs.
+
+Two private tensor-core layouts pass all 280,694 operator comparisons but fail the speed criterion.
+The rotating-weight control averages 141.000 us.
+The M16 and M1 layouts average 1,458.197 us and 2,067.463 us, including activation packing.
+These layouts remain rejected. Their captures are not repeated to seek a pass.
+
+A separate Rust NVPTX prototype uses one warp per output and four outputs per CTA.
+Each lane computes eight-value signed DP4A dots, then applies the subgroup scale and the block scale.
+Three residual components preserve activation accuracy. Each lane uses compensated FP32 accumulation before the warp reduction.
+The kernel uses 40 registers and no shared memory, local memory, or stack.
+Its first assembly contains an unsupported lane-index instruction and remains preserved.
+An explicit integer-mask expression removes that instruction. The machine-code checker remains unchanged.
+
+The DP4A experiment passes all 175,524 projection comparisons against the original operator tolerance.
+Both poison trials reproduce all 16,000 activation bytes exactly.
+Output guards and complete immutable-source comparisons pass.
+Nine output extents cover 1, 3, 4, 31, 32, 33, 128, 129, and 17,408 columns.
+The input width is 5,120 throughout.
+
+| DP4A capture, mean projection latency | Existing FP32 | DP4A only | DP4A with packing |
+| --- | ---: | ---: | ---: |
+| One resident weight buffer | 150.897 us | 98.311 us | 100.166 us |
+| Eight rotating weight buffers | 191.540 us | 126.275 us | 128.634 us |
+
+Each cache mode contains 42 balanced round-robin samples across all three routes, after 12 warmup rounds.
+Each sample contains 16 graph iterations. The combined route packs activations before every projection.
+Eight independent weight buffers exceed the GPU L2 capacity.
+The rotating-weight result reduces mean latency by 32.84%, including packing, and passes the predeclared 5% operator criterion.
+The separate MMA and DP4A captures have different control timings. Their absolute times are not interchangeable.
+
+This result supports an explicit model-level experiment, not a default change or a new 27B TPS claim.
+The complete model still needs its original logit, token, residency, and balanced performance gates.
+The 27B benchmark waits for the host RAM guard without terminating unrelated replay work.
+
+All sources, original attempts, compiler receipts, and complete captures remain in these caches:
+
+- `~/.cache/d3os/qwen-q3-components-probe-v1/`: rejected tensor-core layouts.
+- `~/.cache/d3os/qwen-q3-dp4a-components-probe-v1/`: qualified DP4A operator candidate.
+
+The cached model weights, activation packer, independent reference, platform libraries, and production bundle remain unchanged.
+No full production export or Native model rebuild occurs in these private operator experiments.
