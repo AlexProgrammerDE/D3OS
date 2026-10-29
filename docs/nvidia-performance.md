@@ -3876,3 +3876,25 @@ Token selection, model arithmetic, transfer checks, and the fixed decode workloa
 The old 0.8B capture stays preserved as historical evidence, with no synchronized throughput claim.
 The matching application build passes, with only `infer` recompiled from the verified warm cache.
 Build receipts and a restorable incremental cache archive remain under `~/.cache/d3os/qwen-small-phase-completion-v1/`.
+
+## Full-batch Q3 prefill operator check
+
+The retained Q3 INT8 matrix binary had previously been measured with only one activation row.
+A new operator check reuses that exact binary for multi-row prefill, including row boundaries 15/16/17 and 31/32/33.
+It retains all three activation residuals and uses the actual 27B gate-projection weights, with independent CPU references.
+Cached row-zero reference and activation-packing bytes reproduce exactly.
+
+All 4,659,816 GPU output comparisons pass the original absolute/relative tolerance of 0.0002/0.0002.
+Packed bytes, poisoned destinations, guards, and immutable inputs also pass.
+The fixed speed criterion is not met, and production remains unchanged.
+A new external replay recorder started 5.48 seconds after the VM process, during the 16.46-second capture.
+The retained timings therefore have concurrent activity and are excluded from performance acceptance.
+No replacement capture or additional timing samples are taken for this unchanged candidate.
+
+The capture, exact source and artifact pins, validation, and overlap evidence remain under `~/.cache/d3os/qwen-q3-batched-prefill-v1/`.
+
+A separate Q4 decode prototype keeps all three residuals while partitioning the reduction across four warps.
+Both original operator references pass its staged CPU fold, and the unchanged compiler qualifier accepts its machine code.
+It uses 40 registers, one barrier, 16 shared bytes, and no spills.
+This is compiler and CPU evidence only; GPU accuracy, operator speed, and full-model acceptance remain unproven.
+Those artifacts remain under `~/.cache/d3os/qwen-q4-split-k4-v1/`.
