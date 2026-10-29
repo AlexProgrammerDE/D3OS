@@ -249,6 +249,27 @@ fn verify_command_scopes(backend: &Nvidia) -> d3os_compute::Result<()> {
     super::report(format_args!(
         "NVIDIA_COMMAND_SCOPES_OK steps=103 count={COUNT} recording=joined explicit_nested=waits backend=nvidia"
     ));
+    // No allocation, readback or nested completion can drain this chain early.
+    // Its dependencies must survive several complete submission-wave reuses.
+    const CHAIN_STEPS: usize = 513;
+    let before = backend.queue_profile()?;
+    backend.with_commands(|| -> d3os_compute::Result<()> {
+        for _ in 0..CHAIN_STEPS {
+            backend.dispatch_words(Kernel::Add, &[(&counter, 1), (&increment, 0), (&counter, 1)], &[COUNT])?;
+        }
+        Ok(())
+    })?;
+    let after = backend.queue_profile()?;
+    let launches = after.launches.wrapping_sub(before.launches);
+    let batches = after.batches.wrapping_sub(before.batches);
+    if launches != CHAIN_STEPS as u64 || batches == 0 || batches >= launches {
+        return Err(d3os_compute::Error::DeviceFault);
+    }
+    verify(103 + CHAIN_STEPS)?;
+    super::report(format_args!(
+        "NVIDIA_COMMAND_CHAIN_OK steps={CHAIN_STEPS} final_steps={} count={COUNT} launches={launches} batches={batches} guards=exact backend=nvidia",
+        103 + CHAIN_STEPS
+    ));
     Ok(())
 }
 

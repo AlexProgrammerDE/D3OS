@@ -3093,3 +3093,48 @@ The default kernel bundle remains unpromoted.
 Evidence and cache identities remain under `~/.cache/d3os/qwen-q8-vocab-layout-probe-v1/production-work/`.
 The separate eight-column prototype is not integrated: its corrected harness stopped on a bit mismatch before timing.
 Its independent numerical qualification remains open, and the initial cleanup error remains preserved separately.
+
+## Larger submission waves: measured and rejected
+
+A 128-command wave was compared with the existing 32-command wave.
+Both variants used two waves, the same applications, and the same 276 GPU entries.
+Fence completion, allocation retirement, precision, and numerical tolerances stayed unchanged.
+The larger queue required 393,216 additional DMA bytes.
+
+The comparison used control, candidate, candidate, control order.
+Each variant contributed four ordinary warm samples across two VMs.
+The model, 37-token prompt, 128 decode steps, FP32 state, and 2048-token context matched the vocabulary-layout workload.
+
+| Warm measurement | 32 commands | 128 commands |
+| --- | ---: | ---: |
+| Decode throughput | 54.077 tokens/s | 53.579 tokens/s |
+| Decode submissions per 128 steps | 2304 | 1152 |
+| Decode kernel launches | 51968 | 51968 |
+
+The larger queue was 0.92% slower despite halving submissions.
+Both candidate VM means fell below both control means.
+Control means were 54.180 and 53.974 tokens/s; candidate means were 53.534 and 53.624 tokens/s.
+This rejects the capacity change under the recorded 0.5% improvement threshold.
+Submission count alone did not identify a useful performance optimization.
+The original 32-command capacity remains in production.
+Automatic clocks and the small sample count limit causal conclusions.
+
+All four captures passed the original 32,033,280-value reference gate with identical error statistics and token decisions.
+A new allocation-free chain queues 513 dependent additions across wave boundaries.
+It checks every result, both storage guards, all 513 launches, and actual batching.
+Hardware recorded 17 submissions with 32 commands and five with 128 commands.
+Both variants also completed 600 pixel-verified DOOM frames, exited cleanly, and passed the subsequent GPU self-test.
+These checks establish no new DOOM performance result.
+The chain remains as a regression check; the capacity experiment does not remain enabled.
+
+Before execution, completed evidence was checked against the changed scope.
+The GPU bundle, Math v29 qualification, unchanged SDK/AI tests, model assets, and Linux baseline were reused.
+Only matching Native builds and the affected hardware checks required fresh execution.
+The four timing captures were intentional samples under a contract recorded before measurement.
+A report-filename repair reused its completed capture without another VM launch.
+The idle Native target was compressed, verified file by file, and removed from RAM before timing.
+
+The rejected source, contracts, captures, failures, and cache receipts remain under
+`~/.cache/d3os/qwen-queue128-production-v1/`.
+Its checkpoint records exact evidence identities for future reuse.
+The accepted vocabulary layout and its performance claim remain unchanged.
