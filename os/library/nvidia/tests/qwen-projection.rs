@@ -1,6 +1,45 @@
 use d3os_nvidia::compute::Kernel;
 
 #[test]
+fn paired_tail_rows_cover_odd_rows_without_changing_storage_or_decode() {
+    let pair = Kernel::ProjectQuantized.entry(&[5, 4096, 12288, 8, 2]);
+    let single = Kernel::ProjectQuantized.entry(&[1, 4096, 4096, 8, 2]);
+    assert_ne!(pair, single);
+    for rows in 2u32..=8 {
+        for (inner, columns) in [(4096u32, 4096u32), (4096, 8192), (4096, 12288), (12288, 4096)] {
+            let parameters = [rows, inner, columns, 8, 2];
+            let work = Kernel::ProjectQuantized.work(&parameters).unwrap();
+            assert_eq!(Kernel::ProjectQuantized.entry(&parameters), pair);
+            assert_eq!(work.blocks, rows.div_ceil(2) * (columns / 4));
+            assert_eq!(
+                work.extents[..3],
+                [
+                    u64::from(rows * inner),
+                    u64::from(inner / 32) * u64::from(columns) * 34 / 4,
+                    u64::from(rows * columns)
+                ]
+            );
+            assert_eq!((work.threads, work.pointers, work.output, work.in_place), (128, 3, 2, false));
+            let pointers = [0x100000, 0x10000000, 0x60000000];
+            work.validate_aliases(&pointers).unwrap();
+            for source in 0..2 {
+                let mut overlap = pointers;
+                overlap[2] = overlap[source] + (work.extents[source] - 1) * 4;
+                assert!(work.validate_aliases(&overlap).is_err());
+            }
+        }
+    }
+    for [rows, inner, columns] in [[1, 4096, 4096], [5, 4128, 12288], [5, 4096, 12256], [5, 4096, 248320]] {
+        let parameters = [rows, inner, columns, 8, 2];
+        assert_eq!(Kernel::ProjectQuantized.entry(&parameters), single);
+        assert_eq!(Kernel::ProjectQuantized.work(&parameters).unwrap().blocks, rows * (columns / 4));
+    }
+    for rows in [0, 9] {
+        assert!(Kernel::ProjectQuantized.work(&[rows, 4096, 12288, 8, 2]).is_err());
+    }
+}
+
+#[test]
 fn vocabulary_head_preserves_complete_projection_storage_and_neighboring_routes() {
     let parameters = [1, 4096, 248320, 8, 2];
     let work = Kernel::ProjectQuantized.work(&parameters).unwrap();

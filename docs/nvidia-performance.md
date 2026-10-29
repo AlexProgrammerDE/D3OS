@@ -6,7 +6,8 @@ The Linux performance target remains open. Correct output does not imply compara
 The goal now includes [Burn-based AI APIs and native training](burn-migration.md).
 AlexNet and Qwen now use Burn with a native D3OS/cuTile backend.
 DOOM keeps its native renderer. Its correctness and Linux performance requirements remain unchanged.
-Full [Burn backend API parity with Linux](burn-migration.md#primary-goal-linux-backend-api-parity) now takes priority over further workload-specific optimization.
+Qwen inference performance now takes priority over the remaining generic Burn APIs.
+The unfinished [Burn backend work](burn-migration.md#primary-goal-linux-backend-api-parity) remains preserved and reviewable.
 The existing model migrations do not establish complete backend support, particularly for public quantization and additional dtypes.
 
 The optimization goal also includes Qwen3.5-9B at Q8_0 and Qwen3.6-27B at Q3_K_M.
@@ -3091,7 +3092,8 @@ This result does not establish broader workload, sustained-performance, 27B, or 
 The default kernel bundle remains unpromoted.
 
 Evidence and cache identities remain under `~/.cache/d3os/qwen-q8-vocab-layout-probe-v1/production-work/`.
-The separate eight-column prototype is not integrated: its corrected harness stopped on a bit mismatch before timing.
+At this checkpoint, the corrected eight-column harness stopped on a bit mismatch before timing.
+The later [prototype assessment](#eight-column-vocabulary-prototype-assessment) retains that failure and rejects the slower head route.
 Its independent numerical qualification remains open, and the initial cleanup error remains preserved separately.
 
 ## Larger submission waves: measured and rejected
@@ -3212,3 +3214,60 @@ The prototype loses all 32 paired head samples and remains unintegrated.
 Its smaller cache-resident prefixes do not justify a full-model performance claim.
 The existing compiled prototype, qualified cubins, weights, and input were reused; no GPU compilation was repeated.
 Evidence remains under `~/.cache/d3os/qwen-q8-vector8-oracle-probe-v1/`.
+
+## Paired FP32 rows for Q8 prefill tails
+
+The 9B Q8_0 tail now shares each weight load and conversion across two FP32 rows.
+Each row retains its existing FMA sequence and reduction order.
+The SDK selects this route for two through eight rows in the four measured column-layout geometries.
+Single-token decode, larger component projections, packed weight storage, and activation precision remain unchanged.
+
+The October 29 comparison uses the same 37-token prompt, 128 decode inputs, FP32 state, and 2048-token context.
+It uses fresh control, candidate, candidate-repeat, and control-repeat VMs on the same RTX 4090 Laptop GPU.
+Guest CPU affinity remains `8,10,12,14`.
+
+| Measurement | Existing tail | Paired rows |
+| --- | ---: | ---: |
+| Ordinary warm prefill, first VM mean | 115.0 ms | 109.0 ms |
+| Ordinary warm prefill, second VM mean | 111.0 ms | 108.0 ms |
+| Combined warm prefill mean | 113.0 ms | 108.5 ms |
+| Combined warm decode mean | 54.237 tokens/s | 54.289 tokens/s |
+
+Prefill time decreases by 3.98%, or 4.5 ms.
+Both candidate VM means beat both controls and satisfy the recorded retention criterion.
+Decode remains unchanged within measurement variation. No decode or import speedup is claimed.
+Automatic clocks and two VMs per variant limit the timing conclusion.
+The retained Linux prefill reference is 43.845 ms, so the Native prefill gap remains substantial.
+Linux uses Q8_1 activations, while this Native route preserves FP32 activations.
+
+All four captures pass the original 32,033,280-value FP32 reference gate with identical error statistics.
+All 16 token traces match exactly. The existing selection difference at row 102 remains.
+The instrumented candidate records 184 paired-row prefill calls.
+All other route counts, live weight bytes, and zero host activation transfers remain unchanged.
+
+The standalone probe passes 329,952 independent FP32 reference values and 1,315,264 exact comparisons against the existing kernel.
+Two poison patterns, post-timing outputs, source preservation, and storage guards pass.
+Its rotating-weight five-row projections take about 10% to 15% less time.
+The combined 277-entry bundle preserves all 276 previous inference code sections byte for byte.
+The two smaller GPU families also remain byte-identical.
+Math v30 renews source context only. Its certificate rules remain unchanged.
+
+The 19 SDK projection tests, strict SDK and GPU-exporter Clippy checks, and two Math provenance tests pass.
+Unchanged AI numerical tests and 32 Math mutation tests reuse their matching evidence.
+The full-model timing repeats assess a several-millisecond change against the retained control variation.
+The Linux baseline and standalone prototype capture were reused.
+Verified compressed archives retain the idle SDK and Native build caches.
+The private GPU bundle remains separate from the root default bundle.
+
+Evidence and the frozen measurement contract remain under
+`~/.cache/d3os/qwen-q8-paired-rows-probe-v1/production-work/`.
+
+### Rejected whole-prompt batching
+
+A separate probe compares the existing 32+5 split with one 37-row component projection.
+Every measured projection is slower with the combined batch, so no model build or integration followed.
+It reuses the accepted kernels and passes the original accuracy bound across 1,520,672 independent values.
+A staging-manifest path error omitted copied guest assets from its initial seal.
+A retrospective audit matches those assets against their original pins without repeating the VM.
+The initial seal limitation remains recorded.
+The rejected result is cached under `~/.cache/d3os/qwen-prefill-whole-batch-probe-v1/`.

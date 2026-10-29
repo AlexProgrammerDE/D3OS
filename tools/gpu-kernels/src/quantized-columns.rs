@@ -251,3 +251,96 @@ unsafe fn q8_columns32_embedding(input: *const f32, ids: *const u32, output: *mu
     let value = unsafe { read_quantized_128::<8>(input, source, valid) };
     unsafe { write_tile(output, i, select(valid, value, broadcast_scalar(0f32, shape![128])), mask) };
 }
+
+// Share dequantized Q8 weights across two FP32 rows without changing each row's accumulation order.
+unsafe fn paired_q8_accumulate<const GROUP: i32>(
+    a: *const f32, b: *const f32, col: Tile<u32, { [128] }>, lane: Tile<u32, { [128] }>, block: u32, blocks: u32, cols: u32, row: u32, rows: u32, inner: u32,
+    e0: Tile<f32, { [128] }>, o0: Tile<f32, { [128] }>, e1: Tile<f32, { [128] }>, o1: Tile<f32, { [128] }>,
+) -> (Tile<f32, { [128] }>, Tile<f32, { [128] }>, Tile<f32, { [128] }>, Tile<f32, { [128] }>) {
+    let qblock = lane / broadcast_scalar(16u32, shape![128]) + broadcast_scalar(block + unsigned(GROUP) * 2u32, shape![128]);
+    let pair = lane % broadcast_scalar(16u32, shape![128]);
+    let mask = lt_tile(col, broadcast_scalar(cols, shape![128])) & lt_tile(qblock, broadcast_scalar(blocks, shape![128]));
+    let base = (((col / broadcast_scalar(32u32, shape![128])) * broadcast_scalar(blocks, shape![128]) + qblock) * broadcast_scalar(32u32, shape![128])
+        + col % broadcast_scalar(32u32, shape![128]))
+        * broadcast_scalar(17u32, shape![128]);
+    let scale = unsafe { quant_half_128(b, base * broadcast_scalar(2u32, shape![128]), mask) };
+    let packed = unsafe { read_tile(bf16_pointer(b), base + broadcast_scalar(1u32, shape![128]) + pair, mask, 0u16) };
+    let packed: Tile<u32, { [128] }> = exti(packed);
+    let low = scale * vector_q8_byte::<true>(packed & broadcast_scalar(255u32, shape![128]));
+    let high = scale * vector_q8_byte::<true>(packed >> broadcast_scalar(8u32, shape![128]));
+    let index = broadcast_scalar(row * inner, shape![128]) + qblock * broadcast_scalar(32u32, shape![128]) + pair * broadcast_scalar(2u32, shape![128]);
+    let second = index + broadcast_scalar(inner, shape![128]);
+    let second_mask = mask & lt_tile(broadcast_scalar(row + 1u32, shape![128]), broadcast_scalar(rows, shape![128]));
+    let x00 = unsafe { read_tile(a, index, mask, 0f32) };
+    let x01 = unsafe { read_tile(a, index + broadcast_scalar(1u32, shape![128]), mask, 0f32) };
+    let x10 = unsafe { read_tile(a, second, second_mask, 0f32) };
+    let x11 = unsafe { read_tile(a, second + broadcast_scalar(1u32, shape![128]), second_mask, 0f32) };
+    (
+        fma(x00, low, e0, rounding::NearestEven, ftz::Disabled),
+        fma(x01, high, o0, rounding::NearestEven, ftz::Disabled),
+        fma(x10, low, e1, rounding::NearestEven, ftz::Disabled),
+        fma(x11, high, o1, rounding::NearestEven, ftz::Disabled),
+    )
+}
+
+#[cutile::entry()]
+unsafe fn q8_columns32_pair(a: *const f32, b: *const f32, output: *mut f32, rows: u32, inner: u32, cols: u32, _format: u32) {
+    let groups = (rows + 1u32) / 2u32;
+    let row = (block_id() % groups) * 2u32;
+    let first = (block_id() / groups) * 4u32;
+    let lane = lanes::<128>() % broadcast_scalar(32u32, shape![128]);
+    let col = lanes::<128>() / broadcast_scalar(32u32, shape![128]) + broadcast_scalar(first, shape![128]);
+    let blocks = inner / 32u32;
+    let mut e00 = broadcast_scalar(0f32, shape![128]);
+    let mut o00 = broadcast_scalar(0f32, shape![128]);
+    let mut e01 = broadcast_scalar(0f32, shape![128]);
+    let mut o01 = broadcast_scalar(0f32, shape![128]);
+    let mut e02 = broadcast_scalar(0f32, shape![128]);
+    let mut o02 = broadcast_scalar(0f32, shape![128]);
+    let mut e03 = broadcast_scalar(0f32, shape![128]);
+    let mut o03 = broadcast_scalar(0f32, shape![128]);
+    let mut e10 = broadcast_scalar(0f32, shape![128]);
+    let mut o10 = broadcast_scalar(0f32, shape![128]);
+    let mut e11 = broadcast_scalar(0f32, shape![128]);
+    let mut o11 = broadcast_scalar(0f32, shape![128]);
+    let mut e12 = broadcast_scalar(0f32, shape![128]);
+    let mut o12 = broadcast_scalar(0f32, shape![128]);
+    let mut e13 = broadcast_scalar(0f32, shape![128]);
+    let mut o13 = broadcast_scalar(0f32, shape![128]);
+    let mut block = 0u32;
+    while block < blocks {
+        let (a0, b0, a1, b1) = unsafe { paired_q8_accumulate::<0>(a, b, col, lane, block, blocks, cols, row, rows, inner, e00, o00, e10, o10) };
+        e00 = a0;
+        o00 = b0;
+        e10 = a1;
+        o10 = b1;
+        let (a0, b0, a1, b1) = unsafe { paired_q8_accumulate::<1>(a, b, col, lane, block, blocks, cols, row, rows, inner, e01, o01, e11, o11) };
+        e01 = a0;
+        o01 = b0;
+        e11 = a1;
+        o11 = b1;
+        let (a0, b0, a1, b1) = unsafe { paired_q8_accumulate::<2>(a, b, col, lane, block, blocks, cols, row, rows, inner, e02, o02, e12, o12) };
+        e02 = a0;
+        o02 = b0;
+        e12 = a1;
+        o12 = b1;
+        let (a0, b0, a1, b1) = unsafe { paired_q8_accumulate::<3>(a, b, col, lane, block, blocks, cols, row, rows, inner, e03, o03, e13, o13) };
+        e03 = a0;
+        o03 = b0;
+        e13 = a1;
+        o13 = b1;
+        block = block + 8u32;
+    }
+    let sum = ((e00 + o00) + (e01 + o01)) + ((e02 + o02) + (e03 + o03));
+    let sum: Tile<f32, { [4, 32] }> = sum.reshape(shape![4, 32]);
+    let value: Tile<f32, { [4] }> = reduce_sum(sum, 1i32);
+    let column = lanes::<4>() + broadcast_scalar(first, shape![4]);
+    let mask = lt_tile(column, broadcast_scalar(cols, shape![4])) & lt_tile(broadcast_scalar(row + 0u32, shape![4]), broadcast_scalar(rows, shape![4]));
+    unsafe { write_tile(output, column + broadcast_scalar((row + 0u32) * cols, shape![4]), value, mask) };
+    let sum = ((e10 + o10) + (e11 + o11)) + ((e12 + o12) + (e13 + o13));
+    let sum: Tile<f32, { [4, 32] }> = sum.reshape(shape![4, 32]);
+    let value: Tile<f32, { [4] }> = reduce_sum(sum, 1i32);
+    let column = lanes::<4>() + broadcast_scalar(first, shape![4]);
+    let mask = lt_tile(column, broadcast_scalar(cols, shape![4])) & lt_tile(broadcast_scalar(row + 1u32, shape![4]), broadcast_scalar(rows, shape![4]));
+    unsafe { write_tile(output, column + broadcast_scalar((row + 1u32) * cols, shape![4]), value, mask) };
+}

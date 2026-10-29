@@ -250,6 +250,11 @@ fn q8_batched_narrow(rows: u32, inner: u32, outputs: u32) -> bool {
     (2..=32).contains(&rows) && inner >= 1024 && (1..=128).contains(&outputs)
 }
 
+// Restrict shared-row execution to the measured 9B tail geometries.
+fn q8_paired_rows(rows: u32, inner: u32, outputs: u32) -> bool {
+    (2..=8).contains(&rows) && matches!((inner, outputs), (4096, 4096 | 8192 | 12288) | (12288, 4096))
+}
+
 fn q8_batched_wide(rows: u32, inner: u32, outputs: u32) -> bool {
     (2..=8).contains(&rows) && inner >= 1024 && outputs > 128
 }
@@ -548,6 +553,7 @@ impl Kernel {
             (Self::ProjectQuantized, [m, _, _, 8, 2, 1]) if (2..=8).contains(m) => "q8_columns32_d4_m16",
             (Self::ProjectQuantized, [_, _, _, 8, 2, 1]) => "q8_columns32_d4",
             (Self::ProjectQuantized, [1, 4096, 8192 | 12288 | 248320, 8, 2]) => "q8_columns32_vector_streaming",
+            (Self::ProjectQuantized, [m, k, n, 8, 2]) if q8_paired_rows(*m, *k, *n) => "q8_columns32_pair",
             (Self::ProjectQuantized, [_, _, _, 8, 2]) => "q8_columns32_vector",
             (Self::EmbeddingQuantized, [_, _, _, 8, 2]) => "q8_columns32_embedding",
             (Self::IntegerReduction, p) => integer_reduction::symbol(p).unwrap_or(self.symbol()),
@@ -903,7 +909,8 @@ impl Kernel {
                 }
                 let bytes = product(&[k / 32, n, 34])?;
                 extents[..3].copy_from_slice(&[u64::from(product(&[m, k])?), u64::from(bytes).div_ceil(4), u64::from(product(&[m, n])?)]);
-                (product(&[m, n / 4, 128])?, 3, 2, false)
+                let row_groups = if q8_paired_rows(m, k, n) { m.div_ceil(2) } else { m };
+                (product(&[row_groups, n / 4, 128])?, 3, 2, false)
             }
             (Self::EmbeddingQuantized, &[vocab, width, rows, 8, 2]) => {
                 if vocab == 0 || width == 0 || rows == 0 || !vocab.is_multiple_of(32) || !width.is_multiple_of(32) {

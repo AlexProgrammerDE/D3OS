@@ -19,11 +19,11 @@ from pathlib import Path
 
 ENTRY = "burn_float_arithmetic"
 TEXT = f".text.{ENTRY}"
-PROFILE = "sm89-typed-erf25-library-scratch-v29"
+PROFILE = "sm89-typed-erf25-library-scratch-v30"
 REVISION = "2f47ad0036a7c18ec11d460f70b297a5824f9788"
 # Crate-relative keys are also consumed by prepare-kernels.py before/after
 # compilation. Bind SDK protocol 55 and the batched/component/grouped/signed Q8 and wide RMS/residual variants in
-# the 276-entry family, including optional D4 activation quantization. Registered IDs and math rules are unchanged.
+# the 277-entry family, including optional D4 activation quantization. Registered IDs and math rules are unchanged.
 SOURCE_HASHES = {
     "src/quantized-layout.rs": "e33a1fc10d010c0a02cecced1dc1cb1afbaec6788e652f94cd6547d75a60363e",
     "src/quantized-d4.rs": "85c28d1959ce4a59f4e245a7f47b685c6e87bddf8599c8a982f69ad903e23241",
@@ -41,7 +41,7 @@ SOURCE_HASHES = {
     "src/burn-integer-reduction.rs.in": "4d7143cb0f37bf714373012a03c2ce296b20c40450d31be2ab89e87612edf336",
     "src/burn-float-extrema.rs.in": "880426e13f294e86d614a2d6507a3cf8c9e84b170e9409f0b0fcf3c3fd5f7beb",
     "../../os/library/nvidia/src/compute/float_extrema.rs": "8c769d0e4bb2a8bee74382ba39d3d9552968fa37690e371c810d5a628a410a0f",
-    "src/main.rs": "d2408092becd4e96012fa2db81b483ca4e956d244b13216b498bcf537e84e038",
+    "src/main.rs": "1e084a3ec228c6eeea7cca6e4de7711b8e4fdc131edc1aa8a2406a90cb9c9e17",
     "src/link.rs": "205ac4376fb5ddcb0905c94379d6ad0f6c6cfc77f763585e190d1e5bb0defdd4",
     "build.rs": "c71402883f98ea305487cbb0a470c8fb137b28369fd1e53cd6b9ff2e421c4fab",
     "build/cast.rs": "caabf95f2b72d81bf1cfb8e18b19e595376e42a2e3fae3bfe1545664da2c2125",
@@ -49,7 +49,7 @@ SOURCE_HASHES = {
     "Cargo.lock": "13923daab0897a3f175cae8c314ec58476e959b32c6d2b296e7e5b6bc5ea0f43",
     "rust-toolchain.toml": "85db324345b7937c49ea2ac8b962d741f710719f4f751cab809985cbe6afbe3c",
     "../../os/library/nvidia/Cargo.toml": "1ad5bf6f4f02f27238599265ef024f37ae08114cf48ad2c5db8ee8a32f8cad11",
-    "../../os/library/nvidia/src/compute.rs": "10a08ae84f7fe52b2f188de743c87fc77d5ad655b2ab5a0c8736f786a07cf9e2",
+    "../../os/library/nvidia/src/compute.rs": "bb657950601ebc83588a9de44f8e7e7dc12aec248479c740f4dd6e3dcd4dc1ce",
     "../../os/library/nvidia/src/compute/float_arithmetic.rs": "6bc22945a93d9de619c1a4db4c2d2a4fd0eb05716d7dab3518e3eeb8db91a7fb",
     "../../os/library/nvidia/src/compute/integer_reduction.rs": "abfdc9904d771415257d0732e9e5502616778d1ba9002083bc219a510c0648d2",
     "../../os/library/nvidia/src/compute/mixed_matmul.rs": "4456f761cb62543d11852b6d82d3b49afa9a93f558f00bd88e9a80b7da346f17",
@@ -58,7 +58,7 @@ SOURCE_HASHES = {
     "src/burn-indexed-accumulation.rs.in": "6d01ad5122fc28551df86e7cad76f5e633e62d6db0427e4ddb243d7ddf6f4193",
     "src/quantized-vector.rs": "b2168a5d324b324e8d9e4cfe8c889b40ffc113bca62fae46af063fb72bf45f93",
     "src/rms-wide.rs": "db46698647c421bad0d9d5d5bb513d76a172099d2fa30a153530632fa431a90b",
-    "src/quantized-columns.rs": "6f664a228345800832405078aa59d53010f0ceedb2f487744b1d1dfac7afe3e3",
+    "src/quantized-columns.rs": "17b4470167d980ad9deef9c99426c28976cb7447cce2c2ab4786e69ddd23b7c6",
 }
 TOOL_HASHES = {
     "tileiras": "8733d2ef6ae234ba5b415d185c957b8cc37577507a2850313a8c0e5c7c3ac54d",
