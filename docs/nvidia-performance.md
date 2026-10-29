@@ -2947,9 +2947,14 @@ Finalization reused all four validated captures and matching host checks without
 The default kernel bundle is not promoted by this checkpoint.
 Broader prompt quality, DOOM, and full-backend acceptance remain open.
 
-## Current 0.8B comparison with firmware model transport
+## Historical 0.8B comparison with firmware model transport
 
-The current BF16 0.8B comparison uses the existing 22-token prompt and 64 decode inputs.
+The Native timings below predate explicit GPU completion at the prefill and decode timer boundaries.
+The harness now waits at both boundaries, matching Linux's completion requirement.
+These retained numbers document the old capture; they do not establish a current matched throughput gap.
+A fresh synchronized Native capture is required before reporting that gap again.
+
+The retained BF16 0.8B capture uses the existing 22-token prompt and 64 decode inputs.
 Both guests retain four virtual CPUs, host affinity `8,10,12,14`, 12 GiB RAM, FP32 state, and a 256-token context.
 Linux uses the pinned llama.cpp `b11827` libraries, full GPU offload, batch 32, and automatic Flash Attention.
 The weight audit passes all 320 text tensors and 19 model settings.
@@ -2962,9 +2967,9 @@ All six Linux selection traces match all 64 Native choices, with checksum `11137
 
 Native warm decode samples are 260.163 and 257.028 tokens/s.
 Linux new-context samples are 261.262 and 261.395 tokens/s.
-Native reaches about 99.0% of Linux throughput in this checkpoint.
+The recorded rates suggested about 99.0% of Linux throughput, subject to the timing limitation above.
 One capture per operating system does not establish a confidence interval or a speedup from the transport change.
-Prompt processing remains the larger gap, with Native about 47% slower in this short workload.
+The recorded prompt times suggested a larger gap, also subject to the missing completion wait.
 Native millisecond timing also limits the precision of this prompt comparison.
 
 The normal initrd attempt fails before kernel entry because towboot cannot allocate its 1,936,281,600-byte module below 4 GiB.
@@ -3863,3 +3868,11 @@ Earlier paired GPU evidence is reused; no new ordinary throughput is claimed wit
 Older unsynchronized ordinary timings must not be combined with these measurements.
 
 Build receipts, the source-boundary proof, and the verified incremental cache archive remain under `~/.cache/d3os/qwen-ordinary-phase-completion-v1/`.
+
+The same source audit found missing phase waits in the separate 0.8B benchmark.
+It now waits after prefill and after the final decode step, before stopping each timer.
+Each 0.8B timing record declares `phase_completion=device_sync`.
+Token selection, model arithmetic, transfer checks, and the fixed decode workload remain unchanged.
+The old 0.8B capture stays preserved as historical evidence, with no synchronized throughput claim.
+The matching application build passes, with only `infer` recompiled from the verified warm cache.
+Build receipts and a restorable incremental cache archive remain under `~/.cache/d3os/qwen-small-phase-completion-v1/`.

@@ -433,6 +433,7 @@ pub(super) fn qwen<const DECODE: usize>(backend: &Nvidia, device_timing: bool, f
         };
         let start = now();
         let mut logits = session.prefill(&prompt).map_err(|error| format!("{error}"))?;
+        device.sync().map_err(|error| format!("Qwen prefill completion: {error:?}"))?;
         let prefill_ms = now() - start;
         let before = backend.profile().map_err(|error| format!("{error}"))?;
         let queue_before = backend.queue_profile().map_err(|error| format!("{error}"))?;
@@ -452,6 +453,7 @@ pub(super) fn qwen<const DECODE: usize>(backend: &Nvidia, device_timing: bool, f
             tokens.push(token);
             logits = session.step(token).map_err(|error| format!("{error}"))?;
         }
+        device.sync().map_err(|error| format!("Qwen decode completion: {error:?}"))?;
         let decode_ms = now() - start;
         if run == 1 {
             let after = backend.profile().map_err(|error| format!("{error}"))?;
@@ -484,7 +486,7 @@ pub(super) fn qwen<const DECODE: usize>(backend: &Nvidia, device_timing: bool, f
             timing.finish().map_err(|error| format!("{error}"))?;
         }
         report(format_args!(
-            "INFERENCE_BENCH qwen backend=nvidia run={run} warm={} instrumented={instrumented} file_ms={file_ms} load_ms={load_ms} state_ms={state_ms} session_capacity={capacity} prompt_tokens={} prefill_ms={prefill_ms} prefill_tps={:.3} decode_tokens={DECODE} decode_ms={decode_ms} decode_tps={:.3} checksum={checksum} framework=burn os=d3os",
+            "INFERENCE_BENCH qwen backend=nvidia run={run} warm={} instrumented={instrumented} phase_completion=device_sync file_ms={file_ms} load_ms={load_ms} state_ms={state_ms} session_capacity={capacity} prompt_tokens={} prefill_ms={prefill_ms} prefill_tps={:.3} decode_tokens={DECODE} decode_ms={decode_ms} decode_tps={:.3} checksum={checksum} framework=burn os=d3os",
             run != 0,
             prompt.len(),
             prompt.len() as f64 * 1000. / prefill_ms.max(1) as f64,
