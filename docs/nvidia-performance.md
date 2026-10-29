@@ -3783,3 +3783,35 @@ Verified incremental build-cache archives preserve the warm artifacts while rele
 The deltas occupy about 210 MB, rather than duplicating both complete cache archives.
 Contracts, build receipts, cache restoration data, parser controls, and pooled analysis remain under `~/.cache/d3os/qwen-component-defaults-v1/`.
 Complete captures remain under `~/.cache/d3os/qwen-defaults-paired-01-v1/` and `~/.cache/d3os/qwen-defaults-paired-02-v1/`.
+
+## Rejected Q4 aligned-load trial
+
+The next private trial replaces paired 16-bit Q4 weight loads with aligned 32-bit loads.
+It preserves all arithmetic, activation components, lane mapping, and accumulation order.
+CPU checks prove equality for all 15,073,280 packed words used by the two retained datasets.
+The unchanged qualifier accepts the candidate, with 40 registers and no local or shared storage.
+Its machine code has 14 global load instructions instead of 16.
+
+The GPU comparison uses the current production component kernel as its control.
+Both timed routes include the same activation packing and rotate eight weight buffers beyond L2 capacity.
+All 42 predeclared samples per dataset are retained.
+
+| Q4 vector geometry | Current components, including pack | Aligned loads, including pack | Latency change |
+| --- | ---: | ---: | ---: |
+| K=6144, N=5120 | 47.0874 microseconds | 47.9700 microseconds | 1.87% slower |
+| K=17408, N=5120 | 137.5506 microseconds | 140.0795 microseconds | 1.84% slower |
+
+All 105,288 original reference comparisons pass, together with 62,884 bit-exact comparisons against the production kernel.
+Packed activation bytes, storage guards, and source checks also pass.
+The candidate fails the fixed requirement of at least 5% lower latency on both datasets.
+It is rejected without another sample or any production kernel change.
+A replay held the first preflight; the single GPU capture started after it exited naturally.
+
+A separate CPU feasibility check evaluates two active activation residuals while retaining the existing three-plane storage layout.
+Both independent FP64 references reproduce exactly, and the candidate passes the unchanged operator tolerance.
+This has no compiler, GPU, full-model, or speed acceptance. The full original model gates remain required before retention.
+
+The Native default-loading change now passes both CI workflows.
+The accepted decode result remains the preceding 19.6255 tokens/s; this rejected trial adds no throughput result.
+The aligned-load evidence remains under `~/.cache/d3os/qwen-q4-aligned-loads-probe-v1/`.
+CPU-only residual evidence remains under `~/.cache/d3os/qwen-q4-two-component-feasibility-v1/`.
