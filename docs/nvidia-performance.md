@@ -3138,3 +3138,77 @@ The rejected source, contracts, captures, failures, and cache receipts remain un
 `~/.cache/d3os/qwen-queue128-production-v1/`.
 Its checkpoint records exact evidence identities for future reuse.
 The accepted vocabulary layout and its performance claim remain unchanged.
+
+## Shared Linux and Native DOOM GPU reference
+
+The Linux reference can now run the Native application's Rust draw collector, texture atlas, and rasterizer through CUDA.
+A small word-device interface selects the platform transport.
+D3OS retains its native Rust driver and existing transfer and dispatch methods.
+The pinned C engine, command construction, GPU kernels, palette conversion, and pixel comparisons are shared.
+See [the reference tool](../tools/nvidia-doom-benchmark/README.md) for build and capture commands.
+The earlier Linux software-rendering reference remains available and unchanged.
+
+Two samples per platform used Native, Linux, Linux, Native order.
+All guests used four pinned virtual CPUs on host cores 8, 10, 12, and 14, with 4 GiB of memory.
+Rust and C used the x86-64-v3 CPU target.
+Compilation, module loading, and level initialization were outside the engine's timed interval.
+Pixel verification was disabled in these timing samples.
+
+| Uncapped `demo1` measurement | Native GPU | Linux CUDA |
+| --- | ---: | ---: |
+| Mean FPS | 1511.05 | 1528.25 |
+| Observed FPS range | 1465.26 to 1556.84 | 1518.87 to 1537.62 |
+| Game ticks per sample | 7117 | 7117 |
+| Rendered player views per sample | 7116 | 7116 |
+| Binned raster launches | 8246 | 8246 |
+| Fuzz launches | 1149 | 1149 |
+| Palette/scaling launches | 7156 | 7156 |
+
+The sample means differ by about 1.1%, less than the observed Native run-to-run variation.
+Both paths upload 2,006,236 texture bytes, record 24,975,852 cache hits and 44,594 misses, and grow buffers five times.
+Neither timing run resets the normal 8 MiB atlas.
+These matching counts establish equivalent draw and texture work for this demo.
+They do not establish identical operating-system or presentation costs.
+
+Mean CPU cycle counters per rendered view were:
+
+| Stage | Native | Linux |
+| --- | ---: | ---: |
+| View rendering, transfers, and completion | 609119 | 594074 |
+| Palette/scaling and readback | 400654 | 434925 |
+| Presentation | 112151 | 135614 |
+
+Linux presentation is a headless 800-by-600 memory copy.
+Native presentation includes its window copy, title, and FPS text.
+The Native application also runs input handling.
+The reported FPS therefore supports a bounded GPU-rendering comparison, with overlapping observed ranges.
+It does not prove equivalent physical-display performance.
+Two samples per platform and automatic clocks also limit small-gap conclusions.
+
+The shared Native consumer passes 600 pixel-reference frames with low-detail, fuzz, cache purges, and atlas rollover coverage.
+It exits cleanly and passes the subsequent GPU operator suite.
+The Linux CUDA consumer passes all 7,116 rendered demo views against the C pixel reference, including fuzz and forced cache purges.
+Its verification capture is excluded from the speed comparison.
+
+The Linux tool passes two host packet/range tests.
+Strict Clippy passes for both the Linux tool and Native consumer.
+The GPU bundle and all 276 entries were reused without another shader export.
+The Native kernel, other applications, C objects, and unchanged Qwen evidence were also reused.
+The rebuilt Native DOOM application changes the transport boundary, not its raster algorithms.
+The launcher refuses to overwrite an existing GPU DOOM capture.
+
+Evidence, exact source snapshots, failures, and cache identities are retained under
+`~/.cache/d3os/doom-linux-gpu-reference-v1/`.
+
+## Eight-column vocabulary prototype assessment
+
+The retained eight-column prototype now has a direct serial-FMA CPU assessment.
+It passes the original absolute 0.002 plus relative 0.0005 tolerance across 264,832 independent reference values.
+Both poison trials and post-timing outputs pass, covering 1,588,736 finite GPU outputs with unchanged guards and sources.
+The previous exact-bit comparison remains failed; this assessment does not reclassify it as bit-exact.
+
+On the full vocabulary head, streaming four-column execution averages 1927.832 microseconds and the eight-column prototype averages 1943.996 microseconds.
+The prototype loses all 32 paired head samples and remains unintegrated.
+Its smaller cache-resident prefixes do not justify a full-model performance claim.
+The existing compiled prototype, qualified cubins, weights, and input were reused; no GPU compilation was repeated.
+Evidence remains under `~/.cache/d3os/qwen-q8-vector8-oracle-probe-v1/`.

@@ -1841,6 +1841,27 @@ echo LINUX_DOOM_BENCH_OK
     benchmark.chmod(0o755)
 
 
+def doom_gpu_benchmark(root, binary, cubin, verify):
+    copy_file(root, binary, "/bin/doom-linux-gpu")
+    dependencies = subprocess.check_output(["ldd", str(binary)], text=True)
+    for library in re.findall(r"/[^\s()]+", dependencies):
+        copy_file(root, library)
+    copy_file(root, cubin, "/doom.cubin")
+    copy_file(root, ROOT / "target/doom/freedoom1.wad", "/doom.wad")
+    command = ["/bin/doom-linux-gpu", "/doom.cubin"]
+    if verify:
+        command.append("--verify-gpu")
+    command.extend(["--", "-iwad", "/doom.wad", "-timedemo", "demo1", "-nogui"])
+    benchmark = root / "benchmark"
+    benchmark.write_text(
+        "#!/bin/bash\n"
+        + shlex.join(command)
+        + '\n[ "$?" = 255 ] || exit 1\n'
+        + "echo LINUX_DOOM_GPU_BENCH_OK\n"
+    )
+    benchmark.chmod(0o755)
+
+
 def modules(root, kernel, names):
     directory = Path("/lib/modules") / kernel
     for metadata in directory.glob("modules.*"):
@@ -2189,8 +2210,27 @@ def main():
         help="pin guest CPUs individually to the caller's four host CPUs before boot",
     )
     parser.add_argument("--doom-benchmark", action="store_true")
+    parser.add_argument(
+        "--doom-gpu-binary", type=Path, help="shared Rust/CUDA DOOM reference binary"
+    )
+    parser.add_argument(
+        "--doom-gpu-cubin", type=Path, help="host-qualified inference cubin for DOOM"
+    )
+    parser.add_argument("--doom-gpu-verify", action="store_true")
     parser.add_argument("--alexnet-benchmark", action="store_true")
     args = parser.parse_args()
+    if bool(args.doom_gpu_binary) != bool(args.doom_gpu_cubin):
+        parser.error("--doom-gpu-binary and --doom-gpu-cubin are required together")
+    if args.doom_gpu_binary and not args.doom_benchmark:
+        parser.error("--doom-gpu-binary requires --doom-benchmark")
+    if args.doom_gpu_verify and not args.doom_gpu_binary:
+        parser.error("--doom-gpu-verify requires --doom-gpu-binary")
+    if args.doom_gpu_binary and not all(
+        path.is_file() for path in (args.doom_gpu_binary, args.doom_gpu_cubin)
+    ):
+        parser.error("DOOM GPU binary and cubin must be existing files")
+    if args.doom_gpu_binary and (args.directory / "serial.log").exists():
+        parser.error("preserve the existing DOOM capture; validate or reuse it without relaunching")
     if args.nsight_directory and not args.quantized_profile:
         parser.error("--nsight-directory requires --quantized-profile")
     if args.quantized_profile and any((args.kernel_benchmark, args.compiler_benchmark, args.mnist_benchmark, args.burn_quantization, args.burn_capabilities, args.burn_erf, args.burn_typed_exp_log, args.burn_typed_trig, args.burn_typed_unary, args.burn_typed_power, args.burn_typed_erf, args.burn_typed_remainder, args.burn_relu, args.burn_float_rounding, args.burn_float_arithmetic, args.burn_integer_arithmetic, args.burn_integer_reduction, args.burn_float_extrema, args.burn_float_reduction, args.burn_mixed_matmul, args.burn_indexed_accumulation, args.burn_indexed, args.burn_movement, args.burn_predicate, args.burn_integer_power, args.burn_integer, args.burn_integer_matmul, args.burn_scatter_updates, args.burn_nd_indexing, args.burn_storage, args.burn_conversions, args.burn_remainder, args.burn_inverse, args.burn_spatial_convolution, args.burn_deform, args.burn_interpolate, args.burn_quantized_empty, args.burn_compaction, args.burn_cross, args.burn_scan, args.burn_sort, args.llama_directory, args.doom_benchmark, args.alexnet_benchmark)):
@@ -2651,7 +2691,15 @@ def main():
                 args.model.resolve(),
             )
     elif args.doom_benchmark:
-        doom_benchmark(args.directory / "root")
+        if args.doom_gpu_binary:
+            doom_gpu_benchmark(
+                args.directory / "root",
+                args.doom_gpu_binary.resolve(),
+                args.doom_gpu_cubin.resolve(),
+                args.doom_gpu_verify,
+            )
+        else:
+            doom_benchmark(args.directory / "root")
     elif args.alexnet_benchmark:
         alexnet_benchmark(args.directory / "root")
     elif (args.directory / "root/benchmark").exists():
@@ -3049,11 +3097,39 @@ def main():
                 f"mismatches={sum(differences)} choices={6 * len(manifest['decode_ids'])}",
                 flush=True,
             )
-    if args.doom_benchmark and not re.search(
-        r"LINUX_DOOM_ENGINE_REPORT timed \d+ gametics in \d+ realtics \([0-9.]+ fps\)",
-        text,
-    ):
-        raise RuntimeError("Linux DOOM benchmark did not report a result")
+    if args.doom_benchmark:
+        marker = "DOOM_ENGINE_REPORT" if args.doom_gpu_binary else "LINUX_DOOM_ENGINE_REPORT"
+        if not re.search(
+            rf"^{marker} timed \d+ gametics in \d+ realtics \([0-9.]+ fps\)",
+            text,
+            re.MULTILINE,
+        ):
+            raise RuntimeError("Linux DOOM benchmark did not report a result")
+        if args.doom_gpu_binary and (
+            "LINUX_DOOM_GPU_READY " not in text
+            or "LINUX_DOOM_GPU_REPORT " not in text
+            or "LINUX_DOOM_GPU_BENCH_OK" not in text
+            or any(
+                marker in text
+                for marker in (
+                    "LINUX_DOOM_GPU_FAIL",
+                    "LINUX_DOOM_CUDA_FAIL",
+                    "NVIDIA_DOOM_FAIL",
+                    "NVIDIA_DOOM_MISMATCH",
+                )
+            )
+        ):
+            raise RuntimeError("shared Linux GPU DOOM benchmark did not complete")
+        if args.doom_gpu_binary:
+            profiles = re.findall(r"^NVIDIA_DOOM_PROFILE frames=(\d+) ", text, re.MULTILINE)
+            if len(profiles) != 1 or int(profiles[0]) < (600 if args.doom_gpu_verify else 1):
+                raise RuntimeError("shared Linux GPU DOOM frame coverage is incomplete")
+            if args.doom_gpu_verify and not re.search(
+                r"^NVIDIA_DOOM_READY backend=nvidia verify=true width=320 height=200$",
+                text,
+                re.MULTILINE,
+            ):
+                raise RuntimeError("shared Linux GPU DOOM pixel reference was not enabled")
     print("LINUX_NVIDIA_REFERENCE_OK", flush=True)
 
 

@@ -5,11 +5,7 @@ use core::{
     ptr, slice,
     sync::atomic::{AtomicU64, Ordering},
 };
-use d3os_compute::{
-    Buffer, Error, Result,
-    nvidia::{GpuBuffer, Nvidia},
-    raster::TextureAtlas,
-};
+use d3os_compute::{Buffer, Error, Result, raster::TextureAtlas};
 use d3os_nvidia::compute::{KERNEL_COUNT, Kernel, ProfileEntry};
 use spin::{Mutex, Once};
 
@@ -66,7 +62,20 @@ unsafe extern "C" {
     fn doom_purge_texture_cache();
 }
 
-static RENDERER: Once<Mutex<Renderer>> = Once::new();
+/// Word operations needed by the shared draw collector and rasterizer.
+/// Transfers and dispatches complete before returning on both platforms.
+pub(super) trait Device: Send {
+    type Words: Buffer + Send;
+
+    fn allocate_words(&self, elements: usize) -> Result<Self::Words>;
+    fn write_words(&self, buffer: &Self::Words, offset: usize, words: &[u32]) -> Result<()>;
+    fn write_bytes(&self, buffer: &Self::Words, offset: usize, bytes: &[u8]) -> Result<()>;
+    fn read_words_into(&self, buffer: &Self::Words, offset: usize, words: &mut [u32]) -> Result<()>;
+    fn dispatch_words(&self, kernel: Kernel, buffers: &[(&Self::Words, usize)], parameters: &[usize]) -> Result<()>;
+    fn profile(&self) -> Result<[ProfileEntry; KERNEL_COUNT]>;
+}
+
+static RENDERER: Once<Mutex<Renderer<super::GpuDevice>>> = Once::new();
 // The pinned renderer's texture columns, flats, color maps, translations, and
 // fuzz offsets are immutable between zone lifetime events. Invalidate before
 // allocation too: Z_Malloc can purge caches through internal Z_Free calls.
@@ -99,7 +108,7 @@ pub(super) fn report_profile() {
             renderer.palette_cycles / frames,
             renderer.display_cycles / frames
         );
-        if let Ok(after) = renderer.device.profile() {
+        if let Ok(after) = Device::profile(&renderer.device) {
             for (index, (before, after)) in renderer.profile_start.iter().zip(after).enumerate() {
                 let calls = after.calls.wrapping_sub(before.calls);
                 if calls != 0 {
@@ -125,21 +134,21 @@ pub(super) fn report_profile() {
     }
 }
 
-struct Renderer {
-    device: Nvidia,
+struct Renderer<D: Device> {
+    device: D,
     verify: bool,
     active: bool,
     fuzz: bool,
     commands: Vec<u32>,
     textures: TextureAtlas,
     uploaded_bytes: usize,
-    command_buffer: GpuBuffer<u32>,
-    bin_buffer: GpuBuffer<u32>,
-    texture_buffer: GpuBuffer<u32>,
-    base: GpuBuffer<u32>,
-    output: GpuBuffer<u32>,
-    rgba: GpuBuffer<u32>,
-    palette: GpuBuffer<u32>,
+    command_buffer: D::Words,
+    bin_buffer: D::Words,
+    texture_buffer: D::Words,
+    base: D::Words,
+    output: D::Words,
+    rgba: D::Words,
+    palette: D::Words,
     pixels: Vec<u32>,
     frames: usize,
     primitives: usize,
@@ -158,12 +167,10 @@ struct Renderer {
     buffer_growths: u64,
 }
 
-pub(super) fn init(verify: bool) -> Result<()> {
-    let device = Nvidia::new()?;
+pub(super) fn init(device: super::GpuDevice, verify: bool) -> Result<()> {
     // Verification deliberately exercises atlas rollover during live draws.
     let texture_bytes = if verify { 16 * 1024 } else { TEXTURE_BYTES };
     let renderer = Renderer {
-        device,
         verify,
         active: false,
         fuzz: false,
@@ -187,19 +194,20 @@ pub(super) fn init(verify: bool) -> Result<()> {
         render_cycles: 0,
         palette_cycles: 0,
         display_cycles: 0,
-        profile_start: device.profile()?,
+        profile_start: Device::profile(&device)?,
         texture_uploaded_bytes: 0,
         texture_hits: 0,
         texture_misses: 0,
         texture_resets: 0,
         buffer_growths: 0,
+        device,
     };
     RENDERER.call_once(|| Mutex::new(renderer));
     log::info!("NVIDIA_DOOM_READY backend=nvidia verify={verify} width={WIDTH} height={HEIGHT}");
     Ok(())
 }
 
-impl Renderer {
+impl<D: Device> Renderer<D> {
     unsafe fn screen() -> &'static mut [u8] {
         unsafe { slice::from_raw_parts_mut(I_VideoBuffer, PIXELS) }
     }
@@ -224,7 +232,7 @@ impl Renderer {
         self.frame_start_cycles = cycles();
         self.active = true;
         self.primitives = 0;
-        self.frame_start = time::systime().num_milliseconds();
+        self.frame_start = super::milliseconds();
         self.commands.clear();
         self.device.write_words(&self.base, 0, unsafe { Self::screen_words()? })
     }
@@ -301,7 +309,7 @@ impl Renderer {
                 self.frames,
                 self.primitives,
                 self.verify,
-                time::systime().num_milliseconds() - self.frame_start,
+                super::milliseconds() - self.frame_start,
                 self.low_primitives,
                 self.fuzz_columns,
                 self.texture_resets
@@ -547,7 +555,7 @@ unsafe extern "C" fn __wrap_Z_ClearZone(zone: *mut c_void) {
     unsafe { __real_Z_ClearZone(zone) }
 }
 
-fn upload(device: &Nvidia, buffer: &mut GpuBuffer<u32>, words: &[u32]) -> Result<bool> {
+fn upload<D: Device>(device: &D, buffer: &mut D::Words, words: &[u32]) -> Result<bool> {
     let grow = words.len() > buffer.len();
     if grow {
         let capacity = words.len().checked_next_power_of_two().ok_or(Error::SizeOverflow)?;
@@ -659,5 +667,5 @@ unsafe extern "C" fn __wrap_I_Quit() -> ! {
         log::info!("NVIDIA_DOOM_EXIT frames={}", renderer.lock().frames);
     }
     unsafe { __real_I_Quit() };
-    unsafe { libc::stdlib::system::exit(0) }
+    super::exit_process()
 }

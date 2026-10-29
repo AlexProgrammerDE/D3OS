@@ -65,6 +65,44 @@ static LOGGER: logger::Logger = logger::Logger::new();
 
 mod gpu;
 
+type GpuDevice = d3os_compute::nvidia::Nvidia;
+
+impl gpu::Device for GpuDevice {
+    type Words = d3os_compute::nvidia::GpuBuffer<u32>;
+
+    fn allocate_words(&self, elements: usize) -> d3os_compute::Result<Self::Words> {
+        Self::allocate_words(self, elements)
+    }
+
+    fn write_words(&self, buffer: &Self::Words, offset: usize, words: &[u32]) -> d3os_compute::Result<()> {
+        Self::write_words(self, buffer, offset, words)
+    }
+
+    fn write_bytes(&self, buffer: &Self::Words, offset: usize, bytes: &[u8]) -> d3os_compute::Result<()> {
+        Self::write_bytes(self, buffer, offset, bytes)
+    }
+
+    fn read_words_into(&self, buffer: &Self::Words, offset: usize, words: &mut [u32]) -> d3os_compute::Result<()> {
+        Self::read_words_into(self, buffer, offset, words)
+    }
+
+    fn dispatch_words(&self, kernel: d3os_nvidia::compute::Kernel, buffers: &[(&Self::Words, usize)], parameters: &[usize]) -> d3os_compute::Result<()> {
+        Self::dispatch_words(self, kernel, buffers, parameters)
+    }
+
+    fn profile(&self) -> d3os_compute::Result<[d3os_nvidia::compute::ProfileEntry; d3os_nvidia::compute::KERNEL_COUNT]> {
+        Self::profile(self)
+    }
+}
+
+fn milliseconds() -> i64 {
+    systime().num_milliseconds()
+}
+
+fn exit_process() -> ! {
+    unsafe { libc::stdlib::system::exit(0) }
+}
+
 #[unsafe(no_mangle)]
 unsafe extern "C" fn doom_engine_report(message: *const c_char) {
     log::info!("DOOM_ENGINE_REPORT {}", unsafe { CStr::from_ptr(message) }.to_string_lossy());
@@ -142,7 +180,9 @@ pub fn main() {
     let args: Vec<_> = runtime::env::args().skip(1).collect();
     let verify = args.iter().any(|arg| arg == "--verify-gpu");
     if verify || args.iter().any(|arg| arg == "--gpu") {
-        gpu::init(verify).expect("native GPU renderer initialization failed");
+        GpuDevice::new()
+            .and_then(|device| gpu::init(device, verify))
+            .expect("native GPU renderer initialization failed");
     }
     let mut arguments = alloc::vec![
         CString::new("doom").unwrap(),
