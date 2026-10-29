@@ -26,7 +26,7 @@ native = load_module("native_qemu", "run-qemu.py")
 PRODUCER = b"Cuda compilation tools, release 13.4, V13.4.92\0-O 3 -arch sm_89 \0"
 
 
-def elf(sections):
+def elf(sections, *, constants=()):
     """Build small ELF64 inventories; instruction semantics come from test SASS."""
     names = bytearray(b"\0.shstrtab\0.note.nv.tkinfo\0")
     headers = [(0,) * 10]
@@ -38,6 +38,14 @@ def elf(sections):
         data.extend(b"\0" * (-len(data) % 16))
         headers.append((name_offsets[name], 1, 6, 0, len(data), size, 0, 0, 16, 0))
         data.extend(bytes(size))
+    for name, payload, kind, flags in constants:
+        name_offset = len(names)
+        names.extend(name.encode("ascii") + b"\0")
+        data.extend(b"\0" * (-len(data) % 16))
+        headers.append(
+            (name_offset, kind, flags, 0, len(data), len(payload), 0, 0, 4, 0)
+        )
+        data.extend(payload)
     note_offset = len(data)
     data.extend(PRODUCER)
     headers.append((11, 7, 0, 0, note_offset, len(PRODUCER), 0, 0, 1, 0))
@@ -330,6 +338,140 @@ class Int8DotQualificationTests(unittest.TestCase):
         self.assertEqual(
             mixed["metadata_unused_profile"], qualification.INT8_DOT_PROFILE
         )
+
+    def test_literal_cb2_dot_reads_only_declared_aligned_words(self):
+        for address in (0, 4, 65532):
+            instruction = f"IDP.4A.S8.S8 R1, R2, c[0x2][{address:#x}], RZ"
+            result = qualification.qualify(
+                elf(
+                    [(".text.entry", 16)],
+                    constants=[(".nv.constant2.entry", b"\x01" * (address + 4), 1, 2)],
+                ),
+                sass([(".text.entry", [instruction])]),
+            )
+            self.assertEqual(
+                result["metadata_unused_profile"], qualification.INT8_DOT_CB2_PROFILE
+            )
+            self.assertEqual(result["cb4_accesses"], [])
+            self.assertEqual(
+                result["cb2_dot_accesses"],
+                [
+                    {
+                        "section": ".text.entry",
+                        "offset": 0,
+                        "constant_offset": address,
+                        "bytes": 4,
+                    }
+                ],
+            )
+        for address in (1, 2, 5, 8, 65536, 1 << 40):
+            with self.subTest(address=address), self.assertRaises(ValueError):
+                qualification.qualify(
+                    elf(
+                        [(".text.entry", 16)],
+                        constants=[(".nv.constant2.entry", bytes(8), 1, 2)],
+                    ),
+                    sass(
+                        [
+                            (
+                                ".text.entry",
+                                [f"IDP.4A.S8.S8 R1, R2, c[0x2][{address:#x}], R3"],
+                            )
+                        ]
+                    ),
+                )
+
+    def test_literal_cb2_dot_rejects_ambiguous_missing_and_mutable_banks(self):
+        local = (".nv.constant2.entry", bytes(4), 1, 2)
+        variants = [
+            [],
+            [(".nv.constant2.other", bytes(4), 1, 2)],
+            [(".nv.constant2", bytes(4), 1, 2)],
+            [local, local],
+            [local, (".nv.constant2", bytes(4), 1, 2)],
+        ]
+        variants.extend(
+            [
+                [(local[0], bytes(size), kind, flags)]
+                for size, kind, flags in [
+                    (0, 1, 2),
+                    (65540, 1, 2),
+                    (4, 8, 2),
+                    (4, 3, 2),
+                    (4, 1, 0),
+                    (4, 1, 3),
+                    (4, 1, 6),
+                ]
+            ]
+        )
+        for constants in variants:
+            with (
+                self.subTest(metadata=[(n, len(b), k, f) for n, b, k, f in constants]),
+                self.assertRaises(ValueError),
+            ):
+                qualification.qualify(
+                    elf([(".text.entry", 16)], constants=constants),
+                    sass([(".text.entry", ["IDP.4A.S8.S8 R1, R2, c[0x2][0x0], RZ"])]),
+                )
+
+    def test_literal_cb2_dot_retains_bank_operand_and_register_restrictions(self):
+        binary = elf(
+            [(".text.entry", 16)], constants=[(".nv.constant2.entry", bytes(4), 1, 2)]
+        )
+        invalid = [
+            f"IDP.4A.S8.S8 R1, R2, {value}, RZ"
+            for value in [
+                "c[0x0][0x0]",
+                "c[0x4][0x8]",
+                "c[0x2][R0]",
+                "c[0x2][0x0+R0]",
+                "cx[UR0]",
+                "-c[0x2][0x0]",
+                "c[0x2][0x0].H0",
+            ]
+        ]
+        invalid.extend(
+            [
+                "IDP.4A.S8.S8 c[0x2][0x0], R1, R2, RZ",
+                "IDP.4A.S8.S8 R0, c[0x2][0x0], R2, RZ",
+                "IDP.4A.S8.S8 R0, R1, R2, c[0x2][0x0]",
+                "IDP.4A.U8.S8 R0, R1, c[0x2][0x0], RZ",
+                "IDP.4A.S8.S8 R255, R1, c[0x2][0x0], RZ",
+            ]
+        )
+        for instruction in invalid:
+            with self.subTest(instruction=instruction), self.assertRaises(ValueError):
+                qualification.qualify(binary, sass([(".text.entry", [instruction])]))
+
+    def test_observed_unsigned_extraction_keeps_its_exact_operand_contract(self):
+        accepted = qualify_instructions("SGXT.U32 R1, R254, 0x4")
+        self.assertEqual(
+            accepted["metadata_unused_profile"], qualification.INT8_DOT_CB2_PROFILE
+        )
+        self.assertEqual(
+            accepted["u32_extracts"],
+            [{"section": ".text.entry", "offset": 0, "literal": 4}],
+        )
+        invalid = [
+            f"{op} R1, R2, 0x4"
+            for op in ["SGXT", "SGXT.S32", "SGXT.U16", "SGXT.U32.SAT"]
+        ]
+        invalid.extend(
+            f"SGXT.U32 R1, R2, {count}"
+            for count in ["4", "0x3", "0x5", "0x20", "R0", "UR0", "c[0x2][0x0]"]
+        )
+        invalid.extend(
+            [
+                "SGXT.U32 R255, R1, 0x4",
+                "SGXT.U32 R0, RZ, 0x4",
+                "SGXT.U32 R1, c[0x0][0x160], 0x4",
+                "SGXT.U32 R1, R2.reuse, 0x4",
+                "SGXT.U32 R1, R2, 0x4, R3",
+            ]
+        )
+        for instruction in invalid:
+            with self.subTest(instruction=instruction), self.assertRaises(ValueError):
+                qualify_instructions(instruction)
 
     def test_other_dot_shapes_types_and_modifiers_reject(self):
         for opcode in (

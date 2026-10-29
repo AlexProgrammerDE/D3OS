@@ -17,6 +17,7 @@ import struct
 PROFILE = "sm89-direct-constant-v2"
 INT8_MMA_PROFILE = "sm89-direct-constant-v3"
 INT8_DOT_PROFILE = "sm89-direct-constant-v4"
+INT8_DOT_CB2_PROFILE = "sm89-direct-constant-v5"
 VERSION = "13.4.92"
 ELF_HEADER = struct.Struct("<16sHHIQQQIHHHHHH")
 SECTION_HEADER = struct.Struct("<IIQQQQIIQQ")
@@ -43,6 +44,18 @@ INT8_DOT_OPCODE = "IDP.4A.S8.S8"
 INT8_DOT_OPERANDS = re.compile(
     rf"{INT8_MMA_REGISTER}\s*,\s*{INT8_MMA_REGISTER}\s*,\s*"
     rf"{INT8_MMA_REGISTER}\s*,\s*(?:{INT8_MMA_REGISTER}|RZ)"
+)
+# The observed byte-sum form reads one aligned word from its own read-only
+# CB2 section. Every literal offset is bounded against the actual ELF bytes.
+INT8_DOT_CB2_OPERANDS = re.compile(
+    rf"{INT8_MMA_REGISTER}\s*,\s*{INT8_MMA_REGISTER}\s*,\s*"
+    rf"c\[0x2\]\[(0x[0-9a-f]+)\]\s*,\s*(?:{INT8_MMA_REGISTER}|RZ)"
+)
+# The observed Q4 upper-nibble extraction has register-only data and the
+# literal 0x4 selector. Other signedness, selectors and modifiers stay rejected.
+U32_EXTRACT_OPCODE = "SGXT.U32"
+U32_EXTRACT_OPERANDS = re.compile(
+    rf"{INT8_MMA_REGISTER}\s*,\s*{INT8_MMA_REGISTER}\s*,\s*0x4"
 )
 CB4 = r"c\[0x4\]\[0x[0-9a-f]+\]"
 # nvdisasm prints a space between the brackets for this packed-half operand.
@@ -232,6 +245,42 @@ def executable_sections(cubin):
     return sections
 
 
+def dot_constant2_bytes(cubin, text_section):
+    """Read one unambiguous, allocated, read-only per-entry constant bank.
+
+    executable_sections() already validated the ELF header and table bounds.
+    Global/local overlap is rejected because the native adapter would otherwise
+    choose the last matching binding. This extension needs one exact binding.
+    """
+    header = ELF_HEADER.unpack_from(cubin)
+    offset, stride, count, names_index = header[6], header[11], header[12], header[13]
+    headers = [
+        SECTION_HEADER.unpack_from(cubin, offset + stride * i) for i in range(count)
+    ]
+    strings = headers[names_index]
+    names = cubin[strings[4] : strings[4] + strings[5]]
+    expected = ".nv.constant2." + text_section.removeprefix(".text.")
+    matches = []
+    for section in headers:
+        name_offset, kind, flags, _, start, size = section[:6]
+        name = names[name_offset : names.find(b"\0", name_offset)].decode("ascii")
+        if name not in (expected, ".nv.constant2"):
+            continue
+        if (
+            name != expected
+            or kind != 1
+            or flags & 7 != 2
+            or not 0 < size <= 65536
+            or start < ELF_HEADER.size
+            or start + size > len(cubin)
+        ):
+            raise ValueError("dot4 requires a bounded read-only per-entry CB2 section")
+        matches.append(cubin[start : start + size])
+    if len(matches) != 1:
+        raise ValueError("dot4 requires one unambiguous per-entry CB2 binding")
+    return matches[0]
+
+
 def constant_accesses(opcode, operands):
     """Return qualified CB4 ranges; reject all unrecognized constant syntax."""
     if opcode == "HADD2.F32":
@@ -306,6 +355,9 @@ def qualify(cubin: bytes, sass: str) -> dict:
     cb4_accesses = []
     has_int8_mma = False
     has_int8_dot = False
+    cb2_dot_accesses = []
+    u32_extracts = []
+    dot_constants = {}
     for line_number, line in enumerate(sass.splitlines(), 1):
         boundary = SECTION.fullmatch(line)
         if boundary:
@@ -337,13 +389,40 @@ def qualify(cubin: bytes, sass: str) -> dict:
                 )
             half_compare = HALF_COMPARE_FORMS.get(opcode)
             if opcode.split(".")[0] == "IDP":
-                if opcode != INT8_DOT_OPCODE or not INT8_DOT_OPERANDS.fullmatch(
-                    operands
-                ):
+                if opcode != INT8_DOT_OPCODE:
                     raise ValueError(
                         f"{active}:{offset:#x}: unsupported signed INT8 dot4 form"
                     )
+                if not INT8_DOT_OPERANDS.fullmatch(operands):
+                    literal = INT8_DOT_CB2_OPERANDS.fullmatch(operands)
+                    if literal is None:
+                        raise ValueError(
+                            f"{active}:{offset:#x}: unsupported signed INT8 dot4 form"
+                        )
+                    if active not in dot_constants:
+                        dot_constants[active] = dot_constant2_bytes(cubin, active)
+                    address = int(literal[1], 16)
+                    if address % 4 or address + 4 > len(dot_constants[active]):
+                        raise ValueError(
+                            f"{active}:{offset:#x}: dot4 CB2 word outside declared bounds"
+                        )
+                    cb2_dot_accesses.append(
+                        {
+                            "section": active,
+                            "offset": offset,
+                            "constant_offset": address,
+                            "bytes": 4,
+                        }
+                    )
                 has_int8_dot = True
+            elif opcode.split(".")[0] == "SGXT":
+                if opcode != U32_EXTRACT_OPCODE or not U32_EXTRACT_OPERANDS.fullmatch(
+                    operands
+                ):
+                    raise ValueError(
+                        f"{active}:{offset:#x}: unsupported unsigned register extraction"
+                    )
+                u32_extracts.append({"section": active, "offset": offset, "literal": 4})
             elif opcode.split(".")[0] == "IMMA":
                 if opcode != INT8_MMA_OPCODE or not INT8_MMA_OPERANDS.fullmatch(
                     operands
@@ -393,7 +472,9 @@ def qualify(cubin: bytes, sass: str) -> dict:
     record = {
         "schema_version": 1,
         "metadata_unused_profile": (
-            INT8_DOT_PROFILE
+            INT8_DOT_CB2_PROFILE
+            if cb2_dot_accesses or u32_extracts
+            else INT8_DOT_PROFILE
             if has_int8_dot
             else INT8_MMA_PROFILE
             if has_int8_mma
@@ -414,6 +495,10 @@ def qualify(cubin: bytes, sass: str) -> dict:
         ],
         "cb4_accesses": cb4_accesses,
     }
+    if cb2_dot_accesses:
+        record["cb2_dot_accesses"] = cb2_dot_accesses
+    if u32_extracts:
+        record["u32_extracts"] = u32_extracts
     record["evidence_sha256"] = sha256(
         json.dumps(record, sort_keys=True, separators=(",", ":")).encode("utf-8")
     )
