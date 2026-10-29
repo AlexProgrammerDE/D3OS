@@ -4015,3 +4015,36 @@ The new timing boundary also prevents attributing a speedup to comparisons with 
 The contract, source/image bindings, shard verification, complete capture, cached Linux evidence, and resource receipts remain under `~/.cache/d3os/qwen-synchronized-9b-baseline-v1/`.
 The retained 27B default result remains 19.6255 tokens/s against 34.2330 for matched Linux.
 No new 27B model measurement or broader parity claim follows from these checks.
+
+## Rejected Q3 decode candidates
+
+Two further private candidates target the dominant Q3 projection cost without changing the model, activation packing, or tolerances.
+Each uses one fixed GPU capture with 42 balanced samples per cache mode and no replacement capture.
+Both require at least 5% lower rotating-weight latency, including activation packing.
+
+| Candidate | Its paired baseline | Candidate | Fixed speed criterion |
+| --- | ---: | ---: | --- |
+| Combine the first two integer residual terms; retain the third | 130.9852 microseconds | 130.3950 microseconds | Fail, 0.45% reduction |
+| Aligned paired weight loads with the original two-byte-alignment fallback | 125.3401 microseconds | 161.0971 microseconds | Fail, 28.53% increase |
+
+These baselines belong to separate captures and must not be interpreted as a trend between candidates.
+The first candidate passes 175,524 original reference comparisons and 105,170 exact staged CPU comparisons.
+Its integer bound covers the full signed-byte range without overflow.
+The second passes all 246,600 reference and exact CPU comparisons, including two weight-pointer alignments and nine output-size boundaries.
+Its CPU load audit also checks 8,355,840 actual words.
+Both captures pass packing, guards, immutable-source, and resource checks without recorder overlap.
+
+The second candidate increases register use from 40 to 48; the capture does not isolate that effect from its new load instructions.
+Neither candidate is retained, and production remains unchanged.
+No model throughput claim follows from these operator checks.
+Complete contracts, inputs, machine artifacts, samples, and validation remain under `~/.cache/d3os/qwen-q3-two-term-fold-v1/` and `~/.cache/d3os/qwen-q3-aligned-pair-loads-v1/`.
+
+The next prefill preparation moves Q3 weight decoding outside the repeated matrix loop.
+A CPU reference stores signed bytes of `q3 * subgroup_scale - 1`, followed by the unchanged FP16 block scales.
+All 89,128,960 decoded weights and scale bits are verified against the existing source and GGUF decoder.
+The prepared layout occupies 89,825,280 bytes; all 574,464 cached multi-row reference values are reused.
+The matrix dot and three-residual accumulation source remains unchanged.
+
+This preparation has no compiler, GPU, model, or performance acceptance.
+Any retention measurement must include GPU weight preparation, activation packing, and projection on every timed call.
+The CPU layout, source diff, original reference bindings, and pending compiler requirements remain under `~/.cache/d3os/qwen-q3-prepared-prefill-v1/`.
