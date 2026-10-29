@@ -3308,3 +3308,59 @@ A staging-manifest path error omitted copied guest assets from its initial seal.
 A retrospective audit matches those assets against their original pins without repeating the VM.
 The initial seal limitation remains recorded.
 The rejected result is cached under `~/.cache/d3os/qwen-prefill-whole-batch-probe-v1/`.
+
+## Current 27B profile with cached Linux evidence
+
+The October 29 baseline runs Qwen3.6-27B Q3_K_M through the current Native image and accepted 277-entry GPU bundle.
+The image matches all 1,118 current OS source pins.
+The model remains packed in its original mixed Q3_K, Q4_K, Q5_K, Q6_K, and FP32 formats.
+This baseline introduces no source or arithmetic change.
+
+The comparison reuses the retained Linux capture because its benchmark source, executable, and all 63 library/header pins still match.
+The NVIDIA driver libraries and Linux kernel identity also match the retained recent 9B guest.
+Both workloads use the exact same model, 37 prompt tokens, 128 teacher-forced decode inputs, FP32 cache, and 2048-token context.
+Native preserves FP32 activations. Linux uses Q8_1 activations where its CUDA backend selects them.
+
+| Ordinary warm measurement | Current D3OS Native | Retained Linux CUDA |
+| --- | ---: | ---: |
+| First prefill sample | 744 ms | 94.257 ms |
+| Second prefill sample | 744 ms | 93.129 ms |
+| Mean prefill | 744 ms | 93.693 ms |
+| First decode sample | 15.593 tokens/s | 34.229 tokens/s |
+| Second decode sample | 15.463 tokens/s | 34.237 tokens/s |
+| Mean decode | 15.528 tokens/s | 34.233 tokens/s |
+
+Native reaches 45.36% of the retained Linux decode rate.
+Native prefill takes 7.94 times as long.
+These two warm samples from one current Native VM establish a baseline, not an optimization or sustained-performance claim.
+The performance goal remains open.
+
+All 32,033,280 independent FP32 reference values pass the original tolerance.
+Maximum absolute error remains `0.000034809113`, and all four Native token traces reproduce the retained checksum `14424479105642919525`.
+The two existing differences against Linux token selections remain at rows 69 and 112.
+All activations remain resident, with zero host activation transfers.
+The model occupies 13,575,868,416 live device bytes.
+
+A separate fourth pass records device intervals. Its serialized timings are excluded from ordinary throughput.
+Packed projections account for 92.43% of measured prefill kernel time and 89.21% of decode kernel time.
+
+| Instrumented decode projection | Calls across 128 tokens | Total device time |
+| --- | ---: | ---: |
+| Q3_K gate/up, 5120 to 17408 | 16,384 | 3,056.668 ms |
+| Q4_K down, 17408 to 5120 | 7,680 | 1,476.189 ms |
+| Q4_K projection, 5120 to 10240 | 5,888 | 667.697 ms |
+| Q4_K output, 6144 to 5120 | 8,192 | 583.437 ms |
+
+The Q3_K gate/up projection alone accounts for 43.17% of packed-projection device time.
+Matching cached Nsight records remain reusable: their Q3_K and Q4_K machine bodies and all six probe input files match exactly.
+The retained Q3_K diagnostic records 83.62% SM throughput and 42.48% DRAM throughput, relative to their sustained peaks.
+These counters suggest the instruction cost of weight unpacking and conversion as a target. Their controlled clocks and cache conditions differ from ordinary Native execution.
+No new profiler run was needed.
+
+The existing Native image, compiled kernels, CPU references, and Linux result were reused without compilation or reference regeneration.
+Firmware shards share the original 12.65 GiB of weight extents through Btrfs.
+Native model import takes 7,936 ms with host file pages warm from integrity preparation.
+Its storage transport differs from Linux, so these import timings do not establish matched cold-load parity.
+
+Complete cache decisions, identities, reference checks, and the current profile remain under
+`~/.cache/d3os/qwen-27b-current-baseline-v1/`.
