@@ -3896,7 +3896,8 @@ The capture, exact source and artifact pins, validation, and overlap evidence re
 A separate Q4 decode prototype keeps all three residuals while partitioning the reduction across four warps.
 Both original operator references pass its staged CPU fold, and the unchanged compiler qualifier accepts its machine code.
 It uses 40 registers, one barrier, 16 shared bytes, and no spills.
-This is compiler and CPU evidence only; GPU accuracy, operator speed, and full-model acceptance remain unproven.
+The later GPU operator check passes accuracy but fails the fixed general-replacement speed criterion, as recorded below.
+It receives no full-model acceptance.
 Those artifacts remain under `~/.cache/d3os/qwen-q4-split-k4-v1/`.
 
 ## Synchronized 0.8B baseline
@@ -3963,3 +3964,54 @@ Ruff and formatting checks pass.
 This admits an observed operand spelling; it grants no GPU numerical, model, or performance acceptance to the prototype.
 
 Source preservation, CPU folds, actual machine artifacts, parser controls, unchanged baseline records, and the prepared first operator test remain under `~/.cache/d3os/qwen-q4-folded-triplet-v1/`.
+
+## Three-residual Q4 integer-fold operator result
+
+The prepared prototype retains all three activation residuals and combines their integer dots before FP32 conversion.
+Its first GPU capture passes 105,288 original reference comparisons and 62,884 bit-exact staged CPU comparisons.
+Both packing trials, poisoned destinations, nine output-size boundaries, guards, and immutable sources pass.
+The capture has no recorder overlap, and its process exits normally with all input pins unchanged.
+
+| Rotating-weight mean latency, including activation packing | Accepted Q4 Components | Integer-fold prototype |
+| --- | ---: | ---: |
+| 6144 inputs, 5120 outputs | 47.4051 microseconds | 47.8916 microseconds |
+| 17408 inputs, 5120 outputs | 141.7150 microseconds | 143.4880 microseconds |
+
+Latency increases by 1.03% and 1.25%, respectively.
+The fixed requirement was at least a 5% reduction for both datasets, so the prototype is rejected.
+Production remains unchanged. No additional samples or replacement capture are taken.
+This operator result grants no new model throughput or accuracy claim.
+
+The contract, original capture, machine artifacts, complete sample populations, and validation remain under `~/.cache/d3os/qwen-q4-folded-triplet-v1/`.
+
+## Synchronized 9B baseline
+
+A fresh Native capture measures Qwen3.5-9B Q8_0 with explicit GPU completion at both phase boundaries.
+It reuses the existing application image, qualified kernels, all nine model shards, and independent CPU FP32 reference.
+The cached Linux capture is reused after verifying its benchmark, 39 library hashes, and exact token inputs.
+All 1,119 current application-build source pins match. No rebuild or reference regeneration is needed.
+
+| Ordinary warm measurement | Native, fresh | llama.cpp, cached |
+| --- | ---: | ---: |
+| Decode throughput | 54.3990 tokens/s | 58.0835 tokens/s |
+| Prompt processing | 106.000 ms | 43.845 ms |
+
+Native decode throughput is 6.34% below the cached Linux result.
+Prompt processing takes 141.76% longer.
+Both sides retain 37 prompt tokens, 128 decode tokens, FP32 state, a 2048-token context, batch 32, and four pinned vCPUs.
+The Native guest uses 15 GiB RAM.
+
+All 32,033,280 original logit comparisons pass with zero tolerance failures.
+The absolute and relative tolerances remain 0.002 and 0.0005.
+All three Native token traces match the retained Native workload, including its existing single near-tie difference from Linux.
+The original residency, boot, and inference gates pass.
+
+The capture has no recorder overlap or resource stop. Minimum available host RAM remains above 13.4 GiB.
+One capture per OS and two warm samples do not establish a statistical guarantee.
+Pinned Linux Q8_1 activation arithmetic differs from Native Accurate mode.
+Model transport and storage-cache differences still prevent a matched cold-load claim.
+The new timing boundary also prevents attributing a speedup to comparisons with older unsynchronized Native captures.
+
+The contract, source/image bindings, shard verification, complete capture, cached Linux evidence, and resource receipts remain under `~/.cache/d3os/qwen-synchronized-9b-baseline-v1/`.
+The retained 27B default result remains 19.6255 tokens/s against 34.2330 for matched Linux.
+No new 27B model measurement or broader parity claim follows from these checks.
