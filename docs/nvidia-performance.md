@@ -3429,3 +3429,62 @@ The private candidate bundle remains separate from the root default bundle.
 
 Operator evidence and preserved source variants remain under `~/.cache/d3os/qwen-q3-signed-conversion-probe-v1/`.
 Production audits, the frozen criterion, completed captures, and cache decisions remain in its `production-work/` directory.
+
+## Unretained Q4_K and Q6_K conversion trials
+
+Two private prototypes extend the small-integer conversion experiment to other packed formats.
+Both preserve decoded FP32 operands, weight multiplication order, FMA accumulation, and reduction order.
+They do not quantize activations.
+
+The Q6_K prototype reduces registers from 80 to 72 and executable size from 12,288 to 11,136 bytes.
+It passes 118,952 independent reference comparisons and 59,476 bit-equal output comparisons across eight operator cases.
+However, its rotating-weight vocabulary-prefix case regresses from 114.590 to 122.654 microseconds, or 7.04%.
+That case uses 8,192 real vocabulary rows, not the complete vocabulary.
+The prototype remains unintegrated. No full-model run follows this failed operator criterion.
+
+The Q4_K prototype instead converts bounded unsigned operands through `u8`.
+Its executable size remains 7,296 bytes, while registers increase from 70 to 72.
+Both versions retain seven active CTAs per SM and 512 bytes of shared storage.
+
+| Rotating-weight Q4_K projection | Existing mean | Candidate mean | Time reduction |
+| --- | ---: | ---: | ---: |
+| 6144 to 5120 | 62.224 us | 56.347 us | 9.45% |
+| 17408 to 5120 | 211.746 us | 192.093 us | 9.28% |
+
+Each row contains 32 alternating paired samples with eight disjoint weight buffers.
+The candidate wins every sample. Smaller output extents also pass the recorded operator criterion.
+Across both eight-case captures, 213,328 reference comparisons and 106,664 bit-equal comparisons pass.
+Storage guards, complete source preservation, and both poison patterns pass.
+
+A private production export changes only `vector_project_q4k` among 277 inference entries.
+The other 276 machine-text sections and both smaller cubins remain byte-identical.
+The production body and 40-byte ABI match the GPU-tested prototype exactly.
+Q5_K and Q6_K remain unchanged. Math v33 changes source context only, with unchanged certificate rules.
+Strict exporter Clippy, Rustfmt, and both provenance tests pass.
+
+The model experiment reuses two exact current Q3 controls and plans two candidates plus one fresh final control.
+Its criterion requires at least 2% combined decode gain, each candidate faster than every control, and no more than 2% mean prefill regression.
+All original numerical, route, residency, and token requirements remain intact.
+
+| Ordinary warm measurement | Prefill mean | Decode mean |
+| --- | ---: | ---: |
+| Cached current control 1 | 788.0 ms | 15.658 tokens/s |
+| Cached current control 2 | 765.5 ms | 15.677 tokens/s |
+| Q4 candidate 1 | 792.0 ms | 15.9185 tokens/s |
+| Q4 candidate 2 | 861.0 ms | 15.4375 tokens/s |
+
+Both candidates pass all 32,033,280 logit comparisons with unchanged error statistics.
+All 16 traces across the four captures match the retained Native token sequence.
+The second candidate fails the requirement to exceed every control.
+The controller therefore skips the final control, and both production source files return byte-for-byte to the accepted Q3 versions.
+The faster operator results do not establish a retained whole-model gain.
+
+Unchanged Q3 projection timings also vary across these model captures.
+Boot clock telemetry stops before inference, so it cannot identify clocks during the measured phases.
+These records do not prove a clock, thermal, TSC, or host-scheduling cause.
+The next comparison needs paired sampling within one resident-model run or stronger control of run variation.
+
+All attempts, references, compiled artifacts, captures, and the source reversion proof remain under
+`~/.cache/d3os/qwen-k-narrow-conversion-probe-v1/`.
+The original Native image, model shards, Linux baseline, and matching references were reused.
+No Native rebuild or model-reference regeneration occurred.
