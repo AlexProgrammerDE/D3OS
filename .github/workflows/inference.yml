@@ -207,18 +207,16 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y libclang-dev
-      - name: Compile and audit cuTile kernels without GPU hardware
-        run: python3 tools/inference/test-cutile-kernels.py
-      - name: Compile and audit optional Qwen vector kernels
-        env:
-          CARGO_TARGET_DIR: target/qwen-vector-build
+      - name: Install pinned Qwen vector toolchain
         run: |
           toolchain=$(python3 -c 'import pathlib,tomllib; print(tomllib.loads(pathlib.Path("tools/qwen-vector-kernels/rust-toolchain.toml").read_text())["toolchain"]["channel"])')
           rustup toolchain install "$toolchain" --profile minimal --component rust-src
-          python3 -B tools/nvidia/prepare-qwen-vector.py \
-            --bundle target/nvidia/kernels \
-            --output target/nvidia/qwen-vector-kernels \
-            --toolkit target/nvidia/cutile-toolkit/packages/nvidia/cu13
+          cargo +"$toolchain" fetch --locked \
+            --manifest-path tools/qwen-vector-kernels/Cargo.toml \
+            -Z build-std=core -Z build-std-features=compiler-builtins-mem \
+            --target nvptx64-nvidia-cuda
+      - name: Compile and audit NVIDIA kernels without GPU hardware
+        run: python3 tools/inference/test-cutile-kernels.py
       - name: Upload compiler verification records
         if: always()
         uses: actions/upload-artifact@v7
@@ -231,11 +229,8 @@ jobs:
             target/nvidia/kernels/host-audit/*.sass
             target/nvidia/kernels-failed-*/*.json
             target/nvidia/kernels-failed-*/*.sass
-            target/nvidia/qwen-vector-kernels/manifest.json
-            target/nvidia/qwen-vector-kernels/qwen-vector.ptx
-            target/nvidia/qwen-vector-kernels/host-audit/qwen-vector.cubin
-            target/nvidia/qwen-vector-kernels/host-audit/qwen-vector.sass
-            target/nvidia/qwen-vector-kernels-failed-*/*
+            target/nvidia/kernels/qwen-vector.ptx
+            target/nvidia/kernels/host-audit/qwen-vector.cubin
 
   qwen:
     if: github.event_name == 'workflow_dispatch' && inputs.qwen

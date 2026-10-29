@@ -4,12 +4,29 @@
 import importlib.util
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 def main():
+    subprocess.run(
+        [
+            sys.executable,
+            "-B",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            str(ROOT / "tools/nvidia/tests"),
+            "-p",
+            "test_qwen_vector_preparation.py",
+        ],
+        cwd=ROOT,
+        check=True,
+        timeout=60,
+    )
     spec = importlib.util.spec_from_file_location(
         "cutile_toolkit", ROOT / "tools/nvidia/prepare-cutile-toolkit.py"
     )

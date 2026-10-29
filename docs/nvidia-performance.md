@@ -3723,7 +3723,18 @@ Cold-load, broader workload, and full performance parity remain open.
 
 The math certificate advances to v36 for the SDK source binding only. Its functions, schedules, resources, and constant rules remain unchanged.
 Both current provenance tests pass and reject the stale v35 binding.
-The preceding v35 repair also passes fresh CI compilation and audit. The v36 current-source CI result remains pending.
+The v36 current-source cuTile compilation and audit pass in CI.
+The following Qwen step failed because the clean runner lacked an offline Rust standard-library dependency.
+Preparation now fetches those pinned dependencies explicitly before the offline build.
+An isolated empty-cache fetch followed by an offline fetch passes; the updated CI run remains pending.
 
 Sources, build-cache restoration and verified archival receipts, Native checks, parser controls, and frozen model criteria remain under `~/.cache/d3os/qwen-q4-components-integration-v1/`.
 Complete captures remain under `~/.cache/d3os/qwen-q4-components-paired-01-v1/` and `~/.cache/d3os/qwen-q4-components-paired-02-v1/`.
+
+Normal kernel preparation now includes the qualified Qwen PTX module.
+The packaging check reused the three cached Tile IR families and the warm Rust build cache.
+All 16 published files and all four qualification records match the GPU-tested bundle exactly.
+The completed operator and model evidence therefore remains applicable without another GPU run.
+Seven filesystem controls cover publication, interrupted copies, stale assets, and the explicit core-only output.
+This packaging change leaves projection defaults unchanged and establishes no additional throughput result.
+Receipts remain under `~/.cache/d3os/qwen-components-default-bundle-v1/`.

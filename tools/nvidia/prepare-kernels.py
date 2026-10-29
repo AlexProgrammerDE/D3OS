@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export portable cuTile input for D3OS, with optional host SASS audits."""
+"""Export portable cuTile and Rust PTX input, with optional core SASS audits."""
 
 import argparse
 import hashlib
@@ -59,7 +59,9 @@ def staging_directory(output):
         try:
             yield staging
         except Exception:
-            failure = Path(tempfile.mkdtemp(prefix=f"{output.name}-failed-", dir=output.parent))
+            failure = Path(
+                tempfile.mkdtemp(prefix=f"{output.name}-failed-", dir=output.parent)
+            )
             shutil.copytree(staging, failure, dirs_exist_ok=True)
             print(f"Retained failed build artifacts: {failure}", flush=True)
             raise
@@ -72,6 +74,54 @@ def typed_math_scratch():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def add_qwen_module(staging, manifest, toolkit, target):
+    spec = importlib.util.spec_from_file_location(
+        "qwen_vector", Path(__file__).with_name("prepare-qwen-vector.py")
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    manifest["kernels"][module.FAMILY] = module.compile_module(staging, toolkit, target)
+
+
+def publish_bundle(staging, output, manifest, *, audit):
+    """Publish staged families while keeping host-only machine audits separate."""
+    staging, output = staging.resolve(), output.resolve()
+    if staging == output or staging in output.parents:
+        raise ValueError("output must be outside the staging directory")
+    staged_manifest = staging / "manifest.json"
+    staged_manifest.write_text(json.dumps(manifest, indent=2) + "\n")
+    output.mkdir(parents=True, exist_ok=True)
+    for artifact in staging.iterdir():
+        if artifact.is_dir():
+            shutil.copytree(artifact, output / artifact.name, dirs_exist_ok=True)
+        elif artifact.name != "manifest.json":
+            shutil.copyfile(artifact, output / artifact.name)
+    audit_directory = output / "host-audit"
+    if audit:
+        audit_directory.mkdir(exist_ok=True)
+    portable_ptx = {
+        record["input"]
+        for record in manifest["kernels"].values()
+        if record["input"].endswith(".ptx")
+    }
+    for artifact in output.iterdir():
+        if artifact.suffix in (".cubin", ".sass"):
+            if audit and (staging / artifact.name).is_file():
+                shutil.move(artifact, audit_directory / artifact.name)
+            else:
+                artifact.unlink()
+        elif artifact.suffix == ".ptx" and artifact.name not in portable_ptx:
+            artifact.unlink()
+    if "qwen-vector" not in manifest["kernels"]:
+        for suffix in ("cubin", "sass"):
+            (audit_directory / f"qwen-vector.{suffix}").unlink(missing_ok=True)
+    # Replace the manifest only after all selected files are present.
+    with tempfile.NamedTemporaryFile(dir=output, delete=False) as pending:
+        pending.write(staged_manifest.read_bytes())
+    shutil.copystat(staged_manifest, pending.name)
+    Path(pending.name).replace(output / "manifest.json")
 
 
 def audit(family, sass, *, cubin=None, entries=None, provenance=None):
@@ -103,7 +153,6 @@ def audit(family, sass, *, cubin=None, entries=None, provenance=None):
             "burn_atan",
             "burn_atanh",
             "burn_atan2",
-
             "burn_argwhere",
             "burn_scatter_ordered_f32",
             "burn_scatter_ordered_i32",
@@ -113,7 +162,11 @@ def audit(family, sass, *, cubin=None, entries=None, provenance=None):
             "burn_deform_input",
             "burn_spatial_windows",
             "burn_spatial_fold",
-            *(f"burn_interpolate_{mode}{direction}" for mode in ("nearest","exact","linear","cubic","lanczos3") for direction in ("","_backward")),
+            *(
+                f"burn_interpolate_{mode}{direction}"
+                for mode in ("nearest", "exact", "linear", "cubic", "lanczos3")
+                for direction in ("", "_backward")
+            ),
             "burn_storage_copy",
             "burn_storage_fill",
             "burn_i32_divide",
@@ -136,7 +189,12 @@ def audit(family, sass, *, cubin=None, entries=None, provenance=None):
             "burn_i32_cumprod",
             "burn_i32_cummin",
             "burn_i32_cummax",
-            *(f"burn_sort_{dtype}_{order}{phase}" for dtype in ("f32", "i32") for order in ("ascending", "descending") for phase in ("", "_initial")),
+            *(
+                f"burn_sort_{dtype}_{order}{phase}"
+                for dtype in ("f32", "i32")
+                for order in ("ascending", "descending")
+                for phase in ("", "_initial")
+            ),
             "burn_sort_f32_topk",
             "burn_sort_f32_topk_initial",
             "burn_quantize",
@@ -169,8 +227,16 @@ def audit(family, sass, *, cubin=None, entries=None, provenance=None):
                     )
                 try:
                     typed_math_scratch().qualify(cubin, sass, entries, provenance)
-                except (ValueError, KeyError, IndexError, UnicodeError, struct.error) as error:
-                    raise RuntimeError(f"{name}: library-scratch qualification failed: {error}") from error
+                except (
+                    ValueError,
+                    KeyError,
+                    IndexError,
+                    UnicodeError,
+                    struct.error,
+                ) as error:
+                    raise RuntimeError(
+                        f"{name}: library-scratch qualification failed: {error}"
+                    ) from error
                 continue
             if not body or re.search(r"\b(?:LDL|STL)\b", body):
                 raise RuntimeError(f"{name}: specialization must remain spill-free")
@@ -188,7 +254,9 @@ def audit(family, sass, *, cubin=None, entries=None, provenance=None):
         instructions = "\n".join(
             line for line in body.splitlines() if re.search(r"/\*[0-9a-f]+\*/", line)
         )
-        for match in re.finditer(r"c\[0x([0-9a-f]+)\](?:\[0x([0-9a-f]+)\])?", instructions):
+        for match in re.finditer(
+            r"c\[0x([0-9a-f]+)\](?:\[0x([0-9a-f]+)\])?", instructions
+        ):
             bank = int(match[1], 16)
             offset = int(match[2], 16) if match[2] is not None else None
             if bank in (0, 2):
@@ -215,6 +283,17 @@ def main():
         help="also assemble sm_89 code on the host and audit its instructions",
     )
     parser.add_argument("--output", type=Path, default=ROOT / "target/nvidia/kernels")
+    parser.add_argument(
+        "--core-only",
+        action="store_true",
+        help="export only the three Tile IR families, without Q3/Q4 component decode",
+    )
+    parser.add_argument(
+        "--qwen-target",
+        type=Path,
+        default=ROOT / "target/qwen-vector-build",
+        help="Rust NVPTX build cache for the normal Qwen vector module",
+    )
     args = parser.parse_args()
     qualification_spec = importlib.util.spec_from_file_location(
         "cubin_qualification", Path(__file__).with_name("cubin-qualification.py")
@@ -236,7 +315,9 @@ def main():
     env["CARGO_TARGET_DIR"] = str(ROOT / "target/cutile-build")
     crate = ROOT / "tools/gpu-kernels"
     scratch = typed_math_scratch() if args.audit else None
-    provenance = scratch.collect_provenance(crate, toolkit, disassembler) if scratch else None
+    provenance = (
+        scratch.collect_provenance(crate, toolkit, disassembler) if scratch else None
+    )
     toolchain = tomllib.loads((crate / "rust-toolchain.toml").read_text())["toolchain"][
         "channel"
     ]
@@ -260,8 +341,13 @@ def main():
             check=True,
             timeout=COMPILATION_TIMEOUT,
         )
-        if scratch and scratch.collect_provenance(crate, toolkit, disassembler) != provenance:
-            raise RuntimeError("typed-math source/compiler provenance changed during compilation")
+        if (
+            scratch
+            and scratch.collect_provenance(crate, toolkit, disassembler) != provenance
+        ):
+            raise RuntimeError(
+                "typed-math source/compiler provenance changed during compilation"
+            )
         manifest = {
             "architecture": None,
             "format": "tile-ir",
@@ -314,32 +400,24 @@ def main():
                 "bytes": cubin.stat().st_size,
                 "sass_verified": True,
             }
-            manifest["kernels"][family]["legacy_qualification"] = (
-                qualification.qualify(cubin.read_bytes(), sass)
-                | {
-                    "source_sha256": manifest["kernels"][family]["sha256"],
-                    "source_bytes": ir.stat().st_size,
-                }
+            manifest["kernels"][family]["legacy_qualification"] = qualification.qualify(
+                cubin.read_bytes(), sass
+            ) | {
+                "source_sha256": manifest["kernels"][family]["sha256"],
+                "source_bytes": ir.stat().st_size,
+            }
+        if not args.core_only:
+            add_qwen_module(staging, manifest, toolkit, args.qwen_target)
+        if (
+            scratch
+            and scratch.collect_provenance(crate, toolkit, disassembler) != provenance
+        ):
+            raise RuntimeError(
+                "typed-math source/compiler provenance changed before publication"
             )
-        (staging / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-        args.output.mkdir(parents=True, exist_ok=True)
-        for artifact in staging.iterdir():
-            shutil.copyfile(artifact, args.output / artifact.name)
-        # Remove machine code left by older builds. Optional audit artifacts
-        # stay in a separate directory and never enter the guest boot image.
-        audit_directory = args.output / "host-audit"
-        if args.audit:
-            audit_directory.mkdir(exist_ok=True)
-        for artifact in args.output.iterdir():
-            if artifact.suffix in (".cubin", ".sass"):
-                if args.audit and (staging / artifact.name).is_file():
-                    shutil.move(artifact, audit_directory / artifact.name)
-                else:
-                    artifact.unlink()
-            elif artifact.suffix == ".ptx":
-                artifact.unlink()
+        publish_bundle(staging, args.output, manifest, audit=args.audit)
     print(
-        f"CUTILE_BUILD_OK format=tile-ir code_generation_os=d3os host_audit={args.audit} families={len(FAMILIES)} output={args.output}"
+        f"CUTILE_BUILD_OK format=tile-ir code_generation_os=d3os host_audit={args.audit} families={len(manifest['kernels'])} output={args.output}"
     )
 
 

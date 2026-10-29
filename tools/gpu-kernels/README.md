@@ -1,6 +1,7 @@
 # Native D3OS cuTile kernels
 
 This host compiler exports portable Tile IR for native inference and rendering kernels.
+Normal bundle preparation also compiles the Rust PTX Qwen projection module.
 NVIDIA cuTile Rust produces Tile IR 13.4.
 D3OS runs `tileiras` and `ptxas` inside its Linux execution personality during module loading.
 The compiler targets the detected GPU, currently Ada `sm_89` on the validation machine.
@@ -9,11 +10,16 @@ D3OS requires no Linux CUDA execution libraries.
 
 ## Build and check
 
-Install libclang and Rust 1.98.1 on a Linux x86-64 host.
+Install libclang, Rust 1.98.1, and the Qwen crate's pinned nightly on a Linux x86-64 host.
 From the repository root, run:
 
 ```bash
 rustup toolchain install 1.98.1 --profile minimal --component clippy,rustfmt
+rustup toolchain install nightly-2026-02-01 --profile minimal --component rust-src
+cargo +nightly-2026-02-01 fetch --locked \
+  --manifest-path tools/qwen-vector-kernels/Cargo.toml \
+  -Z build-std=core -Z build-std-features=compiler-builtins-mem \
+  --target nvptx64-nvidia-cuda
 python3 tools/inference/test-cutile-kernels.py
 ```
 
@@ -21,19 +27,28 @@ The script downloads checksum-pinned NVIDIA compiler packages into `target/nvidi
 It runs linker tests, Clippy, full compilation, and SASS audits without a GPU.
 Run `python3 tools/nvidia/prepare-kernels.py` to rebuild only the device bundle.
 An existing CUDA 13.4 toolkit can be supplied with `--toolkit`.
+Use `--qwen-target /path/to/existing/nvptx-build-cache` to reuse a Qwen build cache.
+The default cache is `target/qwen-vector-build`.
+The fetch step prepares the pinned standard-library dependencies for the offline Rust build.
 
-The output directory contains three binary families:
+The output directory contains four module families:
 
 | Family | Contents |
 | --- | --- |
 | `vector-add` | Native boot arithmetic check |
 | `tensor-matmul` | FP16 and BF16 Tensor Core boot checks |
 | `inference` | All 59 public kernel families, operation specializations, and timing and scratch diagnostics |
+| `qwen-vector` | Q3_K and Q4_K three-component DP4A decode projections |
 
-Each family includes textual IR, binary Tile IR, and entry metadata.
+The first three families include textual IR, binary Tile IR, and entry metadata.
+The Qwen family contains portable PTX and entry metadata.
 The manifest records input hashes and the guest compilation requirement.
-With `--audit`, host assembly and disassembly stay under `host-audit/`.
+The Qwen module always passes host assembly and instruction qualification.
+With `--audit`, the three Tile IR families also receive host assembly and instruction checks.
+Host cubins and disassembly stay under `host-audit/`.
 Those machine-code files never enter the guest boot image.
+Use `--core-only` to export only the three Tile IR families.
+That bundle cannot execute the Q3_K or Q4_K component projection routes.
 Compilation does not establish GPU execution or numerical correctness.
 Follow [the VFIO guide](../../docs/nvidia-vfio.howto.md) for hardware checks.
 

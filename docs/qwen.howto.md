@@ -431,12 +431,26 @@ The optional Q3_K and Q4_K routes use three signed-byte activation residuals and
 They retain the original packed weight layout and FP32 output accumulation.
 The default projection choices remain unchanged.
 
-The route needs the optional `qwen-vector` PTX module and a matching Native image.
+The route needs the `qwen-vector` PTX module and a matching Native image.
+Normal `prepare-kernels.py` output now includes that module.
 The existing three Tile IR modules remain intact.
-The optional module uses the same source, compiler, runtime, and output qualification checks.
+The Qwen module uses the same source, compiler, runtime, and output qualification checks.
 An absent module produces an error. It does not select another implementation.
 
-Build the optional module from an existing audited three-family bundle:
+Prepare the normal audited bundle with a reusable Qwen build cache:
+
+```sh
+rustup toolchain install nightly-2026-02-01 --profile minimal --component rust-src
+cargo +nightly-2026-02-01 fetch --locked \
+  --manifest-path tools/qwen-vector-kernels/Cargo.toml \
+  -Z build-std=core -Z build-std-features=compiler-builtins-mem \
+  --target nvptx64-nvidia-cuda
+python3 -B tools/nvidia/prepare-kernels.py --audit \
+  --qwen-target /path/to/existing/nvptx-build-cache
+```
+
+`--core-only` omits the Qwen module when only Tile IR output is required.
+To extend an existing audited three-family bundle without rebuilding those families, use:
 
 ```sh
 export CARGO_TARGET_DIR=/path/to/existing/nvptx-build-cache
@@ -485,7 +499,7 @@ let model = model
 ```
 
 Selection changes metadata and shares existing packed weight storage.
-Unsupported backends reject the selection. A missing optional module fails when dispatch starts.
+Unsupported backends reject the selection. A missing Qwen module fails when dispatch starts.
 
 Both component stages passed their predeclared full-model comparisons.
 The [performance record](nvidia-performance.md#q4_k-native-integration-and-model-result) gives the separate controls, timing scope, and remaining Linux gap.
