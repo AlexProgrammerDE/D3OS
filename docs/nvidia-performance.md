@@ -4114,3 +4114,46 @@ Cold-storage matching, broader prefill shapes, the remaining decode gap, and ful
 
 Contracts, preserved failures, complete samples, source/image bindings, verified cache deltas, and captures remain under `~/.cache/d3os/qwen-q3-warp-mma-v1/`.
 An unintended formatter expansion was removed before the final build. Its before/after canonical comparison is retained.
+
+## Further Q3 decode checks
+
+The accepted matrix kernel is also tested with one valid row, against the current DP4A decoder.
+Its existing binary, raw weights, packer, and independent references are reused without recompilation.
+All 140,708 reference comparisons pass across nine output-size boundaries.
+The four exact packing checks, poison patterns, guards, and immutable inputs also pass.
+
+A separate candidate combines all three unscaled residual dots in I32 before FP32 conversion.
+The full signed-byte bound is 67,637,248, so the radix sum cannot overflow I32.
+Subgroup scaling then uses FP32 rather than an overflowing scaled integer product.
+This changes rounding and reduces compensated accumulation work.
+The original numerical tolerances remain unchanged.
+
+| Separate paired captures, rotating weights, including packing | Its accepted baseline | Candidate | Fixed 5% requirement |
+| --- | ---: | ---: | --- |
+| Existing M16 kernel with one valid row | 113.2067 microseconds | 348.3661 microseconds | Fail, 207.73% increase |
+| Unscaled I32 triplet fold | 131.7771 microseconds | 131.2754 microseconds | Fail, 0.38% reduction |
+
+Each row has its own same-capture baseline. The different baselines do not establish a trend between captures.
+The fold passes 175,524 reference comparisons and 105,170 bit-exact staged CPU comparisons.
+Its original packing and physical checks pass.
+Both candidates retain all three residuals, and neither is integrated into decode.
+No replacement captures or additional samples are taken.
+
+The fold retains 40 registers and six signed-dot instructions, without spills.
+Its static FP32 instruction inventory falls from 17 to nine additions and nine to four multiplications.
+All 11 halfword weight-load instructions remain.
+These static counts do not isolate the runtime bottleneck.
+The result motivates a separate load-layout experiment rather than another arithmetic-only variation.
+
+The next CPU preparation pads each 110-byte Q3 block to 112 bytes for aligned load pairs.
+It preserves every original byte, scale bit, and subgroup field.
+All 22,282,240 planned load pairs match the original fixture.
+The fixture grows from 38,297,600 to 38,993,920 bytes, an increase of 1.82%.
+The private source retains the original dot, residual scaling, compensated accumulation, and reduction body.
+Its new alignment requirement is eight bytes.
+Compilation, GPU speed, model accuracy, residency, and load-time costs remain unqualified.
+
+The complete captures and contracts remain under `~/.cache/d3os/qwen-q3-warp-decode-v1/` and `~/.cache/d3os/qwen-q3-i32-triplet-v1/`.
+The latter also preserves an initial CPU allocation failure under a 512 MiB address-space cap and its corrected 1 GiB run.
+The verified layout and private source remain under `~/.cache/d3os/qwen-q3-padded112-v1/`.
+The accepted 7.52% prefill improvement and the measured 19.7097-token/s decode result remain unchanged.
