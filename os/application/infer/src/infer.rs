@@ -110,15 +110,23 @@ fn run() -> Result<(), String> {
         }
         Some("gpu-kernel-bench") if args.len() == 1 => benchmark::kernels(&Nvidia::new().map_err(|error| format!("{error}"))?)?,
         Some("gpu-alexnet-bench") if args.len() == 1 => benchmark::alexnet(&Nvidia::new().map_err(|error| format!("{error}"))?)?,
-        Some("gpu-qwen-bench")
-            if args.len() <= 3 && args[1..].iter().all(|arg| arg == "long" || arg == "device-timing") && (args.len() != 3 || args[1] != args[2]) =>
-        {
+        Some("gpu-qwen-bench") => {
+            let mut long = false;
+            let mut device_timing = false;
+            let mut firmware_model = false;
+            for argument in &args[1..] {
+                match argument.as_str() {
+                    "long" if !long => long = true,
+                    "device-timing" if !device_timing => device_timing = true,
+                    "firmware-model" if !firmware_model => firmware_model = true,
+                    _ => return Err(String::from("usage: infer gpu-qwen-bench [long] [device-timing] [firmware-model]")),
+                }
+            }
             let backend = Nvidia::new().map_err(|error| format!("{error}"))?;
-            let device_timing = args[1..].iter().any(|arg| arg == "device-timing");
-            if args[1..].iter().any(|arg| arg == "long") {
-                benchmark::qwen::<4096>(&backend, device_timing)?;
+            if long {
+                benchmark::qwen::<4096>(&backend, device_timing, firmware_model)?;
             } else {
-                benchmark::qwen::<64>(&backend, device_timing)?;
+                benchmark::qwen::<64>(&backend, device_timing, firmware_model)?;
             }
         }
         Some("gpu-alexnet") if args.len() == 1 || args.len() == 3 => {
@@ -173,7 +181,7 @@ fn run() -> Result<(), String> {
         }
         _ => {
             return Err(String::from(
-                "usage: infer self-test | burn-self-test | gpu-mnist-train | gpu-mnist-infer | gpu-mnist-bench | gpu-mnist-profile | fwcfg-self-test | gpu-self-test | gpu-kernel-bench | alexnet [MODEL FIXTURE] | gpu-alexnet [MODEL FIXTURE] | gpu-alexnet-bench | qwen [MAX_TOKENS PROMPT...] | qwen-verify | gpu-qwen [MAX_TOKENS PROMPT...] | gpu-qwen-verify | gpu-qwen-bench [long] [device-timing] | gpu-qwen-gguf [MAX_TOKENS PROMPT...] | gpu-qwen-gguf-bench [device-timing] [q8-prefill|q8-attention-prefill] | gpu-qwen-gguf-verify",
+                "usage: infer self-test | burn-self-test | gpu-mnist-train | gpu-mnist-infer | gpu-mnist-bench | gpu-mnist-profile | fwcfg-self-test | gpu-self-test | gpu-kernel-bench | alexnet [MODEL FIXTURE] | gpu-alexnet [MODEL FIXTURE] | gpu-alexnet-bench | qwen [MAX_TOKENS PROMPT...] | qwen-verify | gpu-qwen [MAX_TOKENS PROMPT...] | gpu-qwen-verify | gpu-qwen-bench [long] [device-timing] [firmware-model] | gpu-qwen-gguf [MAX_TOKENS PROMPT...] | gpu-qwen-gguf-bench [device-timing] [q8-prefill|q8-attention-prefill] | gpu-qwen-gguf-verify",
             ));
         }
     }

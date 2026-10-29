@@ -2944,4 +2944,57 @@ Compiler-wrapper, type-inference, and preparation failures remain preserved with
 
 Finalization reused all four validated captures and matching host checks without another test or build.
 The default kernel bundle is not promoted by this checkpoint.
-Broader prompt quality, the latest 0.8B comparison, DOOM, and full-backend acceptance remain open.
+Broader prompt quality, DOOM, and full-backend acceptance remain open.
+
+## Current 0.8B comparison with firmware model transport
+
+The current BF16 0.8B comparison uses the existing 22-token prompt and 64 decode inputs.
+Both guests retain four virtual CPUs, host affinity `8,10,12,14`, 12 GiB RAM, FP32 state, and a 256-token context.
+Linux uses the pinned llama.cpp `b11827` libraries, full GPU offload, batch 32, and automatic Flash Attention.
+The weight audit passes all 320 text tensors and 19 model settings.
+All six Linux selection traces match all 64 Native choices, with checksum `11137929795425568356`.
+
+| Warm measurement | Native | Linux, new context | Linux, reset context |
+| --- | ---: | ---: | ---: |
+| Decode throughput | 258.596 tokens/s | 261.329 tokens/s | 260.580 tokens/s |
+| Prompt processing | 10.000 ms | 6.783 ms | 6.5025 ms |
+
+Native warm decode samples are 260.163 and 257.028 tokens/s.
+Linux new-context samples are 261.262 and 261.395 tokens/s.
+Native reaches about 99.0% of Linux throughput in this checkpoint.
+One capture per operating system does not establish a confidence interval or a speedup from the transport change.
+Prompt processing remains the larger gap, with Native about 47% slower in this short workload.
+Native millisecond timing also limits the precision of this prompt comparison.
+
+The normal initrd attempt fails before kernel entry because towboot cannot allocate its 1,936,281,600-byte module below 4 GiB.
+The launcher now supports `--qwen-firmware-model` for `gpu-qwen-bench`.
+This option exposes the original archive through the existing read-only firmware filesystem and keeps the tokenizer and references in the initrd.
+The initrd shrinks to 431,482,880 bytes.
+The default initrd transport remains available, and the benchmark reports its actual model transport and byte count.
+
+```bash
+taskset -c 8,10,12,14 python3 tools/nvidia/run-qemu.py \
+  --directory /path/to/new-capture \
+  --firmware target/nvidia/firmware --kernels /path/to/qualified-kernels \
+  --kernel-image /path/to/kernel.elf --application-binaries /path/to/applications \
+  --inference gpu-qwen-bench --qwen-firmware-model \
+  --memory-mib 12288 --boot-check --pin-vcpus --precompiled-kernels
+```
+
+The new capture passes all 105 tokenizer cases, 29 reference positions, 24 layers, batched execution, and final cache comparisons.
+It retains zero host activation transfers and excludes the first session from warm results.
+The model bytes, mathematical operations, and correctness tolerances remain unchanged.
+The Native firmware read takes 1034 ms, followed by 1066 ms of model import.
+Linux reports 5660.114 ms of file access and 904.903 ms of model load through its existing 9p transport.
+These file timings use different transports and do not establish a cold-storage advantage.
+
+Cache checks reused the current kernel, qualified 276-entry GPU bundle, model fixtures, and unchanged numerical test evidence.
+Only the inference application required compilation for the new transport option.
+Strict application Clippy, Python lint, formatting, and four invalid-option controls pass.
+Four pre-existing application lint warnings were corrected without changing their test oracles.
+The failed boot, initial lint failure, interrupted build, and memory preflight remain recorded separately from passing results.
+Idle build artifacts remain available in a hash-verified compressed archive.
+
+Prompt-processing kernels are the next optimization priority.
+The separate 9B checkpoint remains 53.793 versus 58.354 tokens/s, with its original precision qualification unchanged.
+Broader prompts, sustained comparisons, 27B, DOOM, and full-backend performance acceptance remain open.

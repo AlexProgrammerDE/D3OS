@@ -377,15 +377,24 @@ impl Drop for DeviceTiming<'_> {
     }
 }
 
-pub(super) fn qwen<const DECODE: usize>(backend: &Nvidia, device_timing: bool) -> Result<(), String> {
+pub(super) fn qwen<const DECODE: usize>(backend: &Nvidia, device_timing: bool, firmware_model: bool) -> Result<(), String> {
     let start = now();
     let tokenizer = read_file("/usr/share/inference/qwen3.5.bpe")?;
     let tokenizer = Tokenizer::parse(&tokenizer).map_err(|error| format!("{error}"))?;
     let prompt = tokenizer
         .encode_chat(include_str!("../../../../tools/inference/qwen-benchmark.prompt"))
         .map_err(|error| format!("{error}"))?;
-    let weights = read_file("/usr/share/inference/qwen3.5-0.8b.d3t")?;
+    let weights = read_file(if firmware_model {
+        "/fwcfg/qwen3.5-0.8b.d3t"
+    } else {
+        "/usr/share/inference/qwen3.5-0.8b.d3t"
+    })?;
     let file_ms = now() - start;
+    report(format_args!(
+        "INFERENCE_BENCH_ASSETS qwen model_source={} model_bytes={}",
+        if firmware_model { "fwcfg" } else { "initrd" },
+        weights.len()
+    ));
     let load_profile = backend.service_profile().map_err(|error| format!("{error}"))?;
     let start = now();
     let load_cycles = unsafe { core::arch::x86_64::_rdtsc() };

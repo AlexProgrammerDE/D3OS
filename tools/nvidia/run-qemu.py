@@ -203,6 +203,11 @@ def main():
         action="store_true",
         help="generate 4096 tokens per Qwen benchmark run with a 4352-token cache",
     )
+    parser.add_argument(
+        "--qwen-firmware-model",
+        action="store_true",
+        help="stream the 0.8B benchmark model through firmware instead of the boot initrd",
+    )
     parser.add_argument("--cpus", type=int, default=4)
     parser.add_argument(
         "--fwcfg-file",
@@ -263,6 +268,17 @@ def main():
             "--application-binaries requires --firmware and infer, shell, terminal_emulator"
         )
     firmware_files = {}
+    if args.qwen_firmware_model:
+        if args.inference != "gpu-qwen-bench" or not args.firmware:
+            parser.error(
+                "--qwen-firmware-model requires --firmware and --inference gpu-qwen-bench"
+            )
+        model = ROOT / "target/qwen/qwen3.5-0.8b.d3t"
+        if not model.is_file() or not 0 < model.stat().st_size <= 0xFFFFFFFF:
+            parser.error(
+                "the firmware benchmark model must exist and fit in a firmware file"
+            )
+        firmware_files[model.name] = model
     if args.qwen_gguf_parts:
         if not args.inference.startswith("gpu-qwen-gguf"):
             parser.error("--qwen-gguf-parts requires a GGUF inference workload")
@@ -412,6 +428,11 @@ def main():
                     ),
                 ]
             )
+        if args.qwen_firmware_model:
+            for name in ("qwen3.5.bpe", "qwen-fixture.d3t", "tokenizer-fixture.bin"):
+                assets.append(
+                    (ROOT / "target/qwen" / name, Path("usr/share/inference") / name)
+                )
         for source, _ in assets:
             if not source.is_file():
                 parser.error(f"firmware file does not exist: {source}")
@@ -426,7 +447,7 @@ def main():
                         Path("usr/share/inference/qwen3.5.bpe"),
                     )
                 )
-            elif args.inference.startswith("gpu-qwen"):
+            elif args.inference.startswith("gpu-qwen") and not args.qwen_firmware_model:
                 mode = "qwen"
             elif args.inference.startswith("gpu-alexnet"):
                 mode = "alexnet"
@@ -617,6 +638,7 @@ def main():
                                 else ""
                             )
                             + (" long" if args.qwen_long_bench else "")
+                            + (" firmware-model" if args.qwen_firmware_model else "")
                         )
                     started = True
                 if (

@@ -69,7 +69,7 @@ fn selection(backend: &Nvidia) -> Result<(), String> {
                 .with_commands(|| data.select_update(2, &indices, &values, update_op))
                 .map_err(|e| format!("{e}"))?;
             super::dispatch::resident(backend, &before, 1)?;
-            let mut row = vec![word(3); 5];
+            let mut row = [word(3); 5];
             for id in [4, 1, 4, 0] {
                 row[id] = update(row[id], word(2), mode);
             }
@@ -89,7 +89,7 @@ fn selection(backend: &Nvidia) -> Result<(), String> {
             let before = backend.queue_profile().map_err(|e| format!("{e}"))?;
             let output = data.select_update(2, &empty, &no_values, update_op).map_err(|e| format!("{e}"))?;
             if backend.queue_profile().map_err(|e| format!("{e}"))?.launches != before.launches
-                || output.read().map_err(|e| format!("{e}"))?.as_bytes() != vec![word(3); 30].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>()
+                || output.read().map_err(|e| format!("{e}"))?.as_bytes() != [word(3); 30].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>()
             {
                 return Err(String::from("empty vector selection changed data or launched work"));
             }

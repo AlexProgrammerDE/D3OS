@@ -441,7 +441,7 @@ fn witnesses(dtype: DType, op: Elementwise) -> Vec<(u64, u64)> {
         }
     }
     // Every fixed case has an odd output count, exercising half-tail ownership.
-    if cases.len() % 2 == 0 {
+    if cases.len().is_multiple_of(2) {
         cases.push((0, 0));
     }
     cases

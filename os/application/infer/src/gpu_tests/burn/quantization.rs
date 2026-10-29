@@ -1,7 +1,7 @@
 //! Public Burn quantization, independently packed references, and guarded I/O.
 use alloc::{format, string::String, vec, vec::Vec};
 use d3os_ai::burn::{
-    backend::{DType, TensorData},
+    backend::TensorData,
     tensor::{
         Device, Tensor,
         quantization::{QuantScheme, QuantStore, QuantValue, QuantizationParameters, ScaleDtype},
