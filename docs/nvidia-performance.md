@@ -3262,6 +3262,43 @@ The private GPU bundle remains separate from the root default bundle.
 Evidence and the frozen measurement contract remain under
 `~/.cache/d3os/qwen-q8-paired-rows-probe-v1/production-work/`.
 
+### Unretained adaptive tail grouping
+
+A follow-up probe shares Q8 weight loads across three or four FP32 rows.
+The measured selector uses two rows for batch size two, three rows for sizes three and five through seven, and four otherwise.
+Only the four existing 9B tail geometries qualify.
+Each row preserves its FMA sequence and reduction order.
+
+The standalone captures pass 1,034,464 independent reference values and 9,647,424 exact comparisons against the accepted pair kernel.
+The combined 279-entry module preserves all 277 previous inference code sections.
+Both new kernel bodies match their GPU-checked standalone prototypes byte for byte.
+SDK tests, strict SDK/exporter Clippy, and Math provenance checks pass.
+Unchanged AI tests and Math mutation tests reuse their matching evidence.
+
+A fresh control, candidate, candidate-repeat, control-repeat comparison uses the same model, inputs, accuracy gate, and GPU settings.
+The control reuses the accepted paired-row image and compiled bundle.
+
+| Ordinary warm measurement | Paired-row control | Adaptive grouping |
+| --- | ---: | ---: |
+| First VM prefill mean | 103.5 ms | 104.0 ms |
+| Second VM prefill mean | 107.0 ms | 100.0 ms |
+| Combined prefill mean | 105.25 ms | 102.0 ms |
+| Combined decode mean | 54.066 tokens/s | 54.026 tokens/s |
+
+The candidate average is 3.25 ms lower, but the VM means overlap.
+The recorded retention rule requires every candidate mean to beat every control mean, plus at least 2 ms combined improvement.
+The candidate fails that rule and remains unretained.
+The accepted two-row implementation remains unchanged.
+No additional timing repeats were performed to seek a passing result.
+
+All four captures pass the original 32,033,280-value accuracy gate with identical error statistics.
+All 16 token traces match, including the existing selection difference at row 102.
+The candidate records the expected 184 triple-row prefill calls and unchanged decode routes.
+
+Cached artifacts, source snapshots, the frozen criterion, and complete captures remain under
+`~/.cache/d3os/qwen-q8-four-rows-probe-v1/production-work/`.
+This result does not establish a speedup, broader prompt coverage, or whole-model parity.
+
 ### Rejected whole-prompt batching
 
 A separate probe compares the existing 32+5 split with one 37-row component projection.
