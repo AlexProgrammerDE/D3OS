@@ -2998,3 +2998,47 @@ Idle build artifacts remain available in a hash-verified compressed archive.
 Prompt-processing kernels are the next optimization priority.
 The separate 9B checkpoint remains 53.793 versus 58.354 tokens/s, with its original precision qualification unchanged.
 Broader prompts, sustained comparisons, 27B, DOOM, and full-backend performance acceptance remain open.
+
+## Rejected padded16 Q8 prefill experiment
+
+The October 29 experiment padded short activation batches to 16 physical rows for an accurate three-component Q8 projection.
+The selector covered only Q8 column layouts, 5 through 16 logical rows, 4096 inputs, and 8192 or 12288 outputs.
+Other projections and decode retained their existing routes.
+
+Standalone rotating-weight measurements improved the selected five-row projections by about 15% to 20%.
+The combined module preserved all 276 existing inference text sections and added two entries.
+Their executable text and parameter constants matched the completed GPU prototypes byte-for-byte.
+The matching Native run passed all 32,033,280 original FP32 reference values and the exact dispatch ledger.
+All 302 SDK/Native host tests, strict Clippy, and two fresh Math provenance tests also passed.
+
+The full-model warm prefill samples were 118 and 105 ms, averaging 111.5 ms.
+The retained accepted baseline averaged 112.25 ms across four warm samples.
+This result did not meet the 2 ms improvement criterion recorded before candidate timing review.
+The candidate therefore remains rejected, and the accepted source was restored byte-for-byte.
+The unchanged decode implementation provides no basis for attributing its observed timing variation to this experiment.
+No kernel bundle or performance default changed.
+
+The closed experiment, candidate source, exact identities, and completed capture remain under
+`~/.cache/d3os/qwen-q8-components-pad16-probe-v1/production-work/`.
+Its `checkpoint-report.json` records the rejection and hashes the evidence.
+Matching future work can reuse this result without another compilation or GPU run.
+
+## Cache checks before tests
+
+Before each test, use this procedure:
+
+1. Find completed evidence for the same behavior and test scope.
+2. Match the relevant source, dependency, toolchain, artifact, and input identities.
+3. For GPU benchmarks, also match the model, precision, prompt, context, batch, driver, hardware, and timing settings.
+4. If the identities match, reuse the completed result and record its evidence path.
+5. If an identity changes, record the reason and run only the affected checks.
+
+An intentional performance repeat contributes a new timing sample.
+Its record states that purpose separately from correctness validation.
+A validator repair can reuse the existing capture.
+A timeout or partial observation alone does not justify another VM launch.
+
+The padded16 experiment reused both GPU prototype captures, unchanged AI tests, the Math mutation suite, and the Linux baseline.
+The new SDK geometry, Native integration, provenance, and model route required fresh checks.
+Idle Cargo targets remain reusable through hash-verified compressed archives.
+The combined GPU exporter still processes unchanged entries for a changed bundle, so its compilation cache remains less complete than its test cache.
