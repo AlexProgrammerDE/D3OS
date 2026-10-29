@@ -67,14 +67,17 @@ mod tests {
         let format = MatrixFormat::Quantized(Quantization::Q4K);
         let bytes = alloc::vec![0; format.byte_len(shape).unwrap()];
         let mut matrix = PackedMatrix::from_bytes(shape, format, &bytes, &device).unwrap();
-        assert!(matrix.set_q4_vector_kernel(crate::qwen::Q4VectorKernel::Narrow).is_err());
-        assert_eq!(matrix.q4_vector_kernel, crate::qwen::Q4VectorKernel::Default);
         let input = Tensor::<2>::ones([1, 256], &device);
         let expected = matrix.project(input.clone()).unwrap().try_into_vec_as::<f32>().unwrap();
-        matrix.q4_vector_kernel = crate::qwen::Q4VectorKernel::Narrow;
-        let moved = matrix.clone().to_device(&device);
-        assert_eq!(moved.q4_vector_kernel, crate::qwen::Q4VectorKernel::Narrow);
-        assert!(moved.project(input.clone()).is_err());
+        for kernel in [crate::qwen::Q4VectorKernel::Narrow, crate::qwen::Q4VectorKernel::Components] {
+            assert!(matrix.set_q4_vector_kernel(kernel).is_err());
+            assert_eq!(matrix.q4_vector_kernel, crate::qwen::Q4VectorKernel::Default);
+            matrix.q4_vector_kernel = kernel;
+            let moved = matrix.clone().to_device(&device);
+            assert_eq!(moved.q4_vector_kernel, kernel);
+            assert!(moved.project(input.clone()).is_err());
+            matrix.q4_vector_kernel = crate::qwen::Q4VectorKernel::Default;
+        }
         matrix.q4_vector_kernel = crate::qwen::Q4VectorKernel::Default;
         assert_eq!(matrix.project(input).unwrap().try_into_vec_as::<f32>().unwrap(), expected);
     }

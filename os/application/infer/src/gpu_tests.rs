@@ -1,6 +1,7 @@
 //! Hardware conformance checks, invoked only by the explicit GPU test command.
 use alloc::{format, string::String, vec, vec::Vec};
 use d3os_compute::{Backend, Conv2d, Pool2d, Tensor, cpu::Cpu, nvidia::Nvidia};
+use d3os_tensor_file::quantized::Quantization;
 
 mod bf16;
 mod burn;
@@ -79,7 +80,11 @@ fn verify_syscall_direction_flag(backend: &Nvidia) -> Result<(), d3os_compute::E
 }
 
 pub(super) fn q3_components(backend: &Nvidia) -> Result<(), String> {
-    quantized::components(backend)
+    quantized::components(backend, Quantization::Q3K)
+}
+
+pub(super) fn q4_components(backend: &Nvidia) -> Result<(), String> {
+    quantized::components(backend, Quantization::Q4K)
 }
 
 pub(super) fn run(backend: &Nvidia) -> Result<(), String> {

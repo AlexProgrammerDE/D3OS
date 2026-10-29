@@ -504,38 +504,40 @@ fn weight_reordering_checks_complete_blocks_and_rejects_aliases() {
 }
 
 #[test]
-fn q3_components_bound_scratch_packed_words_grid_and_aliases() {
-    for inner in [256u32, 512, 5120, 17408] {
-        for columns in [1u32, 3, 4, 31, 32, 33, 17408] {
-            let packet = [1, inner, columns, 11, 1, 3];
-            let work = Kernel::ProjectQuantized.work(&packet).unwrap();
-            assert_eq!(
-                &work.extents[..3],
-                &[
-                    u64::from(inner) * 3 / 4 + u64::from(inner) / 32,
-                    (u64::from(inner / 256) * u64::from(columns) * 110).div_ceil(4),
-                    u64::from(columns),
-                ]
-            );
-            assert_eq!((work.blocks, work.threads, work.pointers, work.output), (columns.div_ceil(4), 128, 3, 2));
-            work.validate_aliases(&[0x100000, 0x10000000, 0x40000000]).unwrap();
-            for output in [0x100000, 0x100004, 0x10000000] {
-                assert!(work.validate_aliases(&[0x100000, 0x10000000, output]).is_err());
+fn component_vectors_bound_scratch_packed_words_grid_and_aliases() {
+    for (format, block_bytes) in [(11, 110u64), (12, 144)] {
+        for inner in [256u32, 512, 5120, 6144, 17408] {
+            for columns in [1u32, 3, 4, 31, 32, 33, 17408] {
+                let packet = [1, inner, columns, format, 1, 3];
+                let work = Kernel::ProjectQuantized.work(&packet).unwrap();
+                assert_eq!(
+                    &work.extents[..3],
+                    &[
+                        u64::from(inner) * 3 / 4 + u64::from(inner) / 32,
+                        (u64::from(inner / 256) * u64::from(columns) * block_bytes).div_ceil(4),
+                        u64::from(columns),
+                    ]
+                );
+                assert_eq!((work.blocks, work.threads, work.pointers, work.output), (columns.div_ceil(4), 128, 3, 2));
+                work.validate_aliases(&[0x100000, 0x10000000, 0x40000000]).unwrap();
+                for output in [0x100000, 0x100004, 0x10000000] {
+                    assert!(work.validate_aliases(&[0x100000, 0x10000000, output]).is_err());
+                }
+                assert_ne!(Kernel::ProjectQuantized.entry(&packet), Kernel::ProjectQuantized.entry(&packet[..4]));
             }
-            assert_ne!(Kernel::ProjectQuantized.entry(&packet), Kernel::ProjectQuantized.entry(&packet[..4]));
         }
-    }
-    for packet in [
-        [0, 5120, 17408, 11, 1, 3],
-        [2, 5120, 17408, 11, 1, 3],
-        [1, 0, 17408, 11, 1, 3],
-        [1, 5119, 17408, 11, 1, 3],
-        [1, 5120, 0, 11, 1, 3],
-        [1, 5120, 17408, 11, 0, 3],
-        [1, 5120, 17408, 11, 1, 2],
-        [1, 5120, u32::MAX, 11, 1, 3],
-        [1, 1 << 31, 1, 11, 1, 3],
-    ] {
-        assert!(Kernel::ProjectQuantized.work(&packet).is_err());
+        for packet in [
+            [0, 5120, 17408, format, 1, 3],
+            [2, 5120, 17408, format, 1, 3],
+            [1, 0, 17408, format, 1, 3],
+            [1, 5119, 17408, format, 1, 3],
+            [1, 5120, 0, format, 1, 3],
+            [1, 5120, 17408, format, 0, 3],
+            [1, 5120, 17408, format, 1, 2],
+            [1, 5120, u32::MAX, format, 1, 3],
+            [1, 1 << 31, 1, format, 1, 3],
+        ] {
+            assert!(Kernel::ProjectQuantized.work(&packet).is_err());
+        }
     }
 }

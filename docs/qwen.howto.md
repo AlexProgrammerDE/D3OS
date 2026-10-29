@@ -425,11 +425,11 @@ The guest emits `NATIVE_LARGE_QWEN_PAIRED_*` records and the separate `INFERENCE
 The launcher rejects incomplete schedules and mismatched references.
 Ordinary benchmark commands retain their existing schedule and records.
 
-## Experimental three-component Q3_K decode
+## Explicit three-component Q3_K and Q4_K decode
 
-The optional Q3_K route uses three signed-byte activation residuals and DP4A integer dots.
-It retains the original packed weight layout and FP32 output accumulation.
-This route is experimental. The default Q3_K projection remains unchanged.
+The optional Q3_K and Q4_K routes use three signed-byte activation residuals and DP4A integer dots.
+They retain the original packed weight layout and FP32 output accumulation.
+The default projection choices remain unchanged.
 
 The route needs the optional `qwen-vector` PTX module and a matching Native image.
 The existing three Tile IR modules remain intact.
@@ -442,17 +442,19 @@ Build the optional module from an existing audited three-family bundle:
 export CARGO_TARGET_DIR=/path/to/existing/nvptx-build-cache
 python3 -B tools/nvidia/prepare-qwen-vector.py \
   --bundle /path/to/audited-kernel-bundle \
-  --output /path/to/new-q3-kernel-bundle \
+  --output /path/to/new-qwen-kernel-bundle \
   --toolkit target/nvidia/cutile-toolkit/packages/nvidia/cu13
 ```
 
 The compiler uses the crate's pinned Rust nightly and CUDA 13.4.92 host tools.
 The output retains every original module and adds the qualified PTX module.
+The module contains both `q3_components_dp4a` and `q4_components_dp4a`.
 An existing output directory is rejected to preserve previous evidence.
 
 The targeted Native check uses `--inference gpu-q3-components-check` with the new bundle and image.
 It exercises guarded raw dispatch and public Burn projections across nine shapes.
 Its completion record requires 53,022 comparisons, preserved sources, and intact storage guards.
+The Q4 counterpart uses `--inference gpu-q4-components-check` and requires 31,419 comparisons across nine shapes.
 
 For the full 27B experiment, use `--qwen-paired-q3` in place of `--qwen-paired-q4`.
 All other paired benchmark prerequisites and timing boundaries remain unchanged.
@@ -464,8 +466,26 @@ Both configurations must pass all 32,033,280 original logit comparisons with zer
 The tolerances remain `0.002 + 0.0005 * abs(reference)`.
 Every benchmark token sequence must match between configurations.
 Q3 error statistics can differ within these original limits because its activation arithmetic differs.
-The Q4 comparison still requires identical numerical statistics.
+The legacy `--qwen-paired-q4` conversion comparison still requires identical numerical statistics.
 The Q3 parser also binds activation-pack counts to projection counts for every geometry.
 
-A faster isolated operator does not establish a full-model TPS improvement.
-The model experiment remains pending. Existing accepted TPS results remain unchanged.
+To measure the incremental Q4 gain, use `--qwen-paired-q4-components`.
+This comparison fixes Q3 components in both variants and changes Q4 from `Default` to `Components`.
+Both routes retain the original logit tolerances and identical token sequences.
+The parser binds each activation pack to the combined Q3/Q4 projection workload.
+
+For a loaded Native model, select both implementations through the public API:
+
+```rust
+use d3os_ai::qwen::{Q3VectorKernel, Q4VectorKernel};
+
+let model = model
+    .with_q3_vector_kernel(Q3VectorKernel::Components)?
+    .with_q4_vector_kernel(Q4VectorKernel::Components)?;
+```
+
+Selection changes metadata and shares existing packed weight storage.
+Unsupported backends reject the selection. A missing optional module fails when dispatch starts.
+
+Both component stages passed their predeclared full-model comparisons.
+The [performance record](nvidia-performance.md#q4_k-native-integration-and-model-result) gives the separate controls, timing scope, and remaining Linux gap.

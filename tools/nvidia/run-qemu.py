@@ -122,9 +122,10 @@ def validate_module_admission(text, manifest, families, *, precompiled):
     return records
 
 
-def validate_paired_projection(text, *, format_code=12):
-    if format_code not in (11, 12):
+def validate_paired_projection(text, *, format_code=12, components=False):
+    if format_code not in (11, 12) or (components and format_code != 12):
         raise ValueError("paired projection format must be Q3_K or Q4_K")
+    component_mode = format_code == 11 or components
     field = "q3_vector_kernel" if format_code == 11 else "q4_vector_kernel"
 
     def records(marker):
@@ -182,7 +183,7 @@ def validate_paired_projection(text, *, format_code=12):
     ]
     kernels = {
         "Control": "Default",
-        "Candidate": "Components" if format_code == 11 else "Narrow",
+        "Candidate": "Components" if component_mode else "Narrow",
     }
     benches = records("NATIVE_LARGE_QWEN_PAIRED_BENCH")
     resident = records("NATIVE_LARGE_QWEN_PAIRED_RESIDENT_OK")
@@ -198,6 +199,8 @@ def validate_paired_projection(text, *, format_code=12):
             field: kernels[role],
             "sample": f"Some({run - 2})" if 2 <= run < 10 else "None",
         }
+        if components:
+            context["q3_vector_kernel"] = "Components"
         if any(
             row.get(key) != value
             or storage.get(key) != value
@@ -275,6 +278,8 @@ def validate_paired_projection(text, *, format_code=12):
             "inputs": "linux_reference",
             field: kernels[row["variant"]],
         }
+        if components:
+            expected["q3_vector_kernel"] = "Components"
         if any(row.get(key) != value for key, value in expected.items()):
             raise RuntimeError(
                 "paired projection numerical policy or population differs"
@@ -294,7 +299,7 @@ def validate_paired_projection(text, *, format_code=12):
     # full reference tolerances, and all generated tokens remain identical.
     equal_statistics = (
         ["selection_mismatches"]
-        if format_code == 11
+        if component_mode
         else [
             "max_absolute",
             "max_scaled_error",
@@ -319,7 +324,11 @@ def validate_paired_projection(text, *, format_code=12):
         expected_entry = (
             ("q3_components_dp4a" if role == "Candidate" else "vector_project_q3k")
             if format_code == 11
-            else "vector_project_q4k" + ("_narrow" if role == "Candidate" else "")
+            else (
+                "q4_components_dp4a"
+                if components and role == "Candidate"
+                else "vector_project_q4k" + ("_narrow" if role == "Candidate" else "")
+            )
         )
         if not chosen or any(row["entry"] != expected_entry for row in chosen):
             raise RuntimeError(
@@ -334,30 +343,44 @@ def validate_paired_projection(text, *, format_code=12):
             if calls <= 0:
                 raise RuntimeError("paired projection call count is invalid")
             if (
-                format_code == 11
-                and role == "Candidate"
+                (components or (format_code == 11 and role == "Candidate"))
                 and len(params) == 6
                 and params[3:] == [8, 0, 3]
             ):
                 if row["entry"] != "q8_components_pack" or tuple(params[:3]) in packs:
-                    raise RuntimeError("invalid or duplicate Q3 activation pack")
+                    raise RuntimeError("invalid or duplicate component activation pack")
                 packs[tuple(params[:3])] = calls
                 continue
             if row in chosen:
-                suffix = [1, 3] if format_code == 11 else [1]
+                suffix = [1, 3] if component_mode else [1]
                 expected = params[:4] + (suffix if role == "Candidate" else [])
                 if params != expected:
                     raise RuntimeError(
                         "paired projection executed an invalid selector packet"
                     )
-                if format_code == 11 and role == "Candidate":
-                    expected_packs[tuple(params[:3])] = calls
+            if (
+                components
+                and params[3] == 11
+                and (row["entry"] != "q3_components_dp4a" or params[4:] != [1, 3])
+            ):
+                raise RuntimeError(
+                    "Q4 component experiment changed its Q3 control route"
+                )
+            if (components and params[3] == 11) or (
+                component_mode and role == "Candidate" and row in chosen
+            ):
+                key = tuple(params[:3])
+                expected_packs[key] = expected_packs.get(key, 0) + calls
             key = tuple(params[:4])
             if key in ledger:
                 raise RuntimeError("paired projection ledger is invalid")
             ledger[key] = calls
-        if format_code == 11 and role == "Candidate" and packs != expected_packs:
-            raise RuntimeError("Q3 activation pack and projection populations differ")
+        if (
+            components or (format_code == 11 and role == "Candidate")
+        ) and packs != expected_packs:
+            raise RuntimeError(
+                "component activation pack and projection populations differ"
+            )
         if sum(ledger.values()) != 51328:
             raise RuntimeError("paired projection projection count differs")
         ledgers.append(ledger)
@@ -424,6 +447,7 @@ def main():
             "gpu-qwen",
             "gpu-qwen-verify",
             "gpu-q3-components-check",
+            "gpu-q4-components-check",
             "gpu-qwen-bench",
             "gpu-qwen-gguf",
             "gpu-qwen-gguf-bench",
@@ -460,6 +484,11 @@ def main():
         "--qwen-paired-q4",
         action="store_true",
         help="compare accurate Q4 vector implementations with shared weights; requires --qwen-device-timing",
+    )
+    parser.add_argument(
+        "--qwen-paired-q4-components",
+        action="store_true",
+        help="compare Q4 components with Q3 components fixed in both variants; requires --qwen-device-timing",
     )
     parser.add_argument(
         "--qwen-paired-q3",
@@ -619,9 +648,14 @@ def main():
         )
     if args.qwen_prefill_q8 and args.qwen_prefill_q8_attention:
         parser.error("select one Qwen prefill quantization mode")
-    if args.qwen_paired_q4 and args.qwen_paired_q3:
+    if (
+        sum([args.qwen_paired_q4, args.qwen_paired_q3, args.qwen_paired_q4_components])
+        > 1
+    ):
         parser.error("select one paired Qwen projection experiment")
-    if (args.qwen_paired_q4 or args.qwen_paired_q3) and (
+    if (
+        args.qwen_paired_q4 or args.qwen_paired_q3 or args.qwen_paired_q4_components
+    ) and (
         args.inference != "gpu-qwen-gguf-bench"
         or not args.qwen_device_timing
         or args.qwen_prefill_q8
@@ -919,6 +953,8 @@ def main():
                             + (
                                 " paired-q4"
                                 if args.qwen_paired_q4
+                                else " paired-q4-components"
+                                if args.qwen_paired_q4_components
                                 else " paired-q3"
                                 if args.qwen_paired_q3
                                 else ""
@@ -951,6 +987,7 @@ def main():
                     "gpu-mnist-profile": "INFERENCE_OK mnist mode=profile os=d3os backend=nvidia",
                     "gpu-self-test": "INFERENCE_OK self-test backend=nvidia",
                     "gpu-q3-components-check": "INFERENCE_OK q3-components backend=nvidia cases=9 guards=ok public=ok",
+                    "gpu-q4-components-check": "INFERENCE_OK q4-components backend=nvidia cases=9 guards=ok public=ok",
                     "gpu-kernel-bench": "INFERENCE_BENCH_OK kernels backend=nvidia",
                     "gpu-alexnet": "INFERENCE_OK alexnet backend=nvidia layers=8",
                     "gpu-alexnet-bench": "INFERENCE_BENCH_OK alexnet backend=nvidia reference_layers=8",
@@ -964,12 +1001,22 @@ def main():
                     "gpu-doom-verify": "NVIDIA_DOOM_FRAME_OK frame=600",
                     "gpu-doom-bench": "NVIDIA_DOOM_PROFILE_DONE",
                 }[args.inference]
-                if args.qwen_paired_q4 or args.qwen_paired_q3:
+                if (
+                    args.qwen_paired_q4
+                    or args.qwen_paired_q3
+                    or args.qwen_paired_q4_components
+                ):
                     expected = "INFERENCE_BENCH_PAIR_OK qwen-gguf backend=nvidia framework=burn os=d3os variants=2 reference_values_per_variant=32033280"
                 if expected in text:
-                    if args.qwen_paired_q4 or args.qwen_paired_q3:
+                    if (
+                        args.qwen_paired_q4
+                        or args.qwen_paired_q3
+                        or args.qwen_paired_q4_components
+                    ):
                         validate_paired_projection(
-                            text, format_code=11 if args.qwen_paired_q3 else 12
+                            text,
+                            format_code=11 if args.qwen_paired_q3 else 12,
+                            components=args.qwen_paired_q4_components,
                         )
                     if args.inference == "gpu-doom-bench":
                         result = re.search(

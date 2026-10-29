@@ -35,12 +35,13 @@ pub enum PrefillQuantization {
     Q8_1WithAttention,
 }
 
-/// Select a Q4_K vector implementation without changing its numerical policy.
+/// Select a Q4_K vector implementation with the original output tolerances.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Q4VectorKernel {
     #[default]
     Default,
     Narrow,
+    Components,
 }
 
 impl Q4VectorKernel {
@@ -56,6 +57,7 @@ impl Q4VectorKernel {
         match self {
             Self::Default => d3os_burn_native::backend::Q4VectorKernel::Default,
             Self::Narrow => d3os_burn_native::backend::Q4VectorKernel::Narrow,
+            Self::Components => d3os_burn_native::backend::Q4VectorKernel::Components,
         }
     }
 }

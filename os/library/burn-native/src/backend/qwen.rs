@@ -26,6 +26,7 @@ pub enum Q4VectorKernel {
     #[default]
     Default,
     Narrow,
+    Components,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -149,13 +150,18 @@ fn projection(
             &[1, width, outputs, 12, 1],
         );
     }
-    if batch == 1 && format == MatrixFormat::Quantized(Quantization::Q3K) && options.q3_vector == Q3VectorKernel::Components {
+    let vector_components = match format {
+        MatrixFormat::Quantized(Quantization::Q3K) if options.q3_vector == Q3VectorKernel::Components => Some(11),
+        MatrixFormat::Quantized(Quantization::Q4K) if options.q4_vector == Q4VectorKernel::Components => Some(12),
+        _ => None,
+    };
+    if let (1, Some(code)) = (batch, vector_components) {
         let activations = prepare_activations(&input, outputs, 3)?;
         return output(
             [1, outputs],
             Kernel::ProjectQuantized,
             &[(&activations, 0), (&packed, 0)],
-            &[1, width, outputs, 11, 1, 3],
+            &[1, width, outputs, code, 1, 3],
         );
     }
     if let Some(components) = components {

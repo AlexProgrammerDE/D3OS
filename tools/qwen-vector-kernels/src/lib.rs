@@ -132,3 +132,5 @@ pub unsafe extern "ptx-kernel" fn q3_components_dp4a(
         unsafe { output.add(col as usize).write(sum) };
     }
 }
+
+mod q4;

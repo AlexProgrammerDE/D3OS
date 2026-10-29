@@ -3680,3 +3680,50 @@ The underlying opcode set and CB4 rules remain unchanged.
 
 This result supports Native integration and a full-model comparison. It does not establish a Q4 model TPS gain or change any default.
 The original compiler attempts, CPU audit, fixed criteria, and complete GPU capture remain under `~/.cache/d3os/qwen-q4-dp4a-components-probe-v1/`.
+
+## Q4_K Native integration and model result
+
+The optional Rust PTX module now contains the measured Q3_K and Q4_K kernels.
+Both machine bodies match their prior GPU-tested versions exactly. The Q4 constant bank also remains byte-exact.
+All three existing Tile IR module files and qualification records remain unchanged.
+
+The SDK validates both six-word selector packets, packed weight extents, activation extents, grid bounds, and disjoint outputs.
+Host checks pass 69 SDK tests, 77 Native tests, six Qwen unit tests, and 12 model tests.
+Strict SDK, Native, AI, and NVPTX Clippy checks pass.
+Parser controls reject 44 legacy Q4 mutations, 37 Q3 mutations, and 39 new Q4 component mutations.
+The current parser also revalidates three completed prior captures without another GPU run.
+
+A matching Native kernel and application image passes 31,419 guarded and public Q4 projection comparisons across nine shapes.
+The guest admits all four expected module hashes, preserves sources and guards, and uses the original operator tolerance.
+The Q3 machine body remains exact, so its previous Native numerical evidence remains reusable.
+
+The full-model experiment fixes Q3 components in both variants and changes only the single-row Q4 route.
+Two predeclared VMs each complete two warmups, eight balanced ordinary passes, two instrumented passes, and both full reference checks.
+Only the 16 ordinary passes contribute to these means.
+
+| Qwen3.6-27B Q3_K_M, matched Native measurement | Q3 components only | Q3 and Q4 components |
+| --- | ---: | ---: |
+| Mean decode time, 128 tokens | 8,233.875 ms | 7,181.375 ms |
+| Decode throughput from mean time | 15.5455 tokens/s | 17.8239 tokens/s |
+| Mean prefill time, 37 tokens | 955.250 ms | 966.250 ms |
+
+The Q4 stage reduces decode time by 12.78% and increases throughput by 14.66%.
+All four balanced blocks improve, with time reductions from 11.47% to 14.51%.
+Prefill time increases by 1.15%, within the predeclared 2% limit.
+
+All 128,133,120 original logit comparisons pass, and all 24 token sequences remain identical.
+Both variants retain the same two greedy differences from the Linux reference.
+Resident weight storage remains shared, with no activation transfers or additional model copies.
+No memory stop, replacement capture, or extra performance sample occurs.
+
+The option passes the predeclared retention criteria. Default projection choices remain unchanged.
+The combined route measures 17.8239 tokens/s, 47.93% below the cached matched llama.cpp result of 34.2330 tokens/s.
+Absolute rates vary between captures. The two stage percentages do not establish a separately measured cumulative TPS gain.
+Cold-load, broader workload, and full performance parity remain open.
+
+The math certificate advances to v36 for the SDK source binding only. Its functions, schedules, resources, and constant rules remain unchanged.
+Both current provenance tests pass and reject the stale v35 binding.
+The preceding v35 repair also passes fresh CI compilation and audit. The v36 current-source CI result remains pending.
+
+Sources, build-cache restoration and verified archival receipts, Native checks, parser controls, and frozen model criteria remain under `~/.cache/d3os/qwen-q4-components-integration-v1/`.
+Complete captures remain under `~/.cache/d3os/qwen-q4-components-paired-01-v1/` and `~/.cache/d3os/qwen-q4-components-paired-02-v1/`.

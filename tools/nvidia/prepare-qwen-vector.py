@@ -13,7 +13,7 @@ from pathlib import Path
 import tomllib
 
 ROOT = Path(__file__).resolve().parents[2]
-ENTRY = "q3_components_dp4a"
+ENTRIES = ("q3_components_dp4a", "q4_components_dp4a")
 FAMILY = "qwen-vector"
 CRATE = ROOT / "tools/qwen-vector-kernels"
 FLAGS = ["-C", "target-cpu=sm_89", "-C", "target-feature=+ptx80", "--emit=asm"]
@@ -70,6 +70,7 @@ def main():
             CRATE / "Cargo.lock",
             CRATE / "rust-toolchain.toml",
             CRATE / "src/lib.rs",
+            CRATE / "src/q4.rs",
         ]
     }
     env = dict(
@@ -138,7 +139,9 @@ def main():
             text=True,
         ).stdout
         evidence = qualifier.qualify(cubin.read_bytes(), sass)
-        if [entry["name"] for entry in evidence["sections"]] != [f".text.{ENTRY}"]:
+        if {entry["name"] for entry in evidence["sections"]} != {
+            f".text.{entry}" for entry in ENTRIES
+        }:
             raise RuntimeError("unexpected Qwen module entry inventory")
         if evidence["cb4_accesses"] or any(
             instruction in sass for instruction in (" LDL", " STL")
@@ -165,7 +168,7 @@ def main():
             ).stdout,
             "ptxas_sha256": sha(args.toolkit / "bin/ptxas"),
             "nvdisasm_sha256": sha(args.toolkit / "bin/nvdisasm"),
-            "entries": [{"entry": ENTRY, "threads": 128}],
+            "entries": [{"entry": entry, "threads": 128} for entry in ENTRIES],
             "host_audit": {
                 "cubin": f"host-audit/{cubin.name}",
                 "sass": f"host-audit/{FAMILY}.sass",
@@ -191,7 +194,9 @@ def main():
             # Keep incomplete output reviewable; never use it as a valid cache hit.
             (args.output / "manifest.json").unlink(missing_ok=True)
             raise
-    print(f"QWEN_VECTOR_BUILD_OK family={FAMILY} entry={ENTRY} output={args.output}")
+    print(
+        f"QWEN_VECTOR_BUILD_OK family={FAMILY} entries={ENTRIES} output={args.output}"
+    )
 
 
 if __name__ == "__main__":

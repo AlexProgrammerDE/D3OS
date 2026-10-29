@@ -85,13 +85,22 @@ pub(super) fn verify(device: &Device) -> core::result::Result<(), String> {
 pub(super) enum ProjectionPair {
     Q4Narrow,
     Q3Components,
+    Q4Components,
 }
 
 impl ProjectionPair {
+    fn control(self, model: Qwen) -> Result<Qwen> {
+        match self {
+            Self::Q4Components => model.with_q3_vector_kernel(Q3VectorKernel::Components),
+            _ => Ok(model),
+        }
+    }
+
     fn configure(self, model: Qwen) -> Result<Qwen> {
         match self {
             Self::Q4Narrow => model.with_q4_vector_kernel(Q4VectorKernel::Narrow),
             Self::Q3Components => model.with_q3_vector_kernel(Q3VectorKernel::Components),
+            Self::Q4Components => model.with_q4_vector_kernel(Q4VectorKernel::Components),
         }
     }
 
@@ -99,6 +108,11 @@ impl ProjectionPair {
         match self {
             Self::Q4Narrow => format!("q4_vector_kernel={:?}", model.q4_vector_kernel()),
             Self::Q3Components => format!("q3_vector_kernel={:?}", model.q3_vector_kernel()),
+            Self::Q4Components => format!(
+                "q4_vector_kernel={:?} q3_vector_kernel={:?}",
+                model.q4_vector_kernel(),
+                model.q3_vector_kernel()
+            ),
         }
     }
 }
@@ -154,6 +168,11 @@ pub(super) fn benchmark(
         memory.device_cached_bytes,
         memory.device_retired_bytes
     ));
+    let model = if let Some(pair) = pair {
+        pair.control(model).map_err(|e| format!("{e}"))?
+    } else {
+        model
+    };
     let models = if paired {
         let before = backend.memory_profile().map_err(|e| format!("{e}"))?;
         let services_before = backend.service_profile().map_err(|e| format!("{e}"))?;

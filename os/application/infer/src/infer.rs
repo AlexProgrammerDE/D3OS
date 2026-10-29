@@ -108,6 +108,10 @@ fn run() -> Result<(), String> {
             gpu_tests::run(&backend)?;
             report(format_args!("INFERENCE_OK self-test backend=nvidia"));
         }
+        Some("gpu-q4-components-check") if args.len() == 1 => {
+            gpu_tests::q4_components(&Nvidia::new().map_err(|e| format!("{e}"))?)?;
+            report(format_args!("INFERENCE_OK q4-components backend=nvidia cases=9 guards=ok public=ok"));
+        }
         Some("gpu-q3-components-check") if args.len() == 1 => {
             gpu_tests::q3_components(&Nvidia::new().map_err(|e| format!("{e}"))?)?;
             report(format_args!("INFERENCE_OK q3-components backend=nvidia cases=9 guards=ok public=ok"));
@@ -165,13 +169,14 @@ fn run() -> Result<(), String> {
                     "device-timing" if !device_timing => device_timing = true,
                     "paired-q4" if pair.is_none() => pair = Some(model_file::ProjectionPair::Q4Narrow),
                     "paired-q3" if pair.is_none() => pair = Some(model_file::ProjectionPair::Q3Components),
+                    "paired-q4-components" if pair.is_none() => pair = Some(model_file::ProjectionPair::Q4Components),
                     "q8-prefill" if quantization == qwen::PrefillQuantization::Accurate => quantization = qwen::PrefillQuantization::Q8_1,
                     "q8-attention-prefill" if quantization == qwen::PrefillQuantization::Accurate => {
                         quantization = qwen::PrefillQuantization::Q8_1WithAttention;
                     }
                     _ => {
                         return Err(String::from(
-                            "usage: infer gpu-qwen-gguf-bench [device-timing] [paired-q4|paired-q3|q8-prefill|q8-attention-prefill]",
+                            "usage: infer gpu-qwen-gguf-bench [device-timing] [paired-q4|paired-q3|paired-q4-components|q8-prefill|q8-attention-prefill]",
                         ));
                     }
                 }
@@ -194,7 +199,7 @@ fn run() -> Result<(), String> {
         }
         _ => {
             return Err(String::from(
-                "usage: infer self-test | burn-self-test | gpu-mnist-train | gpu-mnist-infer | gpu-mnist-bench | gpu-mnist-profile | fwcfg-self-test | gpu-self-test | gpu-kernel-bench | alexnet [MODEL FIXTURE] | gpu-alexnet [MODEL FIXTURE] | gpu-alexnet-bench | qwen [MAX_TOKENS PROMPT...] | qwen-verify | gpu-qwen [MAX_TOKENS PROMPT...] | gpu-qwen-verify | gpu-qwen-bench [long] [device-timing] [firmware-model] | gpu-qwen-gguf [MAX_TOKENS PROMPT...] | gpu-qwen-gguf-bench [device-timing] [paired-q4|paired-q3|q8-prefill|q8-attention-prefill] | gpu-qwen-gguf-verify",
+                "usage: infer self-test | burn-self-test | gpu-mnist-train | gpu-mnist-infer | gpu-mnist-bench | gpu-mnist-profile | fwcfg-self-test | gpu-self-test | gpu-kernel-bench | alexnet [MODEL FIXTURE] | gpu-alexnet [MODEL FIXTURE] | gpu-alexnet-bench | qwen [MAX_TOKENS PROMPT...] | qwen-verify | gpu-qwen [MAX_TOKENS PROMPT...] | gpu-qwen-verify | gpu-qwen-bench [long] [device-timing] [firmware-model] | gpu-qwen-gguf [MAX_TOKENS PROMPT...] | gpu-qwen-gguf-bench [device-timing] [paired-q4|paired-q3|paired-q4-components|q8-prefill|q8-attention-prefill] | gpu-qwen-gguf-verify",
             ));
         }
     }

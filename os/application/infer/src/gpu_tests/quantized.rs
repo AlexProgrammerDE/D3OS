@@ -149,13 +149,13 @@ fn guards(backend: &Nvidia, format: Quantization, bytes: &[u8], expected: &[f32]
 }
 
 /// Exercise the optional PTX module through guarded SDK dispatch and public Burn storage.
-pub(super) fn components(backend: &Nvidia) -> Result<(), String> {
+pub(super) fn components(backend: &Nvidia, format: Quantization) -> Result<(), String> {
     use d3os_ai::{
         burn::tensor::Tensor as BurnTensor,
-        qwen::{MatrixFormat, PackedMatrix, Q3VectorKernel},
+        qwen::{MatrixFormat, PackedMatrix, Q3VectorKernel, Q4VectorKernel},
     };
     use d3os_nvidia::compute::Kernel;
-    let format = Quantization::Q3K;
+    let is_q4 = format == Quantization::Q4K;
     let mut fixture = &include_bytes!("../../../../library/compute/tests/fixtures/quantized.bin")[8..];
     let blocks = loop {
         let word = |offset| u32::from_le_bytes(fixture[offset..offset + 4].try_into().unwrap()) as usize;
@@ -175,8 +175,8 @@ pub(super) fn components(backend: &Nvidia) -> Result<(), String> {
         [1024, 32],
         [5120, 33],
         [5120, 129],
-        [17408, 33],
-        [5120, 17408],
+        if is_q4 { [6144, 5120] } else { [17408, 33] },
+        if is_q4 { [17408, 5120] } else { [5120, 17408] },
     ] {
         let raw: Vec<u8> = blocks
             .iter()
@@ -190,7 +190,7 @@ pub(super) fn components(backend: &Nvidia) -> Result<(), String> {
             let weights = Tensor::from_buffer(&[columns, inner], Cpu.upload_quantized(format, inner * columns, &raw)?)?;
             Cpu.download(&Cpu.project(&x, &weights)?)
         })()
-        .map_err(|e| format!("Q3 CPU projection: {e}"))?;
+        .map_err(|e| format!("component CPU projection: {e}"))?;
         let check = |actual: &[f32]| -> Result<(), String> {
             if actual.len() != columns
                 || actual
@@ -198,7 +198,7 @@ pub(super) fn components(backend: &Nvidia) -> Result<(), String> {
                     .zip(&reference)
                     .any(|(a, b)| !a.is_finite() || (a - b).abs() > 2e-4 + 2e-4 * b.abs())
             {
-                return Err(format!("Q3 component projection mismatch at {inner}x{columns}"));
+                return Err(format!("component projection mismatch at {inner}x{columns}"));
             }
             Ok(())
         };
@@ -228,7 +228,7 @@ pub(super) fn components(backend: &Nvidia) -> Result<(), String> {
                 backend.dispatch_words(
                     Kernel::ProjectQuantized,
                     &[(&scratch, 1), (&weights_gpu, 1), (&output, 1)],
-                    &[1, inner, columns, 11, 1, 3],
+                    &[1, inner, columns, format as usize, 1, 3],
                 )?;
                 let mut actual = alloc::vec![0;columns+2];
                 backend.read_words_into(&output, 0, &mut actual)?;
@@ -251,9 +251,14 @@ pub(super) fn components(backend: &Nvidia) -> Result<(), String> {
             }
             Ok(())
         })();
-        guarded.map_err(|e| format!("Q3 guarded dispatch {inner}x{columns}: {e}"))?;
+        guarded.map_err(|e| format!("component guarded dispatch {inner}x{columns}: {e}"))?;
         let mut matrix = PackedMatrix::from_bytes([columns, inner], MatrixFormat::Quantized(format), &raw, &device).map_err(|e| format!("{e}"))?;
-        matrix.set_q3_vector_kernel(Q3VectorKernel::Components).map_err(|e| format!("{e}"))?;
+        if is_q4 {
+            matrix.set_q4_vector_kernel(Q4VectorKernel::Components)
+        } else {
+            matrix.set_q3_vector_kernel(Q3VectorKernel::Components)
+        }
+        .map_err(|e| format!("{e}"))?;
         let actual = matrix
             .project(BurnTensor::from_data(d3os_ai::burn::tensor::TensorData::new(input, [1, inner]), &device))
             .map_err(|e| format!("{e}"))?
@@ -263,7 +268,8 @@ pub(super) fn components(backend: &Nvidia) -> Result<(), String> {
         values += columns * 3;
     }
     super::super::report(format_args!(
-        "NVIDIA_Q3_COMPONENTS_OK cases=9 comparisons={values} source=checkpoint_blocks guards=ok public=ok"
+        "NVIDIA_Q{}_COMPONENTS_OK cases=9 comparisons={values} source=checkpoint_blocks guards=ok public=ok",
+        if is_q4 { 4 } else { 3 }
     ));
     Ok(())
 }
