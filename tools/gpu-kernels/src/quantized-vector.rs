@@ -168,7 +168,11 @@ unsafe fn group_project_q8<const TILED: bool>(
     };
     if block < gate_end {
         if TILED {
-            unsafe { blocked_vector_at::<1, false, true>(input, weights, output, inner, cols, (block - first_block) * 4u32, output_offset, 0u32) };
+            if inner == 4096u32 && cols == 8192u32 {
+                unsafe { blocked_vector_at::<1, false, true, 4>(input, weights, output, inner, cols, (block - first_block) * 4u32, output_offset, 0u32) };
+            } else {
+                unsafe { blocked_vector_at::<1, false, true, 0>(input, weights, output, inner, cols, (block - first_block) * 4u32, output_offset, 0u32) };
+            }
         } else {
             unsafe { vector_project_q8_at::<false, true>(input, weights, output, inner, cols, (block - first_block) * 4u32, output_offset, 0u32) };
         }

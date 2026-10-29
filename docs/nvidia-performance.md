@@ -2877,3 +2877,71 @@ The baseline module, model fixtures, and qualification records were reused after
 The completed GPU capture remains cached with its exact inputs to prevent another identical experiment.
 Production kernels and the measured full-model throughput remain unchanged.
 No full-model gain, broader numerical guarantee, or performance-parity acceptance follows.
+
+## Weight-load scheduling for wide Q8 decode
+
+The column-layout vector kernel now uses a load-latency hint for the measured wide 4096-input decode shapes.
+The selected output widths are 8192 and 12288, with one input row.
+Grouped linear attention applies the same hint only to its 8192-output qkv projection.
+The 4096-output gate, longer-input down projection, prefill, and other routes retain their existing scheduling.
+Packed bytes, FP32 accumulator chains, reduction trees, and public work packets remain unchanged.
+
+The hint is a unitless compiler scheduling preference, not a cycle count or a precision setting.
+[NVIDIA's Tile IR optimization guide](https://docs.nvidia.com/cuda/tile-ir/latest/sections/optimization_guide.html) describes its effect on memory overlap and prefetch scheduling.
+The pinned Rust frontend and emitted Tile IR contain the requested hint.
+
+Three standalone settings produced only two distinct machine implementations.
+Tier 1 matched the cached baseline text exactly; tiers 4 and 8 matched each other.
+Only the new tier-4 implementation required a GPU run.
+Complete bit comparisons passed across nine geometries, including actual full FFN gate/up/down matrices and a five-row tail.
+The run checked 412,160 finite written values and 206,080 bitwise output comparisons, plus unchanged sources and buffer guards.
+
+The standalone result depended on shape and cache state.
+With eight rotating weight buffers, the wide gate/up projections improved by about 2%, and the 8192-output case improved by about 6%.
+The longer-input down projection and the narrower 4096-output case became slower.
+The production selector therefore retains their original implementation.
+The new standalone vector uses 44 registers per thread instead of 64, with no local or stack storage.
+
+The production refactor produced different address instructions from the standalone probe.
+Its cached GPU pass was not substituted for production execution evidence.
+The matching Native image and combined module were checked separately, then executed on the RTX 4090 Laptop GPU.
+
+The October 29 full-model comparison used control, candidate, candidate, control capture order in the accurate default mode.
+Each mode contributed four ordinary warm samples across two VMs.
+The workload retained 37 prompt tokens, 128 teacher-forced decode steps, FP32 KV storage, and a 2048-token context.
+First passes and separately instrumented fourth passes remain excluded from warm timing comparisons.
+
+| Measurement | Existing schedule | Bounded weight-load hint |
+| --- | ---: | ---: |
+| Decode throughput | 52.860 tokens/s | 53.793 tokens/s |
+| Warm prefill | 112.00 ms | 112.25 ms |
+| Model import | 6422 ms | 6458 ms |
+
+Decode throughput increased by 1.77% in this comparison.
+Both candidate VM means exceeded both control VM means, meeting the evaluation criterion recorded before the timing review.
+The candidate means were 53.850 and 53.737 tokens/s; control means were 52.980 and 52.740 tokens/s.
+No prefill or import improvement is claimed.
+Automatic clocks and four warm samples per mode limit the timing result.
+
+Every capture passed the original FP32 gate for all 32,033,280 reference values.
+Complete error statistics and all teacher-forced token decisions matched between candidate and control.
+The original single token-selection difference at row 102 remained unchanged.
+Both modes retained 9,516,859,392 live weight bytes, 77,922,304 allocator cache bytes, zero retired bytes, and no host activation transfers.
+Instrumented decode verified 9216 streaming-vector calls, 8192 ordinary column-vector calls, and 3072 grouped calls.
+
+The retained Linux baseline remains 58.354 tokens/s, so Native reaches about 92.2% of that throughput.
+This comparison reuses the existing Linux capture rather than executing it again.
+Linux uses its existing activation quantization while Native retains FP32 activations.
+The original precision policy is unchanged, and performance parity remains open.
+
+The combined module contains 276 inference entries.
+All 274 unaffected prior inference text sections and both smaller cubins remain byte-exact.
+Only grouped column-layout decode changes among the previous entries; the streaming vector is new.
+The Math artifact and verification rules remain exact, with renewed source provenance.
+Validation passed 299 SDK/Native tests, six Qwen tests, strict Clippy, and two fresh Math provenance tests.
+The unchanged 32-test Math artifact suite was reused rather than rerun.
+Compiler-wrapper, type-inference, and preparation failures remain preserved with the final passing evidence.
+
+Finalization reused all four validated captures and matching host checks without another test or build.
+The default kernel bundle is not promoted by this checkpoint.
+Broader prompt quality, the latest 0.8B comparison, DOOM, and full-backend acceptance remain open.

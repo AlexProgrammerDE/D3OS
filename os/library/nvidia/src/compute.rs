@@ -547,6 +547,7 @@ impl Kernel {
             (Self::ProjectQuantized, [_, _, _, 8, 1, 1]) => "q8_rowmajor_d4",
             (Self::ProjectQuantized, [m, _, _, 8, 2, 1]) if (2..=8).contains(m) => "q8_columns32_d4_m16",
             (Self::ProjectQuantized, [_, _, _, 8, 2, 1]) => "q8_columns32_d4",
+            (Self::ProjectQuantized, [1, 4096, 8192 | 12288, 8, 2]) => "q8_columns32_vector_streaming",
             (Self::ProjectQuantized, [_, _, _, 8, 2]) => "q8_columns32_vector",
             (Self::EmbeddingQuantized, [_, _, _, 8, 2]) => "q8_columns32_embedding",
             (Self::IntegerReduction, p) => integer_reduction::symbol(p).unwrap_or(self.symbol()),

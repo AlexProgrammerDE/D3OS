@@ -88,7 +88,27 @@ unsafe fn q8_columns32_components(
     unsafe { write_matrix(output, rr * broadcast_scalar(cols, shape![32, 32]) + cc, sum, mask, shape![1024]) };
 }
 
-unsafe fn blocked_vector_pairs<const BLOCK_GROUP: i32, const GROUP: i32, const NARROW: bool, const SIGNED: bool>(
+// Scheduling tier for Q8 weight traffic; zero keeps the compiler default.
+unsafe fn read_q8_weight<const LATENCY: i32>(p: *const f32, index: Tile<u32, { [128] }>, mask: Tile<bool, { [128] }>) -> Tile<u16, { [128] }> {
+    let base: PointerTile<*const u16, { [] }> = pointer_to_tile(bf16_pointer(p));
+    let base: PointerTile<*const u16, { [1] }> = base.reshape(shape![1]);
+    let base: PointerTile<*const u16, { [128] }> = base.broadcast(shape![128]);
+    let pointer = base.offset_tile(index);
+    let (value, _): (Tile<u16, { [128] }>, Token) = unsafe {
+        load_ptr_tko(
+            pointer,
+            ordering::Weak,
+            None::<scope::TileBlock>,
+            Some(mask),
+            Some(0u16),
+            None,
+            Latency::<LATENCY>,
+        )
+    };
+    value
+}
+
+unsafe fn blocked_vector_pairs<const BLOCK_GROUP: i32, const GROUP: i32, const NARROW: bool, const SIGNED: bool, const LATENCY: i32>(
     a: *const f32, b: *const f32, col: Tile<u32, { [128] }>, lane: Tile<u32, { [128] }>, block: u32, blocks: u32, cols: u32, input_offset: u32,
     even: Tile<f32, { [128] }>, odd: Tile<f32, { [128] }>,
 ) -> (Tile<f32, { [128] }>, Tile<f32, { [128] }>) {
@@ -103,8 +123,20 @@ unsafe fn blocked_vector_pairs<const BLOCK_GROUP: i32, const GROUP: i32, const N
         + (col % broadcast_scalar(32u32, shape![128])) * broadcast_scalar(unsigned(BLOCK_GROUP), shape![128])
         + qblock % broadcast_scalar(unsigned(BLOCK_GROUP), shape![128]))
         * broadcast_scalar(17u32, shape![128]);
-    let scale = unsafe { quant_half_128(b, base * broadcast_scalar(2u32, shape![128]), mask) };
-    let packed = unsafe { read_tile(bf16_pointer(b), base + broadcast_scalar(1u32, shape![128]) + pair, mask, 0u16) };
+    let scale = if LATENCY == 0 {
+        unsafe { quant_half_128(b, base * broadcast_scalar(2u32, shape![128]), mask) }
+    } else {
+        let value = unsafe { read_q8_weight::<LATENCY>(b, base, mask) };
+        let value: Tile<f16, { [128] }> = bitcast(value);
+        let value: Tile<f32, { [128] }> = ftof(value, rounding::NearestEven);
+        value
+    };
+    let address = base + broadcast_scalar(1u32, shape![128]) + pair;
+    let packed = if LATENCY == 0 {
+        unsafe { read_tile(bf16_pointer(b), address, mask, 0u16) }
+    } else {
+        unsafe { read_q8_weight::<LATENCY>(b, address, mask) }
+    };
     let packed: Tile<u32, { [128] }> = exti(packed);
     let low = packed & broadcast_scalar(255u32, shape![128]);
     let high = packed >> broadcast_scalar(8u32, shape![128]);
@@ -119,7 +151,7 @@ unsafe fn blocked_vector_pairs<const BLOCK_GROUP: i32, const GROUP: i32, const N
     )
 }
 
-unsafe fn blocked_vector_at<const BLOCK_GROUP: i32, const NARROW: bool, const SIGNED: bool>(
+unsafe fn blocked_vector_at<const BLOCK_GROUP: i32, const NARROW: bool, const SIGNED: bool, const LATENCY: i32>(
     a: *const f32, b: *const f32, output: *mut f32, inner: u32, cols: u32, first: u32, output_offset: u32, input_offset: u32,
 ) {
     let lane = if NARROW {
@@ -143,16 +175,20 @@ unsafe fn blocked_vector_at<const BLOCK_GROUP: i32, const NARROW: bool, const SI
     let mut o3 = e0;
     let mut block = 0u32;
     while block < blocks {
-        let (even, odd) = unsafe { blocked_vector_pairs::<BLOCK_GROUP, 0, NARROW, SIGNED>(a, b, col, lane, block, blocks, cols, input_offset, e0, o0) };
+        let (even, odd) =
+            unsafe { blocked_vector_pairs::<BLOCK_GROUP, 0, NARROW, SIGNED, LATENCY>(a, b, col, lane, block, blocks, cols, input_offset, e0, o0) };
         e0 = even;
         o0 = odd;
-        let (even, odd) = unsafe { blocked_vector_pairs::<BLOCK_GROUP, 1, NARROW, SIGNED>(a, b, col, lane, block, blocks, cols, input_offset, e1, o1) };
+        let (even, odd) =
+            unsafe { blocked_vector_pairs::<BLOCK_GROUP, 1, NARROW, SIGNED, LATENCY>(a, b, col, lane, block, blocks, cols, input_offset, e1, o1) };
         e1 = even;
         o1 = odd;
-        let (even, odd) = unsafe { blocked_vector_pairs::<BLOCK_GROUP, 2, NARROW, SIGNED>(a, b, col, lane, block, blocks, cols, input_offset, e2, o2) };
+        let (even, odd) =
+            unsafe { blocked_vector_pairs::<BLOCK_GROUP, 2, NARROW, SIGNED, LATENCY>(a, b, col, lane, block, blocks, cols, input_offset, e2, o2) };
         e2 = even;
         o2 = odd;
-        let (even, odd) = unsafe { blocked_vector_pairs::<BLOCK_GROUP, 3, NARROW, SIGNED>(a, b, col, lane, block, blocks, cols, input_offset, e3, o3) };
+        let (even, odd) =
+            unsafe { blocked_vector_pairs::<BLOCK_GROUP, 3, NARROW, SIGNED, LATENCY>(a, b, col, lane, block, blocks, cols, input_offset, e3, o3) };
         e3 = even;
         o3 = odd;
         block = block + if NARROW { 32u32 } else { 8u32 };
@@ -190,7 +226,14 @@ unsafe fn blocked_vector_at<const BLOCK_GROUP: i32, const NARROW: bool, const SI
 unsafe fn q8_columns32_vector(a: *const f32, b: *const f32, out: *mut f32, m: u32, k: u32, n: u32, _f: u32) {
     let row = block_id() % m;
     let first = (block_id() / m) * 4u32;
-    unsafe { blocked_vector_at::<1, false, true>(a, b, out, k, n, first, row * n, row * k) }
+    unsafe { blocked_vector_at::<1, false, true, 0>(a, b, out, k, n, first, row * n, row * k) }
+}
+
+#[cutile::entry()]
+unsafe fn q8_columns32_vector_streaming(a: *const f32, b: *const f32, out: *mut f32, m: u32, k: u32, n: u32, _f: u32) {
+    let row = block_id() % m;
+    let first = (block_id() / m) * 4u32;
+    unsafe { blocked_vector_at::<1, false, true, 4>(a, b, out, k, n, first, row * n, row * k) }
 }
 
 // Translate logical embedding elements to unchanged Q8 blocks in tiled storage.
