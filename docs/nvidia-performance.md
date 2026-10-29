@@ -3809,9 +3809,57 @@ A replay held the first preflight; the single GPU capture started after it exite
 
 A separate CPU feasibility check evaluates two active activation residuals while retaining the existing three-plane storage layout.
 Both independent FP64 references reproduce exactly, and the candidate passes the unchanged operator tolerance.
-This has no compiler, GPU, full-model, or speed acceptance. The full original model gates remain required before retention.
+The following trial records its subsequent compiler, GPU, and full-model checks.
 
 The Native default-loading change now passes both CI workflows.
 The accepted decode result remains the preceding 19.6255 tokens/s; this rejected trial adds no throughput result.
 The aligned-load evidence remains under `~/.cache/d3os/qwen-q4-aligned-loads-probe-v1/`.
-CPU-only residual evidence remains under `~/.cache/d3os/qwen-q4-two-component-feasibility-v1/`.
+Residual-trial evidence remains under `~/.cache/d3os/qwen-q4-two-component-feasibility-v1/`.
+
+## Rejected Q4 two-residual arithmetic
+
+This private candidate evaluates two activation residuals while retaining the existing three-plane packing and storage.
+It passes the unchanged machine qualifier with 39 registers, eight DP4A instructions, and no shared, local, frame, or stack storage.
+The fixed operator comparison passes all 105,288 original FP64-reference checks and 62,884 bit-exact checks against the staged CPU calculation.
+Activation packing, source preservation, partial outputs, and storage guards also pass.
+
+| Q4 vector geometry | Current three residuals, including pack | Two active residuals, including pack | Operator latency reduction |
+| --- | ---: | ---: | ---: |
+| K=6144, N=5120 | 43.7077 microseconds | 40.0877 microseconds | 8.28% |
+| K=17408, N=5120 | 134.5491 microseconds | 119.2186 microseconds | 11.39% |
+
+Both datasets pass the fixed 5% operator speed requirement using all 42 rotating-weight samples.
+These are operator results, not model throughput gains.
+
+The matching two-entry module preserves the Q3 body, all three core module records, and the Q4 constant bank.
+Its Q4 body matches the private operator-tested body exactly.
+All 1,119 OS source pins match the existing Native image, so no SDK or AI rebuild is needed for the model check.
+
+The single predeclared model capture then fails 304 of the original 32,033,280 logit comparisons.
+Maximum absolute error is 0.0045495033, and maximum normalized error is 1.9769 against the permitted limit of 1.
+The original tolerances remain `0.002 + 0.0005 * abs(reference)`, with zero failures allowed.
+All four benchmark token sequences remain identical to the accepted sequences, including the same two greedy differences from the Linux inputs.
+Those token checks do not override the failed logit gate.
+
+The candidate is rejected and the accepted three-residual source is restored byte-for-byte.
+The failed capture and provisional source remain preserved. No replacement capture or tolerance change occurs.
+Its timings were declared diagnostic and are not used for any speed or default-retention claim.
+The accepted model result remains 19.6255 tokens/s.
+
+Evidence remains under `~/.cache/d3os/qwen-q4-two-component-feasibility-v1/` and `~/.cache/d3os/qwen-q4-two-active-model-v1/`.
+The failed model capture remains under `~/.cache/d3os/q4-two-active-model-check-v1/`.
+
+## Ordinary large-model phase completion
+
+Inspection during the numerical trial found that ordinary large-model benchmarks did not wait for final GPU work at the two timing boundaries.
+Paired benchmarks already performed both waits, including the accepted 19.6255 tokens/s comparison.
+Ordinary prefill and decode now also wait for `device.sync()` before their timers stop.
+The mode record declares `phase_completion=device_sync`.
+
+This changes measurement boundaries, not model arithmetic, schedules, or workloads.
+The accepted kernel is reused exactly, and only `infer` recompiles from the verified warm cache.
+Source comparison confirms that the existing paired completion calls retain their positions and behavior.
+Earlier paired GPU evidence is reused; no new ordinary throughput is claimed without a fresh measurement using the new boundary.
+Older unsynchronized ordinary timings must not be combined with these measurements.
+
+Build receipts, the source-boundary proof, and the verified incremental cache archive remain under `~/.cache/d3os/qwen-ordinary-phase-completion-v1/`.

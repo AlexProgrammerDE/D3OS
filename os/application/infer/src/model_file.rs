@@ -170,7 +170,7 @@ pub(super) fn benchmark(
     let load_ms = time::systime().num_milliseconds() - start;
     let memory = backend.memory_profile().map_err(|e| format!("{e}"))?;
     super::report(format_args!(
-        "NATIVE_LARGE_QWEN_MODE prefill_quantization={:?} decode_quantization=per_format reference_policy=unchanged q3_vector_kernel={:?} q4_vector_kernel={:?}",
+        "NATIVE_LARGE_QWEN_MODE prefill_quantization={:?} decode_quantization=per_format reference_policy=unchanged q3_vector_kernel={:?} q4_vector_kernel={:?} phase_completion=device_sync",
         model.prefill_quantization(),
         model.q3_vector_kernel(),
         model.q4_vector_kernel()
@@ -234,9 +234,7 @@ pub(super) fn benchmark(
             .map_err(|e| format!("Qwen projection collector: {e}"))?;
         let start = time::systime().num_milliseconds();
         let mut logits = session.prefill(prompt).map_err(|e| format!("{e}"))?;
-        if paired {
-            device.sync().map_err(|e| format!("paired Q4 prefill completion: {e}"))?;
-        }
+        device.sync().map_err(|e| format!("Qwen prefill completion: {e}"))?;
         let prefill_ms = time::systime().num_milliseconds() - start;
         #[cfg(feature = "qwen-profiling")]
         let prefill_projections = projections.as_ref().map(|collector| collector.take());
@@ -258,9 +256,7 @@ pub(super) fn benchmark(
             checksum = checksum.wrapping_mul(31).wrapping_add(u64::from(token));
             logits = session.step(input).map_err(|e| format!("{e}"))?;
         }
-        if paired {
-            device.sync().map_err(|e| format!("paired Q4 decode completion: {e}"))?;
-        }
+        device.sync().map_err(|e| format!("Qwen decode completion: {e}"))?;
         let decode_ms = time::systime().num_milliseconds() - start;
         #[cfg(feature = "qwen-profiling")]
         let decode_projections = projections.as_ref().map(|collector| collector.take());
