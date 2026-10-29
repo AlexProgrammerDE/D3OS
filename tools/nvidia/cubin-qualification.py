@@ -40,9 +40,11 @@ INT8_MMA_OPERANDS = re.compile(
 )
 # Rust NVPTX emits this signed packed dot4 with register-only operands.
 # A register accumulator covers the second dot4 in each eight-value group.
+# The observed first multiplicand may carry a register reuse hint. No other
+# modifier slot or constant-addressing form inherits that allowance.
 INT8_DOT_OPCODE = "IDP.4A.S8.S8"
 INT8_DOT_OPERANDS = re.compile(
-    rf"{INT8_MMA_REGISTER}\s*,\s*{INT8_MMA_REGISTER}\s*,\s*"
+    rf"{INT8_MMA_REGISTER}\s*,\s*{INT8_MMA_REGISTER}(?:\.reuse)?\s*,\s*"
     rf"{INT8_MMA_REGISTER}\s*,\s*(?:{INT8_MMA_REGISTER}|RZ)"
 )
 # The observed byte-sum form reads one aligned word from its own read-only

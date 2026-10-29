@@ -3942,3 +3942,24 @@ Its timing scratch allocation did not upload initialized sentinel guards before 
 The failure and original capture are preserved; no numerical, physical, or performance acceptance is granted.
 Reported timings are diagnostic, and no replacement run or production integration follows.
 Evidence remains under `~/.cache/d3os/qwen-q3-scratch-prefill-v1/`.
+
+## Exact signed-dot register reuse notation
+
+A three-residual Q4 prototype combines the integer component dots before their FP32 conversion.
+Its CPU folds pass both original operator references, with maximum absolute errors below 0.000003.
+The initial compiler qualification stops at an observed first-multiplicand register reuse hint:
+`IDP.4A.S8.S8 R23, R28.reuse, R20, RZ`.
+The failed qualification receipt and unchanged machine artifact remain preserved.
+
+The parser now admits that optional lowercase hint only on the first register multiplicand of the existing signed-dot form.
+Destination, second-multiplicand, accumulator, opcode, signedness, register bounds, and constant-addressing rules retain their prior restrictions.
+No profile name or qualification function body changes.
+NVIDIA's [Binary Utilities documentation](https://docs.nvidia.com/cuda/cuda-binary-utilities/#nvdisasm) shows register reuse notation in disassembly; the specific dot form comes from the pinned compiler's actual output.
+
+All 38 parser tests pass, and 24 additional malformed-operand or inventory controls reject.
+Fresh disassembly reproduces the candidate's retained SASS exactly.
+All four accepted real-family qualification records remain byte-exact, including their prior profile names and evidence hashes.
+Ruff and formatting checks pass.
+This admits an observed operand spelling; it grants no GPU numerical, model, or performance acceptance to the prototype.
+
+Source preservation, CPU folds, actual machine artifacts, parser controls, unchanged baseline records, and the prepared first operator test remain under `~/.cache/d3os/qwen-q4-folded-triplet-v1/`.

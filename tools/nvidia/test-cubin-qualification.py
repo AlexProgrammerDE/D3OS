@@ -324,6 +324,8 @@ class Int8DotQualificationTests(unittest.TestCase):
             "IDP.4A.S8.S8 R10, R10, R13, RZ",
             "@P0 IDP.4A.S8.S8 R10, R21, R20, R10",
             "@!P6 IDP.4A.S8.S8 R0, R254, R1, R253",
+            "IDP.4A.S8.S8 R23, R28.reuse, R20, RZ",
+            "@!P6 IDP.4A.S8.S8 R0, R254.reuse, R1, R253",
         ):
             result = qualify_instructions(instruction)
             self.assertEqual(
@@ -501,6 +503,9 @@ class Int8DotQualificationTests(unittest.TestCase):
                 "0x0",
                 "-R0",
                 "R0.reuse",
+                "R0.reuse.reuse",
+                "R0.reuse.ROW",
+                "R0.REUSE",
                 "R0.ROW",
                 "R0.H0",
                 "|R0|",
@@ -511,6 +516,8 @@ class Int8DotQualificationTests(unittest.TestCase):
                 "c[0x4][0x8]",
                 "cx[UR0]",
             ):
+                if slot == 1 and value == "R0.reuse":
+                    continue
                 changed = operands.copy()
                 changed[slot] = value
                 with (
