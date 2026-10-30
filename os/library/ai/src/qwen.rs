@@ -33,6 +33,8 @@ pub enum PrefillQuantization {
     Accurate,
     Q8_1,
     Q8_1WithAttention,
+    /// Three-residual Q4_K register MMA on the measured prefill cells.
+    Q4KComponents,
 }
 
 /// Select a Q4_K vector implementation with the original output tolerances.
@@ -96,7 +98,7 @@ impl Q3VectorKernel {
 impl PrefillQuantization {
     fn check_device(self, device: &Device) -> Result<()> {
         if self != Self::Accurate && !native_matrix_device(device) {
-            return Err(Error::from("Q8_1 prefill requires the Native NVIDIA backend"));
+            return Err(Error::from("quantized prefill requires the Native NVIDIA backend"));
         }
         Ok(())
     }
@@ -109,6 +111,7 @@ impl PrefillQuantization {
             Self::Accurate => d3os_burn_native::backend::PrefillQuantization::Accurate,
             Self::Q8_1 => d3os_burn_native::backend::PrefillQuantization::Q8_1,
             Self::Q8_1WithAttention => d3os_burn_native::backend::PrefillQuantization::Q8_1WithAttention,
+            Self::Q4KComponents => d3os_burn_native::backend::PrefillQuantization::Q4KComponents,
         }
     }
 }

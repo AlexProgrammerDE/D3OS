@@ -160,6 +160,7 @@ pub(super) fn projection_module(symbol: &str) -> Result<Option<&'static [u8]>> {
         | "q4_components_dp4a"
         | "q3_warp_m16"
         | "q4_components_wide64"
+        | "q4_warp_m16"
         | "q3_components_padded112"
         | "q3_components_padded112_wide"
         | "q3_default_padded112"

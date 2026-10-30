@@ -137,3 +137,4 @@ mod q3_padded;
 mod q3_prefill;
 mod q4;
 mod q4_aligned;
+mod q4_prefill;

@@ -551,6 +551,7 @@ impl Kernel {
             (Self::ProjectQuantized, [1, _, _, 12, 1, 3]) => "q4_components_dp4a",
             (Self::ProjectQuantized, [1, 6144 | 17408, 5120, 12, 4, 3]) => "q4_components_wide64",
             (Self::ProjectQuantized, [32, 5120, 17408, 11, 2, 3]) => "q3_warp_m16",
+            (Self::ProjectQuantized, [5 | 32, 6144 | 17408, 5120, 12, 2, 3]) => "q4_warp_m16",
             (Self::ProjectQuantized, [1, 5120, 17408, 11, 3, 0]) => "q3_default_padded112",
             (Self::ProjectQuantized, [1, 5120, 17408, 11, 3, 3]) => "q3_components_padded112",
             (Self::ProjectQuantized, [1, 5120, 17408, 11, 4, 3]) => "q3_components_padded112_wide",
@@ -916,6 +917,14 @@ impl Kernel {
                 extents[..3].copy_from_slice(&[4000, 9748480, 17408]);
                 alignments[1] = 8;
                 (4352 * 128, 3, 2, false)
+            }
+            // Direct raw Q4 register MMA on the four measured prefill cells.
+            (Self::ProjectQuantized, &[m @ (5 | 32), k @ (6144 | 17408), 5120, 12, 2, 3]) => {
+                let input = product(&[m, k])?;
+                let activation = product(&[input, 3])? / 4 + input / 32;
+                let weights = product(&[k / 256, 5120, 36])?;
+                extents[..3].copy_from_slice(&[u64::from(activation), u64::from(weights), u64::from(product(&[m, 5120])?)]);
+                (product(&[m.div_ceil(16), 160, 128])?, 3, 2, false)
             }
             // The measured 27B Q3 gate/up prefill geometry uses register MMA.
             (Self::ProjectQuantized, &[32, 5120, 17408, 11, 2, 3]) => {

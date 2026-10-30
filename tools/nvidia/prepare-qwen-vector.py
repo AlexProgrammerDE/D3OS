@@ -23,6 +23,7 @@ ENTRIES = (
     "embedding_q3_padded112",
     "q4_components_wide64",
     "q3_components_padded112_wide",
+    "q4_warp_m16",
 )
 FAMILY = "qwen-vector"
 CRATE = ROOT / "tools/qwen-vector-kernels"
@@ -67,6 +68,7 @@ def compile_module(directory, toolkit, target):
             CRATE / "src/lib.rs",
             CRATE / "src/q4.rs",
             CRATE / "src/q4_aligned.rs",
+            CRATE / "src/q4_prefill.rs",
             CRATE / "src/q3_prefill.rs",
             CRATE / "src/q3_padded.rs",
         ]

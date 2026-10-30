@@ -257,7 +257,7 @@ fn scaled_q3_word(code: u32, scale: i32) -> u32 {
 // B's registers cover column g at K offsets 0 and 16. Every warp lane
 // executes the collective even when its fragment or result is outside a tail.
 #[inline(always)]
-unsafe fn mma(a: [u32; 4], b: [u32; 2]) -> [i32; 4] {
+pub(super) unsafe fn mma(a: [u32; 4], b: [u32; 2]) -> [i32; 4] {
     let d0: i32;
     let d1: i32;
     let d2: i32;

@@ -88,6 +88,7 @@ pub(super) enum ProjectionPair {
     Q4Components,
     Q4Aligned,
     Q3Aligned,
+    Q4Prefill,
     NativeDefaults,
 }
 
@@ -96,6 +97,7 @@ impl ProjectionPair {
         // Historical experiments retain their original FP32 routes even when
         // ordinary Native loading selects the measured component kernels.
         let model = model
+            .with_prefill_quantization(PrefillQuantization::Accurate)?
             .with_q3_vector_kernel(Q3VectorKernel::Default)?
             .with_q4_vector_kernel(Q4VectorKernel::Default)?;
         match self {
@@ -105,6 +107,9 @@ impl ProjectionPair {
                 .with_q4_vector_kernel(Q4VectorKernel::Components),
             Self::Q3Aligned => model
                 .with_q3_vector_kernel(Q3VectorKernel::Components)?
+                .with_q4_vector_kernel(Q4VectorKernel::Aligned),
+            Self::Q4Prefill => model
+                .with_q3_vector_kernel(Q3VectorKernel::Aligned)?
                 .with_q4_vector_kernel(Q4VectorKernel::Aligned),
             _ => Ok(model),
         }
@@ -118,8 +123,12 @@ impl ProjectionPair {
             Self::Q4Components => model.with_q4_vector_kernel(Q4VectorKernel::Components),
             Self::Q4Aligned => model.with_q4_vector_kernel(Q4VectorKernel::Aligned),
             Self::Q3Aligned => model.with_q3_vector_kernel(Q3VectorKernel::Aligned),
+            Self::Q4Prefill => model.with_prefill_quantization(PrefillQuantization::Q4KComponents),
             Self::NativeDefaults => {
-                if model.q3_vector_kernel() != Q3VectorKernel::Aligned || model.q4_vector_kernel() != Q4VectorKernel::Aligned {
+                if model.q3_vector_kernel() != Q3VectorKernel::Aligned
+                    || model.q4_vector_kernel() != Q4VectorKernel::Aligned
+                    || model.prefill_quantization() != PrefillQuantization::Q4KComponents
+                {
                     return Err(Error::from("native default experiment requires both component kernels at model load"));
                 }
                 Ok(model)
@@ -131,7 +140,13 @@ impl ProjectionPair {
         match self {
             Self::Q4Narrow => format!("q4_vector_kernel={:?}", model.q4_vector_kernel()),
             Self::Q3Components => format!("q3_vector_kernel={:?}", model.q3_vector_kernel()),
-            Self::Q4Components | Self::Q4Aligned | Self::Q3Aligned | Self::NativeDefaults => format!(
+            Self::Q4Prefill | Self::NativeDefaults => format!(
+                "q4_vector_kernel={:?} q3_vector_kernel={:?} prefill_quantization={:?}",
+                model.q4_vector_kernel(),
+                model.q3_vector_kernel(),
+                model.prefill_quantization()
+            ),
+            Self::Q4Components | Self::Q4Aligned | Self::Q3Aligned => format!(
                 "q4_vector_kernel={:?} q3_vector_kernel={:?}",
                 model.q4_vector_kernel(),
                 model.q3_vector_kernel()
@@ -173,7 +188,11 @@ pub(super) fn benchmark(
     let (prompt, reference) = ids.split_at(prompt_count);
     let start = time::systime().num_milliseconds();
     let (model, identity) = load(device)?;
-    let model = model.with_prefill_quantization(quantization).map_err(|e| format!("{e}"))?;
+    let model = if quantization == PrefillQuantization::Accurate && matches!(pair, None | Some(ProjectionPair::NativeDefaults)) {
+        model
+    } else {
+        model.with_prefill_quantization(quantization).map_err(|e| format!("{e}"))?
+    };
     if identity.as_slice() != &bytes[32..64] {
         return Err(String::from("GGUF reference targets a different model"));
     }

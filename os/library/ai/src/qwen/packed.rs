@@ -64,10 +64,12 @@ mod tests {
         let format = MatrixFormat::Quantized(Quantization::Q8_0);
         let bytes = alloc::vec![0; format.byte_len(shape).unwrap()];
         let mut matrix = PackedMatrix::from_bytes(shape, format, &bytes, &device).unwrap();
-        matrix.prefill_quantization = crate::qwen::PrefillQuantization::Q8_1;
-        let moved = matrix.to_device(&device);
-        assert_eq!(moved.prefill_quantization, crate::qwen::PrefillQuantization::Q8_1);
-        assert!(moved.project(Tensor::ones([2, 32], &device)).is_err());
+        for mode in [crate::qwen::PrefillQuantization::Q8_1, crate::qwen::PrefillQuantization::Q4KComponents] {
+            matrix.prefill_quantization = mode;
+            let moved = matrix.clone().to_device(&device);
+            assert_eq!(moved.prefill_quantization, mode);
+            assert!(moved.project(Tensor::ones([2, 32], &device)).is_err());
+        }
     }
 
     #[test]

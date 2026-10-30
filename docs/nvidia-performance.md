@@ -4354,3 +4354,79 @@ Evidence remains under `~/.cache/d3os/qwen-q3-metadata64-loads-v1/`.
 The failed capture remains under `~/.cache/d3os/qwen-q3-metadata64-model-v1/`.
 The completed capture remains under `~/.cache/d3os/qwen-q3-metadata64-model-v2/`.
 Its serial SHA-256 is `57a1802dd5874bdb1bfa9bd15106eb171a807ab0695cbed2cd76c87cf189163a`.
+
+### Raw Q4 register-MMA prefill
+
+The next prefill kernel reads raw Q4_K blocks directly into signed INT8 matrix fragments.
+It retains all three activation residuals and applies each K32 group's scale and minimum correction after its integer product.
+The fragment mapping follows the [NVIDIA PTX M16N8K32 layout](https://docs.nvidia.com/cuda/parallel-thread-execution/#warp-level-matrix-fragment-mma-16832), already used by the Q3 kernel.
+The scaled product bound is 3,870,720; the minimum correction bound is 258,048.
+Both fit I32 before conversion to FP32.
+Explicit FP32 operations and Kahan accumulation preserve the stated staging order.
+
+The kernel uses 47 registers, 128 threads, and no shared memory, local memory, stack, or spills.
+It needs no expanded or second weight buffer.
+The production entry matches the operator-tested machine text exactly.
+All nine existing optional entries and all three core kernel-family records remain unchanged.
+The exporter, actual bundle, and kernel module lookup agree on all ten optional entries.
+
+The independent reference checks 33 input rows against the pinned GGUF decoder and FP64 dot products for each actual weight geometry.
+Row zero reproduces the cached real input, reference, and activation packing exactly.
+Other rows are deterministic operator inputs, including zero and cancellation cases.
+The new staging oracle preserves separate positive and minimum terms for every residual and K32 group.
+The GPU test covers eight row counts, six column tails, full-width outputs, two output poisons, immutable inputs, and allocation guards.
+All 3,143,832 original checks and 1,571,916 bit-exact staged CPU comparisons pass.
+Both activation-packing poison trials pass for every tested row population.
+
+| Rotating-weight operator, including packing | Current FP32 | Raw Q4 register MMA | Time reduction |
+| --- | ---: | ---: | ---: |
+| 5 × 6,144 × 5,120 | 416.2695 µs | 226.1248 µs | 45.68% |
+| 32 × 6,144 × 5,120 | 497.7487 µs | 370.6792 µs | 25.53% |
+| 5 × 17,408 × 5,120 | 1,179.3410 µs | 661.8845 µs | 43.88% |
+| 32 × 17,408 × 5,120 | 1,415.2182 µs | 1,036.8147 µs | 26.74% |
+
+Each cell retains all forty samples with eight rotating weight buffers and sixteen graph iterations per sample.
+Every cell passes the declared 5% threshold, including packing.
+One capture supplies all observations; no replacement or extra timing samples were taken.
+The first validator compares a one-group regex result with a tuple instead of a string and fails.
+Its source and failure remain preserved. A separate corrected validator checks the same exact count against the unchanged capture.
+The C harness's earlier cleanup-loop indentation warning is also preserved.
+Neither repair changes a kernel, threshold, population, or measurement.
+
+Native selects `PrefillQuantization::Q4KComponents` only when the model contains a measured raw Q4_K geometry.
+The dispatch applies only at five or 32 rows, inner 6,144 or 17,408, and output width 5,120.
+Other shapes and formats retain their accurate routes, including existing Q3 and Q8 prefill paths.
+Single-token decode keeps the existing Q3 and Q4 `Aligned` kernels.
+Explicit `Accurate` selection and `--qwen-paired-q4-prefill --qwen-q3-padded112` preserve the old prefill route for comparisons.
+Current ordinary/default benchmarks retain the selected Native prefill policy; historical experiments explicitly reset it.
+
+The complete model comparison keeps the same 37-token prompt, 128 generated tokens, batch 32, F32 cache, context 2048, and four pinned vCPUs.
+It shares immutable resident weights and retains four ordinary samples per variant.
+
+| Same-capture model measurement | Accurate prefill | Q4 component prefill |
+| --- | ---: | ---: |
+| Mean prompt latency | 728.50 ms | 600.50 ms |
+| First balanced block | 675.50 ms | 554.50 ms |
+| Second balanced block | 781.50 ms | 646.50 ms |
+| Decode throughput | 21.7928 tokens/s | 21.8365 tokens/s |
+
+Prompt latency falls 17.5704%, with both balanced blocks faster.
+The observed decode difference is +0.2005%; the decode entry/parameter/call ledgers are identical, so this establishes no decode optimization.
+All 64,066,560 original logit checks pass at `0.002 + 0.0005 * abs(reference)`.
+All twelve Native token traces match, and the two existing near-tied Linux differences remain.
+The reference error statistics differ because the prefill arithmetic changes; both variants pass the original limits with zero failures.
+All other prefill entry/parameter/call ledgers remain identical.
+The validator requires the complete 1,001-projection prefill population and exact activation-pack counts, including the 248 added Q4 packs.
+
+Resident weights remain 13,664,997,376 bytes, with no expanded or duplicate weight buffer or timed weight transfer.
+Prepared-page-cache loading and upload take 8.988 seconds, which establishes no cold-storage parity.
+SDK tests (25), Native tests (76), packed-model tests (6), strict Clippy, and 44 parser rejection controls pass.
+Large warm build targets are preserved as verified deltas and removed from RAM.
+
+The cached matched llama.cpp prompt latency is 93.693 ms, so Native prompt processing remains about 6.41 times slower.
+The latest decode rate remains 36.21% below cached llama.cpp at 34.233 tokens/s.
+Both remaining gaps, matched cold storage, and physical rendering presentation remain open goals.
+
+Evidence remains under `~/.cache/d3os/qwen-q4-warp-mma-v1/`.
+The completed model capture remains under `~/.cache/d3os/qwen-q4-warp-prefill-model-v1/`.
+Its serial SHA-256 is `2f00cbd4e0bdbf8c699259a58282d686a1bd6730f2fbe65a760cd036df7afdea`.

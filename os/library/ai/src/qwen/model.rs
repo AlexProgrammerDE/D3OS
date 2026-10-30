@@ -176,13 +176,13 @@ enum Mixer {
 }
 impl Mixer {
     fn set_prefill_quantization(&mut self, mode: PrefillQuantization) -> Result<()> {
-        let mode = if mode == PrefillQuantization::Q8_1WithAttention {
+        let mode = if matches!(mode, PrefillQuantization::Q8_1WithAttention | PrefillQuantization::Q4KComponents) {
             mode
         } else {
             PrefillQuantization::Accurate
         };
         let set = |matrix: &mut PackedMatrix| {
-            if mode != PrefillQuantization::Accurate
+            if mode == PrefillQuantization::Q8_1WithAttention
                 && (!matches!(matrix.layout, MatrixLayout::RowMajor | MatrixLayout::Q8Columns32)
                     || matrix.format != MatrixFormat::Quantized(Quantization::Q8_0)
                     || !matches!(matrix.shape, [1024 | 4096 | 8192, 4096]))
@@ -368,6 +368,9 @@ impl Qwen {
             if load.has_q4 {
                 model = model.with_q4_vector_kernel(Q4VectorKernel::Aligned)?;
             }
+            if model.supports_q4_component_prefill() {
+                model = model.with_prefill_quantization(PrefillQuantization::Q4KComponents)?;
+            }
         }
         Ok(model)
     }
@@ -483,9 +486,25 @@ impl Qwen {
         self.q3_vector_kernel = kernel;
         Ok(self)
     }
+    fn supports_q4_component_prefill(&self) -> bool {
+        self.layers.iter().any(|layer| {
+            let out = match &layer.mixer {
+                Mixer::Full(attention) => &attention.out,
+                Mixer::Linear(attention) => &attention.out,
+            };
+            [&layer.gate, &layer.up, &layer.down, out].into_iter().any(|matrix| {
+                matrix.format == MatrixFormat::Quantized(Quantization::Q4K)
+                    && matrix.layout == MatrixLayout::RowMajor
+                    && matches!(matrix.shape, [5120, 6144 | 17408])
+            })
+        })
+    }
     pub fn with_prefill_quantization(mut self, mode: PrefillQuantization) -> Result<Self> {
         mode.check_device(&self.device())?;
-        if mode != PrefillQuantization::Accurate {
+        if mode == PrefillQuantization::Q4KComponents && !self.supports_q4_component_prefill() {
+            return Err(Error::from("Q4 component prefill requires a measured Q4_K weight geometry"));
+        }
+        if matches!(mode, PrefillQuantization::Q8_1 | PrefillQuantization::Q8_1WithAttention) {
             for layer in &self.layers {
                 for matrix in [&layer.gate, &layer.up, &layer.down] {
                     if matrix.layout != MatrixLayout::Q8Columns32 || matrix.format != MatrixFormat::Quantized(Quantization::Q8_0) {

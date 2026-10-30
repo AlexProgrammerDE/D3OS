@@ -667,3 +667,38 @@ fn aligned_q3_keeps_padded_extents_and_rejects_unmeasured_packets() {
         assert!(Kernel::ProjectQuantized.work(&invalid).is_err());
     }
 }
+
+#[test]
+fn q4_prefill_uses_exact_raw_and_packed_extents() {
+    for rows in [5u32, 32] {
+        for inner in [6144u32, 17408] {
+            let packet = [rows, inner, 5120, 12, 2, 3];
+            let work = Kernel::ProjectQuantized.work(&packet).unwrap();
+            assert_eq!(
+                &work.extents[..3],
+                &[
+                    u64::from(rows * (3 * inner / 4 + inner / 32)),
+                    u64::from(inner / 256 * 5120 * 36),
+                    u64::from(rows * 5120)
+                ]
+            );
+            assert_eq!(
+                (work.blocks, work.threads, work.pointers, work.output, work.in_place),
+                (rows.div_ceil(16) * 160, 128, 3, 2, false)
+            );
+            let addresses = [0x100000, 0x10000000, 0x40000000];
+            work.validate_aliases(&addresses).unwrap();
+            assert!(work.validate_aliases(&[addresses[0], addresses[1] + 2, addresses[2]]).is_err());
+            for source in 0..2 {
+                let mut overlap = addresses;
+                overlap[2] = addresses[source] + (work.extents[source] - 1) * 4;
+                assert!(work.validate_aliases(&overlap).is_err());
+            }
+            for (field, value) in [(0, 1), (0, 16), (0, 33), (1, 5120), (1, u32::MAX), (2, 5119), (3, 13), (4, 5), (5, 1)] {
+                let mut invalid = packet;
+                invalid[field] = value;
+                assert!(Kernel::ProjectQuantized.work(&invalid).is_err());
+            }
+        }
+    }
+}

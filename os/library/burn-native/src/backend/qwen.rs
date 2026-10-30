@@ -19,6 +19,8 @@ pub enum PrefillQuantization {
     Accurate,
     Q8_1,
     Q8_1WithAttention,
+    /// Three-residual Q4_K register MMA on the measured prefill cells.
+    Q4KComponents,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -84,6 +86,12 @@ fn use_components(batch: usize, shape: [usize; 2], format: MatrixFormat) -> bool
 
 fn projection_components(batch: usize, shape: [usize; 2], storage: (MatrixFormat, MatrixLayout), mode: PrefillQuantization) -> Result<Option<usize>> {
     let (format, layout) = storage;
+    // Q4 mode changes only its measured cells; Q8 keeps the accurate policy.
+    let mode = if mode == PrefillQuantization::Q4KComponents {
+        PrefillQuantization::Accurate
+    } else {
+        mode
+    };
     if mode == PrefillQuantization::Q8_1WithAttention && matches!(shape, [1024 | 4096 | 8192, 4096]) {
         if format != MatrixFormat::Quantized(Quantization::Q8_0) {
             return Err(Error::InvalidParameter);
@@ -111,8 +119,15 @@ fn use_q3_prefill(batch: usize, shape: [usize; 2], storage: (MatrixFormat, Matri
     batch == 32
         && shape == [17408, 5120]
         && storage == (MatrixFormat::Quantized(Quantization::Q3K), MatrixLayout::RowMajor)
-        && options.prefill == PrefillQuantization::Accurate
+        && matches!(options.prefill, PrefillQuantization::Accurate | PrefillQuantization::Q4KComponents)
         && matches!(options.q3_vector, Q3VectorKernel::Components | Q3VectorKernel::Aligned)
+}
+
+fn use_q4_prefill(batch: usize, shape: [usize; 2], storage: (MatrixFormat, MatrixLayout), mode: PrefillQuantization) -> bool {
+    mode == PrefillQuantization::Q4KComponents
+        && matches!(batch, 5 | 32)
+        && matches!(shape, [5120, 6144 | 17408])
+        && storage == (MatrixFormat::Quantized(Quantization::Q4K), MatrixLayout::RowMajor)
 }
 
 fn prepare_activations(input: &NativeTensor, outputs: usize, components: usize) -> Result<NativeTensor> {
@@ -153,6 +168,15 @@ fn projection(
     let components = projection_components(batch, shape, storage, options.prefill)?;
     let input = dense(input, DType::F32)?;
     let packed = weights(packed, shape, storage)?;
+    if use_q4_prefill(batch, shape, storage, options.prefill) {
+        let activations = prepare_activations(&input, outputs, 3)?;
+        return output(
+            [batch, outputs],
+            Kernel::ProjectQuantized,
+            &[(&activations, 0), (&packed, 0)],
+            &[batch, width, outputs, 12, 2, 3],
+        );
+    }
     if layout == MatrixLayout::Q3Padded112 {
         if format != MatrixFormat::Quantized(Quantization::Q3K) || shape != [17408, 5120] {
             return Err(Error::InvalidParameter);
@@ -579,6 +603,48 @@ mod projection_mode_tests {
             ProjectionOptions {
                 prefill: PrefillQuantization::Q8_1,
                 ..options
+            }
+        ));
+    }
+
+    #[test]
+    fn q4_prefill_changes_only_measured_cells_and_preserves_q8_and_q3() {
+        let storage = (MatrixFormat::Quantized(Quantization::Q4K), MatrixLayout::RowMajor);
+        for rows in [0, 1, 2, 4, 5, 16, 31, 32, 33] {
+            for inner in [6144, 17408] {
+                assert_eq!(
+                    use_q4_prefill(rows, [5120, inner], storage, PrefillQuantization::Q4KComponents),
+                    matches!(rows, 5 | 32)
+                );
+                assert!(!use_q4_prefill(rows, [5120, inner], storage, PrefillQuantization::Accurate));
+            }
+        }
+        for shape in [[5120, 5120], [5119, 6144], [5120, 17407], [17408, 5120]] {
+            assert!(!use_q4_prefill(32, shape, storage, PrefillQuantization::Q4KComponents));
+        }
+        for other in [
+            (MatrixFormat::Quantized(Quantization::Q3K), MatrixLayout::RowMajor),
+            (MatrixFormat::Quantized(Quantization::Q4K), MatrixLayout::Q3Padded112),
+        ] {
+            assert!(!use_q4_prefill(32, [5120, 6144], other, PrefillQuantization::Q4KComponents));
+        }
+        let q8 = (MatrixFormat::Quantized(Quantization::Q8_0), MatrixLayout::Q8Columns32);
+        for rows in [1, 5, 32] {
+            for shape in [[12288, 4096], [4096, 12288]] {
+                assert_eq!(
+                    projection_components(rows, shape, q8, PrefillQuantization::Q4KComponents),
+                    projection_components(rows, shape, q8, PrefillQuantization::Accurate)
+                );
+            }
+        }
+        assert!(use_q3_prefill(
+            32,
+            [17408, 5120],
+            (MatrixFormat::Quantized(Quantization::Q3K), MatrixLayout::RowMajor),
+            ProjectionOptions {
+                prefill: PrefillQuantization::Q4KComponents,
+                q3_vector: Q3VectorKernel::Aligned,
+                ..Default::default()
             }
         ));
     }
