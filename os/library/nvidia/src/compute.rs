@@ -559,6 +559,7 @@ impl Kernel {
             (Self::ProjectQuantized, [1, 5120, 17408, 11, 3, 0]) => "q3_default_padded112",
             (Self::ProjectQuantized, [1, 5120, 17408, 11, 3, 3]) => "q3_components_padded112",
             (Self::ProjectQuantized, [1, 5120, 17408, 11, 4, 3]) => "q3_components_padded112_wide",
+            (Self::ProjectQuantized, [1, 5120, 17408, 11, 6, 3]) => "q3_components_halfwarp",
             (Self::ProjectQuantized, [_, 5120, 17408, 11, 3, 3]) => "q3_warp_padded112",
             (Self::EmbeddingQuantized, [17408, 5120, _, 11, 3]) => "embedding_q3_padded112",
             (Self::ProjectQuantized, [_, _, _, 8, 0, 3]) => "q8_components_pack",
@@ -917,10 +918,10 @@ impl Kernel {
                 (1280 * 128, 3, 2, false)
             }
             // The same padded allocation, with paired high-scale/header loads.
-            (Self::ProjectQuantized, &[1, 5120, 17408, 11, 4, 3]) => {
+            (Self::ProjectQuantized, &[1, 5120, 17408, 11, phase @ (4 | 6), 3]) => {
                 extents[..3].copy_from_slice(&[4000, 9748480, 17408]);
                 alignments[1] = 8;
-                (4352 * 128, 3, 2, false)
+                ((if phase == 6 { 2176 } else { 4352 }) * 128, 3, 2, false)
             }
             // Direct raw Q4 register MMA on the four measured prefill cells.
             (Self::ProjectQuantized, &[m @ (5 | 32), k @ (6144 | 17408), 5120, 12, phase @ (2 | 3), 3]) => {

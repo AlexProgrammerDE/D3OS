@@ -366,7 +366,12 @@ impl Qwen {
         .valid();
         if super::native_matrix_device(device) {
             if load.has_q3 {
-                model = model.with_q3_vector_kernel(Q3VectorKernel::Aligned)?;
+                let kernel = if model.supports_padded_q3_decode() {
+                    Q3VectorKernel::HalfWarp
+                } else {
+                    Q3VectorKernel::Aligned
+                };
+                model = model.with_q3_vector_kernel(kernel)?;
             }
             if load.has_q4 {
                 model = model.with_q4_vector_kernel(Q4VectorKernel::Aligned)?;
@@ -448,6 +453,9 @@ impl Qwen {
     /// Configure projection dispatch while retaining the existing weight tensors.
     pub fn with_q3_vector_kernel(mut self, kernel: Q3VectorKernel) -> Result<Self> {
         kernel.check_device(&self.device())?;
+        if kernel == Q3VectorKernel::HalfWarp && !self.supports_padded_q3_decode() {
+            return Err(Error::from("halfwarp decode requires a measured padded Q3_K weight geometry"));
+        }
         let mut selected = 0;
         let mut configure = |matrix: &mut PackedMatrix| -> Result<()> {
             if matrix.format == MatrixFormat::Quantized(Quantization::Q3K) {
@@ -488,6 +496,13 @@ impl Qwen {
         }
         self.q3_vector_kernel = kernel;
         Ok(self)
+    }
+    fn supports_padded_q3_decode(&self) -> bool {
+        self.layers.iter().any(|layer| {
+            [&layer.gate, &layer.up, &layer.down].into_iter().any(|matrix| {
+                matrix.format == MatrixFormat::Quantized(Quantization::Q3K) && matrix.layout == MatrixLayout::Q3Padded112 && matrix.shape == [17408, 5120]
+            })
+        })
     }
     fn supports_q4_component_prefill(&self) -> bool {
         self.layers.iter().any(|layer| {

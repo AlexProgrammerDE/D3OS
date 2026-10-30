@@ -4511,3 +4511,92 @@ The decode gap, remaining prompt gap, matched cold storage, and physical renderi
 Evidence remains under `~/.cache/d3os/qwen-q3-shared-tiles-v1/`, `qwen-q4-shared-tiles-v1/`, and `qwen-shared-prefill-integration-v1/`.
 The model capture remains under `~/.cache/d3os/qwen-shared-prefill-model-v1/`.
 Its serial SHA-256 is `75d44724654512681b1eec11d3b911632836079b5131f397d7cdc3c4992e31b5`.
+
+### Two outputs per warp for padded Q3 decode
+
+The next Q3 decode kernel assigns sixteen lanes to each output, with two outputs per warp and eight per CTA.
+Each lane handles one complete sixteen-value subgroup and retains all three activation residuals.
+The sixteen-value integer dot precedes the original FP32 scale operations and Kahan accumulation.
+The integer magnitude is bounded by 262,144, which fits I32 and converts exactly to FP32.
+The final butterfly uses offsets 8, 4, 2, and 1, so it never crosses the two output groups.
+Tail lanes read column zero and participate in every collective, but never publish an out-of-range output.
+
+The kernel uses 40 registers per thread and 128 threads per CTA.
+It has no shared memory, local memory, stack, frame, or spills.
+The same 112-byte padded Q3 allocation and activation packer serve both routes.
+No weight expansion, duplicate weight storage, or new transfer is required.
+Production machine text matches the operator-tested kernel exactly.
+All fourteen prior optional entry texts and all three core-family records remain unchanged.
+
+The CPU reference reproduces the original FP64 reference exactly before evaluating the new reduction order.
+All 17,408 outputs pass the original `0.0002 + 0.0002 * abs(reference)` limit.
+Its largest absolute error is approximately `1.073e-6`.
+The GPU comparison covers twelve output sizes, including both sides of the new eight-output CTA boundary.
+All 175,620 original numerical checks and 105,218 exact staged CPU comparisons pass.
+Both activation-packing poisons, both padding-byte patterns, immutable sources, and allocation guards pass.
+
+| Operator measurement, including packing | Current metadata-paired Q3 | Sixteen-lane Q3 | Time reduction |
+| --- | ---: | ---: | ---: |
+| One weight buffer | 74.3666 µs | 57.7552 µs | 22.34% |
+| Eight rotating weight buffers | 100.8742 µs | 93.2138 µs | 7.59% |
+
+Each mode retains all forty-two samples and sixteen graph iterations per sample.
+The rotating comparison passes the declared 5% threshold.
+Two frontend variants emitted unsupported unsigned extraction forms and failed the unchanged qualifier.
+Explicit bounded masks and shifts replaced those forms without changing the CPU arithmetic.
+All rejected sources and compiler artifacts remain preserved. No qualifier allowance changes.
+
+Native selects `Q3VectorKernel::HalfWarp` for models with the measured padded Q3 FFN geometry.
+Only single-token projection at inner 5,120 and output width 17,408 uses the new entry.
+Other Q3 geometries retain component decode, Q4 keeps its aligned kernels, and shared prefill keeps its prior routes.
+The SDK retains the same pointer extents and eight-byte alignment while reducing CTAs from 4,352 to 2,176.
+`--qwen-paired-q3-halfwarp --qwen-q3-padded112` compares the new route with `Q3VectorKernel::Aligned`.
+Historical comparison flags retain their original selectors.
+
+The model comparison uses a 37-token prompt and 128 generated tokens.
+It keeps the F32 cache, context 2048, batch 32, and four pinned vCPUs.
+One capture retains all four ordinary samples per variant, two warmups, and two instrumented passes.
+The declared threshold requires at least 1% higher decode throughput and faster results in both balanced blocks.
+All original numerical, token, residency, projection, and packing gates remain mandatory.
+
+| Same-capture model measurement | Metadata-paired Q3 | Sixteen-lane Q3 |
+| --- | ---: | ---: |
+| Decode throughput | 22.7475 tokens/s | 23.4218 tokens/s |
+| First balanced block | 22.9267 tokens/s | 23.5706 tokens/s |
+| Second balanced block | 22.5710 tokens/s | 23.2748 tokens/s |
+| Mean prompt latency | 487.00 ms | 488.75 ms |
+
+Decode throughput rises 2.9643%. Prompt latency changes by +0.3593%, with identical prefill entry, parameter, and call ledgers.
+All other decode routes and all activation-pack ledgers remain identical.
+All 64,066,560 original logit checks pass at `0.002 + 0.0005 * abs(reference)`.
+All twelve Native token traces match, and the two existing Linux selection differences remain unchanged.
+Reference-error statistics differ because the reduction order changes. Both variants pass with zero failures.
+The Candidate maximum absolute error is `0.000030398369`, versus Control's `0.000041484833` on this fixture.
+The instrumented Q3 call group is slower in this capture. Its timing is diagnostic and does not replace the ordinary samples.
+
+Resident weights remain 13,664,997,376 bytes. Prepared-page-cache loading and upload take 8.562 seconds, with no cold-storage parity claim.
+SDK tests (27), Native tests (77), packed-model tests (6), and strict Clippy pass.
+Four historical captures, 27 new parser rejection controls, current-default controls, and actual CLI prerequisites pass.
+The matching kernel and application build passes, and all fifteen optional module entries resolve.
+Warm build targets remain preserved as verified deltas and removed from RAM.
+
+The initial model preflight stopped before launch because available RAM was below 30 GiB.
+The corrected recorder guard recognizes both recorder script names through exact process arguments.
+Later preflights waited for active Minecraft recordings without stopping them.
+The operator capture finished before those recordings began.
+After the recordings ended and RAM passed the guard, one model capture supplied every retained sample with zero replay overlap.
+The 2.70 GB of older idle D3OS images remain in a hash-verified archive; their RAM copies were removed.
+
+Cached matched llama.cpp remains at 34.233 tokens/s, leaving a 31.58% decode gap.
+Its cached prompt latency is 93.693 ms; the latest Native prompt remains about 5.22 times slower.
+The decode gap, prompt gap, matched cold storage, and physical rendering presentation remain open goals.
+
+Evidence remains under `~/.cache/d3os/qwen-q3-halfwarp-decode-v1/` and `qwen-halfwarp-integration-v1/`.
+The completed model capture remains under `~/.cache/d3os/qwen-halfwarp-model-v1/`.
+Its serial SHA-256 is `2d2a5dad5751bfa018752a4b52e68487eaea2563bc9b309353934d06c8b99de9`.
+
+A separate CPU-only follow-up proves that negated scaled Q3 values fit S8 exactly in `[-128,124]`.
+It checks 131,072 activation triples, 262,144 packed words, and 4,096 dot products.
+An eight-lane staging reference also passes the original numerical limits.
+That follow-up has no compiled kernel, GPU measurements, production selection, or performance acceptance.
+Its evidence remains under `~/.cache/d3os/qwen-q3-quarterwarp-reference-v1/`.

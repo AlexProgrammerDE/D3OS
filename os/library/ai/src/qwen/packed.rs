@@ -109,7 +109,11 @@ mod tests {
         let format = MatrixFormat::Quantized(Quantization::Q3K);
         let bytes = alloc::vec![0; format.byte_len(shape).unwrap()];
         let mut matrix = PackedMatrix::from_bytes(shape, format, &bytes, &device).unwrap();
-        for kernel in [crate::qwen::Q3VectorKernel::Components, crate::qwen::Q3VectorKernel::Aligned] {
+        for kernel in [
+            crate::qwen::Q3VectorKernel::Components,
+            crate::qwen::Q3VectorKernel::Aligned,
+            crate::qwen::Q3VectorKernel::HalfWarp,
+        ] {
             assert!(matrix.set_q3_vector_kernel(kernel).is_err());
             assert_eq!(matrix.q3_vector_kernel, crate::qwen::Q3VectorKernel::Default);
             matrix.q3_vector_kernel = kernel;

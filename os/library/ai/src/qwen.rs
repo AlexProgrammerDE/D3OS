@@ -77,6 +77,8 @@ pub enum Q3VectorKernel {
     Components,
     /// Paired metadata loads on padded Q3 storage, components elsewhere.
     Aligned,
+    /// Two sixteen-lane outputs per warp on measured padded Q3 storage.
+    HalfWarp,
 }
 
 impl Q3VectorKernel {
@@ -93,6 +95,7 @@ impl Q3VectorKernel {
             Self::Default => d3os_burn_native::backend::Q3VectorKernel::Default,
             Self::Components => d3os_burn_native::backend::Q3VectorKernel::Components,
             Self::Aligned => d3os_burn_native::backend::Q3VectorKernel::Aligned,
+            Self::HalfWarp => d3os_burn_native::backend::Q3VectorKernel::HalfWarp,
         }
     }
 }

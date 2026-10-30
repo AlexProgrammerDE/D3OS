@@ -41,6 +41,8 @@ pub enum Q3VectorKernel {
     Components,
     /// Paired metadata loads on padded Q3 storage, components elsewhere.
     Aligned,
+    /// Two sixteen-lane outputs per warp on measured padded Q3 storage.
+    HalfWarp,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -125,7 +127,24 @@ fn use_q3_prefill(batch: usize, shape: [usize; 2], storage: (MatrixFormat, Matri
             options.prefill,
             PrefillQuantization::Accurate | PrefillQuantization::Q4KComponents | PrefillQuantization::SharedComponents
         )
-        && matches!(options.q3_vector, Q3VectorKernel::Components | Q3VectorKernel::Aligned)
+        && matches!(
+            options.q3_vector,
+            Q3VectorKernel::Components | Q3VectorKernel::Aligned | Q3VectorKernel::HalfWarp
+        )
+}
+
+fn padded_q3_phase(batch: usize, options: ProjectionOptions) -> usize {
+    if matches!(batch, 5 | 32) && options.prefill == PrefillQuantization::SharedComponents {
+        5
+    } else if batch == 1 {
+        match options.q3_vector {
+            Q3VectorKernel::HalfWarp => 6,
+            Q3VectorKernel::Aligned => 4,
+            _ => 3,
+        }
+    } else {
+        3
+    }
 }
 
 fn use_q4_prefill(batch: usize, shape: [usize; 2], storage: (MatrixFormat, MatrixLayout), mode: PrefillQuantization) -> bool {
@@ -193,15 +212,15 @@ fn projection(
         if format != MatrixFormat::Quantized(Quantization::Q3K) || shape != [17408, 5120] {
             return Err(Error::InvalidParameter);
         }
-        let components = usize::from(batch > 1 || matches!(options.q3_vector, Q3VectorKernel::Components | Q3VectorKernel::Aligned)) * 3;
+        let components = usize::from(
+            batch > 1
+                || matches!(
+                    options.q3_vector,
+                    Q3VectorKernel::Components | Q3VectorKernel::Aligned | Q3VectorKernel::HalfWarp
+                ),
+        ) * 3;
         let activations = if components == 3 { prepare_activations(&input, outputs, 3)? } else { input };
-        let phase = if matches!(batch, 5 | 32) && options.prefill == PrefillQuantization::SharedComponents {
-            5
-        } else if batch == 1 && options.q3_vector == Q3VectorKernel::Aligned {
-            4
-        } else {
-            3
-        };
+        let phase = padded_q3_phase(batch, options);
         return output(
             [batch, outputs],
             Kernel::ProjectQuantized,
@@ -227,7 +246,14 @@ fn projection(
         );
     }
     let vector_components = match format {
-        MatrixFormat::Quantized(Quantization::Q3K) if matches!(options.q3_vector, Q3VectorKernel::Components | Q3VectorKernel::Aligned) => Some(11),
+        MatrixFormat::Quantized(Quantization::Q3K)
+            if matches!(
+                options.q3_vector,
+                Q3VectorKernel::Components | Q3VectorKernel::Aligned | Q3VectorKernel::HalfWarp
+            ) =>
+        {
+            Some(11)
+        }
         MatrixFormat::Quantized(Quantization::Q4K) if matches!(options.q4_vector, Q4VectorKernel::Components | Q4VectorKernel::Aligned) => Some(12),
         _ => None,
     };
@@ -623,6 +649,40 @@ mod projection_mode_tests {
                 ..options
             }
         ));
+    }
+
+    #[test]
+    fn halfwarp_selection_preserves_all_prefill_and_legacy_modes() {
+        for prefill in [PrefillQuantization::Accurate, PrefillQuantization::SharedComponents] {
+            for q3_vector in [
+                Q3VectorKernel::Default,
+                Q3VectorKernel::Components,
+                Q3VectorKernel::Aligned,
+                Q3VectorKernel::HalfWarp,
+            ] {
+                for batch in [1, 2, 5, 16, 32, 33] {
+                    let options = ProjectionOptions {
+                        prefill,
+                        q3_vector,
+                        ..Default::default()
+                    };
+                    let expected = if batch != 1 {
+                        if matches!(batch, 5 | 32) && prefill == PrefillQuantization::SharedComponents {
+                            5
+                        } else {
+                            3
+                        }
+                    } else {
+                        match q3_vector {
+                            Q3VectorKernel::HalfWarp => 6,
+                            Q3VectorKernel::Aligned => 4,
+                            _ => 3,
+                        }
+                    };
+                    assert_eq!(padded_q3_phase(batch, options), expected);
+                }
+            }
+        }
     }
 
     #[test]

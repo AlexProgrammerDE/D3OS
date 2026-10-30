@@ -732,3 +732,27 @@ fn shared_prefill_preserves_extents_and_covers_each_row_tile_once() {
         }
     }
 }
+
+#[test]
+fn halfwarp_decode_halves_ctas_without_changing_extents_or_aliases() {
+    let packet = [1, 5120, 17408, 11, 6, 3];
+    let work = Kernel::ProjectQuantized.work(&packet).unwrap();
+    let baseline = Kernel::ProjectQuantized.work(&[1, 5120, 17408, 11, 4, 3]).unwrap();
+    assert_eq!(work.extents, baseline.extents);
+    assert_eq!(work.alignments, baseline.alignments);
+    assert_eq!((work.blocks, work.threads, work.pointers, work.output, work.in_place), (2176, 128, 3, 2, false));
+    assert_eq!(baseline.blocks, work.blocks * 2);
+    let addresses = [0x100000, 0x10000000, 0x40000000];
+    work.validate_aliases(&addresses).unwrap();
+    assert!(work.validate_aliases(&[addresses[0], addresses[1] + 4, addresses[2]]).is_err());
+    for source in 0..2 {
+        let mut overlap = addresses;
+        overlap[2] = addresses[source] + (work.extents[source] - 1) * 4;
+        assert!(work.validate_aliases(&overlap).is_err());
+    }
+    for (field, value) in [(0, 0), (0, 2), (1, 5119), (1, u32::MAX), (2, 17407), (3, 12), (4, 7), (5, 0), (5, 1)] {
+        let mut invalid = packet;
+        invalid[field] = value;
+        assert!(Kernel::ProjectQuantized.work(&invalid).is_err());
+    }
+}

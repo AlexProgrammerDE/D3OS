@@ -90,6 +90,7 @@ pub(super) enum ProjectionPair {
     Q3Aligned,
     Q4Prefill,
     SharedPrefill,
+    Q3HalfWarp,
     NativeDefaults,
 }
 
@@ -109,6 +110,10 @@ impl ProjectionPair {
             Self::Q3Aligned => model
                 .with_q3_vector_kernel(Q3VectorKernel::Components)?
                 .with_q4_vector_kernel(Q4VectorKernel::Aligned),
+            Self::Q3HalfWarp => model
+                .with_q3_vector_kernel(Q3VectorKernel::Aligned)?
+                .with_q4_vector_kernel(Q4VectorKernel::Aligned)?
+                .with_prefill_quantization(PrefillQuantization::SharedComponents),
             Self::SharedPrefill => model
                 .with_q3_vector_kernel(Q3VectorKernel::Aligned)?
                 .with_q4_vector_kernel(Q4VectorKernel::Aligned)?
@@ -130,8 +135,9 @@ impl ProjectionPair {
             Self::Q3Aligned => model.with_q3_vector_kernel(Q3VectorKernel::Aligned),
             Self::Q4Prefill => model.with_prefill_quantization(PrefillQuantization::Q4KComponents),
             Self::SharedPrefill => model.with_prefill_quantization(PrefillQuantization::SharedComponents),
+            Self::Q3HalfWarp => model.with_q3_vector_kernel(Q3VectorKernel::HalfWarp),
             Self::NativeDefaults => {
-                if model.q3_vector_kernel() != Q3VectorKernel::Aligned
+                if model.q3_vector_kernel() != Q3VectorKernel::HalfWarp
                     || model.q4_vector_kernel() != Q4VectorKernel::Aligned
                     || model.prefill_quantization() != PrefillQuantization::SharedComponents
                 {
@@ -146,7 +152,7 @@ impl ProjectionPair {
         match self {
             Self::Q4Narrow => format!("q4_vector_kernel={:?}", model.q4_vector_kernel()),
             Self::Q3Components => format!("q3_vector_kernel={:?}", model.q3_vector_kernel()),
-            Self::Q4Prefill | Self::SharedPrefill | Self::NativeDefaults => format!(
+            Self::Q4Prefill | Self::SharedPrefill | Self::Q3HalfWarp | Self::NativeDefaults => format!(
                 "q4_vector_kernel={:?} q3_vector_kernel={:?} prefill_quantization={:?}",
                 model.q4_vector_kernel(),
                 model.q3_vector_kernel(),
