@@ -130,19 +130,29 @@ def validate_paired_projection(
     defaults=False,
     padded_q3=False,
     aligned_q4=False,
+    aligned_q3=False,
 ):
     if (
         format_code not in (11, 12)
-        or ((components or defaults or aligned_q4) and format_code != 12)
+        or ((components or defaults or aligned_q4 or aligned_q3) and format_code != 12)
         or (components and defaults)
-        or (components and aligned_q4)
-        or (padded_q3 and not (defaults or format_code == 11 or aligned_q4))
+        or (components and (aligned_q4 or aligned_q3))
+        or (aligned_q3 and not padded_q3)
+        or (aligned_q3 and aligned_q4 and not defaults)
+        or (
+            padded_q3
+            and not (defaults or format_code == 11 or aligned_q4 or aligned_q3)
+        )
     ):
         raise ValueError("paired projection format must be Q3_K or Q4_K")
-    component_mode = format_code == 11 or components or defaults or aligned_q4
-    both_q3_components = components or (aligned_q4 and not defaults)
-    formats = (11, 12) if defaults else (format_code,)
-    field = "q3_vector_kernel" if format_code == 11 else "q4_vector_kernel"
+    component_mode = (
+        format_code == 11 or components or defaults or aligned_q4 or aligned_q3
+    )
+    both_q3_components = components or ((aligned_q4 or aligned_q3) and not defaults)
+    formats = (11, 12) if defaults or aligned_q3 else (format_code,)
+    field = (
+        "q3_vector_kernel" if format_code == 11 or aligned_q3 else "q4_vector_kernel"
+    )
 
     def records(marker):
         rows = []
@@ -198,13 +208,30 @@ def validate_paired_projection(
         "Candidate",
     ]
     kernels = {
-        "Control": "Components" if aligned_q4 and not defaults else "Default",
+        "Control": "Components"
+        if (aligned_q4 or aligned_q3) and not defaults
+        else "Default",
         "Candidate": "Aligned"
-        if aligned_q4
+        if aligned_q4 or aligned_q3
         else "Components"
         if component_mode
         else "Narrow",
     }
+
+    def selector_context(role):
+        context = {field: kernels[role]}
+        if aligned_q3:
+            context["q4_vector_kernel"] = (
+                "Aligned" if role == "Candidate" or not defaults else "Default"
+            )
+        elif components or defaults or aligned_q4:
+            context["q3_vector_kernel"] = (
+                ("Components" if role == "Candidate" else "Default")
+                if defaults
+                else "Components"
+            )
+        return context
+
     benches = records("NATIVE_LARGE_QWEN_PAIRED_BENCH")
     resident = records("NATIVE_LARGE_QWEN_PAIRED_RESIDENT_OK")
     tokens = records("NATIVE_LARGE_QWEN_PAIRED_TOKENS")
@@ -219,12 +246,7 @@ def validate_paired_projection(
             field: kernels[role],
             "sample": f"Some({run - 2})" if 2 <= run < 10 else "None",
         }
-        if components or defaults or aligned_q4:
-            context["q3_vector_kernel"] = (
-                ("Components" if role == "Candidate" else "Default")
-                if defaults
-                else "Components"
-            )
+        context.update(selector_context(role))
         if any(
             row.get(key) != value
             or storage.get(key) != value
@@ -302,12 +324,7 @@ def validate_paired_projection(
             "inputs": "linux_reference",
             field: kernels[row["variant"]],
         }
-        if components or defaults or aligned_q4:
-            expected["q3_vector_kernel"] = (
-                ("Components" if row["variant"] == "Candidate" else "Default")
-                if defaults
-                else "Components"
-            )
+        expected.update(selector_context(row["variant"]))
         if any(row.get(key) != value for key, value in expected.items()):
             raise RuntimeError(
                 "paired projection numerical policy or population differs"
@@ -327,7 +344,7 @@ def validate_paired_projection(
     # full reference tolerances, and all generated tokens remain identical.
     equal_statistics = (
         ["selection_mismatches"]
-        if component_mode and not (aligned_q4 and not defaults)
+        if component_mode and not ((aligned_q4 or aligned_q3) and not defaults)
         else [
             "max_absolute",
             "max_scaled_error",
@@ -343,8 +360,17 @@ def validate_paired_projection(
 
     def layout_entry(row, role, legacy):
         params = json.loads(row["parameters"])
-        if aligned_q4 and params[3] == 12:
-            if role == "Candidate" and params[:3] in (
+        if aligned_q3 and params[3] == 11:
+            if params[:4] == [1, 5120, 17408, 11]:
+                if role == "Candidate":
+                    return "q3_components_padded112_wide"
+                return "q3_default_padded112" if defaults else "q3_components_padded112"
+            if role == "Candidate" or not defaults:
+                return "q3_components_dp4a"
+        if (aligned_q4 or aligned_q3) and params[3] == 12:
+            if (role == "Candidate" or (aligned_q3 and not defaults)) and params[
+                :3
+            ] in (
                 [1, 6144, 5120],
                 [1, 17408, 5120],
             ):
@@ -407,8 +433,10 @@ def validate_paired_projection(
                 packs[tuple(params[:3])] = calls
                 continue
             if row in chosen:
-                if aligned_q4 and params[3] == 12:
-                    wide = role == "Candidate" and params[:3] in (
+                if (aligned_q4 or aligned_q3) and params[3] == 12:
+                    wide = (
+                        role == "Candidate" or (aligned_q3 and not defaults)
+                    ) and params[:3] in (
                         [1, 6144, 5120],
                         [1, 17408, 5120],
                     )
@@ -417,12 +445,16 @@ def validate_paired_projection(
                         if role == "Candidate" or not defaults
                         else []
                     )
+                elif aligned_q3 and params[:4] == [1, 5120, 17408, 11]:
+                    suffix = (
+                        [4, 3] if role == "Candidate" else [3, 0 if defaults else 3]
+                    )
                 elif padded_q3 and params[:4] == [1, 5120, 17408, 11]:
                     suffix = [3, 3 if role == "Candidate" else 0]
                 else:
                     suffix = (
                         ([1, 3] if component_mode else [1])
-                        if role == "Candidate"
+                        if role == "Candidate" or (aligned_q3 and not defaults)
                         else []
                     )
                 expected = params[:4] + suffix
@@ -432,15 +464,23 @@ def validate_paired_projection(
                     )
             if both_q3_components and params[3] == 11:
                 padded = padded_q3 and params[:4] == [1, 5120, 17408, 11]
-                if row["entry"] != (
-                    "q3_components_padded112" if padded else "q3_components_dp4a"
-                ) or params[4:] != ([3, 3] if padded else [1, 3]):
+                wide = aligned_q3 and role == "Candidate" and padded
+                expected_entry = (
+                    "q3_components_padded112_wide"
+                    if wide
+                    else "q3_components_padded112"
+                    if padded
+                    else "q3_components_dp4a"
+                )
+                if row["entry"] != expected_entry or params[4:] != (
+                    [4 if wide else 3, 3] if padded else [1, 3]
+                ):
                     raise RuntimeError(
                         "Q4 component experiment changed its Q3 control route"
                     )
             if (
                 (both_q3_components and params[3] == 11)
-                or (aligned_q4 and not defaults and row in chosen)
+                or ((aligned_q4 or aligned_q3) and not defaults and row in chosen)
                 or (component_mode and role == "Candidate" and row in chosen)
             ):
                 key = tuple(params[:3])
@@ -451,7 +491,10 @@ def validate_paired_projection(
             ledger[key] = calls
         if (
             both_q3_components
-            or ((defaults or format_code == 11 or aligned_q4) and role == "Candidate")
+            or (
+                (defaults or format_code == 11 or aligned_q4 or aligned_q3)
+                and role == "Candidate"
+            )
         ) and packs != expected_packs:
             raise RuntimeError(
                 "component activation pack and projection populations differ"
@@ -569,6 +612,11 @@ def main():
         "--qwen-paired-q4-aligned",
         action="store_true",
         help="compare aligned and original Q4 component loads with Q3 components fixed",
+    )
+    parser.add_argument(
+        "--qwen-paired-q3-aligned",
+        action="store_true",
+        help="compare paired Q3 metadata loads with Q4 aligned loads fixed",
     )
     parser.add_argument(
         "--qwen-paired-defaults",
@@ -745,6 +793,7 @@ def main():
                 args.qwen_paired_q3,
                 args.qwen_paired_q4_components,
                 args.qwen_paired_q4_aligned,
+                args.qwen_paired_q3_aligned,
                 args.qwen_paired_defaults,
             ]
         )
@@ -752,14 +801,20 @@ def main():
     ):
         parser.error("select one paired Qwen projection experiment")
     if args.qwen_q3_padded112 and not (
-        args.qwen_paired_defaults or args.qwen_paired_q3 or args.qwen_paired_q4_aligned
+        args.qwen_paired_defaults
+        or args.qwen_paired_q3
+        or args.qwen_paired_q4_aligned
+        or args.qwen_paired_q3_aligned
     ):
         parser.error("--qwen-q3-padded112 requires paired Q3 or defaults validation")
+    if args.qwen_paired_q3_aligned and not args.qwen_q3_padded112:
+        parser.error("--qwen-paired-q3-aligned requires --qwen-q3-padded112")
     if (
         args.qwen_paired_q4
         or args.qwen_paired_q3
         or args.qwen_paired_q4_components
         or args.qwen_paired_q4_aligned
+        or args.qwen_paired_q3_aligned
         or args.qwen_paired_defaults
     ) and (
         args.inference != "gpu-qwen-gguf-bench"
@@ -1063,6 +1118,8 @@ def main():
                                 if args.qwen_paired_q4_components
                                 else " paired-q4-aligned"
                                 if args.qwen_paired_q4_aligned
+                                else " paired-q3-aligned"
+                                if args.qwen_paired_q3_aligned
                                 else " paired-defaults"
                                 if args.qwen_paired_defaults
                                 else " paired-q3"
@@ -1116,6 +1173,7 @@ def main():
                     or args.qwen_paired_q3
                     or args.qwen_paired_q4_components
                     or args.qwen_paired_q4_aligned
+                    or args.qwen_paired_q3_aligned
                     or args.qwen_paired_defaults
                 ):
                     expected = "INFERENCE_BENCH_PAIR_OK qwen-gguf backend=nvidia framework=burn os=d3os variants=2 reference_values_per_variant=32033280"
@@ -1125,6 +1183,7 @@ def main():
                         or args.qwen_paired_q3
                         or args.qwen_paired_q4_components
                         or args.qwen_paired_q4_aligned
+                        or args.qwen_paired_q3_aligned
                         or args.qwen_paired_defaults
                     ):
                         validate_paired_projection(
@@ -1134,6 +1193,8 @@ def main():
                             defaults=args.qwen_paired_defaults,
                             padded_q3=args.qwen_q3_padded112,
                             aligned_q4=args.qwen_paired_q4_aligned
+                            or args.qwen_paired_defaults,
+                            aligned_q3=args.qwen_paired_q3_aligned
                             or args.qwen_paired_defaults,
                         )
                     if args.inference == "gpu-doom-bench":

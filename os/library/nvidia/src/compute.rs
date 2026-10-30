@@ -553,6 +553,7 @@ impl Kernel {
             (Self::ProjectQuantized, [32, 5120, 17408, 11, 2, 3]) => "q3_warp_m16",
             (Self::ProjectQuantized, [1, 5120, 17408, 11, 3, 0]) => "q3_default_padded112",
             (Self::ProjectQuantized, [1, 5120, 17408, 11, 3, 3]) => "q3_components_padded112",
+            (Self::ProjectQuantized, [1, 5120, 17408, 11, 4, 3]) => "q3_components_padded112_wide",
             (Self::ProjectQuantized, [_, 5120, 17408, 11, 3, 3]) => "q3_warp_padded112",
             (Self::EmbeddingQuantized, [17408, 5120, _, 11, 3]) => "embedding_q3_padded112",
             (Self::ProjectQuantized, [_, _, _, 8, 0, 3]) => "q8_components_pack",
@@ -909,6 +910,12 @@ impl Kernel {
                 extents[..3].copy_from_slice(&[u64::from(scratch), u64::from(weights / 4), 5120]);
                 alignments[1] = 8;
                 (1280 * 128, 3, 2, false)
+            }
+            // The same padded allocation, with paired high-scale/header loads.
+            (Self::ProjectQuantized, &[1, 5120, 17408, 11, 4, 3]) => {
+                extents[..3].copy_from_slice(&[4000, 9748480, 17408]);
+                alignments[1] = 8;
+                (4352 * 128, 3, 2, false)
             }
             // The measured 27B Q3 gate/up prefill geometry uses register MMA.
             (Self::ProjectQuantized, &[32, 5120, 17408, 11, 2, 3]) => {

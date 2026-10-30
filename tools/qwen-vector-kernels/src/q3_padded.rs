@@ -73,6 +73,68 @@ pub unsafe extern "ptx-kernel" fn q3_components_padded112(
     }
 }
 
+// One warp per output, four warps per CTA. Rows must equal one. Each lane
+// handles eight adjacent values, sharing one subgroup scale and A scale.
+// Subgroup scale follows the integer dot, avoiding S8 scale-product overflow.
+/// # Safety
+/// Launch 128 threads with one row and a nonzero `inner` divisible by 256.
+/// Activation storage must contain three byte planes and one F32 scale per 32
+/// inputs. Weights must be eight-byte aligned and contain `cols * (inner / 256)`
+/// Q3_K blocks padded from 110 to 112 bytes. Padding has no numerical meaning. Output must
+/// hold `cols` F32 values without overlapping either input allocation.
+#[unsafe(no_mangle)]
+pub unsafe extern "ptx-kernel" fn q3_components_padded112_wide(
+    activation: *const u32, weights: *const u32, output: *mut f32, _rows: u32, inner: u32, cols: u32, _format: u32, _phase: u32, _components: u32,
+) {
+    let thread = unsafe { _thread_idx_x() };
+    let lane = thread & 31;
+    let col = unsafe { _block_idx_x() } * 4 + thread / 32;
+    if col >= cols {
+        return;
+    }
+    let blocks = inner / 256;
+    let sg = lane / 2;
+    let offset = (lane * 8) & 31;
+    let qshift = 2 * ((lane / 4) & 3);
+    let hshift = lane / 4;
+    let plane = inner / 4;
+    let mut sum = 0.0f32;
+    let mut correction = 0.0f32;
+    for block in 0..blocks {
+        let base = (col * blocks + block) * 28;
+        let qindex = base + (32 + (lane / 16) * 32 + offset) / 4;
+        let hindex = base + offset / 4;
+        let (low0, low1) = unsafe { pair(weights, qindex) };
+        let (high0, high1) = unsafe { pair(weights, hindex) };
+        let q0 = signed_q3(low0, high0, qshift, hshift);
+        let q1 = signed_q3(low1, high1, qshift, hshift);
+        let low_word = unsafe { weights.add((base + 24 + mask_index(sg, 7) / 4) as usize).read() };
+        let (high_word, header) = unsafe { pair(weights, base + 26) };
+        let sl = low_word >> (unsafe { mask_index(sg, 3) } * 8 + (sg / 8) * 4);
+        let sh = high_word >> (unsafe { mask_index(sg, 3) } * 8 + (sg / 4) * 2);
+        let scale = ((sl & 15) | ((sh & 3) << 4)) as i32 - 32;
+        let d = unsafe { widen(header as u16) };
+        let ai = block * 64 + lane * 2;
+        let a_scale = f32::from_bits(unsafe { activation.add((3 * plane + block * 8 + lane / 4) as usize).read() });
+        for (component, divisor) in [(0, 1.0f32), (1, 1.0f32 / 128.0), (2, 1.0f32 / 16384.0)] {
+            let a = unsafe { activation.add((component * plane + ai) as usize) };
+            let integer = unsafe { dot(q0, a.read(), 0) };
+            let integer = unsafe { dot(q1, a.add(1).read(), integer) };
+            let value = unsafe { mul(mul((integer * scale) as f32, mul(a_scale, divisor)), d) };
+            let adjusted = unsafe { sub(value, correction) };
+            let next = unsafe { add(sum, adjusted) };
+            correction = unsafe { sub(sub(next, sum), adjusted) };
+            sum = next;
+        }
+    }
+    for shift in [16, 8, 4, 2, 1] {
+        sum = unsafe { add(sum, f32::from_bits(shuffle(sum.to_bits(), shift))) };
+    }
+    if lane == 0 {
+        unsafe { output.add(col as usize).write(sum) };
+    }
+}
+
 #[inline(always)]
 unsafe fn padded_word(p: *const u32, index: u32) -> u32 {
     unsafe { p.add(index as usize).read() }

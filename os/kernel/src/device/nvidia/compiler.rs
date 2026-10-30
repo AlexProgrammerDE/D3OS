@@ -161,6 +161,7 @@ pub(super) fn projection_module(symbol: &str) -> Result<Option<&'static [u8]>> {
         | "q3_warp_m16"
         | "q4_components_wide64"
         | "q3_components_padded112"
+        | "q3_components_padded112_wide"
         | "q3_default_padded112"
         | "q3_warp_padded112"
         | "embedding_q3_padded112" => QWEN_VECTOR

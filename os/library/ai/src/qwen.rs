@@ -71,6 +71,8 @@ pub enum Q3VectorKernel {
     #[default]
     Default,
     Components,
+    /// Paired metadata loads on padded Q3 storage, components elsewhere.
+    Aligned,
 }
 
 impl Q3VectorKernel {
@@ -86,6 +88,7 @@ impl Q3VectorKernel {
         match self {
             Self::Default => d3os_burn_native::backend::Q3VectorKernel::Default,
             Self::Components => d3os_burn_native::backend::Q3VectorKernel::Components,
+            Self::Aligned => d3os_burn_native::backend::Q3VectorKernel::Aligned,
         }
     }
 }

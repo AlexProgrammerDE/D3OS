@@ -171,6 +171,7 @@ fn run() -> Result<(), String> {
                     "paired-q3" if pair.is_none() => pair = Some(model_file::ProjectionPair::Q3Components),
                     "paired-q4-components" if pair.is_none() => pair = Some(model_file::ProjectionPair::Q4Components),
                     "paired-q4-aligned" if pair.is_none() => pair = Some(model_file::ProjectionPair::Q4Aligned),
+                    "paired-q3-aligned" if pair.is_none() => pair = Some(model_file::ProjectionPair::Q3Aligned),
                     "paired-defaults" if pair.is_none() => pair = Some(model_file::ProjectionPair::NativeDefaults),
                     "q8-prefill" if quantization == qwen::PrefillQuantization::Accurate => quantization = qwen::PrefillQuantization::Q8_1,
                     "q8-attention-prefill" if quantization == qwen::PrefillQuantization::Accurate => {
@@ -178,7 +179,7 @@ fn run() -> Result<(), String> {
                     }
                     _ => {
                         return Err(String::from(
-                            "usage: infer gpu-qwen-gguf-bench [device-timing] [paired-q4|paired-q3|paired-q4-components|paired-defaults|q8-prefill|q8-attention-prefill]",
+                            "usage: infer gpu-qwen-gguf-bench [device-timing] [paired-q4|paired-q3|paired-q4-components|paired-q4-aligned|paired-q3-aligned|paired-defaults|q8-prefill|q8-attention-prefill]",
                         ));
                     }
                 }
@@ -201,7 +202,7 @@ fn run() -> Result<(), String> {
         }
         _ => {
             return Err(String::from(
-                "usage: infer self-test | burn-self-test | gpu-mnist-train | gpu-mnist-infer | gpu-mnist-bench | gpu-mnist-profile | fwcfg-self-test | gpu-self-test | gpu-kernel-bench | alexnet [MODEL FIXTURE] | gpu-alexnet [MODEL FIXTURE] | gpu-alexnet-bench | qwen [MAX_TOKENS PROMPT...] | qwen-verify | gpu-qwen [MAX_TOKENS PROMPT...] | gpu-qwen-verify | gpu-qwen-bench [long] [device-timing] [firmware-model] | gpu-qwen-gguf [MAX_TOKENS PROMPT...] | gpu-qwen-gguf-bench [device-timing] [paired-q4|paired-q3|paired-q4-components|paired-defaults|q8-prefill|q8-attention-prefill] | gpu-qwen-gguf-verify",
+                "usage: infer self-test | burn-self-test | gpu-mnist-train | gpu-mnist-infer | gpu-mnist-bench | gpu-mnist-profile | fwcfg-self-test | gpu-self-test | gpu-kernel-bench | alexnet [MODEL FIXTURE] | gpu-alexnet [MODEL FIXTURE] | gpu-alexnet-bench | qwen [MAX_TOKENS PROMPT...] | qwen-verify | gpu-qwen [MAX_TOKENS PROMPT...] | gpu-qwen-verify | gpu-qwen-bench [long] [device-timing] [firmware-model] | gpu-qwen-gguf [MAX_TOKENS PROMPT...] | gpu-qwen-gguf-bench [device-timing] [paired-q4|paired-q3|paired-q4-components|paired-q4-aligned|paired-q3-aligned|paired-defaults|q8-prefill|q8-attention-prefill] | gpu-qwen-gguf-verify",
             ));
         }
     }

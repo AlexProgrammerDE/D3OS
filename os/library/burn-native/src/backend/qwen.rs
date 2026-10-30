@@ -35,6 +35,8 @@ pub enum Q3VectorKernel {
     #[default]
     Default,
     Components,
+    /// Paired metadata loads on padded Q3 storage, components elsewhere.
+    Aligned,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -110,7 +112,7 @@ fn use_q3_prefill(batch: usize, shape: [usize; 2], storage: (MatrixFormat, Matri
         && shape == [17408, 5120]
         && storage == (MatrixFormat::Quantized(Quantization::Q3K), MatrixLayout::RowMajor)
         && options.prefill == PrefillQuantization::Accurate
-        && options.q3_vector == Q3VectorKernel::Components
+        && matches!(options.q3_vector, Q3VectorKernel::Components | Q3VectorKernel::Aligned)
 }
 
 fn prepare_activations(input: &NativeTensor, outputs: usize, components: usize) -> Result<NativeTensor> {
@@ -155,13 +157,14 @@ fn projection(
         if format != MatrixFormat::Quantized(Quantization::Q3K) || shape != [17408, 5120] {
             return Err(Error::InvalidParameter);
         }
-        let components = usize::from(batch > 1 || options.q3_vector == Q3VectorKernel::Components) * 3;
+        let components = usize::from(batch > 1 || matches!(options.q3_vector, Q3VectorKernel::Components | Q3VectorKernel::Aligned)) * 3;
         let activations = if components == 3 { prepare_activations(&input, outputs, 3)? } else { input };
+        let phase = if batch == 1 && options.q3_vector == Q3VectorKernel::Aligned { 4 } else { 3 };
         return output(
             [batch, outputs],
             Kernel::ProjectQuantized,
             &[(&activations, 0), (&packed, 0)],
-            &[batch, width, outputs, 11, 3, components],
+            &[batch, width, outputs, 11, phase, components],
         );
     }
     if use_q3_prefill(batch, shape, storage, options) {
@@ -182,7 +185,7 @@ fn projection(
         );
     }
     let vector_components = match format {
-        MatrixFormat::Quantized(Quantization::Q3K) if options.q3_vector == Q3VectorKernel::Components => Some(11),
+        MatrixFormat::Quantized(Quantization::Q3K) if matches!(options.q3_vector, Q3VectorKernel::Components | Q3VectorKernel::Aligned) => Some(11),
         MatrixFormat::Quantized(Quantization::Q4K) if matches!(options.q4_vector, Q4VectorKernel::Components | Q4VectorKernel::Aligned) => Some(12),
         _ => None,
     };

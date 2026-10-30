@@ -4298,3 +4298,59 @@ The remaining decode, broader prefill, cold-storage, and rendering comparison go
 Evidence remains under `~/.cache/d3os/qwen-q4-wide64-loads-v1/`.
 The full-model capture remains under `~/.cache/d3os/qwen-q4-wide64-model-v1/`.
 Its serial SHA-256 is `3b9a9737da58b714dc25cc8df21c805edd05a5d0db0008e7128c0fef8a1fdaf6`.
+
+### Paired Q3 metadata loads
+
+The next Q3 experiment combines its adjacent high-scale word and FP16 block header into one aligned 64-bit load.
+It preserves the existing 112-byte layout, three activation residuals, FP32 operation order, Kahan accumulation, and warp reduction.
+The kernel uses 38 registers instead of 39, with no spills or shared memory.
+The previous kernel remains available through explicit `Components` selection.
+Native loading selects `Aligned`, which uses the new kernel only for padded single-row `[17408,5120]` projections.
+Other shapes and all prefill paths retain their existing implementations.
+
+The operator test includes activation packing and rotates eight weight buffers.
+Mean latency falls from 110.5610 to 104.6160 microseconds, a 5.3772% reduction.
+All 175,524 original reference checks and 105,170 bit-exact CPU comparisons pass.
+Both output poisons, both ignored-padding patterns, input immutability, and allocation guards pass.
+The new production entry matches the tested machine text exactly.
+All eight existing optional entries and all three core kernel-family records remain unchanged.
+
+An earlier integer-fold candidate also passes every numerical check, but increases rotating-weight latency by 2.5877%.
+Its single-buffer result is faster, which does not satisfy the declared rotating-weight criterion.
+It is rejected without a model run or production arithmetic change.
+
+The full-model comparison fixes Q4 at `Aligned` in both variants and shares the same immutable resident weights.
+The workload remains Qwen3.6-27B Q3_K_M, 37 prompt tokens, 128 generated tokens, batch 32, F32 cache, context 2048, and four pinned vCPUs.
+All four ordinary samples per variant are retained; instrumented diagnostic passes are excluded from throughput.
+
+| Same-capture measurement | Original Q3 loads | Paired Q3 metadata loads |
+| --- | ---: | ---: |
+| Mean decode time, 128 tokens | 6,084.75 ms | 5,999.25 ms |
+| Decode throughput | 21.0362 tokens/s | 21.3360 tokens/s |
+| First balanced block | 22.0120 tokens/s | 22.4463 tokens/s |
+| Second balanced block | 20.1432 tokens/s | 20.3304 tokens/s |
+| Observed prefill mean | 743.75 ms | 739.00 ms |
+
+The measured decode gain is 1.4252%, with both balanced blocks faster.
+The prefill implementations and their complete entry/parameter/call ledgers are identical, so the prefill timings establish no new prefill optimization.
+All 64,066,560 original logit comparisons pass at `0.002 + 0.0005 * abs(reference)`.
+Complete numerical error statistics and all twelve Native token traces match exactly.
+The two existing near-tied Linux token differences remain.
+Resident weights remain 13,664,997,376 bytes, with no extra copy, padding, repacking, or timed weight transfer.
+Prepared-page-cache load and upload take 8.782 seconds; cold-storage parity remains unproven.
+
+The first model launch fails at Candidate decode because the new entry was omitted from the kernel's optional-module lookup.
+Its archive and exact controllers remain preserved; it supplies no Candidate timing or acceptance.
+Adding that exact registration, checking all nine module names, and rebuilding the matching kernel resolves the failure.
+The repaired source receives one complete paired capture, with no added performance samples.
+Host SDK tests (24), Native tests (75), packed-model tests (6), strict Clippy, and parser controls pass.
+
+The latest rate is 37.67% below the cached matched llama.cpp result of 34.2330 tokens/s.
+Absolute rates differ between captures: the previous capture reports 21.8402 tokens/s, while this capture's Control is 21.0362 tokens/s.
+The 1.4252% improvement therefore uses the same-capture Control, rather than comparing absolute rates across captures.
+The remaining decode, broader prefill, cold-storage, and rendering goals remain open.
+
+Evidence remains under `~/.cache/d3os/qwen-q3-metadata64-loads-v1/`.
+The failed capture remains under `~/.cache/d3os/qwen-q3-metadata64-model-v1/`.
+The completed capture remains under `~/.cache/d3os/qwen-q3-metadata64-model-v2/`.
+Its serial SHA-256 is `57a1802dd5874bdb1bfa9bd15106eb171a807ab0695cbed2cd76c87cf189163a`.

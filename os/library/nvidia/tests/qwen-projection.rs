@@ -592,7 +592,7 @@ fn padded_q3_consumers_bound_words_tails_alignment_and_aliases() {
         work.validate_aliases(&[0x10000000, 0x100000, 0x40000000]).unwrap();
         assert!(work.validate_aliases(&[0x10000000, 0x100000, 0x10000000]).is_err());
     }
-    for (field, value) in [(0, 0), (0, u32::MAX), (1, 5119), (1, 5376), (2, 17407), (2, 17440), (3, 12), (4, 4), (5, 1)] {
+    for (field, value) in [(0, 0), (0, u32::MAX), (1, 5119), (1, 5376), (2, 17407), (2, 17440), (3, 12), (4, 5), (5, 1)] {
         let mut packet = [1, 5120, 17408, 11, 3, 3];
         packet[field] = value;
         assert!(Kernel::ProjectQuantized.work(&packet).is_err());
@@ -631,5 +631,39 @@ fn aligned_q4_checks_full_storage_and_rejects_unmeasured_packets() {
             invalid[field] = value;
             assert!(Kernel::ProjectQuantized.work(&invalid).is_err());
         }
+    }
+}
+
+#[test]
+fn aligned_q3_keeps_padded_extents_and_rejects_unmeasured_packets() {
+    let packet = [1, 5120, 17408, 11, 4, 3];
+    let work = Kernel::ProjectQuantized.work(&packet).unwrap();
+    let ordinary = Kernel::ProjectQuantized.work(&[1, 5120, 17408, 11, 3, 3]).unwrap();
+    assert_eq!(work.extents, ordinary.extents);
+    assert_eq!((work.blocks, work.threads, work.pointers, work.output, work.in_place), (4352, 128, 3, 2, false));
+    assert_eq!(work.alignments, ordinary.alignments);
+    let addresses = [0x100000, 0x10000000, 0x40000000];
+    work.validate_aliases(&addresses).unwrap();
+    assert!(work.validate_aliases(&[addresses[0], addresses[1] + 4, addresses[2]]).is_err());
+    for source in 0..2 {
+        let mut overlap = addresses;
+        overlap[2] = addresses[source] + (work.extents[source] - 1) * 4;
+        assert!(work.validate_aliases(&overlap).is_err());
+    }
+    for (field, value) in [
+        (0, 0),
+        (0, 2),
+        (1, 5119),
+        (1, u32::MAX),
+        (2, 17407),
+        (2, u32::MAX),
+        (3, 12),
+        (4, 5),
+        (5, 0),
+        (5, 1),
+    ] {
+        let mut invalid = packet;
+        invalid[field] = value;
+        assert!(Kernel::ProjectQuantized.work(&invalid).is_err());
     }
 }

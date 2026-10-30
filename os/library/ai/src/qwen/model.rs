@@ -363,7 +363,7 @@ impl Qwen {
         .valid();
         if super::native_matrix_device(device) {
             if load.has_q3 {
-                model = model.with_q3_vector_kernel(Q3VectorKernel::Components)?;
+                model = model.with_q3_vector_kernel(Q3VectorKernel::Aligned)?;
             }
             if load.has_q4 {
                 model = model.with_q4_vector_kernel(Q4VectorKernel::Aligned)?;

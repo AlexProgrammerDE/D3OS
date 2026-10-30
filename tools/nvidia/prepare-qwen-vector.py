@@ -22,6 +22,7 @@ ENTRIES = (
     "q3_warp_padded112",
     "embedding_q3_padded112",
     "q4_components_wide64",
+    "q3_components_padded112_wide",
 )
 FAMILY = "qwen-vector"
 CRATE = ROOT / "tools/qwen-vector-kernels"
