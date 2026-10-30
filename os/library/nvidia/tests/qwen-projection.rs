@@ -1,6 +1,38 @@
 use d3os_nvidia::compute::Kernel;
 
 #[test]
+fn block_scaled_prefill_matches_packer_storage_and_rejects_unmeasured_cells() {
+    let pack = Kernel::ProjectQuantized.work(&[5, 5120, 17408, 8, 3, 3]).unwrap();
+    let project = Kernel::ProjectQuantized.work(&[5, 5120, 17408, 11, 8, 3]).unwrap();
+    let values = 5 * 5120;
+    let words = 3 * values / 4 + values / 256;
+    assert_eq!(pack.extents[..2], [values, words]);
+    assert_eq!(project.extents[..3], [words, 17408 * 20 * 28, 5 * 17408]);
+    assert_eq!((pack.blocks, project.blocks, pack.threads, project.threads), (100, 544, 128, 128));
+    assert_eq!((pack.pointers, pack.output, project.pointers, project.output), (2, 1, 3, 2));
+    pack.validate_aliases(&[0x100000, 0x200000]).unwrap();
+    project.validate_aliases(&[0x200000, 0x10000000, 0x40000000]).unwrap();
+    assert!(pack.validate_aliases(&[0x100000, 0x100000 + 4 * (values - 1)]).is_err());
+    for source in 0..2 {
+        let mut addresses = [0x200000, 0x10000000, 0x40000000];
+        addresses[2] = addresses[source] + 4 * (project.extents[source] - 1);
+        assert!(project.validate_aliases(&addresses).is_err());
+    }
+    for parameters in [[5, 5120, 17408, 8, 3, 3], [5, 5120, 17408, 11, 8, 3]] {
+        for field in [0, 1, 2, 5] {
+            for value in [0, 1, 4, 6, 32, u32::MAX] {
+                if value == parameters[field] {
+                    continue;
+                }
+                let mut changed = parameters;
+                changed[field] = value;
+                assert!(Kernel::ProjectQuantized.work(&changed).is_err());
+            }
+        }
+    }
+}
+
+#[test]
 fn paired_tail_rows_cover_odd_rows_without_changing_storage_or_decode() {
     let pair = Kernel::ProjectQuantized.entry(&[5, 4096, 12288, 8, 2]);
     let single = Kernel::ProjectQuantized.entry(&[1, 4096, 4096, 8, 2]);

@@ -146,3 +146,6 @@ mod q4_shared;
 mod q4_halfwarp;
 
 mod q3_negated_shared;
+
+mod q3_k256;
+mod q3_k256_pack;

@@ -4785,3 +4785,78 @@ Operator evidence remains under `~/.cache/d3os/qwen-q3-negated-prefill-v1/`.
 Its serial SHA-256 is `7518c914f7cad36e8c3104e18e80bb209040bff898315449ad6f1eb63914d2b9`.
 Integration evidence remains under `qwen-negated-prefill-integration-v1/`, and the model capture remains under `qwen-negated-prefill-model-v1/`.
 The model serial SHA-256 is `0f156ea94a6bfacd55d9af3765733e035d949ed8bf97b531f2659b7f393e910f`.
+
+### K256 activation scales for five-row Q3 prefill
+
+The next retained change uses one activation scale per K256 block for the measured five-row Q3 projection.
+Three signed-byte residual planes remain. Eight K32 integer matrix products accumulate before each FP32 scale and compensated addition.
+The integer magnitude is at most 4,194,304, so I32 saturation is inert and conversion to F32 is exact.
+The activation scales and FP32 addition order change. A separate CPU oracle therefore covers this route.
+The original FP64 operator reference and numerical limits remain unchanged.
+
+The machine qualifier adds the exact register-only accumulating `IMMA.16832.S8.S8.SAT` form under profile v6.
+The accumulator must equal the destination, and all register groups must satisfy the instruction's alignment and bounds.
+Existing zero-accumulator, constant-bank, inventory, call, and metadata rules remain unchanged.
+All four prior production qualification records remain exact. Numerical bounds remain a separate requirement.
+All 41 qualifier tests and 171 additional malformed-SASS controls pass.
+
+The packer uses 22 registers and 16 shared bytes. The M16 projection uses 52 registers and 3,584 shared bytes.
+Both use 128 threads, with no local memory, stack, frame, or spills.
+Production machine text matches the operator-tested packer and projection exactly.
+All eighteen previous optional entry texts and all three core-family records remain unchanged.
+
+| Operator measurement, including packing | Current K32 scales | K256 scales | Time reduction |
+| --- | ---: | ---: | ---: |
+| Five rows, one weight buffer | 263.3292 µs | 181.0867 µs | 31.23% |
+| Five rows, eight rotating buffers | 282.4285 µs | 197.6780 µs | 30.01% |
+| Thirty-two rows, eight rotating buffers | 481.5391 µs | 469.5881 µs | 2.48% |
+
+Only the five-row cell passes the declared 5% threshold. The thirty-two-row path retains the accepted K32 implementation.
+A separate launch study uses two M16 tiles at thirty-two rows. That geometry passes accuracy but increases rotating latency 33.86%.
+The launch study reuses compiled artifacts and CPU references. It takes no additional five-row performance samples.
+Both captures retain every sample, output poison, padding pattern, row tail, column tail, source check, and allocation guard.
+The first capture passes 5,012,556 original comparisons and the same number of exact CPU comparisons.
+The launch study passes 4,664,396 comparisons against each reference.
+
+`PrefillQuantization::BlockScaledComponents` selects K256 packing and projection only at M 5, K 5,120, and N 17,408.
+The activation allocation holds 19,300 words, versus 20,000 words for K32 packing.
+The packer uses 100 CTAs, and the projection uses 544 CTAs. Both allocations retain complete alias checks.
+Other prefill cells retain their previous entries, including the thirty-two-row negated Q3 route.
+Both HalfWarp decode routes remain unchanged. No expanded or duplicate weights are necessary.
+`--qwen-paired-q3-block-prefill --qwen-q3-padded112` compares this route against the accepted negated shared implementation.
+
+The model contract retains the 37-token prompt, 128 decode tokens, F32 cache, context 2048, batch 32, and four pinned vCPUs.
+One capture retains all eight ordinary samples, two warmups, and two instrumented passes.
+Acceptance requires at least 1% lower mean prompt latency, faster results in both balanced blocks, and at most 1% decode regression.
+
+| Same-capture model measurement | Current K32 scales | Five-row K256 scales |
+| --- | ---: | ---: |
+| Mean prompt latency | 485.5 ms | 470.5 ms |
+| First balanced block | 456.0 ms | 443.0 ms |
+| Second balanced block | 515.0 ms | 498.0 ms |
+| Decode throughput | 24.2884 tokens/s | 24.2792 tokens/s |
+
+Prompt latency decreases 3.0896%. Decode changes -0.0379%, with identical complete decode entry, parameter, and call ledgers.
+Every unrelated prefill entry and pack count remains unchanged. This change provides no measured decode gain.
+All 64,066,560 original logit checks pass at `0.002 + 0.0005 * abs(reference)`.
+All twelve Native token traces match, and the two existing Linux selection differences remain unchanged.
+The Candidate maximum absolute error is `0.000034928322`, versus `0.00003385544` for Control.
+Reference-error statistics differ because activation quantization and FP32 staging change. Neither numerical limit changes.
+
+Resident weights remain 13,664,997,376 bytes. Prepared-page-cache loading and upload take 10.248 seconds.
+The capture has no recorder overlap or resource stop. This measurement establishes no cold-storage parity.
+SDK tests (29), Native tests (78), packed-model tests (6), and strict Clippy pass.
+Seven historical captures, 66 parser rejection controls, current-default controls, and three CLI prerequisite controls pass.
+The matching image builds, and all twenty optional module entries resolve.
+Verified cache deltas preserve both warm build targets before removal of their RAM copies.
+The evidence retains the missing AI enum mapping, two incomplete CLI helper attempts, and the restored formatter-only changes.
+The final image contains the focused source changes. The earlier formatted image was never executed.
+
+Cached matched llama.cpp remains at 34.233 tokens/s and 93.693 ms prompt latency.
+This capture leaves a 29.08% decode gap and about 5.02 times the prompt latency.
+Absolute values differ between captures, so paired samples determine acceptance. No decode improvement follows from this prefill result.
+The remaining decode gap, prompt gap, matched cold storage, and physical rendering presentation remain open.
+
+Operator evidence remains under `~/.cache/d3os/qwen-q3-k256-prefill-v1/` and `qwen-q3-k256-row16-prefill-v1/`.
+Integration evidence remains under `qwen-k256-prefill-integration-v1/`, and the model capture remains under `qwen-k256-prefill-model-v1/`.
+The model serial SHA-256 is `f13013d31042eb13f29f9168367fad0ebfed397089bf04c1f5298ee17432a5fc`.

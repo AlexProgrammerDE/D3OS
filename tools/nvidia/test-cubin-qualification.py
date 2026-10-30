@@ -604,7 +604,6 @@ class Int8MmaQualificationTests(unittest.TestCase):
             (2, "UR22.reuse.COL"),
             (2, "-R22.reuse.COL"),
             (3, "R0"),
-            (3, "R8"),
             (3, "URZ"),
             (3, "-RZ"),
             (3, "RZ.reuse"),
@@ -638,6 +637,78 @@ class Int8MmaQualificationTests(unittest.TestCase):
         for suffix in (", RZ", ", c[0x4][0x8]", " garbage"):
             with self.subTest(suffix=suffix), self.assertRaises(ValueError):
                 qualify_instructions(self.observed + suffix)
+
+    def test_observed_self_accumulator_register_groups(self):
+        for instruction in (
+            "IMMA.16832.S8.S8.SAT R4, R40.ROW, R48.COL, R4",
+            "IMMA.16832.S8.S8.SAT R12, R40.reuse.ROW, R48.COL, R12",
+            "IMMA.16832.S8.S8.SAT R16, R20.ROW, R26.reuse.COL, R16",
+        ):
+            with self.subTest(instruction=instruction):
+                result = qualify_instructions(instruction)
+                self.assertEqual(
+                    result["metadata_unused_profile"],
+                    qualification.INT8_MMA_ACCUM_PROFILE,
+                )
+                (site,) = result["int8_mma_accumulations"]
+                self.assertEqual(site["destination"], site["accumulator"])
+                self.assertEqual((site["section"], site["offset"]), (".text.entry", 0))
+                self.assertEqual(result["cb4_accesses"], [])
+
+    def test_accumulator_group_alignment_boundaries_and_operand_slots(self):
+        for register in range(256):
+            instruction = (
+                f"IMMA.16832.S8.S8.SAT R{register}, R40.ROW, R48.COL, R{register}"
+            )
+            if register % 4 == 0 and register + 3 < 255:
+                result = qualify_instructions(instruction)
+                self.assertEqual(
+                    result["int8_mma_accumulations"][0]["destination"], register
+                )
+            else:
+                with self.subTest(register=register), self.assertRaises(ValueError):
+                    qualify_instructions(instruction)
+        operands = ["R4", "R40.ROW", "R48.COL", "R4"]
+        for slot, values in (
+            (0, ["R2", "R252", "UR4", "R4.reuse"]),
+            (1, ["R42.ROW", "R252.ROW", "R40.COL", "RZ.ROW", "R40.ROW.reuse"]),
+            (2, ["R49.COL", "R254.COL", "R48.ROW", "UR48.COL", "R48.COL.reuse"]),
+            (3, ["R0", "R8", "R4.reuse", "UR4", "-R4"]),
+        ):
+            for value in [
+                *values,
+                "0",
+                "c[0x0][0x160]",
+                "c[0x2][0x0]",
+                "c[0x4][0x8]",
+                "[R4]",
+            ]:
+                changed = operands.copy()
+                changed[slot] = value
+                with (
+                    self.subTest(slot=slot, value=value),
+                    self.assertRaises(ValueError),
+                ):
+                    qualify_instructions("IMMA.16832.S8.S8.SAT " + ", ".join(changed))
+
+    def test_accumulating_mma_requires_executable_inventory_and_producer(self):
+        instruction = "IMMA.16832.S8.S8.SAT R4, R40.ROW, R48.COL, R4"
+        cubin = elf([(".text.entry", 32)])
+        original = sass([(".text.entry", [instruction, "EXIT"])])
+        for mutation in (
+            original.replace("/*0010*/ EXIT;", ""),
+            original.replace("/*0010*/", "/*0000*/"),
+            original.replace("sm_89", "sm_90", 1),
+            original.replace("V13.4.92", "V13.4.93"),
+            original.replace(".S8.S8.SAT", ".U8.S8.SAT"),
+        ):
+            with self.subTest(sass=mutation), self.assertRaises(ValueError):
+                qualification.qualify(cubin, mutation)
+        plain = sass([(".text.entry", ["EXIT"])]) + "// " + instruction + "\n"
+        plain += '.section .nv.info,"",@progbits\n' + instruction + ";\n"
+        result = qualification.qualify(elf([(".text.entry", 16)]), plain)
+        self.assertEqual(result["metadata_unused_profile"], qualification.PROFILE)
+        self.assertNotIn("int8_mma_accumulations", result)
 
     def test_mma_does_not_relax_inventory_or_producer_checks(self):
         cubin = elf([(".text.entry", 32)])

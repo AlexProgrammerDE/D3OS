@@ -39,6 +39,8 @@ pub enum PrefillQuantization {
     SharedComponents,
     /// Shared tiles with exact negated Q3 fragments, retaining Q4 shared tiles.
     NegatedSharedComponents,
+    /// One activation scale per K256 block on the measured five-row Q3 cell.
+    BlockScaledComponents,
 }
 
 /// Select a Q4_K vector implementation with the original output tolerances.
@@ -124,6 +126,7 @@ impl PrefillQuantization {
             Self::Q4KComponents => d3os_burn_native::backend::PrefillQuantization::Q4KComponents,
             Self::SharedComponents => d3os_burn_native::backend::PrefillQuantization::SharedComponents,
             Self::NegatedSharedComponents => d3os_burn_native::backend::PrefillQuantization::NegatedSharedComponents,
+            Self::BlockScaledComponents => d3os_burn_native::backend::PrefillQuantization::BlockScaledComponents,
         }
     }
 }

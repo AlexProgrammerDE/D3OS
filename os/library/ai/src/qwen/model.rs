@@ -182,6 +182,7 @@ impl Mixer {
                 | PrefillQuantization::Q4KComponents
                 | PrefillQuantization::SharedComponents
                 | PrefillQuantization::NegatedSharedComponents
+                | PrefillQuantization::BlockScaledComponents
         ) {
             mode
         } else {
@@ -380,7 +381,7 @@ impl Qwen {
                 model = model.with_q4_vector_kernel(Q4VectorKernel::HalfWarp)?;
             }
             if model.supports_q4_component_prefill() {
-                model = model.with_prefill_quantization(PrefillQuantization::NegatedSharedComponents)?;
+                model = model.with_prefill_quantization(PrefillQuantization::BlockScaledComponents)?;
             }
         }
         Ok(model)
@@ -524,7 +525,10 @@ impl Qwen {
         mode.check_device(&self.device())?;
         if matches!(
             mode,
-            PrefillQuantization::Q4KComponents | PrefillQuantization::SharedComponents | PrefillQuantization::NegatedSharedComponents
+            PrefillQuantization::Q4KComponents
+                | PrefillQuantization::SharedComponents
+                | PrefillQuantization::NegatedSharedComponents
+                | PrefillQuantization::BlockScaledComponents
         ) && !self.supports_q4_component_prefill()
         {
             return Err(Error::from("Q4 component prefill requires a measured Q4_K weight geometry"));

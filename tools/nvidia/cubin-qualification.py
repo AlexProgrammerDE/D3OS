@@ -18,6 +18,7 @@ PROFILE = "sm89-direct-constant-v2"
 INT8_MMA_PROFILE = "sm89-direct-constant-v3"
 INT8_DOT_PROFILE = "sm89-direct-constant-v4"
 INT8_DOT_CB2_PROFILE = "sm89-direct-constant-v5"
+INT8_MMA_ACCUM_PROFILE = "sm89-direct-constant-v6"
 VERSION = "13.4.92"
 ELF_HEADER = struct.Struct("<16sHHIQQQIHHHHHH")
 SECTION_HEADER = struct.Struct("<IIQQQQIIQQ")
@@ -37,6 +38,16 @@ INT8_MMA_REGISTER = r"R(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])"
 INT8_MMA_OPERANDS = re.compile(
     rf"{INT8_MMA_REGISTER}\s*,\s*{INT8_MMA_REGISTER}(?:\.reuse)?\.ROW\s*,\s*"
     rf"{INT8_MMA_REGISTER}(?:\.reuse)?\.COL\s*,\s*RZ"
+)
+# The observed accumulating form writes back to the same four-register group.
+# Complete A/C/D groups and B pairs must stay below the reserved RZ register.
+# SAT behavior remains part of the instruction; caller-specific bounds need
+# a separate numerical proof. This inventory check does not establish them.
+INT8_MMA_ACCUM_OPERANDS = re.compile(
+    rf"(?P<destination>{INT8_MMA_REGISTER})\s*,\s*"
+    rf"(?P<left>{INT8_MMA_REGISTER})(?:\.reuse)?\.ROW\s*,\s*"
+    rf"(?P<right>{INT8_MMA_REGISTER})(?:\.reuse)?\.COL\s*,\s*"
+    rf"(?P<accumulator>{INT8_MMA_REGISTER})"
 )
 # Rust NVPTX emits this signed packed dot4 with register-only operands.
 # A register accumulator covers the second dot4 in each eight-value group.
@@ -356,6 +367,7 @@ def qualify(cubin: bytes, sass: str) -> dict:
     active = None
     cb4_accesses = []
     has_int8_mma = False
+    int8_mma_accumulations = []
     has_int8_dot = False
     cb2_dot_accesses = []
     u32_extracts = []
@@ -426,11 +438,35 @@ def qualify(cubin: bytes, sass: str) -> dict:
                     )
                 u32_extracts.append({"section": active, "offset": offset, "literal": 4})
             elif opcode.split(".")[0] == "IMMA":
-                if opcode != INT8_MMA_OPCODE or not INT8_MMA_OPERANDS.fullmatch(
-                    operands
-                ):
+                if opcode != INT8_MMA_OPCODE:
                     raise ValueError(
                         f"{active}:{offset:#x}: unsupported signed INT8 MMA form"
+                    )
+                if not INT8_MMA_OPERANDS.fullmatch(operands):
+                    accumulated = INT8_MMA_ACCUM_OPERANDS.fullmatch(operands)
+                    registers = (
+                        {
+                            key: int(value[1:])
+                            for key, value in accumulated.groupdict().items()
+                        }
+                        if accumulated
+                        else {}
+                    )
+                    if (
+                        not registers
+                        or registers["destination"] != registers["accumulator"]
+                        or registers["destination"] % 4
+                        or registers["destination"] + 3 >= 255
+                        or registers["left"] % 4
+                        or registers["left"] + 3 >= 255
+                        or registers["right"] % 2
+                        or registers["right"] + 1 >= 255
+                    ):
+                        raise ValueError(
+                            f"{active}:{offset:#x}: unsupported signed INT8 MMA form"
+                        )
+                    int8_mma_accumulations.append(
+                        {"section": active, "offset": offset, **registers}
                     )
                 has_int8_mma = True
             elif half_compare is not None:
@@ -474,7 +510,9 @@ def qualify(cubin: bytes, sass: str) -> dict:
     record = {
         "schema_version": 1,
         "metadata_unused_profile": (
-            INT8_DOT_CB2_PROFILE
+            INT8_MMA_ACCUM_PROFILE
+            if int8_mma_accumulations
+            else INT8_DOT_CB2_PROFILE
             if cb2_dot_accesses or u32_extracts
             else INT8_DOT_PROFILE
             if has_int8_dot
@@ -501,6 +539,8 @@ def qualify(cubin: bytes, sass: str) -> dict:
         record["cb2_dot_accesses"] = cb2_dot_accesses
     if u32_extracts:
         record["u32_extracts"] = u32_extracts
+    if int8_mma_accumulations:
+        record["int8_mma_accumulations"] = int8_mma_accumulations
     record["evidence_sha256"] = sha256(
         json.dumps(record, sort_keys=True, separators=(",", ":")).encode("utf-8")
     )

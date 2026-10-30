@@ -93,6 +93,7 @@ pub(super) enum ProjectionPair {
     Q3HalfWarp,
     Q4HalfWarp,
     Q3NegatedPrefill,
+    Q3BlockPrefill,
     NativeDefaults,
 }
 
@@ -112,6 +113,10 @@ impl ProjectionPair {
             Self::Q3Aligned => model
                 .with_q3_vector_kernel(Q3VectorKernel::Components)?
                 .with_q4_vector_kernel(Q4VectorKernel::Aligned),
+            Self::Q3BlockPrefill => model
+                .with_q3_vector_kernel(Q3VectorKernel::HalfWarp)?
+                .with_q4_vector_kernel(Q4VectorKernel::HalfWarp)?
+                .with_prefill_quantization(PrefillQuantization::NegatedSharedComponents),
             Self::Q3NegatedPrefill => model
                 .with_q3_vector_kernel(Q3VectorKernel::HalfWarp)?
                 .with_q4_vector_kernel(Q4VectorKernel::HalfWarp)?
@@ -148,10 +153,11 @@ impl ProjectionPair {
             Self::Q3HalfWarp => model.with_q3_vector_kernel(Q3VectorKernel::HalfWarp),
             Self::Q4HalfWarp => model.with_q4_vector_kernel(Q4VectorKernel::HalfWarp),
             Self::Q3NegatedPrefill => model.with_prefill_quantization(PrefillQuantization::NegatedSharedComponents),
+            Self::Q3BlockPrefill => model.with_prefill_quantization(PrefillQuantization::BlockScaledComponents),
             Self::NativeDefaults => {
                 if model.q3_vector_kernel() != Q3VectorKernel::HalfWarp
                     || model.q4_vector_kernel() != Q4VectorKernel::HalfWarp
-                    || model.prefill_quantization() != PrefillQuantization::NegatedSharedComponents
+                    || model.prefill_quantization() != PrefillQuantization::BlockScaledComponents
                 {
                     return Err(Error::from("native default experiment requires both component kernels at model load"));
                 }
@@ -164,7 +170,13 @@ impl ProjectionPair {
         match self {
             Self::Q4Narrow => format!("q4_vector_kernel={:?}", model.q4_vector_kernel()),
             Self::Q3Components => format!("q3_vector_kernel={:?}", model.q3_vector_kernel()),
-            Self::Q4Prefill | Self::SharedPrefill | Self::Q3HalfWarp | Self::Q4HalfWarp | Self::Q3NegatedPrefill | Self::NativeDefaults => format!(
+            Self::Q4Prefill
+            | Self::SharedPrefill
+            | Self::Q3HalfWarp
+            | Self::Q4HalfWarp
+            | Self::Q3NegatedPrefill
+            | Self::Q3BlockPrefill
+            | Self::NativeDefaults => format!(
                 "q4_vector_kernel={:?} q3_vector_kernel={:?} prefill_quantization={:?}",
                 model.q4_vector_kernel(),
                 model.q3_vector_kernel(),

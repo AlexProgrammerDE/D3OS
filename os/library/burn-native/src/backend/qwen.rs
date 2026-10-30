@@ -25,6 +25,8 @@ pub enum PrefillQuantization {
     SharedComponents,
     /// Shared tiles with exact negated Q3 fragments, retaining Q4 shared tiles.
     NegatedSharedComponents,
+    /// One activation scale per K256 block on the measured five-row Q3 cell.
+    BlockScaledComponents,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -97,7 +99,10 @@ fn projection_components(batch: usize, shape: [usize; 2], storage: (MatrixFormat
     // Q4 mode changes only its measured cells; Q8 keeps the accurate policy.
     let mode = if matches!(
         mode,
-        PrefillQuantization::Q4KComponents | PrefillQuantization::SharedComponents | PrefillQuantization::NegatedSharedComponents
+        PrefillQuantization::Q4KComponents
+            | PrefillQuantization::SharedComponents
+            | PrefillQuantization::NegatedSharedComponents
+            | PrefillQuantization::BlockScaledComponents
     ) {
         PrefillQuantization::Accurate
     } else {
@@ -136,6 +141,7 @@ fn use_q3_prefill(batch: usize, shape: [usize; 2], storage: (MatrixFormat, Matri
                 | PrefillQuantization::Q4KComponents
                 | PrefillQuantization::SharedComponents
                 | PrefillQuantization::NegatedSharedComponents
+                | PrefillQuantization::BlockScaledComponents
         )
         && matches!(
             options.q3_vector,
@@ -158,10 +164,15 @@ fn padded_q3_phase(batch: usize, options: ProjectionOptions) -> usize {
     if matches!(batch, 5 | 32)
         && matches!(
             options.prefill,
-            PrefillQuantization::SharedComponents | PrefillQuantization::NegatedSharedComponents
+            PrefillQuantization::SharedComponents | PrefillQuantization::NegatedSharedComponents | PrefillQuantization::BlockScaledComponents
         )
     {
-        if options.prefill == PrefillQuantization::NegatedSharedComponents {
+        if options.prefill == PrefillQuantization::BlockScaledComponents && batch == 5 {
+            8
+        } else if matches!(
+            options.prefill,
+            PrefillQuantization::NegatedSharedComponents | PrefillQuantization::BlockScaledComponents
+        ) {
             7
         } else {
             5
@@ -180,7 +191,10 @@ fn padded_q3_phase(batch: usize, options: ProjectionOptions) -> usize {
 fn use_q4_prefill(batch: usize, shape: [usize; 2], storage: (MatrixFormat, MatrixLayout), mode: PrefillQuantization) -> bool {
     matches!(
         mode,
-        PrefillQuantization::Q4KComponents | PrefillQuantization::SharedComponents | PrefillQuantization::NegatedSharedComponents
+        PrefillQuantization::Q4KComponents
+            | PrefillQuantization::SharedComponents
+            | PrefillQuantization::NegatedSharedComponents
+            | PrefillQuantization::BlockScaledComponents
     ) && matches!(batch, 5 | 32)
         && matches!(shape, [5120, 6144 | 17408])
         && storage == (MatrixFormat::Quantized(Quantization::Q4K), MatrixLayout::RowMajor)
@@ -237,7 +251,7 @@ fn projection(
                 12,
                 if matches!(
                     options.prefill,
-                    PrefillQuantization::SharedComponents | PrefillQuantization::NegatedSharedComponents
+                    PrefillQuantization::SharedComponents | PrefillQuantization::NegatedSharedComponents | PrefillQuantization::BlockScaledComponents
                 ) {
                     3
                 } else {
@@ -258,8 +272,15 @@ fn projection(
                     Q3VectorKernel::Components | Q3VectorKernel::Aligned | Q3VectorKernel::HalfWarp
                 ),
         ) * 3;
-        let activations = if components == 3 { prepare_activations(&input, outputs, 3)? } else { input };
         let phase = padded_q3_phase(batch, options);
+        let activations = if phase == 8 {
+            let words = batch * (3 * width / 4 + width / 256);
+            output([1, words], Kernel::ProjectQuantized, &[(&input, 0)], &[batch, width, outputs, 8, 3, 3])?
+        } else if components == 3 {
+            prepare_activations(&input, outputs, 3)?
+        } else {
+            input
+        };
         return output(
             [batch, outputs],
             Kernel::ProjectQuantized,
@@ -721,6 +742,7 @@ mod projection_mode_tests {
             PrefillQuantization::Accurate,
             PrefillQuantization::SharedComponents,
             PrefillQuantization::NegatedSharedComponents,
+            PrefillQuantization::BlockScaledComponents,
         ] {
             for q3_vector in [
                 Q3VectorKernel::Default,
@@ -735,8 +757,24 @@ mod projection_mode_tests {
                         ..Default::default()
                     };
                     let expected = if batch != 1 {
-                        if matches!(batch, 5 | 32) && matches!(prefill, PrefillQuantization::SharedComponents | PrefillQuantization::NegatedSharedComponents) {
-                            if prefill == PrefillQuantization::NegatedSharedComponents { 7 } else { 5 }
+                        if matches!(batch, 5 | 32)
+                            && matches!(
+                                prefill,
+                                PrefillQuantization::SharedComponents
+                                    | PrefillQuantization::NegatedSharedComponents
+                                    | PrefillQuantization::BlockScaledComponents
+                            )
+                        {
+                            if prefill == PrefillQuantization::BlockScaledComponents && batch == 5 {
+                                8
+                            } else if matches!(
+                                prefill,
+                                PrefillQuantization::NegatedSharedComponents | PrefillQuantization::BlockScaledComponents
+                            ) {
+                                7
+                            } else {
+                                5
+                            }
                         } else {
                             3
                         }
@@ -760,6 +798,7 @@ mod projection_mode_tests {
             PrefillQuantization::Q4KComponents,
             PrefillQuantization::SharedComponents,
             PrefillQuantization::NegatedSharedComponents,
+            PrefillQuantization::BlockScaledComponents,
         ] {
             for rows in [0, 1, 2, 4, 5, 16, 31, 32, 33] {
                 for inner in [6144, 17408] {
@@ -773,6 +812,7 @@ mod projection_mode_tests {
                 PrefillQuantization::Q4KComponents,
                 PrefillQuantization::SharedComponents,
                 PrefillQuantization::NegatedSharedComponents,
+                PrefillQuantization::BlockScaledComponents,
             ] {
                 assert!(!use_q4_prefill(32, shape, storage, mode));
             }
@@ -790,6 +830,7 @@ mod projection_mode_tests {
                     PrefillQuantization::Q4KComponents,
                     PrefillQuantization::SharedComponents,
                     PrefillQuantization::NegatedSharedComponents,
+                    PrefillQuantization::BlockScaledComponents,
                 ] {
                     assert_eq!(
                         projection_components(rows, shape, q8, mode),

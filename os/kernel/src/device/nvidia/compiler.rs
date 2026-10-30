@@ -166,6 +166,8 @@ pub(super) fn projection_module(symbol: &str) -> Result<Option<&'static [u8]>> {
         | "q4_shared_m32"
         | "q3_shared_m16"
         | "q3_negated_shared_m16"
+        | "q3_k256_shared_m16"
+        | "q3_k256_components_pack"
         | "q3_shared_m32"
         | "q3_negated_shared_m32"
         | "q3_components_padded112"

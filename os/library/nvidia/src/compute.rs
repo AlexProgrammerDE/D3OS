@@ -557,6 +557,8 @@ impl Kernel {
             (Self::ProjectQuantized, [32, 6144 | 17408, 5120, 12, 3, 3]) => "q4_shared_m32",
             (Self::ProjectQuantized, [5, 5120, 17408, 11, 5, 3]) => "q3_shared_m16",
             (Self::ProjectQuantized, [5, 5120, 17408, 11, 7, 3]) => "q3_negated_shared_m16",
+            (Self::ProjectQuantized, [5, 5120, 17408, 11, 8, 3]) => "q3_k256_shared_m16",
+            (Self::ProjectQuantized, [5, 5120, 17408, 8, 3, 3]) => "q3_k256_components_pack",
             (Self::ProjectQuantized, [32, 5120, 17408, 11, 5, 3]) => "q3_shared_m32",
             (Self::ProjectQuantized, [32, 5120, 17408, 11, 7, 3]) => "q3_negated_shared_m32",
             (Self::ProjectQuantized, [1, 5120, 17408, 11, 3, 0]) => "q3_default_padded112",
@@ -933,6 +935,15 @@ impl Kernel {
                 let weights = product(&[k / 256, 5120, 36])?;
                 extents[..3].copy_from_slice(&[u64::from(activation), u64::from(weights), u64::from(product(&[m, 5120])?)]);
                 (product(&[if phase == 3 { 1 } else { m.div_ceil(16) }, 160, 128])?, 3, 2, false)
+            }
+            // The measured five-row K256 pack and projection share 19,300 words.
+            (Self::ProjectQuantized, &[5, 5120, 17408, 8, 3, 3]) => {
+                extents[..2].copy_from_slice(&[25600, 19300]);
+                (100 * 128, 2, 1, false)
+            }
+            (Self::ProjectQuantized, &[5, 5120, 17408, 11, 8, 3]) => {
+                extents[..3].copy_from_slice(&[19300, 17408 * 20 * 28, 5 * 17408]);
+                (544 * 128, 3, 2, false)
             }
             // Shared raw tiles use the same input/output extents with one CTA row tile.
             (Self::ProjectQuantized, &[m @ (5 | 32), 5120, 17408, 11, 5 | 7, 3]) => {
