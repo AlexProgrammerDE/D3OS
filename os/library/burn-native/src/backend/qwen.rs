@@ -32,6 +32,8 @@ pub enum Q4VectorKernel {
     Narrow,
     Components,
     Aligned,
+    /// Two sixteen-lane outputs per warp on measured Q4 decode cells.
+    HalfWarp,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -131,6 +133,17 @@ fn use_q3_prefill(batch: usize, shape: [usize; 2], storage: (MatrixFormat, Matri
             options.q3_vector,
             Q3VectorKernel::Components | Q3VectorKernel::Aligned | Q3VectorKernel::HalfWarp
         )
+}
+
+fn q4_decode_phase(width: usize, outputs: usize, kernel: Q4VectorKernel) -> usize {
+    if !matches!((width, outputs), (6144 | 17408, 5120)) {
+        return 1;
+    }
+    match kernel {
+        Q4VectorKernel::HalfWarp => 5,
+        Q4VectorKernel::Aligned => 4,
+        _ => 1,
+    }
 }
 
 fn padded_q3_phase(batch: usize, options: ProjectionOptions) -> usize {
@@ -254,16 +267,19 @@ fn projection(
         {
             Some(11)
         }
-        MatrixFormat::Quantized(Quantization::Q4K) if matches!(options.q4_vector, Q4VectorKernel::Components | Q4VectorKernel::Aligned) => Some(12),
+        MatrixFormat::Quantized(Quantization::Q4K)
+            if matches!(
+                options.q4_vector,
+                Q4VectorKernel::Components | Q4VectorKernel::Aligned | Q4VectorKernel::HalfWarp
+            ) =>
+        {
+            Some(12)
+        }
         _ => None,
     };
     if let (1, Some(code)) = (batch, vector_components) {
         let activations = prepare_activations(&input, outputs, 3)?;
-        let phase = if code == 12 && options.q4_vector == Q4VectorKernel::Aligned && matches!((width, outputs), (6144 | 17408, 5120)) {
-            4
-        } else {
-            1
-        };
+        let phase = if code == 12 { q4_decode_phase(width, outputs, options.q4_vector) } else { 1 };
         return output(
             [1, outputs],
             Kernel::ProjectQuantized,
@@ -649,6 +665,28 @@ mod projection_mode_tests {
                 ..options
             }
         ));
+    }
+
+    #[test]
+    fn q4_halfwarp_selection_stays_within_the_measured_decode_shapes() {
+        for kernel in [
+            Q4VectorKernel::Default,
+            Q4VectorKernel::Narrow,
+            Q4VectorKernel::Components,
+            Q4VectorKernel::Aligned,
+            Q4VectorKernel::HalfWarp,
+        ] {
+            for width in [0, 5120, 6144, 6145, 17408, usize::MAX] {
+                for outputs in [0, 5119, 5120, 5121, usize::MAX] {
+                    let expected = match (width, outputs, kernel) {
+                        (6144 | 17408, 5120, Q4VectorKernel::Aligned) => 4,
+                        (6144 | 17408, 5120, Q4VectorKernel::HalfWarp) => 5,
+                        _ => 1,
+                    };
+                    assert_eq!(q4_decode_phase(width, outputs, kernel), expected);
+                }
+            }
+        }
     }
 
     #[test]

@@ -48,6 +48,8 @@ pub enum Q4VectorKernel {
     Components,
     /// Paired loads on the measured Q4 geometries, components elsewhere.
     Aligned,
+    /// Two sixteen-lane outputs per warp on measured Q4 decode cells.
+    HalfWarp,
 }
 
 impl Q4VectorKernel {
@@ -65,6 +67,7 @@ impl Q4VectorKernel {
             Self::Narrow => d3os_burn_native::backend::Q4VectorKernel::Narrow,
             Self::Components => d3os_burn_native::backend::Q4VectorKernel::Components,
             Self::Aligned => d3os_burn_native::backend::Q4VectorKernel::Aligned,
+            Self::HalfWarp => d3os_burn_native::backend::Q4VectorKernel::HalfWarp,
         }
     }
 }

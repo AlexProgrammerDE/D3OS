@@ -89,6 +89,7 @@ mod tests {
             crate::qwen::Q4VectorKernel::Narrow,
             crate::qwen::Q4VectorKernel::Components,
             crate::qwen::Q4VectorKernel::Aligned,
+            crate::qwen::Q4VectorKernel::HalfWarp,
         ] {
             assert!(matrix.set_q4_vector_kernel(kernel).is_err());
             assert_eq!(matrix.q4_vector_kernel, crate::qwen::Q4VectorKernel::Default);

@@ -4635,3 +4635,80 @@ These device times are diagnostic. They do not replace ordinary model samples or
 Evidence remains under `~/.cache/d3os/qwen-q3-quarterwarp-reference-v1/`, `qwen-q3-quarterwarp-decode-v1/`, and `qwen-q3-halfwarp-cache-policy-v1/`.
 The combined operator capture remains under `qwen-q3-decode-study-v1/` with serial SHA-256 `f42d4ba18ed913efdbed841ae129ff1825ac67bed664b2fdb51e70e905022d9a`.
 The accumulation study remains under `qwen-q3-uncompensated-decode-v1/` with serial SHA-256 `1c12fdc5cb95def3fc21f40d6fc88abb2e4ba4314d92888bd2ff7b31ea735ef3`.
+
+### Two outputs per warp for Q4 down-projection
+
+The next retained change applies sixteen-lane output groups to the two measured Q4 decode shapes.
+Each warp computes two outputs, and each 128-thread CTA computes eight outputs instead of four.
+Each lane handles sixteen values from one Q4 subgroup, with two aligned eight-byte weight loads.
+The original positive and minimum FP32 terms remain separate, followed by compensated accumulation.
+All three activation components remain present. The final butterfly uses offsets 8, 4, 2, and 1.
+Tail lanes read column zero and participate in every collective, but never publish outside the output.
+
+The scaled integer-dot magnitude is bounded by 1,935,360. The minimum term is bounded by 129,024.
+Both fit I32 and convert exactly to FP32 before the original scale operations.
+The kernel uses 40 registers per thread, versus 36 for the aligned-load control.
+It has no shared memory, local memory, stack, frame, or spills.
+The same 144-byte Q4 blocks and activation packer serve both routes, with no extra weight allocation.
+
+The CPU audit decodes all 120,586,240 weights and reproduces both original FP64 references exactly.
+The new staging passes all original limits at both shapes.
+Largest absolute errors are approximately `3.815e-6` at K 6,144 and `1.669e-6` at K 17,408.
+The GPU comparison covers fifteen output sizes, including both sides of the eight-output CTA boundary.
+All 105,864 original numerical checks and 63,172 exact candidate-to-CPU comparisons pass.
+Both packing poisons, immutable input and weight checks, and allocation guards pass.
+
+| Operator measurement, including packing | Aligned-load Q4 | Sixteen-lane Q4 | Time reduction |
+| --- | ---: | ---: | ---: |
+| K 6,144, one weight buffer | 33.3983 µs | 26.7467 µs | 19.92% |
+| K 6,144, eight rotating buffers | 40.8478 µs | 37.2373 µs | 8.84% |
+| K 17,408, one weight buffer | 83.8901 µs | 66.0291 µs | 21.29% |
+| K 17,408, eight rotating buffers | 118.5216 µs | 108.2186 µs | 8.69% |
+
+Both rotating cases pass the declared 5% threshold. Each mode retains all forty-two samples and sixteen graph iterations per sample.
+The first compiler attempt passes the unchanged machine-code qualifier.
+The production entry matches the operator-tested machine text exactly.
+All fifteen prior optional entry texts and all three core-family records remain unchanged.
+
+Native selects `Q4VectorKernel::HalfWarp` when a loaded model contains Q4 weights.
+Only single-token projection at K 6,144 or 17,408 and N 5,120 uses the new entry.
+Other Q4 shapes retain component decode. Q3 HalfWarp, shared prefill, and activation packing retain their existing routes.
+The SDK keeps the same storage extents and eight-byte weight alignment, while reducing CTAs from 1,280 to 640.
+Historical selectors keep their original implementations.
+`--qwen-paired-q4-halfwarp --qwen-q3-padded112` compares the new Q4 route with the accepted aligned-load Q4 route.
+
+The full-model comparison retains the 37-token prompt, 128 generated tokens, F32 cache, context 2048, batch 32, and four pinned vCPUs.
+One capture supplies four ordinary samples per variant, two warmups, and two instrumented passes.
+The declared threshold requires at least 1% higher decode throughput, with faster results in both balanced blocks.
+
+| Same-capture model measurement | Aligned-load Q4 | Sixteen-lane Q4 |
+| --- | ---: | ---: |
+| Decode throughput | 23.2748 tokens/s | 24.2378 tokens/s |
+| First balanced block | 23.4733 tokens/s | 24.4391 tokens/s |
+| Second balanced block | 23.0797 tokens/s | 24.0398 tokens/s |
+| Mean prompt latency | 500.5 ms | 498.0 ms |
+
+Decode throughput rises 4.1375%. Prompt latency changes by -0.4995%, with identical prefill entry, parameter, and call ledgers.
+This change makes no prompt-speed claim. All other decode routes and all activation-pack ledgers remain identical.
+All 64,066,560 original logit checks pass at `0.002 + 0.0005 * abs(reference)`.
+All twelve Native token traces match. The two existing Linux selection differences remain unchanged.
+Reference-error statistics differ because the reduction order changes. Both variants pass with zero failures.
+The Candidate maximum absolute error is `0.00003385544`, versus Control's `0.000030398369` on this fixture.
+Instrumented Q4 device times also decrease, but ordinary model samples determine acceptance.
+
+Resident weights remain 13,664,997,376 bytes. Prepared-page-cache loading and upload take 9.125 seconds.
+The capture has no recorder overlap or resource-guard stop. Its minimum available host RAM is about 6.63 GB.
+SDK tests (28), Native tests (78), packed-model tests (6), and strict Clippy pass.
+Five historical captures, 36 parser rejection controls, current-default controls, and three actual CLI prerequisite checks pass.
+The matching kernel and application build passes. All sixteen optional module entries resolve.
+Verified warm-cache deltas preserve the build targets before their RAM copies are removed.
+
+Cached matched llama.cpp remains at 34.233 tokens/s, leaving a 29.20% decode gap.
+Its cached prompt latency is 93.693 ms. The latest Native prompt remains about 5.32 times slower.
+Matched cold storage and physical rendering presentation also remain open.
+Unaffected model geometries reuse their cached results rather than repeat full-model measurements.
+
+Operator evidence remains under `~/.cache/d3os/qwen-q4-halfwarp-decode-v1/`.
+Its serial SHA-256 is `8575066b5d9584ce68a78d91046fda0cda51f319c2359aa555900749297eaa25`.
+Integration evidence remains under `qwen-q4-halfwarp-integration-v1/`, and the model capture remains under `qwen-q4-halfwarp-model-v1/`.
+The model serial SHA-256 is `425c5505ec836008863e6bdb0646bdb919ac6d92add41573a0aae863099da0f7`.

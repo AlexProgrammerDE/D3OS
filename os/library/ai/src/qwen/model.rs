@@ -374,7 +374,7 @@ impl Qwen {
                 model = model.with_q3_vector_kernel(kernel)?;
             }
             if load.has_q4 {
-                model = model.with_q4_vector_kernel(Q4VectorKernel::Aligned)?;
+                model = model.with_q4_vector_kernel(Q4VectorKernel::HalfWarp)?;
             }
             if model.supports_q4_component_prefill() {
                 model = model.with_prefill_quantization(PrefillQuantization::SharedComponents)?;

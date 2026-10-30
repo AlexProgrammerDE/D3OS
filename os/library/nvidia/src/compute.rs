@@ -550,6 +550,7 @@ impl Kernel {
             (Self::ProjectQuantized, [1, _, _, 11, 1, 3]) => "q3_components_dp4a",
             (Self::ProjectQuantized, [1, _, _, 12, 1, 3]) => "q4_components_dp4a",
             (Self::ProjectQuantized, [1, 6144 | 17408, 5120, 12, 4, 3]) => "q4_components_wide64",
+            (Self::ProjectQuantized, [1, 6144 | 17408, 5120, 12, 5, 3]) => "q4_components_halfwarp",
             (Self::ProjectQuantized, [32, 5120, 17408, 11, 2, 3]) => "q3_warp_m16",
             (Self::ProjectQuantized, [5 | 32, 6144 | 17408, 5120, 12, 2, 3]) => "q4_warp_m16",
             (Self::ProjectQuantized, [5, 6144 | 17408, 5120, 12, 3, 3]) => "q4_shared_m16",
@@ -910,12 +911,12 @@ impl Kernel {
                 (product(&[n.div_ceil(4), 128])?, 3, 2, false)
             }
             // Paired Q4 loads require eight-byte weight alignment.
-            (Self::ProjectQuantized, &[1, k @ (6144 | 17408), 5120, 12, 4, 3]) => {
+            (Self::ProjectQuantized, &[1, k @ (6144 | 17408), 5120, 12, phase @ (4 | 5), 3]) => {
                 let scratch = product(&[k, 3])? / 4 + k / 32;
                 let weights = product(&[k / 256, 5120, 144])?;
                 extents[..3].copy_from_slice(&[u64::from(scratch), u64::from(weights / 4), 5120]);
                 alignments[1] = 8;
-                (1280 * 128, 3, 2, false)
+                ((if phase == 5 { 640 } else { 1280 }) * 128, 3, 2, false)
             }
             // The same padded allocation, with paired high-scale/header loads.
             (Self::ProjectQuantized, &[1, 5120, 17408, 11, phase @ (4 | 6), 3]) => {
