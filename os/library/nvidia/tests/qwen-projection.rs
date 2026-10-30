@@ -702,3 +702,33 @@ fn q4_prefill_uses_exact_raw_and_packed_extents() {
         }
     }
 }
+
+#[test]
+fn shared_prefill_preserves_extents_and_covers_each_row_tile_once() {
+    for (format, phase, inner, columns) in [(11, 5, 5120, 17408), (12, 3, 6144, 5120), (12, 3, 17408, 5120)] {
+        for rows in [5u32, 32] {
+            let packet = [rows, inner, columns, format, phase, 3];
+            let work = Kernel::ProjectQuantized.work(&packet).unwrap();
+            let baseline = Kernel::ProjectQuantized
+                .work(&[rows, inner, columns, format, if format == 11 { 3 } else { 2 }, 3])
+                .unwrap();
+            assert_eq!(work.extents, baseline.extents);
+            assert_eq!(
+                (work.blocks, work.threads, work.pointers, work.output, work.in_place),
+                (columns / 32, 128, 3, 2, false)
+            );
+            let pointers = [0x100000, 0x10000000, 0x40000000];
+            work.validate_aliases(&pointers).unwrap();
+            for source in 0..2 {
+                let mut overlap = pointers;
+                overlap[2] = pointers[source] + (work.extents[source] - 1) * 4;
+                assert!(work.validate_aliases(&overlap).is_err());
+            }
+            for (field, value) in [(0, 1), (0, 16), (0, 33), (1, u32::MAX), (2, columns - 1), (3, 13), (5, 1)] {
+                let mut invalid = packet;
+                invalid[field] = value;
+                assert!(Kernel::ProjectQuantized.work(&invalid).is_err());
+            }
+        }
+    }
+}

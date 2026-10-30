@@ -89,6 +89,7 @@ pub(super) enum ProjectionPair {
     Q4Aligned,
     Q3Aligned,
     Q4Prefill,
+    SharedPrefill,
     NativeDefaults,
 }
 
@@ -108,6 +109,10 @@ impl ProjectionPair {
             Self::Q3Aligned => model
                 .with_q3_vector_kernel(Q3VectorKernel::Components)?
                 .with_q4_vector_kernel(Q4VectorKernel::Aligned),
+            Self::SharedPrefill => model
+                .with_q3_vector_kernel(Q3VectorKernel::Aligned)?
+                .with_q4_vector_kernel(Q4VectorKernel::Aligned)?
+                .with_prefill_quantization(PrefillQuantization::Q4KComponents),
             Self::Q4Prefill => model
                 .with_q3_vector_kernel(Q3VectorKernel::Aligned)?
                 .with_q4_vector_kernel(Q4VectorKernel::Aligned),
@@ -124,10 +129,11 @@ impl ProjectionPair {
             Self::Q4Aligned => model.with_q4_vector_kernel(Q4VectorKernel::Aligned),
             Self::Q3Aligned => model.with_q3_vector_kernel(Q3VectorKernel::Aligned),
             Self::Q4Prefill => model.with_prefill_quantization(PrefillQuantization::Q4KComponents),
+            Self::SharedPrefill => model.with_prefill_quantization(PrefillQuantization::SharedComponents),
             Self::NativeDefaults => {
                 if model.q3_vector_kernel() != Q3VectorKernel::Aligned
                     || model.q4_vector_kernel() != Q4VectorKernel::Aligned
-                    || model.prefill_quantization() != PrefillQuantization::Q4KComponents
+                    || model.prefill_quantization() != PrefillQuantization::SharedComponents
                 {
                     return Err(Error::from("native default experiment requires both component kernels at model load"));
                 }
@@ -140,7 +146,7 @@ impl ProjectionPair {
         match self {
             Self::Q4Narrow => format!("q4_vector_kernel={:?}", model.q4_vector_kernel()),
             Self::Q3Components => format!("q3_vector_kernel={:?}", model.q3_vector_kernel()),
-            Self::Q4Prefill | Self::NativeDefaults => format!(
+            Self::Q4Prefill | Self::SharedPrefill | Self::NativeDefaults => format!(
                 "q4_vector_kernel={:?} q3_vector_kernel={:?} prefill_quantization={:?}",
                 model.q4_vector_kernel(),
                 model.q3_vector_kernel(),

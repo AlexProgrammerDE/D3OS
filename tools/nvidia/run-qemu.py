@@ -132,7 +132,14 @@ def validate_paired_projection(
     aligned_q4=False,
     aligned_q3=False,
     q4_prefill=False,
+    shared_prefill=False,
 ):
+    if shared_prefill:
+        if q4_prefill or not padded_q3 or aligned_q3 or aligned_q4 or components:
+            raise ValueError(
+                "shared prefill requires its exclusive padded Q3 experiment"
+            )
+        q4_prefill = True
     if (
         format_code not in (11, 12)
         or (
@@ -246,7 +253,15 @@ def validate_paired_projection(
             return {
                 "q3_vector_kernel": selected,
                 "q4_vector_kernel": selected,
-                "prefill_quantization": "Q4KComponents"
+                "prefill_quantization": (
+                    "SharedComponents"
+                    if role == "Candidate"
+                    else "Accurate"
+                    if defaults
+                    else "Q4KComponents"
+                )
+                if shared_prefill
+                else "Q4KComponents"
                 if role == "Candidate"
                 else "Accurate",
             }
@@ -555,8 +570,17 @@ def validate_paired_projection(
         raise RuntimeError(
             "paired projection variants executed different projection workloads"
         )
+    if shared_prefill and not defaults:
+        for field in (
+            "max_absolute",
+            "max_scaled_error",
+            "squared_error",
+            "selection_mismatches",
+        ):
+            if references[0].get(field) != references[1].get(field):
+                raise RuntimeError("shared prefill changed reference error statistics")
     if q4_prefill:
-        validate_q4_prefill_profiles(profiles)
+        validate_q4_prefill_profiles(profiles, shared=shared_prefill, defaults=defaults)
     footer = records("INFERENCE_BENCH_PAIR_OK qwen-gguf")
     if footer != [
         {
@@ -570,7 +594,7 @@ def validate_paired_projection(
         raise RuntimeError("paired projection completion record differs")
 
 
-def validate_q4_prefill_profiles(profiles):
+def validate_q4_prefill_profiles(profiles, *, shared=False, defaults=False):
     shapes = [
         (5120, 10240, 13, 2),
         (5120, 6144, 11, 48),
@@ -612,22 +636,49 @@ def validate_q4_prefill_profiles(profiles):
             measured = (
                 rows in (5, 32) and k in (6144, 17408) and n == 5120 and code == 12
             )
-            if measured:
-                want_entry = (
-                    "q4_warp_m16"
-                    if role == "Candidate"
-                    else "project_m32_q4k"
-                    if rows == 32
-                    else "project_q4k"
-                )
-                want_params = list(key) + ([2, 3] if role == "Candidate" else [])
-                if row["entry"] != want_entry or params != want_params:
-                    raise RuntimeError(
-                        "Q4 prefill selected an unmeasured implementation"
+            measured_q3 = (
+                shared and rows in (5, 32) and (k, n, code) == (5120, 17408, 11)
+            )
+            if measured or measured_q3:
+                if shared and (role == "Candidate" or not defaults):
+                    if role == "Candidate":
+                        want_entry = f"q{code - 8}_shared_m{32 if rows == 32 else 16}"
+                        phase = 3 if code == 12 else 5
+                    else:
+                        want_entry = (
+                            "q4_warp_m16" if code == 12 else "q3_warp_padded112"
+                        )
+                        phase = 2 if code == 12 else 3
+                    want_params = list(key) + [phase, 3]
+                else:
+                    want_entry = (
+                        (
+                            "q4_warp_m16"
+                            if role == "Candidate"
+                            else "project_m32_q4k"
+                            if rows == 32
+                            else "project_q4k"
+                        )
+                        if measured
+                        else "q3_warp_padded112"
                     )
+                    want_params = (
+                        list(key) + ([2, 3] if role == "Candidate" else [])
+                        if measured
+                        else list(key) + [3, 3]
+                    )
+                if row["entry"] != want_entry or params != want_params:
+                    raise RuntimeError("prefill selected an unmeasured implementation")
             else:
                 untouched[key] = (row["entry"], tuple(params), calls)
-            if row["entry"] in ("q3_warp_padded112", "q4_warp_m16"):
+            if row["entry"] in (
+                "q3_warp_padded112",
+                "q4_warp_m16",
+                "q3_shared_m16",
+                "q3_shared_m32",
+                "q4_shared_m16",
+                "q4_shared_m32",
+            ):
                 if params[-1] != 3:
                     raise RuntimeError("prefill dropped an activation residual")
                 pack_key = tuple(params[:3])
@@ -742,6 +793,11 @@ def main():
         "--qwen-paired-q4-prefill",
         action="store_true",
         help="compare raw Q4 register-MMA prefill with current decode kernels fixed",
+    )
+    parser.add_argument(
+        "--qwen-paired-shared-prefill",
+        action="store_true",
+        help="compare shared raw Q3/Q4 tiles with current register MMA, keeping decode fixed",
     )
     parser.add_argument(
         "--qwen-paired-defaults",
@@ -920,6 +976,7 @@ def main():
                 args.qwen_paired_q4_aligned,
                 args.qwen_paired_q3_aligned,
                 args.qwen_paired_q4_prefill,
+                args.qwen_paired_shared_prefill,
                 args.qwen_paired_defaults,
             ]
         )
@@ -932,10 +989,13 @@ def main():
         or args.qwen_paired_q4_aligned
         or args.qwen_paired_q3_aligned
         or args.qwen_paired_q4_prefill
+        or args.qwen_paired_shared_prefill
     ):
         parser.error("--qwen-q3-padded112 requires paired Q3 or defaults validation")
     if (
-        args.qwen_paired_q4_prefill or args.qwen_paired_defaults
+        args.qwen_paired_q4_prefill
+        or args.qwen_paired_shared_prefill
+        or args.qwen_paired_defaults
     ) and not args.qwen_q3_padded112:
         parser.error(
             "current Q4 prefill/defaults validation requires --qwen-q3-padded112"
@@ -949,6 +1009,7 @@ def main():
         or args.qwen_paired_q4_aligned
         or args.qwen_paired_q3_aligned
         or args.qwen_paired_q4_prefill
+        or args.qwen_paired_shared_prefill
         or args.qwen_paired_defaults
     ) and (
         args.inference != "gpu-qwen-gguf-bench"
@@ -1256,6 +1317,8 @@ def main():
                                 if args.qwen_paired_q3_aligned
                                 else " paired-q4-prefill"
                                 if args.qwen_paired_q4_prefill
+                                else " paired-shared-prefill"
+                                if args.qwen_paired_shared_prefill
                                 else " paired-defaults"
                                 if args.qwen_paired_defaults
                                 else " paired-q3"
@@ -1311,6 +1374,7 @@ def main():
                     or args.qwen_paired_q4_aligned
                     or args.qwen_paired_q3_aligned
                     or args.qwen_paired_q4_prefill
+                    or args.qwen_paired_shared_prefill
                     or args.qwen_paired_defaults
                 ):
                     expected = "INFERENCE_BENCH_PAIR_OK qwen-gguf backend=nvidia framework=burn os=d3os variants=2 reference_values_per_variant=32033280"
@@ -1322,6 +1386,7 @@ def main():
                         or args.qwen_paired_q4_aligned
                         or args.qwen_paired_q3_aligned
                         or args.qwen_paired_q4_prefill
+                        or args.qwen_paired_shared_prefill
                         or args.qwen_paired_defaults
                     ):
                         validate_paired_projection(
@@ -1330,11 +1395,10 @@ def main():
                             components=args.qwen_paired_q4_components,
                             defaults=args.qwen_paired_defaults,
                             padded_q3=args.qwen_q3_padded112,
-                            aligned_q4=args.qwen_paired_q4_aligned
-                            or args.qwen_paired_defaults,
-                            aligned_q3=args.qwen_paired_q3_aligned
-                            or args.qwen_paired_defaults,
-                            q4_prefill=args.qwen_paired_q4_prefill
+                            aligned_q4=args.qwen_paired_q4_aligned,
+                            aligned_q3=args.qwen_paired_q3_aligned,
+                            q4_prefill=args.qwen_paired_q4_prefill,
+                            shared_prefill=args.qwen_paired_shared_prefill
                             or args.qwen_paired_defaults,
                         )
                     if args.inference == "gpu-doom-bench":

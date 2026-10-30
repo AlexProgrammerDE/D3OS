@@ -176,7 +176,10 @@ enum Mixer {
 }
 impl Mixer {
     fn set_prefill_quantization(&mut self, mode: PrefillQuantization) -> Result<()> {
-        let mode = if matches!(mode, PrefillQuantization::Q8_1WithAttention | PrefillQuantization::Q4KComponents) {
+        let mode = if matches!(
+            mode,
+            PrefillQuantization::Q8_1WithAttention | PrefillQuantization::Q4KComponents | PrefillQuantization::SharedComponents
+        ) {
             mode
         } else {
             PrefillQuantization::Accurate
@@ -369,7 +372,7 @@ impl Qwen {
                 model = model.with_q4_vector_kernel(Q4VectorKernel::Aligned)?;
             }
             if model.supports_q4_component_prefill() {
-                model = model.with_prefill_quantization(PrefillQuantization::Q4KComponents)?;
+                model = model.with_prefill_quantization(PrefillQuantization::SharedComponents)?;
             }
         }
         Ok(model)
@@ -501,7 +504,7 @@ impl Qwen {
     }
     pub fn with_prefill_quantization(mut self, mode: PrefillQuantization) -> Result<Self> {
         mode.check_device(&self.device())?;
-        if mode == PrefillQuantization::Q4KComponents && !self.supports_q4_component_prefill() {
+        if matches!(mode, PrefillQuantization::Q4KComponents | PrefillQuantization::SharedComponents) && !self.supports_q4_component_prefill() {
             return Err(Error::from("Q4 component prefill requires a measured Q4_K weight geometry"));
         }
         if matches!(mode, PrefillQuantization::Q8_1 | PrefillQuantization::Q8_1WithAttention) {

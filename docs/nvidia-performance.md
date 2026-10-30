@@ -4393,7 +4393,7 @@ Its source and failure remain preserved. A separate corrected validator checks t
 The C harness's earlier cleanup-loop indentation warning is also preserved.
 Neither repair changes a kernel, threshold, population, or measurement.
 
-Native selects `PrefillQuantization::Q4KComponents` only when the model contains a measured raw Q4_K geometry.
+At this checkpoint, Native selected `PrefillQuantization::Q4KComponents` when the model contained a measured raw Q4_K geometry.
 The dispatch applies only at five or 32 rows, inner 6,144 or 17,408, and output width 5,120.
 Other shapes and formats retain their accurate routes, including existing Q3 and Q8 prefill paths.
 Single-token decode keeps the existing Q3 and Q4 `Aligned` kernels.
@@ -4430,3 +4430,84 @@ Both remaining gaps, matched cold storage, and physical rendering presentation r
 Evidence remains under `~/.cache/d3os/qwen-q4-warp-mma-v1/`.
 The completed model capture remains under `~/.cache/d3os/qwen-q4-warp-prefill-model-v1/`.
 Its serial SHA-256 is `2f00cbd4e0bdbf8c699259a58282d686a1bd6730f2fbe65a760cd036df7afdea`.
+
+### Shared raw Q3 and Q4 prefill tiles
+
+The next kernels copy one raw N32/K256 weight tile into shared memory for reuse across warps.
+Five-row calls use an M16 tile. Full 32-row calls use an M32 tile and reuse activation fragments across two column subtiles.
+Every thread reaches both barriers in each K256 iteration, including threads outside output tails.
+The second barrier prevents the next tile copy from overwriting unfinished reads.
+The arithmetic retains the accepted three activation residuals, explicit FP32 operations, and Kahan accumulation order.
+No expanded weights or second resident weight copy is required.
+
+| Kernel | Registers per thread | Shared bytes | Threads |
+| --- | ---: | ---: | ---: |
+| Q3 M16 | 40 | 3,584 | 128 |
+| Q3 M32 | 56 | 3,584 | 128 |
+| Q4 M16 | 48 | 4,608 | 128 |
+| Q4 M32 | 64 | 4,608 | 128 |
+
+All four kernels have zero local memory, stack, frame, and spills.
+Their production machine text matches the operator-tested kernels exactly.
+All ten prior optional entry texts and all three core-family records remain exact.
+The exporter and kernel module lookup agree on all fourteen optional entries.
+
+The operator tests reuse the original FP64 references and the exact staged CPU oracles.
+Both routes pass 8,156,388 original numerical checks and the same number of bit-exact CPU comparisons.
+Coverage includes eight row counts, six column tails, full-width outputs, two output poisons, source integrity, and allocation guards.
+Q3 also preserves outputs after both padding bytes of every block change to each of two patterns.
+
+| Rotating-weight operator, including packing | Accepted register MMA | Shared tiles | Time reduction |
+| --- | ---: | ---: | ---: |
+| Q3: 5 × 5,120 × 17,408 | 335.5229 µs | 315.7228 µs | 5.90% |
+| Q3: 32 × 5,120 × 17,408 | 1,071.7974 µs | 562.6374 µs | 47.51% |
+| Q4: 5 × 6,144 × 5,120 | 221.9763 µs | 183.3125 µs | 17.42% |
+| Q4: 32 × 6,144 × 5,120 | 348.6266 µs | 302.2280 µs | 13.31% |
+| Q4: 5 × 17,408 × 5,120 | 617.4878 µs | 510.7040 µs | 17.29% |
+| Q4: 32 × 17,408 × 5,120 | 990.8946 µs | 890.2845 µs | 10.15% |
+
+Each cell retains forty samples with eight rotating weight buffers and sixteen graph iterations per sample.
+Both routes include the same activation packing.
+All six cells pass the predeclared 5% operator threshold.
+The initial Q3 assembly failed the unchanged instruction qualifier on `USGXT.U32`.
+Explicit bounded shifts replaced that extraction without changing its values. The failed source and artifacts remain preserved.
+
+Native now selects `PrefillQuantization::SharedComponents` for eligible models.
+The shared routes apply only to the six measured cells, using raw Q4_K or the existing padded Q3_K allocation.
+Single-token decode and all other prefill routes retain their prior kernels.
+`--qwen-paired-shared-prefill --qwen-q3-padded112` compares the new routes with the accepted register-MMA prefill.
+Historical projection experiments retain their original selectors.
+
+The model run keeps the 37-token prompt, 128 generated tokens, batch 32, F32 cache, context 2048, and four pinned vCPUs.
+One capture contains all four ordinary samples per variant, two warmups, and two instrumented passes.
+The declared threshold requires 3% lower prompt latency, both balanced blocks faster, and decode throughput at least 98% of Control.
+
+| Same-capture model measurement | Register-MMA prefill | Shared prefill |
+| --- | ---: | ---: |
+| Mean prompt latency | 568.75 ms | 490.00 ms |
+| First balanced block | 544.50 ms | 466.50 ms |
+| Second balanced block | 593.00 ms | 513.50 ms |
+| Decode throughput | 22.7930 tokens/s | 22.7152 tokens/s |
+
+Prompt latency falls 13.8462%. Decode throughput changes by -0.3416%, with identical decode entry, parameter, and call ledgers.
+This change establishes no decode speedup.
+All 64,066,560 original logit checks pass at `0.002 + 0.0005 * abs(reference)`.
+All twelve Native token traces and complete reference-error statistics remain identical.
+The two existing near-tied Linux selection differences remain unchanged.
+The validator requires all 1,001 prefill projections, identical packing counts, and unchanged unrelated routes.
+Instrumented profiles are diagnostic: the five-row Q3 call group is slower there despite its operator result.
+The aggregate acceptance uses every ordinary sample and does not select individual profile timings.
+
+Resident weights remain 13,664,997,376 bytes. Prepared-page-cache loading and upload take 8.944 seconds, with no cold-storage parity claim.
+SDK tests (26), Native tests (76), packed-model tests (6), strict Clippy, historical parser checks, and 63 new rejection controls pass.
+The matching guest build passes. Warm build targets remain restorable from verified deltas and are removed from RAM.
+The first host attempt contained a test-only variable-scope error; its log and corrected source checks remain preserved.
+
+Cached matched llama.cpp remains at 93.693 ms for the prompt and 34.233 tokens/s for decode.
+Native prompt processing is about 5.23 times slower, and decode throughput remains 33.65% lower.
+The earlier capture's absolute decode rate is not a baseline for this change.
+The decode gap, remaining prompt gap, matched cold storage, and physical rendering presentation remain open goals.
+
+Evidence remains under `~/.cache/d3os/qwen-q3-shared-tiles-v1/`, `qwen-q4-shared-tiles-v1/`, and `qwen-shared-prefill-integration-v1/`.
+The model capture remains under `~/.cache/d3os/qwen-shared-prefill-model-v1/`.
+Its serial SHA-256 is `75d44724654512681b1eec11d3b911632836079b5131f397d7cdc3c4992e31b5`.

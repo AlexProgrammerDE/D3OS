@@ -138,3 +138,6 @@ mod q3_prefill;
 mod q4;
 mod q4_aligned;
 mod q4_prefill;
+
+mod q3_shared;
+mod q4_shared;
