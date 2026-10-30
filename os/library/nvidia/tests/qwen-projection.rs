@@ -705,7 +705,7 @@ fn q4_prefill_uses_exact_raw_and_packed_extents() {
 
 #[test]
 fn shared_prefill_preserves_extents_and_covers_each_row_tile_once() {
-    for (format, phase, inner, columns) in [(11, 5, 5120, 17408), (12, 3, 6144, 5120), (12, 3, 17408, 5120)] {
+    for (format, phase, inner, columns) in [(11, 5, 5120, 17408), (11, 7, 5120, 17408), (12, 3, 6144, 5120), (12, 3, 17408, 5120)] {
         for rows in [5u32, 32] {
             let packet = [rows, inner, columns, format, phase, 3];
             let work = Kernel::ProjectQuantized.work(&packet).unwrap();

@@ -556,7 +556,9 @@ impl Kernel {
             (Self::ProjectQuantized, [5, 6144 | 17408, 5120, 12, 3, 3]) => "q4_shared_m16",
             (Self::ProjectQuantized, [32, 6144 | 17408, 5120, 12, 3, 3]) => "q4_shared_m32",
             (Self::ProjectQuantized, [5, 5120, 17408, 11, 5, 3]) => "q3_shared_m16",
+            (Self::ProjectQuantized, [5, 5120, 17408, 11, 7, 3]) => "q3_negated_shared_m16",
             (Self::ProjectQuantized, [32, 5120, 17408, 11, 5, 3]) => "q3_shared_m32",
+            (Self::ProjectQuantized, [32, 5120, 17408, 11, 7, 3]) => "q3_negated_shared_m32",
             (Self::ProjectQuantized, [1, 5120, 17408, 11, 3, 0]) => "q3_default_padded112",
             (Self::ProjectQuantized, [1, 5120, 17408, 11, 3, 3]) => "q3_components_padded112",
             (Self::ProjectQuantized, [1, 5120, 17408, 11, 4, 3]) => "q3_components_padded112_wide",
@@ -933,7 +935,7 @@ impl Kernel {
                 (product(&[if phase == 3 { 1 } else { m.div_ceil(16) }, 160, 128])?, 3, 2, false)
             }
             // Shared raw tiles use the same input/output extents with one CTA row tile.
-            (Self::ProjectQuantized, &[m @ (5 | 32), 5120, 17408, 11, 5, 3]) => {
+            (Self::ProjectQuantized, &[m @ (5 | 32), 5120, 17408, 11, 5 | 7, 3]) => {
                 extents[..3].copy_from_slice(&[u64::from(m * 4000), 17408 * 20 * 28, u64::from(m * 17408)]);
                 (544 * 128, 3, 2, false)
             }

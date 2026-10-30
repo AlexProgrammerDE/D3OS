@@ -23,6 +23,8 @@ pub enum PrefillQuantization {
     Q4KComponents,
     /// Shared raw Q3_K and Q4_K tiles on the measured prefill cells.
     SharedComponents,
+    /// Shared tiles with exact negated Q3 fragments, retaining Q4 shared tiles.
+    NegatedSharedComponents,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -93,7 +95,10 @@ fn use_components(batch: usize, shape: [usize; 2], format: MatrixFormat) -> bool
 fn projection_components(batch: usize, shape: [usize; 2], storage: (MatrixFormat, MatrixLayout), mode: PrefillQuantization) -> Result<Option<usize>> {
     let (format, layout) = storage;
     // Q4 mode changes only its measured cells; Q8 keeps the accurate policy.
-    let mode = if matches!(mode, PrefillQuantization::Q4KComponents | PrefillQuantization::SharedComponents) {
+    let mode = if matches!(
+        mode,
+        PrefillQuantization::Q4KComponents | PrefillQuantization::SharedComponents | PrefillQuantization::NegatedSharedComponents
+    ) {
         PrefillQuantization::Accurate
     } else {
         mode
@@ -127,7 +132,10 @@ fn use_q3_prefill(batch: usize, shape: [usize; 2], storage: (MatrixFormat, Matri
         && storage == (MatrixFormat::Quantized(Quantization::Q3K), MatrixLayout::RowMajor)
         && matches!(
             options.prefill,
-            PrefillQuantization::Accurate | PrefillQuantization::Q4KComponents | PrefillQuantization::SharedComponents
+            PrefillQuantization::Accurate
+                | PrefillQuantization::Q4KComponents
+                | PrefillQuantization::SharedComponents
+                | PrefillQuantization::NegatedSharedComponents
         )
         && matches!(
             options.q3_vector,
@@ -147,8 +155,17 @@ fn q4_decode_phase(width: usize, outputs: usize, kernel: Q4VectorKernel) -> usiz
 }
 
 fn padded_q3_phase(batch: usize, options: ProjectionOptions) -> usize {
-    if matches!(batch, 5 | 32) && options.prefill == PrefillQuantization::SharedComponents {
-        5
+    if matches!(batch, 5 | 32)
+        && matches!(
+            options.prefill,
+            PrefillQuantization::SharedComponents | PrefillQuantization::NegatedSharedComponents
+        )
+    {
+        if options.prefill == PrefillQuantization::NegatedSharedComponents {
+            7
+        } else {
+            5
+        }
     } else if batch == 1 {
         match options.q3_vector {
             Q3VectorKernel::HalfWarp => 6,
@@ -161,8 +178,10 @@ fn padded_q3_phase(batch: usize, options: ProjectionOptions) -> usize {
 }
 
 fn use_q4_prefill(batch: usize, shape: [usize; 2], storage: (MatrixFormat, MatrixLayout), mode: PrefillQuantization) -> bool {
-    matches!(mode, PrefillQuantization::Q4KComponents | PrefillQuantization::SharedComponents)
-        && matches!(batch, 5 | 32)
+    matches!(
+        mode,
+        PrefillQuantization::Q4KComponents | PrefillQuantization::SharedComponents | PrefillQuantization::NegatedSharedComponents
+    ) && matches!(batch, 5 | 32)
         && matches!(shape, [5120, 6144 | 17408])
         && storage == (MatrixFormat::Quantized(Quantization::Q4K), MatrixLayout::RowMajor)
 }
@@ -216,7 +235,14 @@ fn projection(
                 width,
                 outputs,
                 12,
-                if options.prefill == PrefillQuantization::SharedComponents { 3 } else { 2 },
+                if matches!(
+                    options.prefill,
+                    PrefillQuantization::SharedComponents | PrefillQuantization::NegatedSharedComponents
+                ) {
+                    3
+                } else {
+                    2
+                },
                 3,
             ],
         );
@@ -691,7 +717,11 @@ mod projection_mode_tests {
 
     #[test]
     fn halfwarp_selection_preserves_all_prefill_and_legacy_modes() {
-        for prefill in [PrefillQuantization::Accurate, PrefillQuantization::SharedComponents] {
+        for prefill in [
+            PrefillQuantization::Accurate,
+            PrefillQuantization::SharedComponents,
+            PrefillQuantization::NegatedSharedComponents,
+        ] {
             for q3_vector in [
                 Q3VectorKernel::Default,
                 Q3VectorKernel::Components,
@@ -705,8 +735,8 @@ mod projection_mode_tests {
                         ..Default::default()
                     };
                     let expected = if batch != 1 {
-                        if matches!(batch, 5 | 32) && prefill == PrefillQuantization::SharedComponents {
-                            5
+                        if matches!(batch, 5 | 32) && matches!(prefill, PrefillQuantization::SharedComponents | PrefillQuantization::NegatedSharedComponents) {
+                            if prefill == PrefillQuantization::NegatedSharedComponents { 7 } else { 5 }
                         } else {
                             3
                         }
@@ -726,7 +756,11 @@ mod projection_mode_tests {
     #[test]
     fn q4_prefill_changes_only_measured_cells_and_preserves_q8_and_q3() {
         let storage = (MatrixFormat::Quantized(Quantization::Q4K), MatrixLayout::RowMajor);
-        for mode in [PrefillQuantization::Q4KComponents, PrefillQuantization::SharedComponents] {
+        for mode in [
+            PrefillQuantization::Q4KComponents,
+            PrefillQuantization::SharedComponents,
+            PrefillQuantization::NegatedSharedComponents,
+        ] {
             for rows in [0, 1, 2, 4, 5, 16, 31, 32, 33] {
                 for inner in [6144, 17408] {
                     assert_eq!(use_q4_prefill(rows, [5120, inner], storage, mode), matches!(rows, 5 | 32));
@@ -735,7 +769,11 @@ mod projection_mode_tests {
             }
         }
         for shape in [[5120, 5120], [5119, 6144], [5120, 17407], [17408, 5120]] {
-            for mode in [PrefillQuantization::Q4KComponents, PrefillQuantization::SharedComponents] {
+            for mode in [
+                PrefillQuantization::Q4KComponents,
+                PrefillQuantization::SharedComponents,
+                PrefillQuantization::NegatedSharedComponents,
+            ] {
                 assert!(!use_q4_prefill(32, shape, storage, mode));
             }
         }
@@ -748,10 +786,16 @@ mod projection_mode_tests {
         let q8 = (MatrixFormat::Quantized(Quantization::Q8_0), MatrixLayout::Q8Columns32);
         for rows in [1, 5, 32] {
             for shape in [[12288, 4096], [4096, 12288]] {
-                assert_eq!(
-                    projection_components(rows, shape, q8, PrefillQuantization::Q4KComponents),
-                    projection_components(rows, shape, q8, PrefillQuantization::Accurate)
-                );
+                for mode in [
+                    PrefillQuantization::Q4KComponents,
+                    PrefillQuantization::SharedComponents,
+                    PrefillQuantization::NegatedSharedComponents,
+                ] {
+                    assert_eq!(
+                        projection_components(rows, shape, q8, mode),
+                        projection_components(rows, shape, q8, PrefillQuantization::Accurate)
+                    );
+                }
             }
         }
         assert!(use_q3_prefill(

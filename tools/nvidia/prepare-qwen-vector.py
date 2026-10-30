@@ -28,7 +28,9 @@ ENTRIES = (
     "q4_shared_m16",
     "q4_shared_m32",
     "q3_shared_m16",
+    "q3_negated_shared_m16",
     "q3_shared_m32",
+    "q3_negated_shared_m32",
     "q3_components_halfwarp",
 )
 FAMILY = "qwen-vector"
@@ -78,6 +80,8 @@ def compile_module(directory, toolkit, target):
             CRATE / "src/q4_prefill.rs",
             CRATE / "src/q4_shared.rs",
             CRATE / "src/q3_shared.rs",
+            CRATE / "src/q3_negated_shared.rs",
+            CRATE / "src/q3_negated.rs",
             CRATE / "src/q3_halfwarp.rs",
             CRATE / "src/q3_prefill.rs",
             CRATE / "src/q3_padded.rs",

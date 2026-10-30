@@ -135,10 +135,11 @@ def validate_paired_projection(
     shared_prefill=False,
     halfwarp_q3=False,
     halfwarp_q4=False,
+    negated_q3_prefill=False,
 ):
-    if halfwarp_q3 or halfwarp_q4:
+    if halfwarp_q3 or halfwarp_q4 or negated_q3_prefill:
         if (
-            (halfwarp_q3 and halfwarp_q4 and not defaults)
+            (sum([halfwarp_q3, halfwarp_q4, negated_q3_prefill]) > 1 and not defaults)
             or q4_prefill
             or shared_prefill
             or not padded_q3
@@ -262,7 +263,32 @@ def validate_paired_projection(
             "Candidate": "Aligned",
         }
 
+    def current_q3_decode(role):
+        return (halfwarp_q3 and role == "Candidate") or (
+            (halfwarp_q4 or negated_q3_prefill)
+            and (role == "Candidate" or not defaults)
+        )
+
+    def current_q4_decode(role):
+        return (halfwarp_q4 and role == "Candidate") or (
+            negated_q3_prefill and (role == "Candidate" or not defaults)
+        )
+
     def selector_context(role):
+        if negated_q3_prefill:
+            return {
+                "q3_vector_kernel": "Default"
+                if defaults and role == "Control"
+                else "HalfWarp",
+                "q4_vector_kernel": "Default"
+                if defaults and role == "Control"
+                else "HalfWarp",
+                "prefill_quantization": "NegatedSharedComponents"
+                if role == "Candidate"
+                else "Accurate"
+                if defaults
+                else "SharedComponents",
+            }
         if halfwarp_q4:
             return {
                 "q3_vector_kernel": "Default"
@@ -455,8 +481,7 @@ def validate_paired_projection(
                 if role == "Candidate" or (q4_prefill and not defaults):
                     return (
                         "q3_components_halfwarp"
-                        if (halfwarp_q3 and role == "Candidate")
-                        or (halfwarp_q4 and (role == "Candidate" or not defaults))
+                        if current_q3_decode(role)
                         else "q3_components_padded112_wide"
                     )
                 return "q3_default_padded112" if defaults else "q3_components_padded112"
@@ -471,7 +496,7 @@ def validate_paired_projection(
             ):
                 return (
                     "q4_components_halfwarp"
-                    if halfwarp_q4 and role == "Candidate"
+                    if current_q4_decode(role)
                     else "q4_components_wide64"
                 )
             if role == "Candidate" or not defaults:
@@ -542,11 +567,7 @@ def validate_paired_projection(
                     )
                     suffix = (
                         [
-                            5
-                            if halfwarp_q4 and role == "Candidate" and wide
-                            else 4
-                            if wide
-                            else 1,
+                            5 if current_q4_decode(role) and wide else 4 if wide else 1,
                             3,
                         ]
                         if role == "Candidate" or not defaults
@@ -555,8 +576,7 @@ def validate_paired_projection(
                 elif (aligned_q3 or q4_prefill) and params[:4] == [1, 5120, 17408, 11]:
                     suffix = (
                         [6, 3]
-                        if (halfwarp_q3 and role == "Candidate")
-                        or (halfwarp_q4 and (role == "Candidate" or not defaults))
+                        if current_q3_decode(role)
                         else [4, 3]
                         if role == "Candidate" or (q4_prefill and not defaults)
                         else [3, 0 if defaults else 3]
@@ -582,10 +602,7 @@ def validate_paired_projection(
                     and padded
                     and (role == "Candidate" or (q4_prefill and not defaults))
                 )
-                halfwarp = padded and (
-                    (halfwarp_q3 and role == "Candidate")
-                    or (halfwarp_q4 and (role == "Candidate" or not defaults))
-                )
+                halfwarp = padded and (current_q3_decode(role))
                 expected_entry = (
                     "q3_components_halfwarp"
                     if halfwarp
@@ -650,7 +667,18 @@ def validate_paired_projection(
         ]
         if prefill_ledgers[0] != prefill_ledgers[1]:
             raise RuntimeError("halfwarp decode changed a prefill route")
-    if shared_prefill and not defaults:
+    if negated_q3_prefill and not defaults:
+        decode_ledgers = [
+            {
+                (r["entry"], r["parameters"]): int(r["calls"])
+                for r in profiles
+                if r.get("phase") == f"paired_{role}_decode_device"
+            }
+            for role in ("Control", "Candidate")
+        ]
+        if decode_ledgers[0] != decode_ledgers[1]:
+            raise RuntimeError("negated prefill changed a decode route")
+    if (shared_prefill or negated_q3_prefill) and not defaults:
         for field in (
             "max_absolute",
             "max_scaled_error",
@@ -662,9 +690,11 @@ def validate_paired_projection(
     if q4_prefill:
         validate_q4_prefill_profiles(
             profiles,
-            shared=shared_prefill or halfwarp_q3 or halfwarp_q4,
+            shared=shared_prefill or halfwarp_q3 or halfwarp_q4 or negated_q3_prefill,
             defaults=defaults,
-            control_shared=(halfwarp_q3 or halfwarp_q4) and not defaults,
+            control_shared=(halfwarp_q3 or halfwarp_q4 or negated_q3_prefill)
+            and not defaults,
+            negated_q3=negated_q3_prefill,
         )
     footer = records("INFERENCE_BENCH_PAIR_OK qwen-gguf")
     if footer != [
@@ -680,7 +710,7 @@ def validate_paired_projection(
 
 
 def validate_q4_prefill_profiles(
-    profiles, *, shared=False, defaults=False, control_shared=False
+    profiles, *, shared=False, defaults=False, control_shared=False, negated_q3=False
 ):
     shapes = [
         (5120, 10240, 13, 2),
@@ -731,6 +761,11 @@ def validate_q4_prefill_profiles(
                     if role == "Candidate" or control_shared:
                         want_entry = f"q{code - 8}_shared_m{32 if rows == 32 else 16}"
                         phase = 3 if code == 12 else 5
+                        if code == 11 and negated_q3 and role == "Candidate":
+                            want_entry = (
+                                f"q3_negated_shared_m{32 if rows == 32 else 16}"
+                            )
+                            phase = 7
                     else:
                         want_entry = (
                             "q4_warp_m16" if code == 12 else "q3_warp_padded112"
@@ -763,6 +798,8 @@ def validate_q4_prefill_profiles(
                 "q4_warp_m16",
                 "q3_shared_m16",
                 "q3_shared_m32",
+                "q3_negated_shared_m16",
+                "q3_negated_shared_m32",
                 "q4_shared_m16",
                 "q4_shared_m32",
             ):
@@ -895,6 +932,11 @@ def main():
         "--qwen-paired-q4-halfwarp",
         action="store_true",
         help="compare sixteen-lane Q4 decode with current shared prefill and Q3 decode fixed",
+    )
+    parser.add_argument(
+        "--qwen-paired-q3-negated-prefill",
+        action="store_true",
+        help="compare exact negated-S8 Q3 shared prefill with both current decode kernels fixed",
     )
     parser.add_argument(
         "--qwen-paired-defaults",
@@ -1076,6 +1118,7 @@ def main():
                 args.qwen_paired_shared_prefill,
                 args.qwen_paired_q3_halfwarp,
                 args.qwen_paired_q4_halfwarp,
+                args.qwen_paired_q3_negated_prefill,
                 args.qwen_paired_defaults,
             ]
         )
@@ -1091,6 +1134,7 @@ def main():
         or args.qwen_paired_shared_prefill
         or args.qwen_paired_q3_halfwarp
         or args.qwen_paired_q4_halfwarp
+        or args.qwen_paired_q3_negated_prefill
     ):
         parser.error("--qwen-q3-padded112 requires paired Q3 or defaults validation")
     if (
@@ -1098,6 +1142,7 @@ def main():
         or args.qwen_paired_shared_prefill
         or args.qwen_paired_q3_halfwarp
         or args.qwen_paired_q4_halfwarp
+        or args.qwen_paired_q3_negated_prefill
         or args.qwen_paired_defaults
     ) and not args.qwen_q3_padded112:
         parser.error(
@@ -1115,6 +1160,7 @@ def main():
         or args.qwen_paired_shared_prefill
         or args.qwen_paired_q3_halfwarp
         or args.qwen_paired_q4_halfwarp
+        or args.qwen_paired_q3_negated_prefill
         or args.qwen_paired_defaults
     ) and (
         args.inference != "gpu-qwen-gguf-bench"
@@ -1428,6 +1474,8 @@ def main():
                                 if args.qwen_paired_q3_halfwarp
                                 else " paired-q4-halfwarp"
                                 if args.qwen_paired_q4_halfwarp
+                                else " paired-q3-negated-prefill"
+                                if args.qwen_paired_q3_negated_prefill
                                 else " paired-defaults"
                                 if args.qwen_paired_defaults
                                 else " paired-q3"
@@ -1486,6 +1534,7 @@ def main():
                     or args.qwen_paired_shared_prefill
                     or args.qwen_paired_q3_halfwarp
                     or args.qwen_paired_q4_halfwarp
+                    or args.qwen_paired_q3_negated_prefill
                     or args.qwen_paired_defaults
                 ):
                     expected = "INFERENCE_BENCH_PAIR_OK qwen-gguf backend=nvidia framework=burn os=d3os variants=2 reference_values_per_variant=32033280"
@@ -1500,6 +1549,7 @@ def main():
                         or args.qwen_paired_shared_prefill
                         or args.qwen_paired_q3_halfwarp
                         or args.qwen_paired_q4_halfwarp
+                        or args.qwen_paired_q3_negated_prefill
                         or args.qwen_paired_defaults
                     ):
                         validate_paired_projection(
@@ -1515,6 +1565,8 @@ def main():
                             halfwarp_q3=args.qwen_paired_q3_halfwarp
                             or args.qwen_paired_defaults,
                             halfwarp_q4=args.qwen_paired_q4_halfwarp
+                            or args.qwen_paired_defaults,
+                            negated_q3_prefill=args.qwen_paired_q3_negated_prefill
                             or args.qwen_paired_defaults,
                         )
                     if args.inference == "gpu-doom-bench":

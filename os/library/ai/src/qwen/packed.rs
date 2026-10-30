@@ -68,6 +68,7 @@ mod tests {
             crate::qwen::PrefillQuantization::Q8_1,
             crate::qwen::PrefillQuantization::Q4KComponents,
             crate::qwen::PrefillQuantization::SharedComponents,
+            crate::qwen::PrefillQuantization::NegatedSharedComponents,
         ] {
             matrix.prefill_quantization = mode;
             let moved = matrix.clone().to_device(&device);

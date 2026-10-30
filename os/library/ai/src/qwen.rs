@@ -37,6 +37,8 @@ pub enum PrefillQuantization {
     Q4KComponents,
     /// Shared raw Q3_K and Q4_K tiles on the measured prefill cells.
     SharedComponents,
+    /// Shared tiles with exact negated Q3 fragments, retaining Q4 shared tiles.
+    NegatedSharedComponents,
 }
 
 /// Select a Q4_K vector implementation with the original output tolerances.
@@ -121,6 +123,7 @@ impl PrefillQuantization {
             Self::Q8_1WithAttention => d3os_burn_native::backend::PrefillQuantization::Q8_1WithAttention,
             Self::Q4KComponents => d3os_burn_native::backend::PrefillQuantization::Q4KComponents,
             Self::SharedComponents => d3os_burn_native::backend::PrefillQuantization::SharedComponents,
+            Self::NegatedSharedComponents => d3os_burn_native::backend::PrefillQuantization::NegatedSharedComponents,
         }
     }
 }

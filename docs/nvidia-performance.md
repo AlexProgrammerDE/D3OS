@@ -4712,3 +4712,76 @@ Operator evidence remains under `~/.cache/d3os/qwen-q4-halfwarp-decode-v1/`.
 Its serial SHA-256 is `8575066b5d9584ce68a78d91046fda0cda51f319c2359aa555900749297eaa25`.
 Integration evidence remains under `qwen-q4-halfwarp-integration-v1/`, and the model capture remains under `qwen-q4-halfwarp-model-v1/`.
 The model serial SHA-256 is `425c5505ec836008863e6bdb0646bdb919ac6d92add41573a0aae863099da0f7`.
+
+### Remove the Q3 prefill activation-sum correction
+
+The next retained prefill change uses exact negated signed-byte Q3 fragments.
+The previous fragment represents `q * scale - 1`, so each integer matrix product needs an activation-sum correction.
+Negated products fit S8 exactly in `[-128,124]`.
+The new fragment represents `-(q * scale)`, and negating the I32 matrix result recovers the original integer dot.
+This removes the activation-sum DP4A instructions and their warp reductions.
+The maximum integer magnitude is 524,288, so saturation and I32 overflow do not affect this identity.
+
+The tile geometry, shared storage, barriers, activation packing, three components, FP32 multiply order, and compensated accumulation remain unchanged.
+The existing exhaustive integer proof and Rust packed-word test cover the new encoder.
+A source reconstruction binds the change to the original shared-tile implementation, with the integer replacement as its only arithmetic difference.
+The existing 33-row FP64 and staged CPU fixtures remain unchanged and need no regeneration.
+
+Both new entries pass the unchanged machine-code qualifier, with no activation-sum DP4A instructions in their disassembly.
+The M16 entry uses 47 registers, versus 40 for its control. Both M32 entries use 56 registers.
+Each entry retains 3,584 bytes of shared memory and has no local memory, stack, frame, or spills.
+The same 112-byte weight blocks serve both routes, with no expanded or duplicate weights.
+
+| Operator measurement, including packing | Current shared Q3 | Negated shared Q3 | Time reduction |
+| --- | ---: | ---: | ---: |
+| Five rows, one weight buffer | 287.6427 µs | 266.8556 µs | 7.23% |
+| Five rows, eight rotating buffers | 307.0650 µs | 285.1771 µs | 7.13% |
+| Thirty-two rows, one weight buffer | 518.4190 µs | 450.5679 µs | 13.09% |
+| Thirty-two rows, eight rotating buffers | 587.0249 µs | 510.4729 µs | 13.04% |
+
+Both rotating cases pass the declared 5% threshold. Each mode retains all forty samples and sixteen graph iterations per sample.
+All 5,012,556 original numerical checks and the same number of bit-exact staged CPU comparisons pass.
+The study retains all row and column tails, both poisons, both padding patterns, immutable-source checks, and allocation guards.
+The production entries match the operator-tested machine text exactly.
+All sixteen prior optional entry texts and all three core-family records remain unchanged.
+
+`PrefillQuantization::NegatedSharedComponents` selects the new entries only at M 5 or 32, K 5,120, and N 17,408.
+Q4 keeps its existing shared prefill entries. Both HalfWarp decode selectors and every activation pack retain their prior routes.
+SDK storage extents, alignment, and CTA counts remain unchanged.
+Historical selectors retain the previous entries for reproducible comparisons.
+`--qwen-paired-q3-negated-prefill --qwen-q3-padded112` compares the two prefill implementations with current decode fixed.
+
+The model comparison keeps the 37-token prompt, 128 generated tokens, F32 cache, context 2048, batch 32, and four pinned vCPUs.
+One capture retains all four ordinary samples per variant, two warmups, and two instrumented passes.
+Acceptance requires at least 1% lower mean prompt latency, faster results in both balanced blocks, and no decode regression greater than 1%.
+All original numerical limits, complete reported reference-error statistics, token traces, residency, and unrelated dispatch ledgers remain mandatory.
+
+| Same-capture model measurement | Current shared Q3 | Negated shared Q3 |
+| --- | ---: | ---: |
+| Mean prompt latency | 471.75 ms | 460.25 ms |
+| First balanced block | 461.0 ms | 446.5 ms |
+| Second balanced block | 482.5 ms | 474.0 ms |
+| Decode throughput | 24.4543 tokens/s | 24.4531 tokens/s |
+
+Prompt latency decreases 2.4377%. Decode throughput changes by -0.0048%, with identical full decode entry, parameter, and call ledgers.
+All other prefill routes and activation-pack ledgers remain identical.
+All 64,066,560 original logit checks pass at `0.002 + 0.0005 * abs(reference)`.
+The complete reported reference-error statistics match, including maximum absolute error `0.00003385544` and squared error `0.00022278296714795567`.
+All twelve Native token traces match, and the two existing Linux selection differences remain unchanged.
+Instrumented timings also decrease for both changed Q3 entries. Ordinary model samples determine acceptance.
+
+Resident weights remain 13,664,997,376 bytes. Prepared-page-cache loading and upload take 8.431 seconds, with no cold-storage parity claim.
+The capture has no recorder overlap or resource-guard stop. Minimum available host RAM is about 5.99 GB.
+SDK tests (28), Native tests (78), packed-model tests (6), strict Clippy, and formatting pass.
+Six historical captures, 37 parser rejection controls, current-default controls, and three actual CLI prerequisite checks pass.
+The matching kernel and application build passes. All eighteen optional module entries resolve.
+Verified cache deltas preserve both warm build targets before their RAM copies are removed.
+
+Cached matched llama.cpp prompt latency remains 93.693 ms, so Native prefill remains about 4.91 times slower.
+Its cached decode throughput remains 34.233 tokens/s. The latest capture's decode gap is 28.57%, with no decode optimization in this change.
+The prefill gap, decode gap, matched cold storage, and physical rendering presentation remain open.
+
+Operator evidence remains under `~/.cache/d3os/qwen-q3-negated-prefill-v1/`.
+Its serial SHA-256 is `7518c914f7cad36e8c3104e18e80bb209040bff898315449ad6f1eb63914d2b9`.
+Integration evidence remains under `qwen-negated-prefill-integration-v1/`, and the model capture remains under `qwen-negated-prefill-model-v1/`.
+The model serial SHA-256 is `0f156ea94a6bfacd55d9af3765733e035d949ed8bf97b531f2659b7f393e910f`.

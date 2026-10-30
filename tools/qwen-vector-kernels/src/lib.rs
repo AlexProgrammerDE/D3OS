@@ -144,3 +144,5 @@ mod q3_shared;
 mod q4_shared;
 
 mod q4_halfwarp;
+
+mod q3_negated_shared;
