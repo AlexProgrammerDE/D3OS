@@ -150,6 +150,19 @@ fn projection(
     let components = projection_components(batch, shape, storage, options.prefill)?;
     let input = dense(input, DType::F32)?;
     let packed = weights(packed, shape, storage)?;
+    if layout == MatrixLayout::Q3Padded112 {
+        if format != MatrixFormat::Quantized(Quantization::Q3K) || shape != [17408, 5120] {
+            return Err(Error::InvalidParameter);
+        }
+        let components = usize::from(batch > 1 || options.q3_vector == Q3VectorKernel::Components) * 3;
+        let activations = if components == 3 { prepare_activations(&input, outputs, 3)? } else { input };
+        return output(
+            [batch, outputs],
+            Kernel::ProjectQuantized,
+            &[(&activations, 0), (&packed, 0)],
+            &[batch, width, outputs, 11, 3, components],
+        );
+    }
     if use_q3_prefill(batch, shape, storage, options) {
         let activations = prepare_activations(&input, outputs, 3)?;
         return output(
@@ -281,7 +294,12 @@ impl Native {
                 MatrixFormat::Quantized(format) => (Kernel::EmbeddingQuantized, format as usize),
                 _ => (Kernel::Embedding, usize::from(format == MatrixFormat::Bf16)),
             };
-            let parameters = [vocab, width, tokens.len(), code, 2];
+            let layout_code = match layout {
+                MatrixLayout::RowMajor => 0,
+                MatrixLayout::Q8Columns32 => 2,
+                MatrixLayout::Q3Padded112 => 3,
+            };
+            let parameters = [vocab, width, tokens.len(), code, layout_code];
             output(
                 [tokens.len(), width],
                 kernel,

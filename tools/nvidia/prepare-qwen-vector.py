@@ -13,7 +13,15 @@ from pathlib import Path
 import tomllib
 
 ROOT = Path(__file__).resolve().parents[2]
-ENTRIES = ("q3_components_dp4a", "q4_components_dp4a", "q3_warp_m16")
+ENTRIES = (
+    "q3_components_dp4a",
+    "q4_components_dp4a",
+    "q3_warp_m16",
+    "q3_components_padded112",
+    "q3_default_padded112",
+    "q3_warp_padded112",
+    "embedding_q3_padded112",
+)
 FAMILY = "qwen-vector"
 CRATE = ROOT / "tools/qwen-vector-kernels"
 FLAGS = ["-C", "target-cpu=sm_89", "-C", "target-feature=+ptx80", "--emit=asm"]
@@ -57,6 +65,7 @@ def compile_module(directory, toolkit, target):
             CRATE / "src/lib.rs",
             CRATE / "src/q4.rs",
             CRATE / "src/q3_prefill.rs",
+            CRATE / "src/q3_padded.rs",
         ]
     }
     env = dict(

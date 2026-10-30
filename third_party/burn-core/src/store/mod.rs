@@ -401,7 +401,7 @@ macro_rules! map_kind {
             param: Param<Tensor<D, $kind>>,
         ) -> Param<Tensor<D, $kind>> {
             let device = param.lazy_device();
-            let shape = param.lazy_shape();
+            let shape = param.record_shape();
             match self.take(&device, shape, || param.val().dtype()) {
                 Some((tensor, record_id)) => param.transform_for_load(tensor, record_id),
                 None => param,

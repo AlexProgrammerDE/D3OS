@@ -558,3 +558,52 @@ fn q3_register_prefill_bounds_all_allocations_and_rejects_unmeasured_packets() {
         assert!(Kernel::ProjectQuantized.work(&invalid).is_err());
     }
 }
+
+#[test]
+fn padded_q3_consumers_bound_words_tails_alignment_and_aliases() {
+    for rows in [1u32, 2, 5, 15, 16, 17, 31, 32, 33] {
+        for components in [0, 3] {
+            let packet = [rows, 5120, 17408, 11, 3, components];
+            if rows > 1 && components == 0 {
+                assert!(Kernel::ProjectQuantized.work(&packet).is_err());
+                continue;
+            }
+            let work = Kernel::ProjectQuantized.work(&packet).unwrap();
+            let input = if components == 0 { rows * 5120 } else { rows * 4000 };
+            assert_eq!(&work.extents[..3], &[u64::from(input), 9748480, u64::from(rows * 17408)]);
+            assert_eq!(work.blocks, if rows == 1 { 4352 } else { rows.div_ceil(16) * 544 });
+            assert_eq!((work.threads, work.pointers, work.output, work.in_place), (128, 3, 2, false));
+            let addresses = [0x100000, 0x10000000, 0x40000000];
+            work.validate_aliases(&addresses).unwrap();
+            let alignment = if rows == 1 && components == 3 { 8 } else { 4 };
+            assert_eq!(work.alignments[1], alignment);
+            assert_eq!(work.validate_aliases(&[addresses[0], addresses[1] + 4, addresses[2]]).is_ok(), alignment == 4);
+            for source in 0..2 {
+                let mut overlap = addresses;
+                overlap[2] = addresses[source] + (work.extents[source] - 1) * 4;
+                assert!(work.validate_aliases(&overlap).is_err());
+            }
+        }
+    }
+    for rows in [1, 8, 33] {
+        let work = Kernel::EmbeddingQuantized.work(&[17408, 5120, rows, 11, 3]).unwrap();
+        assert_eq!(&work.extents[..3], &[9748480, u64::from(rows), u64::from(rows * 5120)]);
+        assert_eq!(work.blocks, (rows * 5120).div_ceil(128));
+        work.validate_aliases(&[0x10000000, 0x100000, 0x40000000]).unwrap();
+        assert!(work.validate_aliases(&[0x10000000, 0x100000, 0x10000000]).is_err());
+    }
+    for (field, value) in [(0, 0), (0, u32::MAX), (1, 5119), (1, 5376), (2, 17407), (2, 17440), (3, 12), (4, 4), (5, 1)] {
+        let mut packet = [1, 5120, 17408, 11, 3, 3];
+        packet[field] = value;
+        assert!(Kernel::ProjectQuantized.work(&packet).is_err());
+    }
+    for packet in [
+        [17408, 5120, 0, 11, 3],
+        [17408, 5120, u32::MAX, 11, 3],
+        [17407, 5120, 8, 11, 3],
+        [17408, 5119, 8, 11, 3],
+        [17408, 5120, 8, 12, 3],
+    ] {
+        assert!(Kernel::EmbeddingQuantized.work(&packet).is_err());
+    }
+}

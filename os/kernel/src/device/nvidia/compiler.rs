@@ -156,7 +156,13 @@ pub(super) fn inference() -> Option<&'static [u8]> {
 /// Missing optional code fails explicitly instead of falling back to another kernel.
 pub(super) fn projection_module(symbol: &str) -> Result<Option<&'static [u8]>> {
     match symbol {
-        "q3_components_dp4a" | "q4_components_dp4a" | "q3_warp_m16" => QWEN_VECTOR
+        "q3_components_dp4a"
+        | "q4_components_dp4a"
+        | "q3_warp_m16"
+        | "q3_components_padded112"
+        | "q3_default_padded112"
+        | "q3_warp_padded112"
+        | "embedding_q3_padded112" => QWEN_VECTOR
             .get()
             .and_then(Option::as_ref)
             .map(|module| Some(module.bytes.as_slice()))

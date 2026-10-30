@@ -136,6 +136,8 @@ fn packed_matrix_layout(native: bool, shape: [usize; 2], format: MatrixFormat) -
         && format == MatrixFormat::Quantized(Quantization::Q8_0)
     {
         MatrixLayout::Q8Columns32
+    } else if native && shape == [17408, 5120] && format == MatrixFormat::Quantized(Quantization::Q3K) {
+        MatrixLayout::Q3Padded112
     } else {
         MatrixLayout::RowMajor
     }
@@ -165,17 +167,25 @@ impl PackedMatrix {
     pub fn from_bytes(shape: [usize; 2], format: MatrixFormat, bytes: &[u8], device: &Device) -> Result<Self> {
         device_supported(device)?;
         format.validate(shape, bytes).map_err(|e| format!("Qwen packed matrix: {e}"))?;
-        // Reorder the measured wide 9B FFN, attention and vocabulary geometries. File encoding and
-        // numerical format stay unchanged; the device owns one packed copy.
+        // Only measured geometries change layout. The device owns one packed
+        // copy; canonical file bytes and numerical formats remain unchanged.
         let layout = packed_matrix_layout(cfg!(feature = "native") && native_matrix_device(device), shape, format);
-        let count = bytes.len().div_ceil(4);
+        let mut packed = if layout == MatrixLayout::Q3Padded112 {
+            layout.pack(shape, format, bytes).map_err(|e| format!("Qwen packed matrix: {e}"))?
+        } else {
+            let mut packed = Vec::new();
+            packed
+                .try_reserve_exact(bytes.len())
+                .map_err(|_| String::from("cannot allocate Qwen packed matrix"))?;
+            packed.extend_from_slice(bytes);
+            packed
+        };
+        let count = packed.len().div_ceil(4);
         let length = count.checked_mul(4).ok_or(Error::AllocationFailed)?;
-        let mut packed = Vec::new();
         packed
             .try_reserve_exact(length - packed.len())
             .map_err(|_| String::from("cannot allocate Qwen packed matrix"))?;
-        // Copy the complete encoding once, then initialize only its partial word.
-        packed.extend_from_slice(bytes);
+        // Initialize only the final partial storage word, if any.
         packed.resize(length, 0);
         let words = Tensor::<1, Int>::from_data(TensorData::from_bytes_vec(packed, [count], DType::I32), device);
         #[cfg(feature = "native")]

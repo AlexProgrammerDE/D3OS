@@ -123,12 +123,13 @@ def validate_module_admission(text, manifest, families, *, precompiled):
 
 
 def validate_paired_projection(
-    text, *, format_code=12, components=False, defaults=False
+    text, *, format_code=12, components=False, defaults=False, padded_q3=False
 ):
     if (
         format_code not in (11, 12)
         or ((components or defaults) and format_code != 12)
         or (components and defaults)
+        or (padded_q3 and not (defaults or format_code == 11))
     ):
         raise ValueError("paired projection format must be Q3_K or Q4_K")
     component_mode = format_code == 11 or components or defaults
@@ -321,6 +322,16 @@ def validate_paired_projection(
             raise RuntimeError("paired projection changed numerical results")
     profiles = records("NATIVE_QWEN_PROJECTION_PROFILE")
     ledgers = []
+
+    def layout_entry(row, role, legacy):
+        if padded_q3 and json.loads(row["parameters"])[:4] == [1, 5120, 17408, 11]:
+            return (
+                "q3_components_padded112"
+                if role == "Candidate"
+                else "q3_default_padded112"
+            )
+        return legacy
+
     for role in ["Control", "Candidate"]:
         selected = [
             row
@@ -342,7 +353,9 @@ def validate_paired_projection(
                     + ("_narrow" if role == "Candidate" else "")
                 )
             )
-            if not rows or any(row["entry"] != expected_entry for row in rows):
+            if not rows or any(
+                row["entry"] != layout_entry(row, role, expected_entry) for row in rows
+            ):
                 raise RuntimeError(
                     "paired projection did not execute the selected implementation"
                 )
@@ -367,8 +380,15 @@ def validate_paired_projection(
                 packs[tuple(params[:3])] = calls
                 continue
             if row in chosen:
-                suffix = [1, 3] if component_mode else [1]
-                expected = params[:4] + (suffix if role == "Candidate" else [])
+                if padded_q3 and params[:4] == [1, 5120, 17408, 11]:
+                    suffix = [3, 3 if role == "Candidate" else 0]
+                else:
+                    suffix = (
+                        ([1, 3] if component_mode else [1])
+                        if role == "Candidate"
+                        else []
+                    )
+                expected = params[:4] + suffix
                 if params != expected:
                     raise RuntimeError(
                         "paired projection executed an invalid selector packet"
@@ -509,6 +529,11 @@ def main():
         "--qwen-paired-defaults",
         action="store_true",
         help="compare normal Native Q3/Q4 defaults against legacy projections; requires --qwen-device-timing",
+    )
+    parser.add_argument(
+        "--qwen-q3-padded112",
+        action="store_true",
+        help="require the measured Q3 padded layout in paired Q3/default validation",
     )
     parser.add_argument(
         "--qwen-paired-q3",
@@ -680,6 +705,10 @@ def main():
         > 1
     ):
         parser.error("select one paired Qwen projection experiment")
+    if args.qwen_q3_padded112 and not (
+        args.qwen_paired_defaults or args.qwen_paired_q3
+    ):
+        parser.error("--qwen-q3-padded112 requires paired Q3 or defaults validation")
     if (
         args.qwen_paired_q4
         or args.qwen_paired_q3
@@ -1052,6 +1081,7 @@ def main():
                             format_code=11 if args.qwen_paired_q3 else 12,
                             components=args.qwen_paired_q4_components,
                             defaults=args.qwen_paired_defaults,
+                            padded_q3=args.qwen_q3_padded112,
                         )
                     if args.inference == "gpu-doom-bench":
                         result = re.search(

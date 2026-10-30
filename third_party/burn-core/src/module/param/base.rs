@@ -149,6 +149,8 @@ pub struct Param<T: ParameterValue> {
 pub struct ParamMapper<T: ParameterValue> {
     load: Option<Mapper<T>>,
     save: Option<Mapper<T>>,
+    /// Persisted shape when the load/save mappers change physical storage size.
+    record_shape: Option<Shape>,
     /// Carries configured training state across `consume` / `from_mapped_value` reconstruction.
     mapped_is_active: Option<bool>,
 }
@@ -185,6 +187,7 @@ impl<T: ParameterValue> Default for ParamMapper<T> {
         Self {
             load: None,
             save: None,
+            record_shape: None,
             mapped_is_active: None,
         }
     }
@@ -646,6 +649,23 @@ impl<T: Parameter> Param<T> {
             Some(value) => value.shape.clone(),
             None => self.shape(),
         }
+    }
+
+    /// Declare the canonical shape validated before the load mapper runs.
+    ///
+    /// The live tensor can have a different physical shape. This metadata
+    /// avoids reading or initializing it just to discover the record shape.
+    pub fn with_record_shape(mut self, shape: Shape) -> Self {
+        self.param_mapper.record_shape = Some(shape);
+        self
+    }
+
+    /// The expected saved shape, without initializing or reading tensor data.
+    pub fn record_shape(&self) -> Shape {
+        self.param_mapper
+            .record_shape
+            .clone()
+            .unwrap_or_else(|| self.lazy_shape())
     }
 
     /// Transform a parameter for loading by applying load transformations.

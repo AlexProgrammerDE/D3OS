@@ -231,6 +231,8 @@ pub struct Work {
     pub in_place: bool,
     /// Additional buffers modified by stateful kernels.
     pub mutated: u16,
+    /// Required byte alignment for each pointer, in kernel argument order.
+    pub alignments: [u8; 16],
 }
 
 fn product(values: &[u32]) -> Result<u32> {
@@ -548,6 +550,10 @@ impl Kernel {
             (Self::ProjectQuantized, [1, _, _, 11, 1, 3]) => "q3_components_dp4a",
             (Self::ProjectQuantized, [1, _, _, 12, 1, 3]) => "q4_components_dp4a",
             (Self::ProjectQuantized, [32, 5120, 17408, 11, 2, 3]) => "q3_warp_m16",
+            (Self::ProjectQuantized, [1, 5120, 17408, 11, 3, 0]) => "q3_default_padded112",
+            (Self::ProjectQuantized, [1, 5120, 17408, 11, 3, 3]) => "q3_components_padded112",
+            (Self::ProjectQuantized, [_, 5120, 17408, 11, 3, 3]) => "q3_warp_padded112",
+            (Self::EmbeddingQuantized, [17408, 5120, _, 11, 3]) => "embedding_q3_padded112",
             (Self::ProjectQuantized, [_, _, _, 8, 0, 3]) => "q8_components_pack",
             (Self::ProjectQuantized, [_, _, _, 8, 1, 3]) => "q8_components_project",
             (Self::ProjectQuantized, [_, _, _, 8, 2, 3]) => "q8_columns32_components",
@@ -630,6 +636,7 @@ impl Kernel {
     pub fn work(self, p: &[u32]) -> Result<Work> {
         let mut extents = [0; 16];
         let mut mutated = 0;
+        let mut alignments = [4; 16];
         let mut threads = 128;
         let (count, pointers, output, in_place) = match (self, p) {
             (Self::ArgWhere, p) => {
@@ -898,6 +905,27 @@ impl Kernel {
             (Self::ProjectQuantized, &[32, 5120, 17408, 11, 2, 3]) => {
                 extents[..3].copy_from_slice(&[32 * (3 * 5120 / 4 + 5120 / 32), 17408 * (5120 / 256) * 110 / 4, 32 * 17408]);
                 (2 * (17408 / 32) * 128, 3, 2, false)
+            }
+            // One padded Q3 copy serves accurate vectors, component decode and
+            // prefill. Only component decode issues eight-byte weight loads.
+            (Self::ProjectQuantized, &[m, 5120, 17408, 11, 3, components @ (0 | 3)]) => {
+                if m == 0 || (components == 0 && m != 1) {
+                    return Err(Error::InvalidField);
+                }
+                let input = product(&[m, 5120])?;
+                let scratch_bytes = product(&[input, 3])?;
+                let activation = if components == 3 { scratch_bytes / 4 + input / 32 } else { input };
+                extents[..3].copy_from_slice(&[u64::from(activation), 17408 * 20 * 28, u64::from(product(&[m, 17408])?)]);
+                if m == 1 && components == 3 {
+                    alignments[1] = 8;
+                }
+                let blocks = if m == 1 { 17408 / 4 } else { product(&[m.div_ceil(16), 17408 / 32])? };
+                (product(&[blocks, 128])?, 3, 2, false)
+            }
+            (Self::EmbeddingQuantized, &[17408, 5120, rows, 11, 3]) => {
+                let values = product(&[rows, 5120])?;
+                extents[..3].copy_from_slice(&[17408 * 20 * 28, u64::from(rows), u64::from(values)]);
+                (values, 3, 2, false)
             }
             // Pack three component planes and their scales, or consume them.
             (Self::ProjectQuantized, &[m, k, n, 8, phase @ 0..=2, 3]) => {
@@ -1416,6 +1444,7 @@ impl Kernel {
             output,
             in_place,
             mutated,
+            alignments,
         })
     }
 }
@@ -1423,6 +1452,13 @@ impl Kernel {
 impl Work {
     pub fn validate_aliases(&self, addresses: &[u64]) -> Result<()> {
         if addresses.len() != self.pointers {
+            return Err(Error::InvalidField);
+        }
+        if addresses
+            .iter()
+            .zip(self.alignments)
+            .any(|(&address, alignment)| !alignment.is_power_of_two() || !address.is_multiple_of(u64::from(alignment)))
+        {
             return Err(Error::InvalidField);
         }
         let writes = self.mutated | (1 << self.output);

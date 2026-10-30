@@ -10,14 +10,20 @@ pub enum MatrixLayout {
     /// Q8_0 blocks in [output / 32, input / 32, output % 32] order.
     /// All 34 bytes of each block are retained, including the original scale.
     Q8Columns32,
+    /// Q3_K blocks retain their 110 file bytes followed by two unused bytes.
+    /// Each 112-byte block starts at an eight-byte boundary in aligned storage.
+    Q3Padded112,
 }
 
 impl MatrixLayout {
     pub fn byte_len(self, shape: [usize; 2], format: MatrixFormat) -> Result<usize> {
-        if self == Self::Q8Columns32 && (format != MatrixFormat::Quantized(Quantization::Q8_0) || !shape[0].is_multiple_of(32)) {
-            return Err(Error::InvalidShape);
+        let length = format.byte_len(shape)?;
+        match self {
+            Self::Q8Columns32 if format != MatrixFormat::Quantized(Quantization::Q8_0) || !shape[0].is_multiple_of(32) => Err(Error::InvalidShape),
+            Self::Q3Padded112 if format != MatrixFormat::Quantized(Quantization::Q3K) => Err(Error::InvalidShape),
+            Self::Q3Padded112 => (length / 110).checked_mul(112).ok_or(Error::SizeOverflow),
+            _ => Ok(length),
         }
-        format.byte_len(shape)
     }
 
     /// Copy validated file bytes into the requested physical storage order.
@@ -45,13 +51,21 @@ impl MatrixLayout {
             return Ok(Cow::Borrowed(bytes));
         }
         let mut output = Vec::new();
-        output.try_reserve_exact(length).map_err(|_| Error::AllocationFailed)?;
-        output.resize(length, 0);
+        let canonical_length = format.byte_len(shape)?;
+        output.try_reserve_exact(canonical_length).map_err(|_| Error::AllocationFailed)?;
+        output.resize(canonical_length, 0);
         self.copy_blocks(shape, bytes, &mut output, true);
         Ok(Cow::Owned(output))
     }
 
     fn copy_blocks(self, shape: [usize; 2], input: &[u8], output: &mut [u8], inverse: bool) {
+        if self == Self::Q3Padded112 {
+            let (source_bytes, destination_bytes) = if inverse { (112, 110) } else { (110, 112) };
+            for (source, destination) in input.chunks_exact(source_bytes).zip(output.chunks_exact_mut(destination_bytes)) {
+                destination[..110].copy_from_slice(&source[..110]);
+            }
+            return;
+        }
         let blocks = shape[1] / 32;
         for column_tile in 0..shape[0] / 32 {
             for block in 0..blocks {

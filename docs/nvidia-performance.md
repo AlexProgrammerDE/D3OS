@@ -4157,3 +4157,79 @@ The complete captures and contracts remain under `~/.cache/d3os/qwen-q3-warp-dec
 The latter also preserves an initial CPU allocation failure under a 512 MiB address-space cap and its corrected 1 GiB run.
 The verified layout and private source remain under `~/.cache/d3os/qwen-q3-padded112-v1/`.
 The accepted 7.52% prefill improvement and the measured 19.7097-token/s decode result remain unchanged.
+
+## Aligned Q3 storage and the 27B checkpoint
+
+Native now pads each Q3_K block from 110 to 112 bytes for the measured `[17408, 5120]` matrices.
+Every original byte stays exact, including scales, signed zeros, and subgroup fields.
+The two padding bytes have no numerical meaning.
+Aligned load pairs replace eleven halfword weight loads with five loads in the component decoder.
+The SDK requires eight-byte weight alignment for that entry and rejects misaligned or overlapping requests.
+
+One resident representation serves component decode, accurate FP32 vectors, register-MMA prefill, and embedding lookup.
+Import prepares this representation once, before upload.
+Kernel selection changes metadata without duplicating or repacking weights during inference.
+Other matrix shapes, formats, CPU imports, and the three core kernel families keep their previous routes.
+All three existing optional kernel texts remain exact.
+
+| Rotating-weight operator mean, including activation packing | Raw 110-byte blocks | Padded 112-byte blocks | Time reduction |
+| --- | ---: | ---: | ---: |
+| One-row component decode | 142.3231 µs | 112.8077 µs | 20.74% |
+| 32-row register-MMA prefill | 1097.4030 µs | 1058.0304 µs | 3.59% |
+
+Each comparison retains all 42 balanced samples after 12 warmup rounds.
+Eight weight buffers per layout exceed L2 capacity.
+Both timed routes include the same activation packing.
+The operator times exclude initial uploads and the one-time CPU layout conversion.
+
+The component decoder passes 175,524 original reference comparisons and 105,170 bit-exact CPU comparisons.
+The remaining consumers pass 5,063,152 reference comparisons, including 49 prefill shapes and the five-row model tail.
+These checks also cover accurate vectors, embedding duplicates, boundary IDs, both padding patterns, guards, and immutable sources.
+Accurate vectors, prefill, and embeddings match their raw consumers bit for bit.
+Embedding values also match the CPU GGUF decoder exactly.
+The accurate vector follows the compiled cuTile reduction order, `[4, 2, 1, 16, 8]`, after its shared-memory transpose.
+
+The 49 prefill cases reuse verified records from an earlier capture whose later vector check failed.
+Their kernel text remains exact, so the final capture does not repeat them.
+The already validated component decoder also reuses exact machine-text evidence.
+Failed scale-offset, reduction-order, and staging attempts remain preserved.
+No tolerance or physical-write gate changes.
+
+Records retain canonical 110-byte blocks.
+Explicit record-shape metadata lets Burn validate that encoding before the load mapper restores padded storage.
+This avoids reading the destination tensor to discover its saved shape.
+Host tests cover odd block counts, partial canonical words, device moves, round trips, and rejection of a wrong record shape.
+
+### Full-model result
+
+One new synchronized capture uses the original Qwen3.6-27B-Q3_K_M model and references.
+It retains 37 prompt tokens, 128 decode tokens, FP32 state, context 2048, batch 32, and four pinned vCPUs.
+Both balanced blocks improve over the cached previous Candidate.
+
+| Full-model observation | Previous accepted capture | Padded-layout capture |
+| --- | ---: | ---: |
+| Candidate decode | 19.7097 tokens/s | 21.5506 tokens/s |
+| Candidate prefill | 824.25 ms | 697.00 ms |
+| Resident weight storage | 13,575,868,416 bytes | 13,664,997,376 bytes |
+| Model load and upload, prepared page cache | 10.230 s | 9.582 s |
+
+Decode throughput increases by 9.34%, and prefill time decreases by 15.44% against the cached capture.
+These are cross-capture observations, not an isolated same-capture measurement of the layout effect.
+The new same-capture Control uses accurate vectors on the same padded weights.
+Both variants share padded prefill, so their prefill difference does not measure the layout improvement.
+
+All 64,066,560 original logit comparisons pass with the unchanged `0.002 + 0.0005 * abs(reference)` limit.
+All twelve Native token sequences match.
+The two existing near-tie differences against Linux remain recorded.
+Both variants share one resident weight copy, with no weight transfers during timed inference.
+The layout adds exactly 85 MiB across 128 matrices and fits with the tested context on the 16 GiB GPU.
+The source page cache is prepared, so the load observation establishes no cold-storage parity.
+
+The cached matched llama.cpp result remains 34.2330 tokens/s.
+Native decode is now 37.05% below it.
+The broader prefill, cold-storage, and full performance goals remain open.
+
+The operator captures, failed attempts, exact reuse proofs, compiler bundle, and host checks remain under `~/.cache/d3os/qwen-q3-padded112-v1/`.
+The full-model capture remains under `~/.cache/d3os/qwen-q3-padded112-model-v1/`.
+Its serial SHA-256 is `a0957e533e2fc801bb8f09eb5bcf7037d5840df8b9feb4acf3e9f45e574f5aea`.
+Large build targets are preserved as verified deltas and removed from RAM after this checkpoint.
