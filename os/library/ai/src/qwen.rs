@@ -42,6 +42,8 @@ pub enum Q4VectorKernel {
     Default,
     Narrow,
     Components,
+    /// Paired loads on the measured Q4 geometries, components elsewhere.
+    Aligned,
 }
 
 impl Q4VectorKernel {
@@ -58,6 +60,7 @@ impl Q4VectorKernel {
             Self::Default => d3os_burn_native::backend::Q4VectorKernel::Default,
             Self::Narrow => d3os_burn_native::backend::Q4VectorKernel::Narrow,
             Self::Components => d3os_burn_native::backend::Q4VectorKernel::Components,
+            Self::Aligned => d3os_burn_native::backend::Q4VectorKernel::Aligned,
         }
     }
 }

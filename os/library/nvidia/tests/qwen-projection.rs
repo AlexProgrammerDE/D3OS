@@ -607,3 +607,29 @@ fn padded_q3_consumers_bound_words_tails_alignment_and_aliases() {
         assert!(Kernel::EmbeddingQuantized.work(&packet).is_err());
     }
 }
+
+#[test]
+fn aligned_q4_checks_full_storage_and_rejects_unmeasured_packets() {
+    for inner in [6144u32, 17408] {
+        let packet = [1, inner, 5120, 12, 4, 3];
+        let work = Kernel::ProjectQuantized.work(&packet).unwrap();
+        let ordinary = Kernel::ProjectQuantized.work(&[1, inner, 5120, 12, 1, 3]).unwrap();
+        assert_eq!(work.extents, ordinary.extents);
+        assert_eq!((work.blocks, work.threads, work.pointers, work.output, work.in_place), (1280, 128, 3, 2, false));
+        assert_eq!(work.alignments[1], 8);
+        let addresses = [0x100000, 0x10000000, 0x40000000];
+        work.validate_aliases(&addresses).unwrap();
+        assert!(work.validate_aliases(&[addresses[0], addresses[1] + 4, addresses[2]]).is_err());
+        ordinary.validate_aliases(&[addresses[0], addresses[1] + 4, addresses[2]]).unwrap();
+        for source in 0..2 {
+            let mut overlap = addresses;
+            overlap[2] = addresses[source] + (work.extents[source] - 1) * 4;
+            assert!(work.validate_aliases(&overlap).is_err());
+        }
+        for (field, value) in [(0, 0), (0, 2), (1, 5120), (1, u32::MAX), (2, 5119), (2, u32::MAX), (3, 11), (4, 0), (5, 1)] {
+            let mut invalid = packet;
+            invalid[field] = value;
+            assert!(Kernel::ProjectQuantized.work(&invalid).is_err());
+        }
+    }
+}

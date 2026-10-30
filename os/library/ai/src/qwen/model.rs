@@ -366,7 +366,7 @@ impl Qwen {
                 model = model.with_q3_vector_kernel(Q3VectorKernel::Components)?;
             }
             if load.has_q4 {
-                model = model.with_q4_vector_kernel(Q4VectorKernel::Components)?;
+                model = model.with_q4_vector_kernel(Q4VectorKernel::Aligned)?;
             }
         }
         Ok(model)

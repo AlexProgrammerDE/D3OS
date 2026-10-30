@@ -549,6 +549,7 @@ impl Kernel {
             (Self::ProjectQuantized, [_, _, _, _, 8]) => "group_project_q8_0",
             (Self::ProjectQuantized, [1, _, _, 11, 1, 3]) => "q3_components_dp4a",
             (Self::ProjectQuantized, [1, _, _, 12, 1, 3]) => "q4_components_dp4a",
+            (Self::ProjectQuantized, [1, 6144 | 17408, 5120, 12, 4, 3]) => "q4_components_wide64",
             (Self::ProjectQuantized, [32, 5120, 17408, 11, 2, 3]) => "q3_warp_m16",
             (Self::ProjectQuantized, [1, 5120, 17408, 11, 3, 0]) => "q3_default_padded112",
             (Self::ProjectQuantized, [1, 5120, 17408, 11, 3, 3]) => "q3_components_padded112",
@@ -900,6 +901,14 @@ impl Kernel {
                 let weights = product(&[k / 256, n, if format == 11 { 110 } else { 144 }])?;
                 extents[..3].copy_from_slice(&[u64::from(scratch), u64::from(weights).div_ceil(4), u64::from(n)]);
                 (product(&[n.div_ceil(4), 128])?, 3, 2, false)
+            }
+            // Paired Q4 loads require eight-byte weight alignment.
+            (Self::ProjectQuantized, &[1, k @ (6144 | 17408), 5120, 12, 4, 3]) => {
+                let scratch = product(&[k, 3])? / 4 + k / 32;
+                let weights = product(&[k / 256, 5120, 144])?;
+                extents[..3].copy_from_slice(&[u64::from(scratch), u64::from(weights / 4), 5120]);
+                alignments[1] = 8;
+                (1280 * 128, 3, 2, false)
             }
             // The measured 27B Q3 gate/up prefill geometry uses register MMA.
             (Self::ProjectQuantized, &[32, 5120, 17408, 11, 2, 3]) => {

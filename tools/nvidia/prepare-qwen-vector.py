@@ -21,6 +21,7 @@ ENTRIES = (
     "q3_default_padded112",
     "q3_warp_padded112",
     "embedding_q3_padded112",
+    "q4_components_wide64",
 )
 FAMILY = "qwen-vector"
 CRATE = ROOT / "tools/qwen-vector-kernels"
@@ -64,6 +65,7 @@ def compile_module(directory, toolkit, target):
             CRATE / "rust-toolchain.toml",
             CRATE / "src/lib.rs",
             CRATE / "src/q4.rs",
+            CRATE / "src/q4_aligned.rs",
             CRATE / "src/q3_prefill.rs",
             CRATE / "src/q3_padded.rs",
         ]

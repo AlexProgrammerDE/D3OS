@@ -4233,3 +4233,68 @@ The operator captures, failed attempts, exact reuse proofs, compiler bundle, and
 The full-model capture remains under `~/.cache/d3os/qwen-q3-padded112-model-v1/`.
 Its serial SHA-256 is `a0957e533e2fc801bb8f09eb5bcf7037d5840df8b9feb4acf3e9f45e574f5aea`.
 Large build targets are preserved as verified deltas and removed from RAM after this checkpoint.
+
+## Paired Q4 quant loads
+
+The `Aligned` Q4 selector reads each adjacent quant pair with one aligned 64-bit load.
+It reads `d` and `dmin` from one 32-bit header word and extracts scale bytes from three aligned words.
+All component arithmetic, Kahan accumulation, and warp reduction retain their original order.
+The SDK requires eight-byte weight alignment for the new packet.
+The selected geometries are `[5120, 6144]` and `[5120, 17408]`, with one input row.
+Other Q4 geometries retain the existing component kernel.
+Storage size, file encoding, and prefill kernels do not change.
+
+This differs from the rejected 32-bit-only Q4 load candidate.
+That cached candidate remains rejected and does not run again.
+The new kernel uses 36 registers instead of 40, with no spills or shared memory.
+Its production machine text matches the private operator test exactly.
+All seven existing optional entry texts and all three core-family qualification records remain exact.
+
+| Rotating-weight operator mean, including the same packing | Existing components | Aligned loads | Time reduction |
+| --- | ---: | ---: | ---: |
+| 6144 inputs, 5120 outputs | 43.0329 µs | 40.8323 µs | 5.11% |
+| 17408 inputs, 5120 outputs | 137.0213 µs | 128.0765 µs | 6.53% |
+
+Both datasets pass the original reference, guard, and source checks.
+All 62,884 paired output comparisons match bit for bit.
+The capture retains all 42 balanced samples per cache mode and both poison trials.
+No extra samples or replacement capture seek a better result.
+
+### Isolated full-model comparison
+
+The paired model capture holds Q3 components, padded Q3 storage, prefill, and all resident weights fixed.
+Control selects the existing Q4 component kernel.
+Candidate selects aligned loads on the two measured geometries and the existing kernel elsewhere.
+Both variants use four synchronized ordinary samples in balanced ABBA and BAAB blocks.
+
+| 27B synchronized decode | Control | Candidate |
+| --- | ---: | ---: |
+| First balanced block | 22.0405 tokens/s | 22.5293 tokens/s |
+| Second balanced block | 20.7961 tokens/s | 21.1921 tokens/s |
+| Combined result | 21.4002 tokens/s | 21.8402 tokens/s |
+
+The same-capture throughput increase is 2.06%, with both blocks improving.
+All 64,066,560 original logit comparisons pass, and the complete reference error statistics match.
+All twelve Native token traces match.
+The two existing near-tie differences against Linux remain recorded.
+Weight storage stays at 13,664,997,376 bytes, with no extra resident copy, repacking, or timed weight transfer.
+
+The prefill entry, parameter, and call-count ledgers match exactly between variants.
+Observed prefill means are 729.00 ms and 711.25 ms.
+These unchanged prefill kernels establish no new prefill optimization.
+Prepared-page-cache model load and upload take 11.095 seconds, which establishes no cold-storage parity.
+
+Native now selects `Aligned` Q4 at ordinary model load.
+Explicit `Components` selection preserves the old implementation for controlled comparisons.
+The `--qwen-paired-q4-aligned --qwen-q3-padded112` benchmark requires exact selectors, identical reference statistics, and the full existing residency gates.
+Historical captures retain their original validator options and expectations.
+Host SDK, Native, record/device-move tests, and strict lint pass.
+The large build targets remain restorable from verified deltas and are removed from RAM.
+
+The fresh result is 36.20% below the cached matched llama.cpp result of 34.2330 tokens/s.
+Absolute throughput varies between captures, so the 2.06% claim uses the paired Control rather than the previous capture's 21.5506 tokens/s.
+The remaining decode, broader prefill, cold-storage, and rendering comparison goals remain open.
+
+Evidence remains under `~/.cache/d3os/qwen-q4-wide64-loads-v1/`.
+The full-model capture remains under `~/.cache/d3os/qwen-q4-wide64-model-v1/`.
+Its serial SHA-256 is `3b9a9737da58b714dc25cc8df21c805edd05a5d0db0008e7128c0fef8a1fdaf6`.

@@ -170,6 +170,7 @@ fn run() -> Result<(), String> {
                     "paired-q4" if pair.is_none() => pair = Some(model_file::ProjectionPair::Q4Narrow),
                     "paired-q3" if pair.is_none() => pair = Some(model_file::ProjectionPair::Q3Components),
                     "paired-q4-components" if pair.is_none() => pair = Some(model_file::ProjectionPair::Q4Components),
+                    "paired-q4-aligned" if pair.is_none() => pair = Some(model_file::ProjectionPair::Q4Aligned),
                     "paired-defaults" if pair.is_none() => pair = Some(model_file::ProjectionPair::NativeDefaults),
                     "q8-prefill" if quantization == qwen::PrefillQuantization::Accurate => quantization = qwen::PrefillQuantization::Q8_1,
                     "q8-attention-prefill" if quantization == qwen::PrefillQuantization::Accurate => {

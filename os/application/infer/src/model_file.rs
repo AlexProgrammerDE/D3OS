@@ -86,6 +86,7 @@ pub(super) enum ProjectionPair {
     Q4Narrow,
     Q3Components,
     Q4Components,
+    Q4Aligned,
     NativeDefaults,
 }
 
@@ -98,6 +99,9 @@ impl ProjectionPair {
             .with_q4_vector_kernel(Q4VectorKernel::Default)?;
         match self {
             Self::Q4Components => model.with_q3_vector_kernel(Q3VectorKernel::Components),
+            Self::Q4Aligned => model
+                .with_q3_vector_kernel(Q3VectorKernel::Components)?
+                .with_q4_vector_kernel(Q4VectorKernel::Components),
             _ => Ok(model),
         }
     }
@@ -108,8 +112,9 @@ impl ProjectionPair {
             Self::Q4Narrow => model.with_q4_vector_kernel(Q4VectorKernel::Narrow),
             Self::Q3Components => model.with_q3_vector_kernel(Q3VectorKernel::Components),
             Self::Q4Components => model.with_q4_vector_kernel(Q4VectorKernel::Components),
+            Self::Q4Aligned => model.with_q4_vector_kernel(Q4VectorKernel::Aligned),
             Self::NativeDefaults => {
-                if model.q3_vector_kernel() != Q3VectorKernel::Components || model.q4_vector_kernel() != Q4VectorKernel::Components {
+                if model.q3_vector_kernel() != Q3VectorKernel::Components || model.q4_vector_kernel() != Q4VectorKernel::Aligned {
                     return Err(Error::from("native default experiment requires both component kernels at model load"));
                 }
                 Ok(model)
@@ -121,7 +126,7 @@ impl ProjectionPair {
         match self {
             Self::Q4Narrow => format!("q4_vector_kernel={:?}", model.q4_vector_kernel()),
             Self::Q3Components => format!("q3_vector_kernel={:?}", model.q3_vector_kernel()),
-            Self::Q4Components | Self::NativeDefaults => format!(
+            Self::Q4Components | Self::Q4Aligned | Self::NativeDefaults => format!(
                 "q4_vector_kernel={:?} q3_vector_kernel={:?}",
                 model.q4_vector_kernel(),
                 model.q3_vector_kernel()

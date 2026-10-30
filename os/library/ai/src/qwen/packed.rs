@@ -79,7 +79,11 @@ mod tests {
         let mut matrix = PackedMatrix::from_bytes(shape, format, &bytes, &device).unwrap();
         let input = Tensor::<2>::ones([1, 256], &device);
         let expected = matrix.project(input.clone()).unwrap().try_into_vec_as::<f32>().unwrap();
-        for kernel in [crate::qwen::Q4VectorKernel::Narrow, crate::qwen::Q4VectorKernel::Components] {
+        for kernel in [
+            crate::qwen::Q4VectorKernel::Narrow,
+            crate::qwen::Q4VectorKernel::Components,
+            crate::qwen::Q4VectorKernel::Aligned,
+        ] {
             assert!(matrix.set_q4_vector_kernel(kernel).is_err());
             assert_eq!(matrix.q4_vector_kernel, crate::qwen::Q4VectorKernel::Default);
             matrix.q4_vector_kernel = kernel;
