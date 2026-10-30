@@ -4595,8 +4595,43 @@ Evidence remains under `~/.cache/d3os/qwen-q3-halfwarp-decode-v1/` and `qwen-hal
 The completed model capture remains under `~/.cache/d3os/qwen-halfwarp-model-v1/`.
 Its serial SHA-256 is `2d2a5dad5751bfa018752a4b52e68487eaea2563bc9b309353934d06c8b99de9`.
 
-A separate CPU-only follow-up proves that negated scaled Q3 values fit S8 exactly in `[-128,124]`.
-It checks 131,072 activation triples, 262,144 packed words, and 4,096 dot products.
-An eight-lane staging reference also passes the original numerical limits.
-That follow-up has no compiled kernel, GPU measurements, production selection, or performance acceptance.
-Its evidence remains under `~/.cache/d3os/qwen-q3-quarterwarp-reference-v1/`.
+### Rejected Q3 decode follow-ups
+
+Three private follow-ups retain the accepted sixteen-lane kernel as their control.
+The first assigns eight lanes per output and negates scaled Q3 values before signed-byte conversion.
+Those values fit S8 exactly in `[-128,124]`, which removes the activation-sum correction.
+The CPU proof checks 131,072 activation triples, 262,144 packed words, and 4,096 dot products.
+The actual Rust encoder also passes an exhaustive packed-word check.
+
+The second changes only weight loads to PTX `.cg`, bypassing L1 while retaining L2 caching.
+Activation loads, arithmetic, output ownership, and the sixteen-lane reduction remain unchanged.
+The third replaces compensated accumulation with explicit round-to-nearest FP32 addition.
+It retains all three activation components, their scale operations, and the sixteen-lane reduction.
+Its CPU reference reproduces the original FP64 reference before evaluating the changed accumulation.
+The largest absolute error is approximately `1.192e-6`, with zero failures under the original limits.
+
+All three kernels compile and pass the unchanged machine-code qualifier.
+Each uses 40 registers and no shared memory, local memory, stack, frame, or spills.
+The first two candidates share one guest capture. The third uses a separate capture.
+Every candidate has its own paired control measurements, with all forty-two samples per mode retained.
+The declared acceptance threshold remains a 5% reduction in rotating-weight latency, including the same activation packing.
+
+| Rotating-weight operator measurement | Paired control | Candidate | Candidate latency change |
+| --- | ---: | ---: | ---: |
+| Eight lanes with negated scaled Q3 | 91.4359 µs | 114.1593 µs | +24.85% |
+| Sixteen lanes with `.cg` weight loads | 93.9798 µs | 100.1309 µs | +6.55% |
+| Sixteen lanes without compensated accumulation | 91.7389 µs | 113.5106 µs | +23.73% |
+
+Every original numerical check and exact staged CPU comparison passes: 175,812 values of each kind per candidate.
+All fifteen output sizes, both poison trials, both padding patterns, immutable sources, and allocation guards pass.
+Source pins remain unchanged through both captures, with no recording overlap.
+All candidates fail the speed threshold, so none enters production or triggers a full-model comparison.
+The accepted model result remains 23.4218 tokens/s. These operator measurements establish no new model throughput.
+
+The unchanged model capture also supplies the next profiling priority without another model run.
+Its instrumented Q4 down-projection groups total about 1,246 ms, versus about 1,561 ms for the main Q3 group.
+These device times are diagnostic. They do not replace ordinary model samples or establish a new optimization result.
+
+Evidence remains under `~/.cache/d3os/qwen-q3-quarterwarp-reference-v1/`, `qwen-q3-quarterwarp-decode-v1/`, and `qwen-q3-halfwarp-cache-policy-v1/`.
+The combined operator capture remains under `qwen-q3-decode-study-v1/` with serial SHA-256 `f42d4ba18ed913efdbed841ae129ff1825ac67bed664b2fdb51e70e905022d9a`.
+The accumulation study remains under `qwen-q3-uncompensated-decode-v1/` with serial SHA-256 `1c12fdc5cb95def3fc21f40d6fc88abb2e4ba4314d92888bd2ff7b31ea735ef3`.
